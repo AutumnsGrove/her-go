@@ -377,12 +377,22 @@ func Run(params RunParams) (*RunResult, error) {
 			})
 		}
 
-		// Don't break on replyCalled — the agent may still need to:
-		// - think about what to save
-		// - save_fact, update_fact, save_self_fact
-		// - remove outdated facts
-		// The loop exits naturally when the model returns no tool calls,
-		// or when the 10-iteration hard limit is hit.
+		// After reply has been sent, check if the agent is just spinning.
+		// If the only tools called in this iteration were think and/or
+		// no_action, the agent is done deliberating — exit the loop.
+		if tctx.replyCalled {
+			allPassive := true
+			for _, tc := range resp.ToolCalls {
+				if tc.Function.Name != "think" && tc.Function.Name != "no_action" {
+					allPassive = false
+					break
+				}
+			}
+			if allPassive {
+				log.Printf("  [agent] reply sent, no more active tools — done")
+				break
+			}
+		}
 	}
 
 	// Safety net: if the agent never called reply, generate a fallback
@@ -661,7 +671,7 @@ func execThink(argsJSON string, tctx *toolContext) string {
 	}
 
 	log.Printf("  [think] %s", args.Thought)
-	return "ok, continue with your next action"
+	return "ok"
 }
 
 // --- Search tool execution ---
