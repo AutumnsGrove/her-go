@@ -313,21 +313,44 @@ func Run(params RunParams) (*RunResult, error) {
 	// --- Persona Evolution Triggers ---
 	// These run AFTER the response has been sent to the user.
 	// They go in a goroutine because they don't affect the current turn.
+	//
+	// The chain: facts accumulate → triggers reflection →
+	//            reflections accumulate → triggers persona rewrite
+	// No concept of "conversations" needed — just fact and reflection counts.
 	go func() {
-		// Trigger B: Reflection — if this conversation was memory-dense.
-		if len(tctx.savedFacts) >= params.ReflectionThreshold && params.ReflectionThreshold > 0 {
-			if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, tctx.savedFacts); err != nil {
-				log.Printf("  [persona] reflection error: %v", err)
+		// Trigger: Reflection — have enough new facts accumulated since the last reflection?
+		if params.ReflectionThreshold > 0 {
+			factCount, err := params.Store.FactCountSinceLastReflection()
+			if err != nil {
+				log.Printf("  [persona] error checking fact count: %v", err)
+			} else if factCount >= params.ReflectionThreshold {
+				log.Printf("  [persona] %d facts since last reflection (threshold: %d), reflecting...", factCount, params.ReflectionThreshold)
+
+				// Gather the recent facts for the reflection prompt.
+				recentFacts, _ := params.Store.RecentFacts("user", factCount)
+				var factStrings []string
+				for _, f := range recentFacts {
+					factStrings = append(factStrings, f.Fact)
+				}
+
+				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings); err != nil {
+					log.Printf("  [persona] reflection error: %v", err)
+				}
 			}
 		}
 
-		// Trigger A: Persona rewrite — check if enough conversations
-		// have passed since the last rewrite.
+		// Trigger: Persona rewrite — have enough reflections accumulated since the last rewrite?
 		if params.RewriteEveryN > 0 {
-			if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, params.RewriteEveryN); err != nil {
-				log.Printf("  [persona] rewrite error: %v", err)
-			} else if rewritten {
-				log.Printf("  [persona] persona.md rewritten")
+			reflectionCount, err := params.Store.ReflectionCountSinceLastRewrite()
+			if err != nil {
+				log.Printf("  [persona] error checking reflection count: %v", err)
+			} else if reflectionCount >= params.RewriteEveryN {
+				log.Printf("  [persona] %d reflections since last rewrite (threshold: %d), rewriting persona...", reflectionCount, params.RewriteEveryN)
+				if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
+					log.Printf("  [persona] rewrite error: %v", err)
+				} else if rewritten {
+					log.Printf("  [persona] persona.md rewritten")
+				}
 			}
 		}
 	}()

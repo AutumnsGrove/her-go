@@ -875,6 +875,58 @@ func (s *Store) ConversationCountSince(since time.Time) (int, error) {
 	return count, nil
 }
 
+// FactCountSinceLastReflection counts how many facts have been saved
+// since the most recent reflection. Used to trigger reflections based
+// on accumulated new knowledge rather than per-turn counts.
+func (s *Store) FactCountSinceLastReflection() (int, error) {
+	var lastReflectionTime string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM facts
+		 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self'
+		 ORDER BY id DESC LIMIT 1`,
+	).Scan(&lastReflectionTime)
+
+	var count int
+	if err != nil {
+		// No reflections yet. Count all facts.
+		s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1`).Scan(&count)
+	} else {
+		// Count facts created after the last reflection.
+		s.db.QueryRow(
+			`SELECT COUNT(*) FROM facts WHERE active = 1 AND timestamp > ?`,
+			lastReflectionTime,
+		).Scan(&count)
+	}
+	return count, nil
+}
+
+// ReflectionCountSinceLastRewrite counts reflections created since
+// the most recent persona rewrite. Used to trigger persona rewrites
+// based on accumulated reflections rather than conversation counts.
+func (s *Store) ReflectionCountSinceLastRewrite() (int, error) {
+	lastRewrite, err := s.LastPersonaTimestamp()
+	if err != nil {
+		return 0, err
+	}
+
+	var count int
+	if lastRewrite.IsZero() {
+		// No rewrites yet. Count all reflections.
+		s.db.QueryRow(
+			`SELECT COUNT(*) FROM facts
+			 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self' AND active = 1`,
+		).Scan(&count)
+	} else {
+		s.db.QueryRow(
+			`SELECT COUNT(*) FROM facts
+			 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self'
+			   AND active = 1 AND timestamp > ?`,
+			lastRewrite.Format("2006-01-02 15:04:05"),
+		).Scan(&count)
+	}
+	return count, nil
+}
+
 // LastPersonaTimestamp returns the timestamp of the most recent persona
 // version. Returns zero time if no versions exist yet.
 func (s *Store) LastPersonaTimestamp() (time.Time, error) {

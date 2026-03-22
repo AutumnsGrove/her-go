@@ -116,34 +116,21 @@ func Reflect(
 	return nil
 }
 
-// MaybeRewrite checks if it's time for a persona rewrite (Trigger A)
-// and performs one if so. Returns true if a rewrite happened.
-//
-// The check: count distinct conversations since the last persona version.
-// If >= rewriteEveryN, trigger a rewrite.
+// MaybeRewrite performs a persona rewrite. The caller (agent) has already
+// decided it's time based on reflection count. This just does the work.
+// Returns true if a rewrite happened.
 func MaybeRewrite(
 	llmClient *llm.Client,
 	store *memory.Store,
 	personaFile string,
-	rewriteEveryN int,
+	_ int, // unused, kept for API compatibility
 ) (bool, error) {
-	// When was the last persona version written?
 	lastRewrite, err := store.LastPersonaTimestamp()
 	if err != nil {
 		return false, fmt.Errorf("checking last persona timestamp: %w", err)
 	}
 
-	// How many conversations since then?
-	convCount, err := store.ConversationCountSince(lastRewrite)
-	if err != nil {
-		return false, fmt.Errorf("counting conversations: %w", err)
-	}
-
-	if convCount < rewriteEveryN {
-		return false, nil // not time yet
-	}
-
-	log.Printf("  [persona] triggering persona rewrite (%d conversations since last rewrite)", convCount)
+	log.Printf("  [persona] triggering persona rewrite")
 
 	// Read current persona.md.
 	currentPersona := "(no persona description yet — this is your first one)"
@@ -200,7 +187,7 @@ func MaybeRewrite(
 	}
 
 	// Store the version in DB for history/rollback.
-	versionID, err := store.SavePersonaVersion(resp.Content, fmt.Sprintf("auto: %d conversations", convCount))
+	versionID, err := store.SavePersonaVersion(resp.Content, fmt.Sprintf("auto: %d reflections", len(reflections)))
 	if err != nil {
 		return false, fmt.Errorf("saving persona version: %w", err)
 	}
@@ -208,8 +195,8 @@ func MaybeRewrite(
 	// Log metrics.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
 
-	log.Printf("  [persona] persona rewritten (version ID=%d, %d conversations, %d reflections used)",
-		versionID, convCount, len(reflections))
+	log.Printf("  [persona] persona rewritten (version ID=%d, %d reflections used)",
+		versionID, len(reflections))
 	log.Printf("  [persona] new persona: %s", truncate(resp.Content, 200))
 
 	return true, nil
