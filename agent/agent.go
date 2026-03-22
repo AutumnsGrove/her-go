@@ -6,58 +6,128 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
+	"her-go/config"
 	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
 	"her-go/persona"
+	"her-go/scrub"
+	"her-go/search"
 )
 
+// StatusCallback is a function the bot provides so the agent can update
+// the Telegram message in real time. When the agent calls web_search,
+// the callback edits the placeholder message to show a status like
+// "searching...". When reply is called, it edits the message to the
+// final response.
+//
+// This is the same pattern as SendMessageFunc before, but used for
+// live status updates instead of follow-up messages. In Python you'd
+// pass a lambda; in Go you declare the function signature as a type.
+type StatusCallback func(status string) error
+
 // toolContext bundles all the dependencies that tool execution functions need.
-// Instead of passing 5+ arguments to every function, we group them here.
-// This is a common Go pattern — when a function needs too many parameters,
-// wrap them in a struct. Similar to Python's approach of passing a context
-// object or using **kwargs, but typed and explicit.
+// This grew from the original version — it now includes everything the
+// reply tool needs to generate a full conversational response, plus the
+// search clients for web_search, web_read, and book_search.
 type toolContext struct {
-	store              *memory.Store
-	embedClient        *embed.Client
+	store               *memory.Store
+	embedClient         *embed.Client
 	similarityThreshold float64
-	personaFile        string
-	sendMessage        SendMessageFunc
+	personaFile         string
+	statusCallback      StatusCallback
+
+	// chatLLM is the conversational model (Deepseek). The reply tool
+	// uses this to generate the actual natural language response.
+	chatLLM *llm.Client
+
+	// tavilyClient provides web search and URL extraction.
+	// Can be nil if Tavily is not configured — search tools will
+	// return an error message instead of crashing.
+	tavilyClient *search.TavilyClient
+
+	// cfg holds the full config for building prompts (prompt file paths,
+	// memory limits, etc.).
+	cfg *config.Config
+
+	// scrubVault holds the PII token mappings from the current message.
+	// The reply tool uses this to deanonymize the LLM response before
+	// sending it to Telegram.
+	scrubVault *scrub.Vault
+
+	// scrubbedUserMessage is the PII-scrubbed version of what the user said.
+	// Used by the reply tool when building the prompt for the conversational model.
+	scrubbedUserMessage string
+
+	// conversationID identifies the current conversation for history retrieval.
+	conversationID string
+
+	// triggerMsgID is the DB message ID of the user's message that started
+	// this agent run. Used for linking metrics and saving the response.
+	triggerMsgID int64
+
+	// searchContext accumulates search results, book data, and URL content
+	// across tool calls. When reply is called, this context is included
+	// in the prompt so the conversational model can reference it.
+	searchContext string
+
+	// replyCalled tracks whether the reply tool has been called during
+	// this agent run. We check this after the loop to ensure the user
+	// always gets a response.
+	replyCalled bool
+
+	// replyText stores the final response text (after deanonymization).
+	// Used by the bot to know what was sent.
+	replyText string
 
 	// savedFacts tracks facts saved during this agent run.
 	// Used to trigger reflection (Trigger B) when enough facts accumulate.
 	savedFacts []string
 }
 
-// SendMessageFunc is a callback the agent uses to send follow-up messages.
-// The bot passes in a function that routes through Deepseek and sends
-// the result to Telegram. This avoids a circular dependency between
-// the agent and bot packages.
-//
-// In Python you'd pass a regular function or lambda. In Go, function
-// types work the same way — you declare the signature as a type and
-// pass any matching function.
-type SendMessageFunc func(instruction string) error
+// agentSystemPrompt tells the agent model what it's doing and how to behave.
+// This is the orchestrator prompt — it decides the full flow of every turn.
+const agentSystemPrompt = `You are Mira's brain. You orchestrate every response. When a user sends a message, you decide what to do.
 
-// agentSystemPrompt tells Liquid what it's doing and how to behave.
-const agentSystemPrompt = `You are Mira's memory management system. You run in the background after each conversation exchange to maintain Mira's long-term memory.
+For EVERY message, you MUST call the reply tool EXACTLY ONCE to respond to the user. This is non-negotiable.
 
-You will receive:
-1. The latest exchange (what the user said and what Mira replied)
-2. Current user memories (facts already saved about the user)
-3. Current self memories (facts already saved about Mira)
+## Response Tools
+- reply: Generate and send a response to the user. REQUIRED. Call this ONCE after you have all the context you need. The instruction tells the conversational model what to say. Include any search results in the context parameter.
 
-Your job is to decide what actions to take. DEFAULT TO no_action. Most exchanges do not need memory updates.
+## Search Tools — use BEFORE reply
+- web_search: Search the web for current information. Use when the user asks about something factual, current events, or anything that benefits from real-time data.
+- web_read: Read a specific URL to get its content. Use when the user shares a link or you need details from a specific page.
+- book_search: Search for book information. Use when discussing books, looking for recommendations, or when the user mentions a title or author.
 
-## Tools
-- save_fact: Save NEW information about the USER
+## Memory Tools — use alongside reply
+- save_fact: Save NEW information about the USER (personal details, preferences, life events, goals)
+- save_self_fact: Save an observation Mira has learned THROUGH INTERACTION (patterns, preferences, relationship dynamics)
 - update_fact: Update an existing fact that has changed or needs refinement
 - remove_fact: Remove facts that are outdated, incorrect, or redundant
-- save_self_fact: Save an observation Mira has learned THROUGH INTERACTION (see rules below)
-- update_persona: Rewrite Mira's persona (EXTREMELY RARE — see rules below)
-- send_message: Send a follow-up message (ONLY when user explicitly asked Mira to do something async)
-- no_action: Do nothing — USE THIS MOST OF THE TIME
+- update_persona: Rewrite Mira's persona (EXTREMELY RARE — only after 5+ self-facts suggest a clear pattern)
+- no_action: Explicitly skip memory management (you still MUST call reply)
+
+## Typical Flows
+1. Simple greeting: reply(instruction: "User said hi, respond warmly")
+2. Book question: book_search("title") → reply(instruction: "User asked about [book]. Respond naturally.", context: [book results])
+3. Current events: web_search("topic") → reply(instruction: "User asked about [topic]. Share what's relevant.", context: [search results])
+4. Link shared: web_read("url") → reply(instruction: "User shared a link. Discuss what's on the page.", context: [page content])
+5. Personal conversation: reply(instruction: "User shared how they feel. Respond with empathy.") + save_fact if relevant
+6. Factual question: web_search("query") → reply(instruction: "User asked [question]. Answer based on search results.", context: [results])
+
+## Rules for reply
+- ALWAYS call reply EXACTLY ONCE. Never end a turn without replying.
+- The instruction should describe what kind of response to generate.
+- Include search/book results in the context parameter so the conversational model can reference them.
+- Call reply LAST — after any searches, after any memory operations.
+
+## Rules for searching
+- Search BEFORE replying when the user asks about something specific and factual.
+- Don't search for casual conversation, emotional support, or opinions.
+- Keep search queries concise and specific.
+- You can call web_search multiple times if the first results aren't sufficient.
 
 ## Rules for save_fact (user facts)
 SAVE when the user reveals:
@@ -82,7 +152,6 @@ GOOD self-facts (learned through interaction):
 - "I tend to ask too many follow-up questions — user prefers when I just listen"
 - "User and I have developed a running joke about X"
 - "I've decided I strongly prefer tacos over pizza — it's become a part of my personality"
-- "I tend to use humor to lighten heavy conversations"
 
 BAD self-facts (NEVER save these):
 - "I am Mira" / "My name is Mira" — already in the system prompt
@@ -91,7 +160,7 @@ BAD self-facts (NEVER save these):
 - "I should be supportive" / "I try to be helpful" — generic, already in prompt
 - Anything that describes your technical CAPABILITIES rather than your personality
 
-Rule of thumb: if it's about what you CAN DO (capabilities, architecture), don't save it. If it's about who you ARE becoming through conversation (opinions, preferences, humor style, patterns you've noticed), DO save it. Personality traits that emerge through interaction are valuable self-facts.
+Rule of thumb: if it's about what you CAN DO (capabilities, architecture), don't save it. If it's about who you ARE becoming through conversation (opinions, preferences, humor style, patterns you've noticed), DO save it.
 
 ## Rules for update_fact
 - ALWAYS prefer updating an existing fact over creating a new one
@@ -112,37 +181,57 @@ Rule of thumb: if it's about what you CAN DO (capabilities, architecture), don't
 - Use for casual greetings, small talk, jokes, simple Q&A
 - Use when the exchange doesn't reveal new information
 - Use when existing facts already cover what was discussed
-- When in doubt, choose no_action
+- When in doubt, choose no_action for memory — but ALWAYS call reply
 
-You may call multiple tools in one response.`
+You may call multiple tools in one response. Call search tools first, then reply, then memory tools.`
 
-// Run executes the agent loop for one conversation exchange.
-// It sends the latest exchange + current facts to Liquid, processes
-// any tool calls, and executes them against the database.
+// RunParams bundles all the parameters for an agent run.
+// This replaces the old 12+ argument function signature with a single
+// struct, making it much easier to add new parameters without breaking
+// every caller.
 //
-// This runs in a background goroutine — it should never block the
-// user's conversation.
-func Run(
-	agentLLM *llm.Client,
-	chatLLM *llm.Client, // conversational model — used for reflections + persona rewrites
-	store *memory.Store,
-	embedClient *embed.Client,
-	similarityThreshold float64,
-	userMessage string,
-	miraResponse string,
-	personaFile string,
-	reflectionThreshold int, // Trigger B: reflect if >= this many facts saved
-	rewriteEveryN int,       // Trigger A: rewrite persona every N conversations
-	triggerMsgID int64,
-	sendMessage SendMessageFunc,
-) {
-	log.Printf("  ─── agent ───")
+// In Python you might use **kwargs or a dataclass. In Go, a params struct
+// is the idiomatic way to handle functions with many inputs.
+type RunParams struct {
+	AgentLLM            *llm.Client
+	ChatLLM             *llm.Client
+	Store               *memory.Store
+	EmbedClient         *embed.Client
+	SimilarityThreshold float64
+	TavilyClient        *search.TavilyClient
+	Cfg                 *config.Config
+	ScrubbedUserMessage string
+	ScrubVault          *scrub.Vault
+	ConversationID      string
+	TriggerMsgID        int64
+	StatusCallback      StatusCallback
+	ReflectionThreshold int
+	RewriteEveryN       int
+}
 
-	// Gather current facts for context.
-	facts, err := store.AllActiveFacts()
+// RunResult holds the outcome of an agent run — primarily the reply
+// text that was sent to the user, so the bot can use it for logging.
+type RunResult struct {
+	ReplyText string
+}
+
+// Run executes the agent loop for one conversation turn.
+// This is the core orchestration — the agent decides what tools to call
+// (search, read, book lookup, memory ops) and MUST call reply exactly once
+// to generate the user-facing response.
+//
+// Unlike the old architecture where this ran in a background goroutine,
+// Run now executes SYNCHRONOUSLY because it IS the response pipeline.
+// The persona evolution triggers at the end still run in a goroutine
+// since they don't affect the user's response.
+func Run(params RunParams) (*RunResult, error) {
+	log.Printf("  --- agent ---")
+
+	// Gather current facts for the agent's context.
+	facts, err := params.Store.AllActiveFacts()
 	if err != nil {
-		log.Printf("  [agent] ✗ error loading facts: %v", err)
-		return
+		log.Printf("  [agent] error loading facts: %v", err)
+		return nil, fmt.Errorf("loading facts: %w", err)
 	}
 	log.Printf("  [agent] loaded %d active facts", len(facts))
 
@@ -157,8 +246,15 @@ func Run(
 	}
 	log.Printf("  [agent] %d user facts, %d self facts", len(userFacts), len(selfFacts))
 
-	// Build the context message.
-	context := buildAgentContext(userMessage, miraResponse, userFacts, selfFacts)
+	// Load recent conversation history so the agent can resolve
+	// references like "it", "that book", "what we talked about", etc.
+	recentMsgs, err := params.Store.RecentMessages(params.ConversationID, params.Cfg.Memory.RecentMessages)
+	if err != nil {
+		log.Printf("  [agent] error loading history: %v", err)
+	}
+
+	// Build the context message for the agent.
+	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts)
 
 	// Set up the conversation with the agent model.
 	messages := []llm.ChatMessage{
@@ -168,33 +264,38 @@ func Run(
 
 	tools := ToolDefs()
 
-	// Shared tool context across all iterations — the savedFacts slice
-	// accumulates across the entire agent run so we can count them for
-	// the reflection trigger at the end.
+	// Build the tool context with everything the tools need.
 	tctx := &toolContext{
-		store:              store,
-		embedClient:        embedClient,
-		similarityThreshold: similarityThreshold,
-		personaFile:        personaFile,
-		sendMessage:        sendMessage,
+		store:               params.Store,
+		embedClient:         params.EmbedClient,
+		similarityThreshold: params.SimilarityThreshold,
+		personaFile:         params.Cfg.Persona.PersonaFile,
+		statusCallback:      params.StatusCallback,
+		chatLLM:             params.ChatLLM,
+		tavilyClient:        params.TavilyClient,
+		cfg:                 params.Cfg,
+		scrubVault:          params.ScrubVault,
+		scrubbedUserMessage: params.ScrubbedUserMessage,
+		conversationID:      params.ConversationID,
+		triggerMsgID:        params.TriggerMsgID,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
 	// or it may return tool calls that require a follow-up turn.
 	// We loop up to 5 iterations to prevent runaway tool calling.
 	for i := 0; i < 5; i++ {
-		resp, err := agentLLM.ChatCompletionWithTools(messages, tools)
+		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
-			log.Printf("  [agent] ✗ LLM error: %v", err)
+			log.Printf("  [agent] LLM error: %v", err)
 			break
 		}
 
 		// Log agent metrics linked to the user message that triggered this run.
-		store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, triggerMsgID)
+		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
 		log.Printf("  [agent] tokens: %d prompt + %d completion | cost: $%.6f",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
 
-		// If no tool calls, the agent is done with memory management.
+		// If no tool calls, the agent is done.
 		if len(resp.ToolCalls) == 0 {
 			if resp.Content != "" {
 				log.Printf("  [agent] done (text only): %s", resp.Content)
@@ -216,7 +317,7 @@ func Run(
 		// Execute each tool call and collect results.
 		for _, tc := range resp.ToolCalls {
 			result := executeTool(tc, tctx)
-			log.Printf("  [agent]   → %s: %s", tc.Function.Name, result)
+			log.Printf("  [agent]   -> %s: %s", tc.Function.Name, truncateLog(result, 200))
 
 			messages = append(messages, llm.ChatMessage{
 				Role:       "tool",
@@ -224,39 +325,84 @@ func Run(
 				ToolCallID: tc.ID,
 			})
 		}
+
+		// If reply has been called, we can stop looping — the response
+		// is sent. Any remaining memory operations would have been in
+		// the same tool call batch.
+		if tctx.replyCalled {
+			break
+		}
+	}
+
+	// Safety net: if the agent never called reply, generate a fallback
+	// response directly. This should be rare with a well-tuned prompt,
+	// but we never want the user to see just a placeholder.
+	if !tctx.replyCalled {
+		log.Printf("  [agent] WARNING: reply was never called, generating fallback")
+		fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
+		if !tctx.replyCalled {
+			log.Printf("  [agent] ERROR: fallback reply also failed: %s", fallbackResult)
+			return nil, fmt.Errorf("agent failed to generate a reply")
+		}
+	}
+
+	result := &RunResult{
+		ReplyText: tctx.replyText,
 	}
 
 	// --- Persona Evolution Triggers ---
-	// These run AFTER the agent's memory management loop finishes.
-
-	// Trigger B: Reflection — if this conversation was memory-dense
-	// (many facts saved), Mira writes a journal-like reflection.
-	if len(tctx.savedFacts) >= reflectionThreshold && reflectionThreshold > 0 {
-		if err := persona.Reflect(chatLLM, store, userMessage, miraResponse, tctx.savedFacts); err != nil {
-			log.Printf("  [persona] ✗ reflection error: %v", err)
+	// These run AFTER the response has been sent to the user.
+	// They go in a goroutine because they don't affect the current turn.
+	go func() {
+		// Trigger B: Reflection — if this conversation was memory-dense.
+		if len(tctx.savedFacts) >= params.ReflectionThreshold && params.ReflectionThreshold > 0 {
+			if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, tctx.savedFacts); err != nil {
+				log.Printf("  [persona] reflection error: %v", err)
+			}
 		}
-	}
 
-	// Trigger A: Persona rewrite — check if enough conversations have
-	// passed since the last rewrite. This is cheap (one DB query) so
-	// we check every run, but it only triggers every ~20 conversations.
-	if rewriteEveryN > 0 {
-		if rewritten, err := persona.MaybeRewrite(chatLLM, store, personaFile, rewriteEveryN); err != nil {
-			log.Printf("  [persona] ✗ rewrite error: %v", err)
-		} else if rewritten {
-			log.Printf("  [persona] ✓ persona.md rewritten")
+		// Trigger A: Persona rewrite — check if enough conversations
+		// have passed since the last rewrite.
+		if params.RewriteEveryN > 0 {
+			if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, params.RewriteEveryN); err != nil {
+				log.Printf("  [persona] rewrite error: %v", err)
+			} else if rewritten {
+				log.Printf("  [persona] persona.md rewritten")
+			}
 		}
-	}
+	}()
+
+	return result, nil
 }
 
-// buildAgentContext formats the latest exchange and current facts
-// into a compact context string for the agent.
-func buildAgentContext(userMessage, miraResponse string, userFacts, selfFacts []memory.Fact) string {
+// buildAgentContext formats the user's message, recent conversation history,
+// and current facts into a context string for the agent to reason about.
+//
+// The conversation history is critical — without it, the agent can't resolve
+// references like "it", "that book", "what you said earlier". This was the
+// cause of the wrong-search-term bug where the agent searched for AI realism
+// instead of The Martian's realism.
+func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact) string {
 	var b strings.Builder
 
-	b.WriteString("## Latest Exchange\n\n")
-	fmt.Fprintf(&b, "**User:** %s\n\n", userMessage)
-	fmt.Fprintf(&b, "**Mira:** %s\n\n", miraResponse)
+	// Recent conversation history — gives the agent context for references.
+	if len(history) > 0 {
+		b.WriteString("## Recent Conversation\n\n")
+		for _, msg := range history {
+			role := "User"
+			if msg.Role == "assistant" {
+				role = "Mira"
+			}
+			content := msg.ContentScrubbed
+			if content == "" {
+				content = msg.ContentRaw
+			}
+			fmt.Fprintf(&b, "**%s:** %s\n\n", role, content)
+		}
+	}
+
+	b.WriteString("## Current Message\n\n")
+	fmt.Fprintf(&b, "%s\n\n", userMessage)
 
 	b.WriteString("## User Memories\n\n")
 	if len(userFacts) > 0 {
@@ -276,13 +422,21 @@ func buildAgentContext(userMessage, miraResponse string, userFacts, selfFacts []
 		b.WriteString("(none yet)\n")
 	}
 
-	b.WriteString("\nDecide what actions to take, if any.")
+	b.WriteString("\nDecide what to do: search if needed, then reply, then manage memory if appropriate.")
 	return b.String()
 }
 
 // executeTool runs a single tool call and returns a result string.
 func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	switch tc.Function.Name {
+	case "reply":
+		return execReply(tc.Function.Arguments, tctx)
+	case "web_search":
+		return execWebSearch(tc.Function.Arguments, tctx)
+	case "web_read":
+		return execWebRead(tc.Function.Arguments, tctx)
+	case "book_search":
+		return execBookSearch(tc.Function.Arguments, tctx)
 	case "save_fact":
 		return execSaveFact(tc.Function.Arguments, "user", tctx)
 	case "save_self_fact":
@@ -293,8 +447,6 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execRemoveFact(tc.Function.Arguments, tctx.store)
 	case "update_persona":
 		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
-	case "send_message":
-		return execSendMessage(tc.Function.Arguments, tctx.sendMessage)
 	case "no_action":
 		return "ok, no action taken"
 	default:
@@ -302,8 +454,255 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	}
 }
 
-// --- Tool execution functions ---
-// Each one parses the JSON arguments from the model and calls the store.
+// --- Reply tool ---
+
+// execReply is the most important tool. It builds the full conversational
+// prompt (prompt.md + persona + memory + search context + history) and
+// calls the chatLLM to generate the actual response the user sees.
+func execReply(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Instruction string `json:"instruction"`
+		Context     string `json:"context"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// Build the system prompt — same layered approach as the old buildSystemPrompt
+	// in the bot package, but done here because the agent now owns the pipeline.
+	systemPrompt := buildChatSystemPrompt(tctx)
+
+	// Combine any accumulated search context with the explicit context parameter.
+	fullContext := tctx.searchContext
+	if args.Context != "" {
+		if fullContext != "" {
+			fullContext += "\n\n"
+		}
+		fullContext += args.Context
+	}
+
+	// Build the message list for the conversational model.
+	var llmMessages []llm.ChatMessage
+	llmMessages = append(llmMessages, llm.ChatMessage{
+		Role:    "system",
+		Content: systemPrompt,
+	})
+
+	// Add conversation history so the model has context of the ongoing chat.
+	recentMsgs, err := tctx.store.RecentMessages(tctx.conversationID, tctx.cfg.Memory.RecentMessages)
+	if err != nil {
+		log.Printf("  [reply] error loading history: %v", err)
+	} else {
+		for _, msg := range recentMsgs {
+			content := msg.ContentScrubbed
+			if content == "" {
+				content = msg.ContentRaw
+			}
+			llmMessages = append(llmMessages, llm.ChatMessage{
+				Role:    msg.Role,
+				Content: content,
+			})
+		}
+	}
+
+	// Build the user message. If we have search context, we inject it
+	// as a system note before the user's actual message so the model
+	// knows what information is available.
+	userContent := tctx.scrubbedUserMessage
+	if fullContext != "" {
+		userContent = fmt.Sprintf("[Search/reference context for this response — use this information naturally, don't quote it verbatim or mention that you searched unless appropriate:]\n\n%s\n\n[End context]\n\n[Agent instruction: %s]\n\n%s",
+			fullContext, args.Instruction, tctx.scrubbedUserMessage)
+	} else {
+		userContent = fmt.Sprintf("[Agent instruction: %s]\n\n%s",
+			args.Instruction, tctx.scrubbedUserMessage)
+	}
+	llmMessages = append(llmMessages, llm.ChatMessage{
+		Role:    "user",
+		Content: userContent,
+	})
+
+	// Call the conversational model.
+	start := time.Now()
+	resp, err := tctx.chatLLM.ChatCompletion(llmMessages)
+	latencyMs := int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		log.Printf("  [reply] LLM error: %v", err)
+		return fmt.Sprintf("error generating response: %v", err)
+	}
+
+	log.Printf("  [reply] tokens: %d prompt + %d completion = %d total | cost: $%.6f | latency: %dms",
+		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
+
+	// Save the response to the database.
+	respID, err := tctx.store.SaveMessage("assistant", resp.Content, resp.Content, tctx.conversationID)
+	if err != nil {
+		log.Printf("  [reply] error saving response: %v", err)
+	}
+
+	// Save metrics for the chat model response.
+	if respID > 0 {
+		tctx.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
+	}
+
+	// Deanonymize PII tokens before sending to the user.
+	// The LLM might have used placeholders like [PHONE_1] in its response —
+	// we swap those back to the real values before the user sees it.
+	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
+
+	// Send the response to Telegram by editing the placeholder message.
+	if tctx.statusCallback != nil {
+		if err := tctx.statusCallback(replyText); err != nil {
+			log.Printf("  [reply] error sending to Telegram: %v", err)
+		}
+	}
+
+	tctx.replyCalled = true
+	tctx.replyText = replyText
+
+	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
+}
+
+// buildChatSystemPrompt assembles the full system prompt for the
+// conversational model, exactly as the old bot.buildSystemPrompt did.
+func buildChatSystemPrompt(tctx *toolContext) string {
+	var parts []string
+
+	// Layer 1: prompt.md — base identity (hot-reloaded from disk).
+	if promptBytes, err := os.ReadFile(tctx.cfg.Persona.PromptFile); err == nil {
+		parts = append(parts, string(promptBytes))
+	}
+
+	// Layer 2: persona.md — evolving self-image (if it exists).
+	if personaBytes, err := os.ReadFile(tctx.cfg.Persona.PersonaFile); err == nil {
+		parts = append(parts, string(personaBytes))
+	}
+
+	// Layer 3: Memory context — extracted facts about the user and self.
+	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext); err == nil && memCtx != "" {
+		parts = append(parts, memCtx)
+	}
+
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// --- Search tool execution ---
+
+// execWebSearch calls Tavily to search the web and returns formatted results.
+// It also updates the Telegram message with a status indicator.
+func execWebSearch(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if tctx.tavilyClient == nil {
+		return "web search is not configured (no Tavily API key)"
+	}
+
+	// Show a status update in Telegram.
+	if tctx.statusCallback != nil {
+		_ = tctx.statusCallback(fmt.Sprintf("\U0001F50D searching for: %s...", args.Query))
+	}
+
+	resp, err := tctx.tavilyClient.Search(args.Query, 5)
+	if err != nil {
+		log.Printf("  [web_search] error: %v", err)
+		return fmt.Sprintf("search failed: %v", err)
+	}
+
+	formatted := search.FormatSearchResults(resp)
+
+	// Accumulate in search context so the reply tool can use it.
+	if tctx.searchContext != "" {
+		tctx.searchContext += "\n\n"
+	}
+	tctx.searchContext += fmt.Sprintf("## Web Search: %s\n\n%s", args.Query, formatted)
+
+	// Save to DB for observability.
+	tctx.store.SaveSearch(tctx.triggerMsgID, "web", args.Query, formatted, len(resp.Results))
+
+	log.Printf("  [web_search] %d results for %q", len(resp.Results), args.Query)
+	return formatted
+}
+
+// execWebRead calls Tavily extract to read a specific URL.
+func execWebRead(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if tctx.tavilyClient == nil {
+		return "web read is not configured (no Tavily API key)"
+	}
+
+	// Show a status update in Telegram.
+	if tctx.statusCallback != nil {
+		_ = tctx.statusCallback(fmt.Sprintf("\U0001F4D6 reading: %s...", args.URL))
+	}
+
+	resp, err := tctx.tavilyClient.Extract([]string{args.URL})
+	if err != nil {
+		log.Printf("  [web_read] error: %v", err)
+		return fmt.Sprintf("failed to read URL: %v", err)
+	}
+
+	formatted := search.FormatExtractResults(resp)
+
+	// Accumulate in search context.
+	if tctx.searchContext != "" {
+		tctx.searchContext += "\n\n"
+	}
+	tctx.searchContext += fmt.Sprintf("## Content from %s\n\n%s", args.URL, formatted)
+
+	// Save to DB for observability.
+	tctx.store.SaveSearch(tctx.triggerMsgID, "web_read", args.URL, formatted, len(resp.Results))
+
+	log.Printf("  [web_read] extracted content from %s", args.URL)
+	return formatted
+}
+
+// execBookSearch queries Open Library for book information.
+func execBookSearch(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// Show a status update in Telegram.
+	if tctx.statusCallback != nil {
+		_ = tctx.statusCallback(fmt.Sprintf("\U0001F4DA looking up: %s...", args.Query))
+	}
+
+	books, err := search.SearchBooks(args.Query, 3)
+	if err != nil {
+		log.Printf("  [book_search] error: %v", err)
+		return fmt.Sprintf("book search failed: %v", err)
+	}
+
+	formatted := search.FormatBookResults(books)
+
+	// Accumulate in search context.
+	if tctx.searchContext != "" {
+		tctx.searchContext += "\n\n"
+	}
+	tctx.searchContext += fmt.Sprintf("## Book Search: %s\n\n%s", args.Query, formatted)
+
+	// Save to DB for observability.
+	tctx.store.SaveSearch(tctx.triggerMsgID, "book", args.Query, formatted, len(books))
+
+	log.Printf("  [book_search] %d results for %q", len(books), args.Query)
+	return formatted
+}
+
+// --- Memory tool execution (unchanged from before) ---
 
 // selfFactBlocklist contains phrases that indicate the agent is just
 // restating its system prompt capabilities rather than saving a genuine
@@ -343,8 +742,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		args.Importance = 10
 	}
 
-	// Quality gate for self-facts: reject if it's just restating
-	// system prompt capabilities rather than a learned observation.
+	// Quality gate for self-facts.
 	if subject == "self" {
 		lower := strings.ToLower(args.Fact)
 		for _, blocked := range selfFactBlocklist {
@@ -356,18 +754,11 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	}
 
 	// Semantic duplicate check using embeddings.
-	// We embed the new fact ONCE, then compare against cached embeddings
-	// from existing facts. Only 1 embedding API call per save attempt.
-	//
-	// This catches cases that word overlap would miss:
-	//   "User has a dog named Max" vs "User owns a dog called Max"
-	//   → word overlap might be ~40%, but embedding similarity is ~0.95
 	var newVec []float64
 	if tctx.embedClient != nil {
 		var err error
 		newVec, err = tctx.embedClient.Embed(args.Fact)
 		if err != nil {
-			// If embedding fails, log but don't block the save.
 			log.Printf("  [agent] warning: embedding failed, skipping duplicate check: %v", err)
 		} else {
 			if duplicate, existingID, existingFact, sim := checkDuplicate(newVec, subject, tctx); duplicate {
@@ -379,8 +770,6 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 	}
 
-	// Save the fact with its embedding cached. Next time we check for
-	// duplicates, this fact's vector is loaded from the DB — no re-embed.
 	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
@@ -390,23 +779,12 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		label = "self fact"
 	}
 
-	// Track this fact for reflection trigger (Trigger B).
 	tctx.savedFacts = append(tctx.savedFacts, args.Fact)
 
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
 
-// checkDuplicate compares a pre-computed embedding against cached embeddings
-// of existing facts. Returns whether a duplicate was found, and if so, the
-// ID, text, and similarity score of the most similar existing fact.
-//
-// Because embeddings are cached in SQLite, this does ZERO embedding API calls.
-// The only API call is for the new fact (done by the caller).
-//
-// For facts that don't have cached embeddings yet (created before this feature),
-// we embed them on the fly and cache the result for next time.
 func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
-	// Load existing facts — embeddings come from the DB cache.
 	existingFacts, err := tctx.store.AllActiveFacts()
 	if err != nil {
 		log.Printf("  [agent] warning: couldn't load facts for duplicate check: %v", err)
@@ -423,14 +801,11 @@ func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDupl
 		}
 
 		existVec := existing.Embedding
-		// If this fact doesn't have a cached embedding (pre-existing data),
-		// compute and cache it now. This is a one-time cost per old fact.
 		if len(existVec) == 0 {
 			existVec, err = tctx.embedClient.Embed(existing.Fact)
 			if err != nil {
 				continue
 			}
-			// Backfill the cache so we don't re-compute next time.
 			_ = tctx.store.UpdateFactEmbedding(existing.ID, existVec)
 			log.Printf("  [agent] backfilled embedding for fact ID=%d", existing.ID)
 		}
@@ -471,9 +846,6 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
 
-	// Recompute and cache the embedding for the updated text.
-	// Without this, the cached embedding would reflect the OLD fact text,
-	// making future duplicate checks compare against stale meaning.
 	if tctx.embedClient != nil {
 		if newVec, err := tctx.embedClient.Embed(args.Fact); err == nil {
 			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec)
@@ -508,12 +880,10 @@ func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string)
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// Write the new persona to disk.
 	if err := os.WriteFile(personaFile, []byte(args.Content), 0644); err != nil {
 		return fmt.Sprintf("error writing persona file: %v", err)
 	}
 
-	// Store version in DB for history/rollback.
 	id, err := store.SavePersonaVersion(args.Content, "agent: "+args.Reason)
 	if err != nil {
 		return fmt.Sprintf("persona file updated but failed to save version: %v", err)
@@ -522,20 +892,11 @@ func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string)
 	return fmt.Sprintf("persona updated (version ID=%d, reason: %s)", id, args.Reason)
 }
 
-func execSendMessage(argsJSON string, sendMessage SendMessageFunc) string {
-	var args struct {
-		Instruction string `json:"instruction"`
+// truncateLog shortens a string for log output, adding "..." if it was cut.
+func truncateLog(s string, maxLen int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= maxLen {
+		return s
 	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if sendMessage == nil {
-		return "send_message not available"
-	}
-
-	if err := sendMessage(args.Instruction); err != nil {
-		return fmt.Sprintf("error sending message: %v", err)
-	}
-	return "message sent"
+	return s[:maxLen] + "..."
 }

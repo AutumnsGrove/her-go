@@ -168,6 +168,21 @@ func (s *Store) initTables() error {
 			message_id INTEGER,
 			FOREIGN KEY (message_id) REFERENCES messages(id)
 		)`,
+
+		// Searches — full audit trail of web/book/URL lookups.
+		// Tracks what the agent searched for, what it got back, and
+		// which user message triggered it. Essential for debugging
+		// agent tool-call decisions and tuning search behavior.
+		`CREATE TABLE IF NOT EXISTS searches (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			message_id INTEGER,
+			search_type TEXT NOT NULL,
+			query TEXT NOT NULL,
+			results TEXT,
+			result_count INTEGER,
+			FOREIGN KEY (message_id) REFERENCES messages(id)
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -321,6 +336,25 @@ func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTo
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)
+	}
+	return nil
+}
+
+// SaveSearch logs a search operation (web, book, or URL read) for
+// full observability. Tracks what was searched, what came back, and
+// which user message triggered it.
+func (s *Store) SaveSearch(messageID int64, searchType, query, results string, resultCount int) error {
+	var msgID interface{} = messageID
+	if messageID == 0 {
+		msgID = nil
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO searches (message_id, search_type, query, results, result_count)
+		 VALUES (?, ?, ?, ?, ?)`,
+		msgID, searchType, query, results, resultCount,
+	)
+	if err != nil {
+		return fmt.Errorf("saving search: %w", err)
 	}
 	return nil
 }
