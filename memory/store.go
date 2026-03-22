@@ -919,6 +919,25 @@ func (s *Store) ReflectionsSince(since time.Time) ([]Fact, error) {
 	return facts, nil
 }
 
+// LatestConversationID returns the most recent conversation_id used
+// for a given chat identifier prefix (e.g., "tg_7570137189").
+// Returns empty string if no conversations exist.
+// This lets the bot resume the same conversation after a restart
+// instead of generating a new ID and losing context.
+func (s *Store) LatestConversationID(prefix string) string {
+	var convID string
+	err := s.db.QueryRow(
+		`SELECT conversation_id FROM messages
+		 WHERE conversation_id LIKE ? || '%'
+		 ORDER BY id DESC LIMIT 1`,
+		prefix,
+	).Scan(&convID)
+	if err != nil {
+		return ""
+	}
+	return convID
+}
+
 // SavePIIVaultEntry persists a Tier 2 token↔original mapping for audit trail.
 func (s *Store) SavePIIVaultEntry(messageID int64, token, originalValue, entityType string) error {
 	_, err := s.db.Exec(

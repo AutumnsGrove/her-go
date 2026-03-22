@@ -230,10 +230,30 @@ func (b *Bot) handleMessage(c tele.Context) error {
 }
 
 // getConversationID returns the active conversation ID for a chat.
+// On first call after a restart, it checks the database for the most
+// recent conversation ID for this chat, so the bot resumes where it
+// left off instead of starting a new conversation and losing context.
 func (b *Bot) getConversationID(chatID int64) string {
 	key := fmt.Sprintf("%d", chatID)
-	val, _ := b.conversationIDs.LoadOrStore(key, fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix()))
-	return val.(string)
+
+	// Check in-memory cache first.
+	if val, ok := b.conversationIDs.Load(key); ok {
+		return val.(string)
+	}
+
+	// Not in memory (first message after restart). Check the DB
+	// for the most recent conversation with this chat.
+	prefix := fmt.Sprintf("tg_%d", chatID)
+	if existing := b.store.LatestConversationID(prefix); existing != "" {
+		b.conversationIDs.Store(key, existing)
+		log.Printf("  [bot] resumed conversation: %s", existing)
+		return existing
+	}
+
+	// No existing conversation. Create a new one.
+	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
+	b.conversationIDs.Store(key, newID)
+	return newID
 }
 
 // handleClear resets the conversation context.
