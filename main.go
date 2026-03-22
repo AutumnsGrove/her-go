@@ -11,6 +11,7 @@ import (
 
 	"her-go/bot"
 	"her-go/config"
+	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
 )
@@ -81,8 +82,24 @@ func main() {
 	)
 	log.Printf("Agent client configured: %s (model: %s)", cfg.LLM.BaseURL, agentModel)
 
+	// Create the embedding client for semantic similarity.
+	// This talks to a local LM Studio (or Ollama) server running an
+	// embedding model. Used for memory deduplication — before saving a
+	// new fact, we check if a semantically similar one already exists.
+	//
+	// The client is optional — if the embed config is empty, the agent
+	// will skip duplicate checking rather than crash.
+	var embedClient *embed.Client
+	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model)
+		log.Printf("Embed client configured: %s (model: %s, threshold: %.2f)",
+			cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.SimilarityThreshold)
+	} else {
+		log.Println("Embed client not configured — semantic duplicate checking disabled")
+	}
+
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, embedClient, store)
 	if err != nil {
 		log.Fatalf("Failed to create Telegram bot: %v", err)
 	}

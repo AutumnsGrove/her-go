@@ -6,14 +6,19 @@ telegram:
 llm:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
-  model: "minimax/minimax-m2-her"
+  model: "deepseek/deepseek-v3.2"
   temperature: 0.85
   max_tokens: 1024
 
 agent:
-  model: "xiaomi/mimo-v2-flash"  # tool-calling model for memory management
+  model: "arcee-ai/trinity-large-preview:free"  # tool-calling model for memory management
   temperature: 0.1                              # low temp for precise tool decisions
   max_tokens: 512
+
+embed:
+  base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
+  model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
+  similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
 
 memory:
   db_path: "./her.db"

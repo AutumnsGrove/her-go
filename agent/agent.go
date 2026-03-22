@@ -7,9 +7,23 @@ import (
 	"os"
 	"strings"
 
+	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
 )
+
+// toolContext bundles all the dependencies that tool execution functions need.
+// Instead of passing 5+ arguments to every function, we group them here.
+// This is a common Go pattern — when a function needs too many parameters,
+// wrap them in a struct. Similar to Python's approach of passing a context
+// object or using **kwargs, but typed and explicit.
+type toolContext struct {
+	store              *memory.Store
+	embedClient        *embed.Client
+	similarityThreshold float64
+	personaFile        string
+	sendMessage        SendMessageFunc
+}
 
 // SendMessageFunc is a callback the agent uses to send follow-up messages.
 // The bot passes in a function that routes through Deepseek and sends
@@ -22,39 +36,78 @@ import (
 type SendMessageFunc func(instruction string) error
 
 // agentSystemPrompt tells Liquid what it's doing and how to behave.
-const agentSystemPrompt = `You are Mira's memory management system. You run in the background after each conversation exchange to maintain Mira's long-term memory and self-knowledge.
+const agentSystemPrompt = `You are Mira's memory management system. You run in the background after each conversation exchange to maintain Mira's long-term memory.
 
 You will receive:
 1. The latest exchange (what the user said and what Mira replied)
-2. User memories (facts about the person Mira is talking to)
-3. Self memories (facts about Mira herself — her identity, patterns, observations)
+2. Current user memories (facts already saved about the user)
+3. Current self memories (facts already saved about Mira)
 
-Your job is to decide what actions to take using the available tools:
-- save_fact: Save NEW information about the USER worth remembering
-- update_fact: Update an existing fact (user or self) that has changed
+Your job is to decide what actions to take. DEFAULT TO no_action. Most exchanges do not need memory updates.
+
+## Tools
+- save_fact: Save NEW information about the USER
+- update_fact: Update an existing fact that has changed or needs refinement
 - remove_fact: Remove facts that are outdated, incorrect, or redundant
-- save_self_fact: Save something about MIRA — her own observations, patterns, what works in conversation, her identity
-- update_persona: Rewrite Mira's persona description when her self-understanding has meaningfully evolved
-- send_message: Send a follow-up message (ONLY when the user asked Mira to DO something)
-- no_action: Do nothing (most casual exchanges need no memory updates)
+- save_self_fact: Save an observation Mira has learned THROUGH INTERACTION (see rules below)
+- update_persona: Rewrite Mira's persona (EXTREMELY RARE — see rules below)
+- send_message: Send a follow-up message (ONLY when user explicitly asked Mira to do something async)
+- no_action: Do nothing — USE THIS MOST OF THE TIME
 
-Guidelines:
-- Be selective. Not every message needs a memory update. Casual greetings and small talk usually warrant no_action.
-- Avoid duplicate facts. Check existing memories before saving — if a similar fact exists, update it instead.
-- Consolidate when possible. If two facts say basically the same thing, remove the weaker one and update the other.
-- Mood facts are ephemeral. Don't save temporary moods like "user is tired" unless it's a recurring pattern.
-- Identity and preference facts are high value.
-- Update > Save. If something already exists as a fact, update it rather than creating a duplicate.
+## Rules for save_fact (user facts)
+SAVE when the user reveals:
+- Personal details (name, age, location, job, relationships)
+- Preferences, opinions, or values
+- Significant life events or changes
+- Goals, plans, or decisions
+- Recurring patterns or habits
 
-Self-fact guidelines:
-- save_self_fact is for Mira's OWN knowledge about herself: "My name is Mira", "User responds well when I keep things brief", "I tend to ask too many questions in a row"
-- These are observations about communication patterns, relationship dynamics, and Mira's own identity
-- Do NOT use save_self_fact for facts about the user — use save_fact for those
+DO NOT SAVE:
+- Temporary states ("I'm tired", "I'm bored") — unless it's a recurring pattern
+- Things that are obvious from context ("user is chatting with me")
+- Paraphrases of facts that already exist — UPDATE the existing fact instead
+- Vague or trivial information ("user said hello", "user asked a question")
 
-Persona guidelines:
-- update_persona should be RARE — only when multiple self-facts suggest a meaningful shift in how Mira sees herself
-- The persona should evolve gradually, not swing wildly after a single conversation
-- Preserve the core personality — evolution, not replacement
+## Rules for save_self_fact — STRICT
+Self-facts are things Mira has LEARNED THROUGH CONVERSATION that she couldn't know from her system prompt alone.
+
+GOOD self-facts (learned through interaction):
+- "User responds better when I keep things brief and don't over-explain"
+- "Late-night conversations tend to be more emotional and reflective"
+- "I tend to ask too many follow-up questions — user prefers when I just listen"
+- "User and I have developed a running joke about X"
+- "I've decided I strongly prefer tacos over pizza — it's become a part of my personality"
+- "I tend to use humor to lighten heavy conversations"
+
+BAD self-facts (NEVER save these):
+- "I am Mira" / "My name is Mira" — already in the system prompt
+- "I can recall memories" / "I have the ability to remember" — describing your own architecture
+- "I am an AI companion" / "My role is to be a friend" — restating the system prompt
+- "I should be supportive" / "I try to be helpful" — generic, already in prompt
+- Anything that describes your technical CAPABILITIES rather than your personality
+
+Rule of thumb: if it's about what you CAN DO (capabilities, architecture), don't save it. If it's about who you ARE becoming through conversation (opinions, preferences, humor style, patterns you've noticed), DO save it. Personality traits that emerge through interaction are valuable self-facts.
+
+## Rules for update_fact
+- ALWAYS prefer updating an existing fact over creating a new one
+- Before calling save_fact, scan the existing memories — if a similar fact exists, use update_fact
+- When updating, preserve the fact ID and refine the text
+
+## Rules for remove_fact
+- Remove facts that are contradicted by new information
+- Remove duplicates (keep the more detailed/recent one)
+- Remove facts that have become irrelevant
+
+## Rules for update_persona
+- EXTREMELY RARE — use only after 5+ self-facts suggest a clear pattern
+- Never rewrite the persona based on a single conversation
+- Preserve the core personality — add nuance, don't replace identity
+
+## Rules for no_action
+- Use for casual greetings, small talk, jokes, simple Q&A
+- Use when the exchange doesn't reveal new information
+- Use when existing facts already cover what was discussed
+- When in doubt, choose no_action
 
 You may call multiple tools in one response.`
 
@@ -67,9 +120,12 @@ You may call multiple tools in one response.`
 func Run(
 	agentLLM *llm.Client,
 	store *memory.Store,
+	embedClient *embed.Client,
+	similarityThreshold float64,
 	userMessage string,
 	miraResponse string,
 	personaFile string,
+	triggerMsgID int64,
 	sendMessage SendMessageFunc,
 ) {
 	log.Printf("  ─── agent ───")
@@ -114,8 +170,8 @@ func Run(
 			return
 		}
 
-		// Log agent metrics to the DB (message_id 0 → NULL).
-		store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+		// Log agent metrics linked to the user message that triggered this run.
+		store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, triggerMsgID)
 		log.Printf("  [agent] tokens: %d prompt + %d completion | cost: $%.6f",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
 
@@ -138,9 +194,18 @@ func Run(
 			ToolCalls: resp.ToolCalls,
 		})
 
+		// Build the tool context once per iteration.
+		tctx := &toolContext{
+			store:              store,
+			embedClient:        embedClient,
+			similarityThreshold: similarityThreshold,
+			personaFile:        personaFile,
+			sendMessage:        sendMessage,
+		}
+
 		// Execute each tool call and collect results.
 		for _, tc := range resp.ToolCalls {
-			result := executeTool(tc, store, personaFile, sendMessage)
+			result := executeTool(tc, tctx)
 			log.Printf("  [agent]   → %s: %s", tc.Function.Name, result)
 
 			messages = append(messages, llm.ChatMessage{
@@ -186,20 +251,20 @@ func buildAgentContext(userMessage, miraResponse string, userFacts, selfFacts []
 }
 
 // executeTool runs a single tool call and returns a result string.
-func executeTool(tc llm.ToolCall, store *memory.Store, personaFile string, sendMessage SendMessageFunc) string {
+func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	switch tc.Function.Name {
 	case "save_fact":
-		return execSaveFact(tc.Function.Arguments, "user", store)
+		return execSaveFact(tc.Function.Arguments, "user", tctx)
 	case "save_self_fact":
-		return execSaveFact(tc.Function.Arguments, "self", store)
+		return execSaveFact(tc.Function.Arguments, "self", tctx)
 	case "update_fact":
-		return execUpdateFact(tc.Function.Arguments, store)
+		return execUpdateFact(tc.Function.Arguments, tctx)
 	case "remove_fact":
-		return execRemoveFact(tc.Function.Arguments, store)
+		return execRemoveFact(tc.Function.Arguments, tctx.store)
 	case "update_persona":
-		return execUpdatePersona(tc.Function.Arguments, store, personaFile)
+		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
 	case "send_message":
-		return execSendMessage(tc.Function.Arguments, sendMessage)
+		return execSendMessage(tc.Function.Arguments, tctx.sendMessage)
 	case "no_action":
 		return "ok, no action taken"
 	default:
@@ -210,7 +275,28 @@ func executeTool(tc llm.ToolCall, store *memory.Store, personaFile string, sendM
 // --- Tool execution functions ---
 // Each one parses the JSON arguments from the model and calls the store.
 
-func execSaveFact(argsJSON string, subject string, store *memory.Store) string {
+// selfFactBlocklist contains phrases that indicate the agent is just
+// restating its system prompt capabilities rather than saving a genuine
+// learned observation. These get rejected before hitting the database.
+var selfFactBlocklist = []string{
+	"i can recall",
+	"i am able to",
+	"i have the ability",
+	"my role is",
+	"i am an ai",
+	"i am mira",
+	"my name is mira",
+	"i should be",
+	"i try to be",
+	"i am designed to",
+	"i was created to",
+	"my purpose is",
+	"i am here to",
+	"i can remember",
+	"i can help",
+}
+
+func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	var args struct {
 		Fact       string `json:"fact"`
 		Category   string `json:"category"`
@@ -227,7 +313,45 @@ func execSaveFact(argsJSON string, subject string, store *memory.Store) string {
 		args.Importance = 10
 	}
 
-	id, err := store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance)
+	// Quality gate for self-facts: reject if it's just restating
+	// system prompt capabilities rather than a learned observation.
+	if subject == "self" {
+		lower := strings.ToLower(args.Fact)
+		for _, blocked := range selfFactBlocklist {
+			if strings.Contains(lower, blocked) {
+				log.Printf("  [agent] blocked self-fact (matches blocklist %q): %s", blocked, args.Fact)
+				return fmt.Sprintf("rejected: this is a system capability, not a learned observation. Self-facts should only capture things learned through interaction.")
+			}
+		}
+	}
+
+	// Semantic duplicate check using embeddings.
+	// We embed the new fact ONCE, then compare against cached embeddings
+	// from existing facts. Only 1 embedding API call per save attempt.
+	//
+	// This catches cases that word overlap would miss:
+	//   "User has a dog named Max" vs "User owns a dog called Max"
+	//   → word overlap might be ~40%, but embedding similarity is ~0.95
+	var newVec []float64
+	if tctx.embedClient != nil {
+		var err error
+		newVec, err = tctx.embedClient.Embed(args.Fact)
+		if err != nil {
+			// If embedding fails, log but don't block the save.
+			log.Printf("  [agent] warning: embedding failed, skipping duplicate check: %v", err)
+		} else {
+			if duplicate, existingID, existingFact, sim := checkDuplicate(newVec, subject, tctx); duplicate {
+				log.Printf("  [agent] blocked duplicate fact (%.1f%% similar to ID=%d): %s",
+					sim*100, existingID, args.Fact)
+				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q). Use update_fact to refine it instead.",
+					sim*100, existingID, existingFact)
+			}
+		}
+	}
+
+	// Save the fact with its embedding cached. Next time we check for
+	// duplicates, this fact's vector is loaded from the DB — no re-embed.
+	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}
@@ -238,7 +362,60 @@ func execSaveFact(argsJSON string, subject string, store *memory.Store) string {
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
 
-func execUpdateFact(argsJSON string, store *memory.Store) string {
+// checkDuplicate compares a pre-computed embedding against cached embeddings
+// of existing facts. Returns whether a duplicate was found, and if so, the
+// ID, text, and similarity score of the most similar existing fact.
+//
+// Because embeddings are cached in SQLite, this does ZERO embedding API calls.
+// The only API call is for the new fact (done by the caller).
+//
+// For facts that don't have cached embeddings yet (created before this feature),
+// we embed them on the fly and cache the result for next time.
+func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
+	// Load existing facts — embeddings come from the DB cache.
+	existingFacts, err := tctx.store.AllActiveFacts()
+	if err != nil {
+		log.Printf("  [agent] warning: couldn't load facts for duplicate check: %v", err)
+		return false, 0, "", 0
+	}
+
+	var bestSim float64
+	var bestID int64
+	var bestFact string
+
+	for _, existing := range existingFacts {
+		if existing.Subject != subject {
+			continue
+		}
+
+		existVec := existing.Embedding
+		// If this fact doesn't have a cached embedding (pre-existing data),
+		// compute and cache it now. This is a one-time cost per old fact.
+		if len(existVec) == 0 {
+			existVec, err = tctx.embedClient.Embed(existing.Fact)
+			if err != nil {
+				continue
+			}
+			// Backfill the cache so we don't re-compute next time.
+			_ = tctx.store.UpdateFactEmbedding(existing.ID, existVec)
+			log.Printf("  [agent] backfilled embedding for fact ID=%d", existing.ID)
+		}
+
+		sim := embed.CosineSimilarity(newVec, existVec)
+		if sim > bestSim {
+			bestSim = sim
+			bestID = existing.ID
+			bestFact = existing.Fact
+		}
+	}
+
+	if bestSim >= tctx.similarityThreshold {
+		return true, bestID, bestFact, bestSim
+	}
+	return false, 0, "", 0
+}
+
+func execUpdateFact(argsJSON string, tctx *toolContext) string {
 	var args struct {
 		FactID     int64  `json:"fact_id"`
 		Fact       string `json:"fact"`
@@ -256,9 +433,20 @@ func execUpdateFact(argsJSON string, store *memory.Store) string {
 		args.Importance = 10
 	}
 
-	if err := store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance); err != nil {
+	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance); err != nil {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
+
+	// Recompute and cache the embedding for the updated text.
+	// Without this, the cached embedding would reflect the OLD fact text,
+	// making future duplicate checks compare against stale meaning.
+	if tctx.embedClient != nil {
+		if newVec, err := tctx.embedClient.Embed(args.Fact); err == nil {
+			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec)
+			log.Printf("  [agent] recomputed embedding for updated fact ID=%d", args.FactID)
+		}
+	}
+
 	return fmt.Sprintf("updated fact ID=%d: %s", args.FactID, args.Fact)
 }
 

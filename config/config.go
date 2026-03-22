@@ -27,6 +27,7 @@ type Config struct {
 	LLM      LLMConfig      `yaml:"llm"`
 	Agent    AgentConfig    `yaml:"agent"`
 	Memory   MemoryConfig   `yaml:"memory"`
+	Embed    EmbedConfig    `yaml:"embed"`
 	Scrub    ScrubConfig    `yaml:"scrub"`
 	Persona  PersonaConfig  `yaml:"persona"`
 }
@@ -67,6 +68,14 @@ type MemoryConfig struct {
 // ScrubConfig controls PII scrubbing behavior.
 type ScrubConfig struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// EmbedConfig controls the local embedding model used for semantic
+// similarity (memory deduplication, future vector search).
+type EmbedConfig struct {
+	BaseURL            string  `yaml:"base_url"`
+	Model              string  `yaml:"model"`
+	SimilarityThreshold float64 `yaml:"similarity_threshold"` // above this = duplicate (0.0-1.0)
 }
 
 // PersonaConfig controls the persona evolution system.

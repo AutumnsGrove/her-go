@@ -4,7 +4,9 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 
 	// The underscore import is a Go idiom: it imports the package purely for
@@ -186,6 +188,10 @@ func (s *Store) initTables() error {
 		// subject: "user" for facts about the user, "self" for Mira's
 		// own self-knowledge (observations, patterns, identity).
 		`ALTER TABLE facts ADD COLUMN subject TEXT DEFAULT 'user'`,
+		// embedding: cached vector from the embedding model, stored as
+		// raw bytes ([]float64 serialized with binary.LittleEndian).
+		// Avoids re-computing embeddings on every duplicate check.
+		`ALTER TABLE facts ADD COLUMN embedding BLOB`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -319,15 +325,46 @@ type Fact struct {
 	Timestamp       time.Time
 	Fact            string
 	Category        string
-	Subject         string // "user" or "self"
+	Subject         string    // "user" or "self"
 	SourceMessageID int64
 	Importance      int
 	Active          bool
+	Embedding       []float64 // cached embedding vector (nil if not yet computed)
+}
+
+// encodeEmbedding serializes a float64 slice to bytes for SQLite BLOB storage.
+// Each float64 is 8 bytes, written in little-endian order.
+//
+// This is like Python's struct.pack() or numpy's .tobytes() — converting
+// in-memory floats to a compact binary representation. We use LittleEndian
+// because that's what most modern CPUs use natively (x86, ARM).
+func encodeEmbedding(vec []float64) []byte {
+	if len(vec) == 0 {
+		return nil
+	}
+	buf := make([]byte, len(vec)*8)
+	for i, v := range vec {
+		binary.LittleEndian.PutUint64(buf[i*8:], math.Float64bits(v))
+	}
+	return buf
+}
+
+// decodeEmbedding deserializes bytes back into a float64 slice.
+func decodeEmbedding(data []byte) []float64 {
+	if len(data) == 0 || len(data)%8 != 0 {
+		return nil
+	}
+	vec := make([]float64, len(data)/8)
+	for i := range vec {
+		vec[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[i*8:]))
+	}
+	return vec
 }
 
 // SaveFact inserts an extracted fact into the database.
 // subject is "user" or "self". If sourceMessageID is 0, it's stored as NULL.
-func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int) (int64, error) {
+// embedding is optional — pass nil if not yet computed.
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float64) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -336,10 +373,16 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 		subject = "user"
 	}
 
+	// Encode the embedding to bytes for BLOB storage.
+	var embBlob interface{}
+	if len(embedding) > 0 {
+		embBlob = encodeEmbedding(embedding)
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO facts (fact, category, subject, source_message_id, importance)
-		 VALUES (?, ?, ?, ?, ?)`,
-		fact, category, subject, srcID, importance,
+		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		fact, category, subject, srcID, importance, embBlob,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving fact: %w", err)
@@ -351,11 +394,24 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 	return id, nil
 }
 
+// UpdateFactEmbedding sets the cached embedding for a fact that was
+// saved without one (e.g., facts created before embeddings were enabled).
+func (s *Store) UpdateFactEmbedding(factID int64, embedding []float64) error {
+	_, err := s.db.Exec(
+		`UPDATE facts SET embedding = ? WHERE id = ?`,
+		encodeEmbedding(embedding), factID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating embedding for fact %d: %w", factID, err)
+	}
+	return nil
+}
+
 // RecentFacts retrieves the top-K active facts for a given subject,
 // ordered by importance (descending) then recency (descending).
 func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
 		 FROM facts
 		 WHERE active = 1 AND COALESCE(subject, 'user') = ?
 		 ORDER BY importance DESC, timestamp DESC
@@ -371,11 +427,13 @@ func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 	for rows.Next() {
 		var f Fact
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+		var embData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
+		f.Embedding = decodeEmbedding(embData)
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -472,10 +530,10 @@ func (s *Store) DeactivateFact(factID int64) error {
 
 // AllActiveFacts returns every active fact (both user and self).
 // Used by the agent to see the full memory state when deciding
-// what to update or consolidate.
+// what to update or consolidate. Includes cached embeddings.
 func (s *Store) AllActiveFacts() ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
 		 FROM facts WHERE active = 1
 		 ORDER BY subject ASC, importance DESC, timestamp DESC`,
 	)
@@ -488,11 +546,13 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 	for rows.Next() {
 		var f Fact
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+		var embData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
+		f.Embedding = decodeEmbedding(embData)
 		facts = append(facts, f)
 	}
 	return facts, nil

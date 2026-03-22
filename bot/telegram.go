@@ -13,6 +13,7 @@ import (
 
 	"her-go/agent"
 	"her-go/config"
+	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
 	"her-go/scrub"
@@ -27,7 +28,8 @@ import (
 type Bot struct {
 	tb           *tele.Bot
 	llm          *llm.Client
-	agentLLM     *llm.Client // Liquid LFM — background tool-calling brain
+	agentLLM     *llm.Client    // background tool-calling brain
+	embedClient  *embed.Client  // local embedding model for similarity
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
@@ -41,7 +43,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedClient *embed.Client, store *memory.Store) (*Bot, error) {
 	// tele.Settings configures the bot's behavior.
 	// Poller controls how the bot receives updates from Telegram.
 	settings := tele.Settings{
@@ -64,6 +66,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, store 
 		tb:           tb,
 		llm:          llmClient,
 		agentLLM:     agentLLM,
+		embedClient:  embedClient,
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
@@ -216,7 +219,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	log.Printf("  → reply sent, handing off to agent")
 
 	// Step 11: Run the agent in a background goroutine.
-	go b.runAgent(userText, resp.Content, c)
+	// Pass msgID so agent metrics link back to the triggering message.
+	go b.runAgent(userText, resp.Content, msgID, c)
 
 	return nil
 }
@@ -282,7 +286,7 @@ func (b *Bot) handleClear(c tele.Context) error {
 // runAgent kicks off the background agent (Liquid LFM) to process
 // the latest exchange. The agent decides what memory operations to
 // perform and can optionally send follow-up messages through Deepseek.
-func (b *Bot) runAgent(userMessage, miraResponse string, c tele.Context) {
+func (b *Bot) runAgent(userMessage, miraResponse string, triggerMsgID int64, c tele.Context) {
 	// Build a send_message callback that routes through Deepseek.
 	// When the agent calls send_message, we generate a response with
 	// the conversational model and send it to Telegram.
@@ -301,7 +305,7 @@ func (b *Bot) runAgent(userMessage, miraResponse string, c tele.Context) {
 		return c.Send(resp.Content)
 	}
 
-	agent.Run(b.agentLLM, b.store, userMessage, miraResponse, b.cfg.Persona.PersonaFile, sendMsg)
+	agent.Run(b.agentLLM, b.store, b.embedClient, b.cfg.Embed.SimilarityThreshold, userMessage, miraResponse, b.cfg.Persona.PersonaFile, triggerMsgID, sendMsg)
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
