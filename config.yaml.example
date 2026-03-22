@@ -20,6 +20,10 @@ embed:
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
 
+search:
+  tavily_api_key: "${TAVILY_API_KEY}"
+  tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
+
 memory:
   db_path: "./her.db"
   recent_messages: 20       # sliding window size

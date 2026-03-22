@@ -1,6 +1,5 @@
 // Package bot handles the Telegram interface — receiving messages,
-// running them through the pipeline (log → scrub → LLM → reply),
-// and managing the typing indicator.
+// running them through the agent pipeline, and managing the UI.
 package bot
 
 import (
@@ -18,6 +17,7 @@ import (
 	"her-go/memory"
 	"her-go/persona"
 	"her-go/scrub"
+	"her-go/search"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -28,25 +28,22 @@ import (
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
 	tb           *tele.Bot
-	llm          *llm.Client
-	agentLLM     *llm.Client    // background tool-calling brain
-	embedClient  *embed.Client  // local embedding model for similarity
+	llm          *llm.Client          // conversational model (Deepseek)
+	agentLLM     *llm.Client          // tool-calling orchestrator
+	embedClient  *embed.Client        // local embedding model for similarity
+	tavilyClient *search.TavilyClient // web search and URL extraction
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
 
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
-	// window starts fresh. sync.Map is Go's concurrent-safe map —
-	// like a regular dict but safe to read/write from multiple
-	// goroutines without explicit locking.
+	// window starts fresh.
 	conversationIDs sync.Map
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedClient *embed.Client, store *memory.Store) (*Bot, error) {
-	// tele.Settings configures the bot's behavior.
-	// Poller controls how the bot receives updates from Telegram.
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -68,14 +65,13 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 		llm:          llmClient,
 		agentLLM:     agentLLM,
 		embedClient:  embedClient,
+		tavilyClient: tavilyClient,
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
 	}
 
-	// Register command handlers. In telebot, commands like "/clear" are
-	// registered separately from regular text messages. The framework
-	// strips the leading "/" for you.
+	// Register command handlers.
 	tb.Handle("/clear", bot.handleClear)
 	tb.Handle("/stats", bot.handleStats)
 	tb.Handle("/forget", bot.handleForget)
@@ -83,9 +79,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 	tb.Handle("/reflect", bot.handleReflect)
 	tb.Handle("/persona", bot.handlePersona)
 
-	// Register message handlers. In telebot, you register handlers for
-	// different event types. tele.OnText fires for any text message.
-	// This is like a route decorator in Flask: @app.route("/")
+	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
 
 	return bot, nil
@@ -113,8 +107,13 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// handleMessage is the core pipeline — this is where every text message
-// flows through. The spec's message flow (steps 1-11) happens here.
+// handleMessage is the core pipeline. In the new agent-first architecture:
+//  1. Save & scrub the message
+//  2. Send a placeholder Telegram message
+//  3. Run the agent SYNCHRONOUSLY — it orchestrates searches, generates
+//     the response via the reply tool, and manages memory
+//  4. The placeholder message gets edited to show status updates and
+//     the final response as tools execute
 func (b *Bot) handleMessage(c tele.Context) error {
 	msg := c.Message()
 	userText := msg.Text
@@ -122,16 +121,16 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Get the active conversation ID for this chat.
 	conversationID := b.getConversationID(msg.Chat.ID)
 
-	log.Printf("─── incoming message ───")
+	log.Printf("--- incoming message ---")
 	log.Printf("  <user> %s", truncate(userText, 100))
 
-	// Step 3: Log the raw message to SQLite.
+	// Step 1: Log the raw message to SQLite.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
-		log.Printf("  ✗ error saving message: %v", err)
+		log.Printf("  error saving message: %v", err)
 	}
 
-	// Step 4: PII scrub the message.
+	// Step 2: PII scrub the message.
 	var scrubResult *scrub.ScrubResult
 	if b.cfg.Scrub.Enabled {
 		scrubResult = scrub.Scrub(userText)
@@ -150,23 +149,12 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
 		for _, entry := range scrubResult.Vault.Entries() {
 			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
-				log.Printf("  ✗ error saving PII vault entry: %v", err)
+				log.Printf("  error saving PII vault entry: %v", err)
 			}
 		}
 	}
 
-	// Step 5: Retrieve recent conversation history for context.
-	recentMsgs, err := b.store.RecentMessages(conversationID, b.cfg.Memory.RecentMessages)
-	if err != nil {
-		log.Printf("  ✗ error retrieving history: %v", err)
-		recentMsgs = nil
-	}
-	log.Printf("  context: %d history messages", len(recentMsgs))
-
-	// Step 6: Assemble the full prompt.
-	llmMessages := b.buildPrompt(scrubResult.Text, recentMsgs)
-
-	// Step 7: Send typing indicator.
+	// Step 3: Show typing indicator while we work.
 	stopTyping := make(chan struct{})
 	go func() {
 		_ = c.Notify(tele.Typing)
@@ -182,127 +170,91 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		}
 	}()
 
-	// Step 8: Call the LLM.
-	start := time.Now()
-	resp, err := b.llm.ChatCompletion(llmMessages)
-	close(stopTyping)
-	latencyMs := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		log.Printf("  ✗ LLM error: %v", err)
-		return c.Send("Sorry, I'm having trouble thinking right now. Try again in a moment?")
+	// Step 4: Send a placeholder message that we'll edit with status
+	// updates as the agent works. The thinking emoji signals to the user
+	// that we're processing their message.
+	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
+	if sendErr != nil {
+		close(stopTyping)
+		log.Printf("  error sending placeholder: %v", sendErr)
+		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
 	}
 
-	log.Printf("  <mira> %s", truncate(resp.Content, 100))
-	log.Printf("  tokens: %d prompt + %d completion = %d total | cost: $%.6f | latency: %dms",
-		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
-
-	// Step 9: Log the response to SQLite.
-	respID, err := b.store.SaveMessage("assistant", resp.Content, resp.Content, conversationID)
-	if err != nil {
-		log.Printf("  ✗ error saving response: %v", err)
-	}
-
-	// Update token counts on both messages.
-	if msgID > 0 {
-		b.store.UpdateMessageTokenCount(msgID, resp.PromptTokens)
-	}
-	if respID > 0 {
-		b.store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-	}
-
-	// Log metrics.
-	if respID > 0 {
-		b.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
-	}
-
-	// Step 10: Deanonymize and send reply.
-	replyText := scrub.Deanonymize(resp.Content, scrubResult.Vault)
-	if err := c.Send(replyText); err != nil {
+	// Step 5: Build the status callback. This function gets passed to
+	// the agent and is called whenever a tool wants to update the
+	// Telegram message — search status indicators, the final reply, etc.
+	//
+	// In Python you'd pass a lambda: lambda status: bot.edit_message(msg_id, status)
+	// In Go, closures work the same way — this function "closes over"
+	// the placeholder variable so it always edits the right message.
+	statusCallback := func(status string) error {
+		_, err := c.Bot().Edit(placeholder, status)
 		return err
 	}
 
-	log.Printf("  → reply sent, handing off to agent")
+	// Step 6: Run the agent SYNCHRONOUSLY. The agent is the pipeline now —
+	// it decides whether to search, what to reply, and handles memory.
+	// This blocks until the agent has called reply and finished.
+	result, err := agent.Run(agent.RunParams{
+		AgentLLM:            b.agentLLM,
+		ChatLLM:             b.llm,
+		Store:               b.store,
+		EmbedClient:         b.embedClient,
+		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:        b.tavilyClient,
+		Cfg:                 b.cfg,
+		ScrubbedUserMessage: scrubResult.Text,
+		ScrubVault:          scrubResult.Vault,
+		ConversationID:      conversationID,
+		TriggerMsgID:        msgID,
+		StatusCallback:      statusCallback,
+		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+	})
 
-	// Step 11: Run the agent in a background goroutine.
-	// Pass msgID so agent metrics link back to the triggering message.
-	go b.runAgent(userText, resp.Content, msgID, c)
+	close(stopTyping)
+
+	if err != nil {
+		log.Printf("  agent error: %v", err)
+		// If the agent failed entirely, edit the placeholder with an error message.
+		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
+		return nil
+	}
+
+	log.Printf("  <mira> %s", truncate(result.ReplyText, 100))
+	log.Printf("  -> reply sent via agent pipeline")
 
 	return nil
 }
 
-// buildPrompt assembles the layered prompt from system prompt + history + current message.
-// For v0.1, we use: prompt.md + recent messages + current message.
-// v0.2 will add persona.md + reflections + facts.
-func (b *Bot) buildPrompt(currentMessage string, history []memory.Message) []llm.ChatMessage {
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: b.buildSystemPrompt()},
-	}
-
-	// Add conversation history. We use the scrubbed versions so the LLM
-	// never sees raw PII from past messages either.
-	for _, msg := range history {
-		content := msg.ContentScrubbed
-		if content == "" {
-			content = msg.ContentRaw // fallback if scrubbing wasn't enabled
-		}
-		messages = append(messages, llm.ChatMessage{
-			Role:    msg.Role,
-			Content: content,
-		})
-	}
-
-	// Add the current (scrubbed) message.
-	messages = append(messages, llm.ChatMessage{
-		Role:    "user",
-		Content: currentMessage,
-	})
-
-	return messages
-}
-
 // getConversationID returns the active conversation ID for a chat.
-// If no conversation has been started (or after a /clear), it creates
-// a new one with a timestamp suffix.
 func (b *Bot) getConversationID(chatID int64) string {
 	key := fmt.Sprintf("%d", chatID)
-
-	// Load existing ID, or create a new one if none exists.
-	// sync.Map.LoadOrStore is atomic — if two goroutines race here,
-	// only one value gets stored. Same idea as Python's
-	// dict.setdefault() but thread-safe.
 	val, _ := b.conversationIDs.LoadOrStore(key, fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix()))
-	return val.(string) // type assertion: sync.Map stores interface{}, we know it's a string
+	return val.(string)
 }
 
-// handleClear resets the conversation context. Old messages stay in the
-// DB but won't be included in future prompts since the conversation ID changes.
+// handleClear resets the conversation context.
 func (b *Bot) handleClear(c tele.Context) error {
 	chatID := c.Message().Chat.ID
 	key := fmt.Sprintf("%d", chatID)
 
-	// Store a new conversation ID with a fresh timestamp.
 	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 	b.conversationIDs.Store(key, newID)
 
-	log.Printf("─── /clear ── conversation reset for chat %d → %s", chatID, newID)
+	log.Printf("--- /clear -- conversation reset for chat %d -> %s", chatID, newID)
 	return c.Send("Context cleared. Fresh start!")
 }
 
 // handleStats shows aggregate usage statistics.
-// Pulls data from the metrics and messages tables and formats it
-// as a Telegram message with HTML formatting.
 func (b *Bot) handleStats(c tele.Context) error {
 	stats, err := b.store.GetStats()
 	if err != nil {
 		return c.Send("couldn't load stats right now, sorry!")
 	}
 
-	// Build a nicely formatted stats message.
-	// We use HTML parse mode because it's easier to work with
-	// programmatically than MarkdownV2 (no escape character hell).
 	msg := fmt.Sprintf(
-		"<b>📊 Stats</b>\n\n"+
+		"<b>\U0001F4CA Stats</b>\n\n"+
 			"<b>Messages:</b> %d total (%d you, %d me)\n"+
 			"<b>Active days:</b> %d\n\n"+
 			"<b>Memory:</b> %d facts (%d about you, %d about me)\n\n"+
@@ -324,17 +276,14 @@ func (b *Bot) handleStats(c tele.Context) error {
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// handleForget deactivates a fact by ID. Usage: /forget 3
-// If no ID is given, lists all active facts so the user can pick one.
+// handleForget deactivates a fact by ID.
 func (b *Bot) handleForget(c tele.Context) error {
 	args := strings.TrimSpace(c.Message().Payload)
 
-	// If no argument, show active facts so the user can pick.
 	if args == "" {
 		return b.handleFacts(c)
 	}
 
-	// Parse the fact ID.
 	var factID int64
 	if _, err := fmt.Sscanf(args, "%d", &factID); err != nil {
 		return c.Send("usage: /forget <fact_id>\n\nUse /facts to see all active facts with their IDs.")
@@ -344,12 +293,11 @@ func (b *Bot) handleForget(c tele.Context) error {
 		return c.Send(fmt.Sprintf("couldn't forget fact %d: %v", factID, err))
 	}
 
-	log.Printf("─── /forget ── deactivated fact ID=%d", factID)
+	log.Printf("--- /forget -- deactivated fact ID=%d", factID)
 	return c.Send(fmt.Sprintf("Done — forgot fact #%d.", factID))
 }
 
 // handleFacts lists all active facts, grouped by subject.
-// Useful for seeing what Mira knows and finding fact IDs for /forget.
 func (b *Bot) handleFacts(c tele.Context) error {
 	facts, err := b.store.AllActiveFacts()
 	if err != nil {
@@ -361,9 +309,8 @@ func (b *Bot) handleFacts(c tele.Context) error {
 	}
 
 	var msg strings.Builder
-	msg.WriteString("<b>🧠 What I Know</b>\n\n")
+	msg.WriteString("<b>\U0001F9E0 What I Know</b>\n\n")
 
-	// Group by subject, show user facts first.
 	currentSubject := ""
 	for _, f := range facts {
 		if f.Subject != currentSubject {
@@ -374,7 +321,7 @@ func (b *Bot) handleFacts(c tele.Context) error {
 				msg.WriteString("\n<b>About me:</b>\n")
 			}
 		}
-		msg.WriteString(fmt.Sprintf("  #%d [%s, ★%d] %s\n", f.ID, f.Category, f.Importance, f.Fact))
+		msg.WriteString(fmt.Sprintf("  #%d [%s, \u2605%d] %s\n", f.ID, f.Category, f.Importance, f.Fact))
 	}
 
 	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a fact.</i>")
@@ -393,20 +340,15 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// handleReflect manually triggers a reflection. Mira looks at her recent
-// conversations and self-facts and writes a journal entry.
+// handleReflect manually triggers a reflection.
 func (b *Bot) handleReflect(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
 
-	// Get the most recent messages across ALL conversations.
-	// We use GlobalRecentMessages here instead of per-conversation,
-	// because /reflect should work even after a /clear or bot restart.
 	recent, err := b.store.GlobalRecentMessages(10)
 	if err != nil || len(recent) < 2 {
 		return c.Send("Not enough conversation history to reflect on yet. Keep chatting!")
 	}
 
-	// Build a summary of recent facts for the reflection.
 	facts, _ := b.store.RecentFacts("user", 10)
 	selfFacts, _ := b.store.RecentFacts("self", 10)
 
@@ -424,7 +366,6 @@ func (b *Bot) handleReflect(c tele.Context) error {
 		return c.Send("I don't have enough memories to reflect on yet. Let's keep talking!")
 	}
 
-	// Use the last user message and Mira response as the exchange.
 	var lastUser, lastMira string
 	for i := len(recent) - 1; i >= 0; i-- {
 		if recent[i].Role == "user" && lastUser == "" {
@@ -440,22 +381,20 @@ func (b *Bot) handleReflect(c tele.Context) error {
 
 	err = persona.Reflect(b.llm, b.store, lastUser, lastMira, factStrings)
 	if err != nil {
-		log.Printf("  ✗ manual reflection error: %v", err)
+		log.Printf("  manual reflection error: %v", err)
 		return c.Send("I tried to reflect but something went wrong. Try again?")
 	}
 
-	// Fetch the reflection we just saved.
 	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-10 * time.Second))
 	if len(reflections) > 0 {
-		return c.Send(fmt.Sprintf("💭 <b>Reflection</b>\n\n<i>%s</i>", reflections[len(reflections)-1].Fact),
+		return c.Send(fmt.Sprintf("\U0001F4AD <b>Reflection</b>\n\n<i>%s</i>", reflections[len(reflections)-1].Fact),
 			&tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 
 	return c.Send("Done reflecting. Use /facts to see what I wrote.")
 }
 
-// handlePersona shows the current persona.md content, or with "history"
-// shows past versions.
+// handlePersona shows the current persona.md content.
 func (b *Bot) handlePersona(c tele.Context) error {
 	args := strings.TrimSpace(c.Message().Payload)
 
@@ -463,13 +402,12 @@ func (b *Bot) handlePersona(c tele.Context) error {
 		return b.handlePersonaHistory(c)
 	}
 
-	// Read current persona.md from disk.
 	data, err := os.ReadFile(b.cfg.Persona.PersonaFile)
 	if err != nil || len(data) == 0 {
 		return c.Send("No persona description yet. I'll develop one as we keep chatting!")
 	}
 
-	msg := fmt.Sprintf("🪞 <b>Who I Am Right Now</b>\n\n<i>%s</i>", string(data))
+	msg := fmt.Sprintf("\U0001FA9E <b>Who I Am Right Now</b>\n\n<i>%s</i>", string(data))
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
@@ -481,11 +419,10 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	}
 
 	var msg strings.Builder
-	msg.WriteString("🪞 <b>Persona History</b>\n\n")
+	msg.WriteString("\U0001FA9E <b>Persona History</b>\n\n")
 	for _, v := range versions {
-		msg.WriteString(fmt.Sprintf("<b>v%d</b> — %s\n<i>Trigger: %s</i>\n",
+		msg.WriteString(fmt.Sprintf("<b>v%d</b> \u2014 %s\n<i>Trigger: %s</i>\n",
 			v.ID, v.Timestamp.Format("Jan 2, 3:04 PM"), v.Trigger))
-		// Truncate long personas for the list view.
 		content := v.Content
 		if len(content) > 150 {
 			content = content[:150] + "..."
@@ -496,47 +433,12 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// runAgent kicks off the background agent (Liquid LFM) to process
-// the latest exchange. The agent decides what memory operations to
-// perform and can optionally send follow-up messages through Deepseek.
-func (b *Bot) runAgent(userMessage, miraResponse string, triggerMsgID int64, c tele.Context) {
-	// Build a send_message callback that routes through Deepseek.
-	// When the agent calls send_message, we generate a response with
-	// the conversational model and send it to Telegram.
-	sendMsg := func(instruction string) error {
-		// Build a minimal prompt for the follow-up.
-		messages := []llm.ChatMessage{
-			{Role: "system", Content: b.buildSystemPrompt()},
-			{Role: "user", Content: instruction},
-		}
-
-		resp, err := b.llm.ChatCompletion(messages)
-		if err != nil {
-			return fmt.Errorf("generating follow-up: %w", err)
-		}
-
-		return c.Send(resp.Content)
-	}
-
-	agent.Run(
-		b.agentLLM,
-		b.llm, // conversational model for reflections + persona rewrites
-		b.store,
-		b.embedClient,
-		b.cfg.Embed.SimilarityThreshold,
-		userMessage,
-		miraResponse,
-		b.cfg.Persona.PersonaFile,
-		b.cfg.Persona.ReflectionMemoryThreshold,
-		b.cfg.Persona.RewriteEveryNConversations,
-		triggerMsgID,
-		sendMsg,
-	)
-}
-
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
 // fresh from disk (hot-reloadable), then layering in persona.md and
 // memory context (extracted facts).
+//
+// This is still used by /reflect which calls the conversational model
+// directly. The main message pipeline now uses the agent's buildChatSystemPrompt.
 func (b *Bot) buildSystemPrompt() string {
 	var parts []string
 

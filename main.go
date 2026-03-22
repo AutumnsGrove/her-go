@@ -14,21 +14,17 @@ import (
 	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
+	"her-go/search"
 )
 
 func main() {
 	// Load configuration from config.yaml.
-	// os.Args would let us accept a custom path, but for simplicity
-	// we hardcode it. Single binary, single config file.
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Quick sanity checks — fail fast if critical config is missing.
-	// log.Fatalf prints the message and exits with code 1.
-	// It's like sys.exit() with a print — used for unrecoverable errors
-	// that should prevent the app from starting at all.
 	if cfg.Telegram.Token == "" {
 		log.Fatalf("Telegram token is required. Set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}
@@ -41,14 +37,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	// defer store.Close() ensures the database connection is closed when
-	// main() returns. Even if we hit a fatal error below, the DB gets
-	// closed cleanly. In Python you'd use "with" or atexit.
 	defer store.Close()
 
 	log.Printf("Database initialized at %s", cfg.Memory.DBPath)
 
-	// Create the LLM client.
+	// Create the LLM client (conversational model — Deepseek).
 	llmClient := llm.NewClient(
 		cfg.LLM.BaseURL,
 		cfg.LLM.APIKey,
@@ -58,7 +51,7 @@ func main() {
 	)
 	log.Printf("LLM client configured: %s (model: %s)", cfg.LLM.BaseURL, cfg.LLM.Model)
 
-	// Create the agent LLM client (Liquid LFM for tool-calling).
+	// Create the agent LLM client (tool-calling orchestrator).
 	// This shares the same base URL and API key as the main client
 	// but uses a different model optimized for tool calling.
 	agentModel := cfg.Agent.Model
@@ -83,12 +76,7 @@ func main() {
 	log.Printf("Agent client configured: %s (model: %s)", cfg.LLM.BaseURL, agentModel)
 
 	// Create the embedding client for semantic similarity.
-	// This talks to a local LM Studio (or Ollama) server running an
-	// embedding model. Used for memory deduplication — before saving a
-	// new fact, we check if a semantically similar one already exists.
-	//
-	// The client is optional — if the embed config is empty, the agent
-	// will skip duplicate checking rather than crash.
+	// Optional — if not configured, the agent skips duplicate checking.
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model)
@@ -98,31 +86,34 @@ func main() {
 		log.Println("Embed client not configured — semantic duplicate checking disabled")
 	}
 
+	// Create the Tavily client for web search and URL extraction.
+	// Optional — if not configured, the agent's search tools will
+	// return an error message instead of crashing.
+	var tavilyClient *search.TavilyClient
+	if cfg.Search.TavilyAPIKey != "" {
+		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
+		log.Printf("Tavily client configured (web search enabled)")
+	} else {
+		log.Println("Tavily client not configured — web search disabled")
+	}
+
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, embedClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, embedClient, tavilyClient, store)
 	if err != nil {
 		log.Fatalf("Failed to create Telegram bot: %v", err)
 	}
 
-	// Handle graceful shutdown. When you press Ctrl+C (SIGINT) or the
-	// system sends SIGTERM (e.g., during deployment), we want to stop
-	// the bot cleanly instead of just killing the process.
-	//
-	// Channels are Go's way of communicating between goroutines — like
-	// asyncio.Queue in Python. os/signal.Notify sends OS signals into
-	// the channel, and we read from it in a goroutine.
+	// Handle graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// This goroutine waits for a shutdown signal in the background.
 	go func() {
-		sig := <-sigChan // blocks until a signal arrives
+		sig := <-sigChan
 		log.Printf("Received %v, shutting down...", sig)
 		tgBot.Stop()
 	}()
 
-	// Start the bot. This blocks until Stop() is called (from the signal
-	// handler above) or an unrecoverable error occurs.
+	// Start the bot. This blocks until Stop() is called.
 	tgBot.Start()
 	log.Println("Bot stopped. Goodbye!")
 }

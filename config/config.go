@@ -28,6 +28,7 @@ type Config struct {
 	Agent    AgentConfig    `yaml:"agent"`
 	Memory   MemoryConfig   `yaml:"memory"`
 	Embed    EmbedConfig    `yaml:"embed"`
+	Search   SearchConfig   `yaml:"search"`
 	Scrub    ScrubConfig    `yaml:"scrub"`
 	Persona  PersonaConfig  `yaml:"persona"`
 }
@@ -76,6 +77,12 @@ type EmbedConfig struct {
 	BaseURL            string  `yaml:"base_url"`
 	Model              string  `yaml:"model"`
 	SimilarityThreshold float64 `yaml:"similarity_threshold"` // above this = duplicate (0.0-1.0)
+}
+
+// SearchConfig controls web search and book search integrations.
+type SearchConfig struct {
+	TavilyAPIKey string `yaml:"tavily_api_key"`
+	TavilyBaseURL string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
 }
 
 // PersonaConfig controls the persona evolution system.
