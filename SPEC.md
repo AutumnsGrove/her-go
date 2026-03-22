@@ -21,33 +21,41 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 ## Architecture
 
 ```
-┌─────────────┐         ┌──────────────────────────────────┐
-│  Telegram   │◀───────▶│         her-go binary            │
-│  (user)     │         │                                  │
-└─────────────┘         │  ┌──────────┐   ┌─────────────┐  │
-                        │  │ Telegram │   │  Scheduler  │  │
-                        │  │ Handler  │   │  (reminders)│  │
-                        │  └────┬─────┘   └──────┬──────┘  │
-                        │       │                │         │
-                        │       ▼                │         │
-                        │  ┌──────────┐          │         │
-                        │  │ Pipeline │◀─────────┘         │
-                        │  │          │                    │
-                        │  │ 1. Log raw message            │
-                        │  │ 2. PII scrub                  │
-                        │  │ 3. Retrieve memories          │
-                        │  │ 4. Build prompt               │
-                        │  │ 5. Call LLM                   │
-                        │  │ 6. Log response + metrics     │
-                        │  │ 7. Send reply                 │
-                        │  └────┬─────┘                    │
-                        │       │                          │
-                        │       ▼                          │
-                        │  ┌──────────┐   ┌─────────────┐  │
-                        │  │ SQLite   │   │  OpenRouter │  │
-                        │  │ (local)  │   │  (external) │  │
-                        │  └──────────┘   └─────────────┘  │
-                        └──────────────────────────────────┘
+┌─────────────┐         ┌──────────────────────────────────────────────────┐
+│  Telegram   │◀───────▶│              her-go binary                       │
+│  (user)     │         │                                                  │
+└─────────────┘         │  ┌──────────┐  ┌───────────┐  ┌──────────────┐  │
+                        │  │ Telegram │  │ Scheduler │  │  Mood        │  │
+                        │  │ Handler  │  │ (remind)  │  │  Check-ins   │  │
+                        │  └────┬─────┘  └─────┬─────┘  └──────┬───────┘  │
+                        │       │              │               │          │
+                        │       ▼              │               │          │
+                        │  ┌──────────┐◀───────┴───────────────┘          │
+                        │  │  Agent   │                                   │
+                        │  │ Pipeline │                                   │
+                        │  │          │                                   │
+                        │  │ 1. Log + scrub                               │
+                        │  │ 2. Agent orchestration                       │
+                        │  │ 3. Tool calls (search, memory, integrations) │
+                        │  │ 4. Reply generation                          │
+                        │  │ 5. Persona evolution                         │
+                        │  └────┬─────┘                                   │
+                        │       │                                         │
+                        │       ▼                                         │
+                        │  ┌──────────┐  ┌─────────────┐  ┌───────────┐  │
+                        │  │ SQLite   │  │  OpenRouter  │  │  External │  │
+                        │  │ (local)  │  │  (LLM)      │  │  APIs     │  │
+                        │  └────┬─────┘  └─────────────┘  └───────────┘  │
+                        │       │                          ▲              │
+                        │       │              ┌───────────┘              │
+                        │       │              │  Todoist, GitHub,        │
+                        │       │              │  Weather, HealthKit      │
+                        │       ▼              │                          │
+                        │  ┌──────────┐  ┌─────────────┐                  │
+                        │  │ D1 Sync  │  │  Obsidian   │                  │
+                        │  │ (v0.7)   │  │  (local fs) │                  │
+                        │  └──────────┘  └─────────────┘                  │
+                        └──────────────────────────────────────────────────┘
 ```
 
 ### Message Flow
@@ -471,6 +479,9 @@ her-go/
 │   └── telegram.go      # Telegram bot setup, message handlers, commands
 ├── llm/
 │   └── client.go        # OpenRouter / OpenAI-compatible client
+├── agent/
+│   ├── agent.go         # Agent loop, tool dispatch, reply generation
+│   └── tools.go         # Tool definitions for the agent
 ├── memory/
 │   ├── store.go         # SQLite operations (read/write messages, facts, summaries)
 │   ├── extract.go       # LLM-based fact extraction
@@ -478,19 +489,53 @@ her-go/
 ├── persona/
 │   ├── evolution.go     # Reflection + persona rewrite logic
 │   └── traits.go        # Trait score tracking + updates
-├── voice/
-│   ├── stt.go           # Speech-to-text: Parakeet / CF Workers AI integration
-│   └── tts.go           # Text-to-speech: Kokoro local TTS (v0.5+)
+├── compact/
+│   └── compact.go       # Conversation history compaction (summary + sliding window)
 ├── scrub/
 │   ├── scrub.go         # Tiered PII detection + redaction/tokenization
 │   └── vault.go         # Session-scoped token↔original mapping for deanonymization
+├── search/
+│   ├── tavily.go        # Tavily web search + URL extraction client
+│   └── books.go         # Open Library book search
+├── embed/
+│   └── embed.go         # Local embedding model client for semantic similarity
+├── logger/
+│   └── logger.go        # Shared charmbracelet/log base logger
 ├── scheduler/
 │   └── scheduler.go     # Reminder checker + delivery
 ├── config/
 │   └── config.go        # Config loading (YAML + env vars)
+├── cmd/
+│   ├── root.go          # Cobra CLI root command
+│   ├── run.go           # Bot startup (her run)
+│   ├── setup.go         # Launchd service installation (her setup)
+│   ├── start.go         # Service start (her start)
+│   ├── stop.go          # Service stop (her stop)
+│   ├── status.go        # Service status (her status)
+│   ├── logs.go          # Tail service logs (her logs)
+│   └── install.go       # Build from source (her install)
+├── voice/               # (v0.3+)
+│   ├── stt.go           # Speech-to-text: Parakeet / CF Workers AI
+│   └── tts.go           # Text-to-speech: Kokoro local TTS (v0.5+)
+├── integrate/           # (v0.6+) External service integrations
+│   ├── todoist.go       # Todoist task management
+│   ├── github.go        # GitHub issues
+│   ├── weather.go       # Weather via Open-Meteo (no API key needed)
+│   ├── obsidian.go      # Obsidian vault reader
+│   └── health.go        # Apple HealthKit bridge (calls her-health Swift CLI)
+├── mood/                # (v0.6+) Mood tracking + check-in scheduler
+│   └── mood.go          # Check-in logic, inline keyboards, mood storage
+├── sync/                # (v0.7+) D1 cloud sync
+│   ├── push.go          # Local → D1 sync
+│   ├── pull.go          # D1 → local sync
+│   └── merge.go         # Smart merge with embedding-based dedup
+├── her-health/          # (future) Swift CLI for optional HealthKit bridge
+│   ├── main.swift       # Read/write Apple Health data as JSON
+│   └── Makefile         # Build the Swift binary
 ├── prompt.md            # Base system prompt (static, user-authored, hot-reloadable)
 ├── persona.md           # Evolving personality (bot-authored, versioned in DB)
-├── config.yaml          # Configuration
+├── config.yaml          # Configuration (gitignored)
+├── config.yaml.example  # Template config
 ├── her.db               # SQLite database (created at runtime, gitignored)
 ├── go.mod
 ├── go.sum
@@ -581,6 +626,203 @@ You speak → Telegram (.ogg)
 **Everything local.** No audio ever leaves the Mac Mini except as Telegram voice memos between you and the bot. STT and TTS both run on-device.
 
 **Result:** A full voice conversation loop. You talk to her, she talks back. Like the movie.
+
+### v0.6 — She Reaches Out (Future)
+
+Mira becomes proactive and gains awareness of your world beyond the chat window.
+
+#### Proactive Mood Check-ins
+
+Mira texts YOU on a configurable schedule (every few hours, or at specific times). Uses Telegram inline keyboards for frictionless responses — no typing required.
+
+```
+┌─────────────────────────────────────┐
+│  Hey, how are you feeling right now? │
+│                                     │
+│  [😊 Great] [🙂 Good] [😐 Meh]     │
+│  [😔 Rough] [😞 Bad]               │
+└─────────────────────────────────────┘
+```
+
+Follow-up is contextual: if you tap "Rough", Mira asks a brief open-ended follow-up ("What's going on?"). If "Great", she might just acknowledge warmly and move on. The mood data feeds into her memory — she can notice patterns over time ("you've been feeling rough most afternoons this week").
+
+**Telegram inline keyboards** (telebot `ReplyMarkup` with `InlineButton`) can also be used for:
+- Quick yes/no confirmations ("Want me to create a task for that?")
+- Rating things she recommends ("Was that book suggestion helpful?")
+- Multi-choice questions during reflection prompts
+
+#### Weather & Location Awareness
+
+Lightweight environmental context. Mira knows what the weather is like where you are, so she can reference it naturally ("stay dry today" / "nice day to work outside").
+
+- Weather data via a free API (OpenWeatherMap or Open-Meteo — no API key needed for Open-Meteo)
+- Location configured in `config.yaml` (lat/lon or city name) — not GPS tracking
+- Fetched on a schedule (hourly or on first message of the day), cached locally
+- Injected into the system prompt as environmental context
+- Mira doesn't announce the weather unprompted — she weaves it in when relevant
+
+#### Todoist Integration
+
+Mira can see your task list and help manage it. This makes her aware of what you're supposed to be doing vs. what you're actually doing.
+
+- Read tasks: "What's on my plate today?" → Mira queries Todoist and summarizes
+- Create tasks: "Remind me to review the PR tomorrow" → Mira creates a Todoist task
+- Contextual awareness: Mira knows you have 5 overdue tasks and can reference that naturally
+- Implementation: thin wrapper around the Todoist REST API as agent tools (`todoist_list`, `todoist_create`, `todoist_complete`)
+- API key stored in `config.yaml` / `secrets.json`
+
+#### GitHub Issues Integration
+
+Mira understands your development work through your issue tracker.
+
+- Read issues: "What's open on grove.place?" → queries the GitHub API
+- Create issues: describe a bug in chat, she files it with proper labels
+- Cross-reference with Todoist — "you have a task for this but no issue, want me to file one?"
+- Implementation: thin wrapper around GitHub REST API as agent tools (`github_list_issues`, `github_create_issue`)
+- Scoped to specific repos configured in `config.yaml`
+
+#### Obsidian Journal Integration
+
+Mira can read and reference your personal notes. This gives her context from your own writing — things you've thought about but never told her directly.
+
+- Read notes: Mira can search your vault for relevant context when you mention a topic
+- Implementation via Obsidian CLI (`npx obsidian-cli`) or direct file reads from the vault path
+- Vault path configured in `config.yaml`
+- Read-only by default — Mira doesn't write to your vault unless explicitly asked
+- Privacy consideration: vault content stays local, only relevant snippets are injected into prompts (same as fact retrieval)
+
+#### Mood Tracking (Internal)
+
+Mira tracks your wellbeing through proactive check-ins and conversational inference. All data lives in SQLite — no external dependencies.
+
+**Mood data flow:**
+```
+Proactive check-in (inline keyboard) → mood rating
+  → optional free-text follow-up (NLP'd into structured data)
+  → stored in SQLite (mood_entries table)
+  → available to Mira as context ("you've been trending down this week")
+```
+
+**Free-text input:** If you'd rather type than tap buttons, Mira accepts that too. She runs the text through the LLM to extract a rating + structured tags (energy level, stress, social, etc.) — same pattern as fact extraction. Lowest friction wins.
+
+**New schema:**
+```sql
+CREATE TABLE mood_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    rating INTEGER NOT NULL,        -- 1-5 scale
+    note TEXT,                      -- optional follow-up text
+    tags TEXT,                      -- JSON: energy, stress, social context
+    source TEXT DEFAULT 'checkin',  -- 'checkin', 'inferred', 'manual'
+    conversation_id TEXT
+);
+```
+
+**Future: Apple HealthKit bridge (v0.6+, optional).** A thin Swift CLI tool (`her-health`) that bridges mood data to/from Apple Health, and pulls in additional signals like sleep duration, step count, and active energy. This enables Mira to notice correlations ("you always feel rough after short sleep nights") but is not required for mood tracking to work. See `her-health/` in the project structure.
+
+**Result:** Mira is aware of your tasks, your weather, your notes, and your wellbeing. She reaches out instead of waiting. She has buttons.
+
+### v0.7 — She Remembers Everywhere (Future)
+
+Mira's memory becomes portable and durable via Cloudflare D1 sync.
+
+#### Design: Hybrid Local-Primary with Cloud Sync
+
+SQLite remains the source of truth during operation. D1 is a durable, edge-replicated backup that enables portability across machines.
+
+**Sync model — option 3 (cold-start pull, periodic push):**
+```
+Machine A (home Mac Mini)          Cloudflare D1
+     │                                  │
+     │  ── push (periodic) ──────────▶  │
+     │                                  │
+     │                              Machine B (laptop)
+     │                                  │
+     │                   ◀── pull ──────│  (cold start)
+     │                                  │
+     │                   ── push ──────▶│  (periodic)
+     │                                  │
+     │  ◀── pull (next start) ──────────│
+```
+
+- On cold start: pull from D1 to bootstrap local SQLite
+- During operation: work against local SQLite (fast, offline-capable)
+- Periodically: push new rows to D1 (background goroutine, every N minutes)
+- CLI commands: `her sync push` / `her sync pull` / `her sync status`
+
+#### Smart Merge with Embeddings
+
+The tricky part: two machines may have accumulated different facts, reflections, and messages independently. A naive merge would create duplicates. The solution uses the same embedding infrastructure we already have for fact dedup.
+
+**Merge strategy per table:**
+
+| Table | Strategy |
+|---|---|
+| `messages` | Append-only. Use `(timestamp, conversation_id, role)` as natural key. Duplicates are rare — you're only chatting on one machine at a time. |
+| `facts` | **Smart merge via embeddings.** For each incoming fact, compute cosine similarity against existing facts. Above threshold → skip (duplicate). Below → insert. Same logic as the existing `checkDuplicate` in the agent. |
+| `persona_versions` | Append-only, ordered by timestamp. Latest version wins for active `persona.md`. |
+| `reflections` | Same as facts — embedding-based dedup. Reflections are stored as facts with `category='reflection'`. |
+| `metrics` | Append-only. Idempotent by `(timestamp, model, message_id)`. Conflicts are harmless. |
+| `summaries` | Keyed by `conversation_id`. If both sides have a summary for the same conversation, keep the longer one (more context). |
+| `mood_entries` | Append-only. Keyed by `(timestamp, source)`. |
+
+**Conflict resolution philosophy:** Last-write-wins for mutable state (persona file, trait scores). Embedding-based dedup for append-mostly data (facts, reflections). No conflicts possible for truly append-only data (messages, metrics).
+
+**Two-way sync algorithm:**
+```
+1. Pull from D1:
+   - Fetch all rows with timestamp > last_sync_timestamp
+   - For each row, run merge strategy per table
+   - Update last_sync_timestamp
+
+2. Push to D1:
+   - Select all local rows with timestamp > last_push_timestamp
+   - Batch insert to D1 (D1 supports batch SQL)
+   - Update last_push_timestamp
+
+3. Handle the rebase problem:
+   - If both sides have many new rows (big local DB + big D1 DB),
+     the embedding-based dedup handles it — it's O(n*m) but facts
+     tables are small (hundreds, not millions)
+   - For messages (potentially large), use the natural key to skip
+     existing rows efficiently
+```
+
+**What syncs vs. what stays local:**
+
+| Syncs to D1 | Stays local only |
+|---|---|
+| facts, reflections | raw message content (privacy) |
+| persona versions | PII vault entries |
+| mood entries | search cache |
+| metrics (aggregated) | agent turn logs |
+| conversation summaries | embedding vectors (recomputable) |
+
+**Privacy note:** Raw message content (`content_raw`) does NOT sync to D1. Only scrubbed content and extracted facts travel to the cloud. This preserves the privacy-first principle — D1 gets the memory, not the transcripts.
+
+#### New schema additions:
+```sql
+CREATE TABLE sync_state (
+    id INTEGER PRIMARY KEY,
+    last_push_timestamp DATETIME,
+    last_pull_timestamp DATETIME,
+    d1_database_id TEXT,
+    sync_enabled BOOLEAN DEFAULT 0
+);
+```
+
+#### New config:
+```yaml
+sync:
+  enabled: false
+  d1_database_id: ""
+  d1_api_token: "${CF_API_TOKEN}"
+  account_id: "${CF_ACCOUNT_ID}"
+  push_interval_minutes: 15
+  sync_messages: false        # opt-in: sync scrubbed message content
+```
+
+**Result:** Mira's memory is durable and portable. Start chatting on your Mac Mini, pick up on your laptop. Facts, personality, and mood history travel with her. Raw conversations stay private on the originating machine.
 
 ---
 
