@@ -1,0 +1,41 @@
+telegram:
+  token: "${TELEGRAM_BOT_TOKEN}"
+  mode: "poll"  # "poll" or "webhook"
+  webhook_url: ""  # only needed for webhook mode
+
+llm:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key: "${OPENROUTER_API_KEY}"
+  model: "minimax/minimax-m2-her"
+  temperature: 0.85
+  max_tokens: 1024
+
+memory:
+  db_path: "./her.db"
+  recent_messages: 20       # sliding window size
+  max_facts_in_context: 10  # top-K facts to inject
+  extraction_interval: 10   # extract facts every N messages
+
+scrub:
+  enabled: true
+  # tier 1 (hard redact) and tier 2 (tokenize) are always on
+  # tier 3 (names, places, context) passes through by design
+
+persona:
+  prompt_file: "./prompt.md"       # base template (static, user-authored)
+  persona_file: "./persona.md"     # evolving self-image (bot-authored)
+  rewrite_every_n_conversations: 20
+  reflection_memory_threshold: 8   # trigger reflection when N+ facts extracted from one conversation
+  max_trait_shift: 0.1             # max trait score change per rewrite cycle
+
+voice:
+  enabled: false               # v0.3+
+  stt:
+    engine: "parakeet"         # "parakeet" or "cf-workers-ai"
+    parakeet_path: ""          # path to parakeet binary
+  tts:
+    enabled: false             # v0.5+
+    engine: "kokoro"           # "kokoro" or future options
+    kokoro_path: ""            # path to kokoro binary/server
+    voice_id: ""               # which voice to use
+    reply_mode: "voice"        # "voice" (always voice reply) or "match" (reply in same format as input)
