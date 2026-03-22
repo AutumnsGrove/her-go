@@ -3,7 +3,10 @@
 package bot
 
 import (
+	"encoding/base64"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -36,6 +39,7 @@ type Bot struct {
 	tb           *tele.Bot
 	llm          *llm.Client          // conversational model (Deepseek)
 	agentLLM     *llm.Client          // tool-calling orchestrator
+	visionLLM    *llm.Client          // vision language model (Gemini Flash) — nil if not configured
 	embedClient  *embed.Client        // local embedding model for similarity
 	tavilyClient *search.TavilyClient // web search and URL extraction
 	store        *memory.Store
@@ -50,7 +54,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -71,6 +75,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 		tb:           tb,
 		llm:          llmClient,
 		agentLLM:     agentLLM,
+		visionLLM:    visionLLM,
 		embedClient:  embedClient,
 		tavilyClient: tavilyClient,
 		store:        store,
@@ -92,6 +97,11 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
+
+	// Register photo handler for image understanding (v0.2.5).
+	// In telebot, tele.OnPhoto fires when a user sends an image.
+	// Photos can optionally have a caption (text alongside the image).
+	tb.Handle(tele.OnPhoto, bot.handlePhoto)
 
 	return bot, nil
 }
@@ -209,6 +219,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
+		VisionLLM:           b.visionLLM,
 		Store:               b.store,
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
@@ -228,6 +239,169 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	if err != nil {
 		log.Error("agent error", "err", err)
 		// If the agent failed entirely, edit the placeholder with an error message.
+		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
+		return nil
+	}
+
+	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Info("─── reply sent ───")
+
+	return nil
+}
+
+// handlePhoto processes incoming photos with optional captions.
+// This is the entry point for v0.2.5 "She Sees" — image understanding.
+//
+// The flow is almost identical to handleMessage, but with extra steps:
+//  1. Download the image from Telegram's servers
+//  2. Base64-encode it (the format VLMs expect for inline images)
+//  3. Detect the MIME type (jpeg, png, etc.)
+//  4. Pass the image data + caption through the agent pipeline
+//
+// In telebot v4, tele.OnPhoto gives us c.Message().Photo which is a
+// single *tele.Photo (the highest-quality version Telegram selected).
+// The photo's FileID lets us download the actual bytes.
+func (b *Bot) handlePhoto(c tele.Context) error {
+	msg := c.Message()
+	photo := msg.Photo
+
+	if photo == nil {
+		return c.Send("I couldn't read that photo. Try sending it again?")
+	}
+
+	// Captions on photos live in msg.Caption, not msg.Text.
+	// This catches people who send a photo with a question like
+	// "what is this?" written underneath it.
+	caption := msg.Caption
+	conversationID := b.getConversationID(msg.Chat.ID)
+
+	log.Info("─── incoming photo ───")
+	if caption != "" {
+		log.Infof("  caption: %s", truncate(caption, 100))
+	}
+
+	// Step 1: Download the image from Telegram's servers.
+	// telebot's File method returns a ReadCloser — same idea as Python's
+	// response = requests.get(url), but you get a stream instead of
+	// the full body. We read all bytes with io.ReadAll (like response.content).
+	reader, err := c.Bot().File(&photo.File)
+	if err != nil {
+		log.Error("downloading photo", "err", err)
+		return c.Send("I couldn't download that photo. Try again?")
+	}
+	defer reader.Close()
+
+	imageBytes, err := io.ReadAll(reader)
+	if err != nil {
+		log.Error("reading photo bytes", "err", err)
+		return c.Send("I couldn't read that photo. Try again?")
+	}
+
+	// Step 2: Base64-encode the image.
+	// base64.StdEncoding.EncodeToString(data) is Go's equivalent of
+	// Python's base64.b64encode(data).decode('utf-8').
+	// The VLM expects this format inside a data: URI.
+	imageBase64 := base64.StdEncoding.EncodeToString(imageBytes)
+
+	// Step 3: Detect MIME type from the file bytes.
+	// http.DetectContentType reads the first 512 bytes and sniffs the
+	// format — like Python's magic library but built into the stdlib.
+	// Telegram usually sends JPEG, but users might send PNG or WebP.
+	imageMIME := http.DetectContentType(imageBytes)
+
+	log.Infof("  photo: %dx%d, %s, %d bytes", photo.Width, photo.Height, imageMIME, len(imageBytes))
+
+	// Step 4: Build the user message text.
+	// The agent sees this as the "user said" content. The image itself
+	// travels separately via RunParams.ImageBase64.
+	userText := "[User sent a photo]"
+	if caption != "" {
+		userText = "[User sent a photo] " + caption
+	}
+
+	// From here, same pipeline as handleMessage: save, scrub, type, run agent.
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	if err != nil {
+		log.Error("saving message", "err", err)
+	}
+
+	// PII scrub the caption (not the image — images aren't text).
+	var scrubResult *scrub.ScrubResult
+	if b.cfg.Scrub.Enabled {
+		scrubResult = scrub.Scrub(userText)
+		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
+			log.Info("PII scrubbed", "tokens", vaultCount)
+		}
+	} else {
+		scrubResult = &scrub.ScrubResult{
+			Text:  userText,
+			Vault: scrub.NewVault(),
+		}
+	}
+
+	if msgID > 0 {
+		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
+		for _, entry := range scrubResult.Vault.Entries() {
+			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
+				log.Error("saving PII vault entry", "err", err)
+			}
+		}
+	}
+
+	// Typing indicator.
+	stopTyping := make(chan struct{})
+	go func() {
+		_ = c.Notify(tele.Typing)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTyping:
+				return
+			case <-ticker.C:
+				_ = c.Notify(tele.Typing)
+			}
+		}
+	}()
+
+	// Placeholder message.
+	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
+	if sendErr != nil {
+		close(stopTyping)
+		log.Error("sending placeholder", "err", sendErr)
+		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
+	}
+
+	statusCallback := func(status string) error {
+		_, err := c.Bot().Edit(placeholder, status)
+		return err
+	}
+
+	// Run the agent with image data attached.
+	result, err := agent.Run(agent.RunParams{
+		AgentLLM:            b.agentLLM,
+		ChatLLM:             b.llm,
+		VisionLLM:           b.visionLLM,
+		Store:               b.store,
+		EmbedClient:         b.embedClient,
+		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:        b.tavilyClient,
+		Cfg:                 b.cfg,
+		ScrubbedUserMessage: scrubResult.Text,
+		ScrubVault:          scrubResult.Vault,
+		ConversationID:      conversationID,
+		TriggerMsgID:        msgID,
+		StatusCallback:      statusCallback,
+		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+		ImageBase64:         imageBase64,
+		ImageMIME:           imageMIME,
+	})
+
+	close(stopTyping)
+
+	if err != nil {
+		log.Error("agent error", "err", err)
 		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
 		return nil
 	}
@@ -511,6 +685,10 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	if b.tavilyClient != nil {
 		tavilyStatus = "on"
 	}
+	visionStatus := "off"
+	if b.visionLLM != nil {
+		visionStatus = "on"
+	}
 
 	// Check if running under launchd.
 	managedBy := "manual (go run)"
@@ -526,17 +704,19 @@ func (b *Bot) handleStatus(c tele.Context) error {
 			"<b>Conversation:</b> %s\n\n"+
 			"<b>Models:</b>\n"+
 			"  Chat: %s\n"+
-			"  Agent: %s\n\n"+
+			"  Agent: %s\n"+
+			"  Vision: %s\n\n"+
 			"<b>Services:</b>\n"+
 			"  Embeddings: %s\n"+
-			"  Web search: %s\n\n"+
+			"  Web search: %s\n"+
+			"  Vision: %s\n\n"+
 			"<b>Session:</b>\n"+
 			"  Messages: %d\n"+
 			"  Facts: %d\n"+
 			"  Cost: $%.4f",
 		uptime, managedBy, runtime.Version(), convID,
-		b.cfg.LLM.Model, b.cfg.Agent.Model,
-		embedStatus, tavilyStatus,
+		b.cfg.LLM.Model, b.cfg.Agent.Model, b.cfg.Vision.Model,
+		embedStatus, tavilyStatus, visionStatus,
 		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
 	)
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})

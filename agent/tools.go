@@ -90,6 +90,25 @@ func ToolDefs() []llm.ToolDef {
 			},
 		},
 
+		// --- Vision tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "view_image",
+				Description: "Analyze an image the user sent. Returns a detailed description of what's in it. Call this BEFORE reply when the user sends a photo, so you can talk about the image in your response.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"prompt": map[string]interface{}{
+							"type":        "string",
+							"description": "What to focus on when describing the image. E.g., 'describe this photo', 'what food is this', 'read any text in this image'. Tailor this to what the user seems interested in.",
+						},
+					},
+					"required": []string{"prompt"},
+				},
+			},
+		},
+
 		// --- Memory management tools ---
 		{
 			Type: "function",

@@ -47,6 +47,16 @@ type toolContext struct {
 	// uses this to generate the actual natural language response.
 	chatLLM *llm.Client
 
+	// visionLLM is the vision language model (Gemini Flash). The
+	// view_image tool uses this to describe photos the user sends.
+	// Nil if vision is not configured.
+	visionLLM *llm.Client
+
+	// imageBase64 and imageMIME hold the current photo data (if any).
+	// Populated by the bot when the user sends a photo on Telegram.
+	imageBase64 string
+	imageMIME   string
+
 	// tavilyClient provides web search and URL extraction.
 	// Can be nil if Tavily is not configured — search tools will
 	// return an error message instead of crashing.
@@ -126,6 +136,7 @@ func loadAgentPrompt(path string) string {
 type RunParams struct {
 	AgentLLM            *llm.Client
 	ChatLLM             *llm.Client
+	VisionLLM           *llm.Client // vision language model — nil if not configured
 	Store               *memory.Store
 	EmbedClient         *embed.Client
 	SimilarityThreshold float64
@@ -138,6 +149,8 @@ type RunParams struct {
 	StatusCallback      StatusCallback
 	ReflectionThreshold int
 	RewriteEveryN       int
+	ImageBase64         string // base64-encoded image data (empty if no image)
+	ImageMIME           string // MIME type of the image (e.g., "image/jpeg")
 }
 
 // RunResult holds the outcome of an agent run — primarily the reply
@@ -199,7 +212,7 @@ func Run(params RunParams) (*RunResult, error) {
 	}
 
 	// Build the context message for the agent.
-	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts)
+	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "")
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile)
@@ -220,6 +233,7 @@ func Run(params RunParams) (*RunResult, error) {
 		personaFile:         params.Cfg.Persona.PersonaFile,
 		statusCallback:      params.StatusCallback,
 		chatLLM:             params.ChatLLM,
+		visionLLM:           params.VisionLLM,
 		tavilyClient:        params.TavilyClient,
 		cfg:                 params.Cfg,
 		scrubVault:          params.ScrubVault,
@@ -227,6 +241,8 @@ func Run(params RunParams) (*RunResult, error) {
 		conversationID:      params.ConversationID,
 		triggerMsgID:        params.TriggerMsgID,
 		conversationSummary: conversationSummary,
+		imageBase64:         params.ImageBase64,
+		imageMIME:           params.ImageMIME,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -367,7 +383,7 @@ func Run(params RunParams) (*RunResult, error) {
 // references like "it", "that book", "what you said earlier". This was the
 // cause of the wrong-search-term bug where the agent searched for AI realism
 // instead of The Martian's realism.
-func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact) string {
+func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool) string {
 	var b strings.Builder
 
 	// Recent conversation history — gives the agent context for references.
@@ -388,6 +404,13 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 
 	b.WriteString("## Current Message\n\n")
 	fmt.Fprintf(&b, "%s\n\n", userMessage)
+
+	// If the user sent a photo, tell the agent explicitly so it knows
+	// to call view_image before replying.
+	if hasImage {
+		b.WriteString("## Attached Image\n\n")
+		b.WriteString("The user sent a photo. Call `view_image` to see what's in it before replying.\n\n")
+	}
 
 	b.WriteString("## User Memories\n\n")
 	if len(userFacts) > 0 {
@@ -432,6 +455,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execRemoveFact(tc.Function.Arguments, tctx.store)
 	case "update_persona":
 		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
+	case "view_image":
+		return execViewImage(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
 	case "no_action":

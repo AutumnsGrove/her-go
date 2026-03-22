@@ -15,6 +15,11 @@ agent:
   temperature: 0.1                              # low temp for precise tool decisions
   max_tokens: 512
 
+vision:
+  model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
+  temperature: 0.3                         # low temp for accurate descriptions
+  max_tokens: 512
+
 embed:
   base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model

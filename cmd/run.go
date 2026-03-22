@@ -94,6 +94,32 @@ func runBot(cmd *cobra.Command, args []string) error {
 	)
 	log.Info("Agent client configured", "url", cfg.LLM.BaseURL, "model", agentModel)
 
+	// Create the vision LLM client (image understanding — Gemini 3 Flash).
+	// Same pattern as the agent client: shares the base URL and API key
+	// from the main LLM config, but uses its own model/temperature/max_tokens.
+	// Optional — if no vision model is configured, image features are disabled.
+	var visionClient *llm.Client
+	if cfg.Vision.Model != "" {
+		visionTemp := cfg.Vision.Temperature
+		if visionTemp == 0 {
+			visionTemp = 0.3
+		}
+		visionMaxTokens := cfg.Vision.MaxTokens
+		if visionMaxTokens == 0 {
+			visionMaxTokens = 512
+		}
+		visionClient = llm.NewClient(
+			cfg.LLM.BaseURL,
+			cfg.LLM.APIKey,
+			cfg.Vision.Model,
+			visionTemp,
+			visionMaxTokens,
+		)
+		log.Info("Vision client configured", "model", cfg.Vision.Model)
+	} else {
+		log.Info("Vision client not configured — image understanding disabled")
+	}
+
 	// Create the embedding client for semantic similarity.
 	// Optional — if not configured, the agent skips duplicate checking.
 	var embedClient *embed.Client
@@ -116,7 +142,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, embedClient, tavilyClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, store)
 	if err != nil {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}

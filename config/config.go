@@ -26,6 +26,7 @@ type Config struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	LLM      LLMConfig      `yaml:"llm"`
 	Agent    AgentConfig    `yaml:"agent"`
+	Vision   VisionConfig   `yaml:"vision"`
 	Memory   MemoryConfig   `yaml:"memory"`
 	Embed    EmbedConfig    `yaml:"embed"`
 	Search   SearchConfig   `yaml:"search"`
@@ -53,6 +54,16 @@ type LLMConfig struct {
 // This runs a separate, lightweight model (Liquid LFM) that handles
 // memory management and can trigger follow-up messages.
 type AgentConfig struct {
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	MaxTokens   int     `yaml:"max_tokens"`
+}
+
+// VisionConfig holds settings for the vision language model (VLM).
+// Used for image understanding — when the user sends a photo, the
+// view_image agent tool calls this model to describe what's in it.
+// Shares the same base_url and api_key as the main LLM section.
+type VisionConfig struct {
 	Model       string  `yaml:"model"`
 	Temperature float64 `yaml:"temperature"`
 	MaxTokens   int     `yaml:"max_tokens"`
