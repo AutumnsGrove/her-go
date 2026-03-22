@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"her-go/agent"
+	"her-go/compact"
 	"her-go/config"
 	"her-go/embed"
 	"her-go/llm"
@@ -78,6 +79,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 	tb.Handle("/facts", bot.handleFacts)
 	tb.Handle("/reflect", bot.handleReflect)
 	tb.Handle("/persona", bot.handlePersona)
+	tb.Handle("/compact", bot.handleCompact)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -431,6 +433,37 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	}
 
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleCompact manually triggers conversation compaction.
+func (b *Bot) handleCompact(c tele.Context) error {
+	convID := b.getConversationID(c.Message().Chat.ID)
+	recent, err := b.store.RecentMessages(convID, b.cfg.Memory.RecentMessages)
+	if err != nil || len(recent) < 4 {
+		return c.Send("Not enough messages to compact yet.")
+	}
+
+	tokensBefore := compact.EstimateHistoryTokens("", recent)
+
+	// Force compaction by passing a very low threshold (0 = always compact).
+	summary, kept, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1)
+	if err != nil {
+		return c.Send(fmt.Sprintf("Compaction failed: %v", err))
+	}
+
+	tokensAfter := compact.EstimateHistoryTokens(summary, kept)
+	saved := tokensBefore - tokensAfter
+
+	msg := fmt.Sprintf(
+		"\U0001F5DC <b>Compacted</b>\n\n"+
+			"Messages: %d \u2192 %d kept\n"+
+			"Tokens: ~%d \u2192 ~%d (saved ~%d)\n\n"+
+			"<i>Summary:</i>\n%s",
+		len(recent), len(kept),
+		tokensBefore, tokensAfter, saved,
+		summary,
+	)
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md

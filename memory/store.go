@@ -698,6 +698,72 @@ func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
 	return versions, nil
 }
 
+// SaveSummary stores a compacted summary of older messages.
+// startID and endID mark the range of message IDs that were summarized.
+func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO summaries (conversation_id, summary, messages_start_id, messages_end_id)
+		 VALUES (?, ?, ?, ?)`,
+		conversationID, summary, startID, endID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving summary: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting summary ID: %w", err)
+	}
+	return id, nil
+}
+
+// LatestSummary returns the most recent summary for a conversation.
+// Returns empty string if no summary exists yet.
+func (s *Store) LatestSummary(conversationID string) (string, int64, error) {
+	var summary string
+	var endID int64
+	err := s.db.QueryRow(
+		`SELECT summary, messages_end_id FROM summaries
+		 WHERE conversation_id = ?
+		 ORDER BY id DESC LIMIT 1`,
+		conversationID,
+	).Scan(&summary, &endID)
+	if err != nil {
+		return "", 0, nil // no summary yet
+	}
+	return summary, endID, nil
+}
+
+// MessagesInRange returns messages between startID and endID inclusive.
+func (s *Store) MessagesInRange(conversationID string, startID, endID int64) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		 FROM messages
+		 WHERE conversation_id = ? AND id >= ? AND id <= ?
+		 ORDER BY id ASC`,
+		conversationID, startID, endID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages in range: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		var ts string
+		var scrubbed sql.NullString
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		if scrubbed.Valid {
+			m.ContentScrubbed = scrubbed.String
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
 func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO persona_versions (content, trigger) VALUES (?, ?)`,

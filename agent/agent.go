@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"her-go/compact"
 	"her-go/config"
 	"her-go/embed"
 	"her-go/llm"
@@ -67,6 +68,11 @@ type toolContext struct {
 	// triggerMsgID is the DB message ID of the user's message that started
 	// this agent run. Used for linking metrics and saving the response.
 	triggerMsgID int64
+
+	// conversationSummary is the compacted summary of older messages.
+	// Injected into the system prompt so the model has context of what
+	// was discussed earlier without needing the full message history.
+	conversationSummary string
 
 	// searchContext accumulates search results, book data, and URL content
 	// across tool calls. When reply is called, this context is included
@@ -175,6 +181,21 @@ func Run(params RunParams) (*RunResult, error) {
 		log.Printf("  [agent] error loading history: %v", err)
 	}
 
+	// Run compaction if the conversation history is getting long.
+	// This summarizes older messages into a running summary, keeping
+	// recent messages in full fidelity. The summary gets injected
+	// into the prompt by buildChatSystemPrompt.
+	var conversationSummary string
+	if len(recentMsgs) > 0 {
+		conversationSummary, recentMsgs, err = compact.MaybeCompact(
+			params.ChatLLM, params.Store, params.ConversationID,
+			recentMsgs, params.Cfg.Memory.MaxHistoryTokens,
+		)
+		if err != nil {
+			log.Printf("  [agent] compaction error: %v", err)
+		}
+	}
+
 	// Build the context message for the agent.
 	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts)
 
@@ -203,6 +224,7 @@ func Run(params RunParams) (*RunResult, error) {
 		scrubbedUserMessage: params.ScrubbedUserMessage,
 		conversationID:      params.ConversationID,
 		triggerMsgID:        params.TriggerMsgID,
+		conversationSummary: conversationSummary,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -529,6 +551,13 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	// Layer 3: Memory context — extracted facts about the user and self.
 	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
+	}
+
+	// Layer 4: Conversation summary — compacted older messages.
+	// This gives the model awareness of what was discussed earlier
+	// without burning tokens on the full message history.
+	if tctx.conversationSummary != "" {
+		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation\n\n%s", tctx.conversationSummary))
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
