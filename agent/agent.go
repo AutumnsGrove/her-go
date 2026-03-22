@@ -161,9 +161,11 @@ Use think to:
 ## Rules for searching
 - ALWAYS think before searching to form a precise query informed by conversation context.
 - ALWAYS think after searching to evaluate if results are relevant.
-- If results aren't relevant, refine your query and search again (up to 2-3 attempts).
+- If results aren't relevant, refine your query and search again — but MAX 2 search attempts per topic.
+- After 2 failed searches, reply with what you have or acknowledge you couldn't find what you were looking for. Don't burn all your turns searching.
 - Don't search for casual conversation, emotional support, or opinions.
 - Use conversation history to understand what the user is actually asking about.
+- Search queries should use specific titles, names, or concrete terms — not abstract descriptions like "strange beautiful world unconventional".
 
 ## Rules for save_fact (user facts)
 SAVE when the user reveals:
@@ -318,8 +320,10 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// Tool-calling loop. The model may return multiple tool calls,
 	// or it may return tool calls that require a follow-up turn.
-	// We loop up to 5 iterations to prevent runaway tool calling.
-	for i := 0; i < 5; i++ {
+	// We loop up to 10 iterations to allow for think + search + refine cycles.
+	// With the think tool, a typical complex flow might use 6-7 iterations:
+	// think → search → think(evaluate) → search(refine) → think → reply → save_fact
+	for i := 0; i < 10; i++ {
 		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
 			log.Printf("  [agent] LLM error: %v", err)
