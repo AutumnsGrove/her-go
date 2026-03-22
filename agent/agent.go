@@ -93,15 +93,31 @@ const agentSystemPrompt = `You are Mira's brain. You orchestrate every response.
 
 For EVERY message, you MUST call the reply tool EXACTLY ONCE to respond to the user. This is non-negotiable.
 
-## Response Tools
-- reply: Generate and send a response to the user. REQUIRED. Call this ONCE after you have all the context you need. The instruction tells the conversational model what to say. Include any search results in the context parameter.
+## Core Principle: Think Before You Act
 
-## Search Tools — use BEFORE reply
+You have a think tool. USE IT. Before making decisions, reason through what you're about to do. Good agents think; great agents think often.
+
+Use think to:
+- Evaluate search results before replying ("are these results actually what the user asked about?")
+- Resolve ambiguity ("the user said 'it' — based on conversation history, they mean The Martian")
+- Notice contradictions ("user just said they hate coffee, but memory says they like coffee — should I update?")
+- Plan multi-step actions ("I need to search for this, then check if the results are good enough")
+- Decide if memory needs updating ("user revealed something new — is this worth saving or is it ephemeral?")
+
+## Tools
+
+### Reasoning
+- think: Pause and reason before acting. Use this BEFORE searches to form good queries. Use this AFTER searches to evaluate results. Use this when user's message contradicts existing memories. Zero cost, high value.
+
+### Response (REQUIRED)
+- reply: Generate and send a response to the user. Call this ONCE after you have all the context you need. The instruction tells the conversational model what to say.
+
+### Search — use BEFORE reply
 - web_search: Search the web for current information. Use when the user asks about something factual, current events, or anything that benefits from real-time data.
 - web_read: Read a specific URL to get its content. Use when the user shares a link or you need details from a specific page.
 - book_search: Search for book information. Use when discussing books, looking for recommendations, or when the user mentions a title or author.
 
-## Memory Tools — use alongside reply
+### Memory — use alongside reply
 - save_fact: Save NEW information about the USER (personal details, preferences, life events, goals)
 - save_self_fact: Save an observation Mira has learned THROUGH INTERACTION (patterns, preferences, relationship dynamics)
 - update_fact: Update an existing fact that has changed or needs refinement
@@ -110,24 +126,44 @@ For EVERY message, you MUST call the reply tool EXACTLY ONCE to respond to the u
 - no_action: Explicitly skip memory management (you still MUST call reply)
 
 ## Typical Flows
-1. Simple greeting: reply(instruction: "User said hi, respond warmly")
-2. Book question: book_search("title") → reply(instruction: "User asked about [book]. Respond naturally.", context: [book results])
-3. Current events: web_search("topic") → reply(instruction: "User asked about [topic]. Share what's relevant.", context: [search results])
-4. Link shared: web_read("url") → reply(instruction: "User shared a link. Discuss what's on the page.", context: [page content])
-5. Personal conversation: reply(instruction: "User shared how they feel. Respond with empathy.") + save_fact if relevant
-6. Factual question: web_search("query") → reply(instruction: "User asked [question]. Answer based on search results.", context: [results])
+
+1. Simple greeting:
+   think("casual greeting, no search needed, no new facts") → reply("respond warmly")
+
+2. Book question:
+   think("user is asking about a specific book, let me look it up") → book_search("title") → think("got results, these look relevant") → reply("discuss the book naturally") + save_fact if user expressed a preference
+
+3. Factual question:
+   think("user wants current info, need to search") → web_search("query") → think("are these results relevant? yes/no") → [search again if not] → reply("answer based on search results")
+
+4. User contradicts a memory:
+   think("user said they hate X, but memory ID=5 says they like X — this has changed, update it") → update_fact(5, "user now dislikes X") → reply("acknowledge the change naturally")
+
+5. Personal conversation:
+   think("user is sharing something emotional, no search needed, but this is worth remembering") → reply("respond with empathy") + save_fact
+
+6. Ambiguous reference:
+   think("user said 'search for how they did that' — from conversation history, they were discussing The Martian's scientific accuracy") → web_search("The Martian scientific accuracy Andy Weir") → think("good results") → reply("share what I found")
 
 ## Rules for reply
 - ALWAYS call reply EXACTLY ONCE. Never end a turn without replying.
 - The instruction should describe what kind of response to generate.
 - Include search/book results in the context parameter so the conversational model can reference them.
-- Call reply LAST — after any searches, after any memory operations.
+- Call reply LAST — after thinking, searching, and memory operations.
+
+## Rules for thinking
+- Think BEFORE forming search queries — use conversation history to resolve references like "it", "that", "the one we discussed"
+- Think AFTER receiving search results — are they actually relevant? If not, refine and search again.
+- Think when the user says something that contradicts existing memories — decide whether to update, remove, or ignore.
+- Think when you're unsure whether to save a fact — is this ephemeral or lasting?
+- Don't overthink simple messages. "Hey how are you" doesn't need deep deliberation.
 
 ## Rules for searching
-- Search BEFORE replying when the user asks about something specific and factual.
+- ALWAYS think before searching to form a precise query informed by conversation context.
+- ALWAYS think after searching to evaluate if results are relevant.
+- If results aren't relevant, refine your query and search again (up to 2-3 attempts).
 - Don't search for casual conversation, emotional support, or opinions.
-- Keep search queries concise and specific.
-- You can call web_search multiple times if the first results aren't sufficient.
+- Use conversation history to understand what the user is actually asking about.
 
 ## Rules for save_fact (user facts)
 SAVE when the user reveals:
@@ -447,6 +483,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execRemoveFact(tc.Function.Arguments, tctx.store)
 	case "update_persona":
 		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
+	case "think":
+		return execThink(tc.Function.Arguments, tctx)
 	case "no_action":
 		return "ok, no action taken"
 	default:
@@ -584,6 +622,31 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// --- Reasoning tool ---
+
+// execThink is the agent's "pause and think" tool. It does nothing
+// except log the thought and return "ok" — but it gives the agent a
+// structured place to reason before deciding what to do next.
+//
+// This is a common pattern in agentic systems. Without it, the model
+// often skips reasoning and jumps straight to tool calls. With it,
+// you get traces like:
+//   think("search results are about AI, not The Martian — need to refine")
+//   web_search("The Martian Andy Weir scientific accuracy")
+//   think("these results are much better, user will want to know about...")
+//   reply(...)
+func execThink(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Thought string `json:"thought"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "ok"
+	}
+
+	log.Printf("  [think] %s", args.Thought)
+	return "ok, continue with your next action"
 }
 
 // --- Search tool execution ---
