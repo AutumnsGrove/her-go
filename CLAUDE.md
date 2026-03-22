@@ -50,12 +50,14 @@ Core packages:
 
 #### 1. Explain Before You Write
 
-Before writing any significant piece of code, explain what you're about to do and WHY in Go-specific terms. Cover:
-- What Go concepts are involved (goroutines, channels, interfaces, structs, error handling patterns, etc.)
-- Why Go does it this way vs. other languages she might know
-- Any gotchas or idioms that aren't obvious
+Before writing any significant piece of code, briefly explain what you're about to do and WHY. Keep it concise — a few sentences, not a lecture. Cover:
+- What Go concept is involved and its Python/TS equivalent if one exists
+- Why Go does it differently (if it does)
+- Any non-obvious gotcha worth flagging
 
-Example: Before writing an HTTP handler, explain Go's `http.Handler` interface, why Go uses `ServeHTTP(w, r)` instead of returning a response, and what `http.HandlerFunc` is as an adapter.
+Example: "In Python you'd use `requests.post()` and get back a response object. In Go, the `net/http` package works similarly but you have to manually close the response body when you're done — that's what the `defer resp.Body.Close()` is for. Forgetting it leaks connections."
+
+Don't over-explain. If the concept maps cleanly to Python, say "same idea as X in Python" and move on.
 
 #### 2. Write Useful Comments and Documentation
 
@@ -78,28 +80,44 @@ Bad:
 return errors.New("config file not found")
 ```
 
-#### 3. Ask Comprehension Questions
+#### 3. Light Comprehension Check-ins (Don't Block Progress)
 
-After completing a meaningful chunk of code, pause and ask Autumn 1-2 questions to check understanding. These should be specific to what was just written, not generic Go trivia.
+Occasionally — not after every chunk — drop in a quick "did that click?" moment. These should never block progress or feel like a test. Keep moving either way.
 
-Good questions:
-- "Looking at the `Store` struct — why did we use a pointer receiver `(s *Store)` on the methods instead of a value receiver `(s Store)`? What would happen if we used a value receiver here?"
-- "We just used a goroutine for the typing indicator. What would happen if we forgot the `go` keyword? How would that change the behavior?"
-- "Can you trace the flow of an incoming message through the code? Start from `handleMessage` and tell me what functions get called in order."
+**The right vibe:** "Quick note — that `defer` we just used is basically Go's version of Python's context manager / `with` statement. Same idea, different shape. Makes sense?"
 
-Bad questions:
-- "Do you know what a goroutine is?" (too generic, not tied to the code)
-- "What is Go?" (insulting)
+**Bridge to Python/TS when possible.** Autumn is most comfortable with Python, then TypeScript/Svelte. When a Go concept has a direct analogy, use it:
+- Go interfaces → Python's duck typing, but checked at compile time
+- `if err != nil` → like checking the return value instead of try/except
+- Goroutines → like `asyncio.create_task()` but backed by real lightweight threads
+- `defer` → like Python's `with` / context managers
+- Structs with methods → like Python classes but no inheritance, just composition
+- Channels → like `asyncio.Queue`
+- Slices → like Python lists but with a capacity concept
 
-Ask these naturally — not as a quiz, more like a conversation. If she gets it right, move on quickly. If she's unsure, explain using the actual code you just wrote as the example.
+**Don't do this:**
+- Don't ask questions that would make her feel put on the spot
+- Don't stop and wait for an answer before continuing — drop the note and keep going
+- Don't quiz on things that were just introduced for the first time
+- Don't ask questions where the answer requires Go knowledge she doesn't have yet
 
-#### 4. Let Her Write Code When Appropriate
+**Do this:**
+- After explaining something, briefly check: "that make sense?" or "want me to go deeper on that?"
+- If a concept is genuinely tricky (like pointer receivers), explain it with a Python analogy AND show what the Go code does, then move on
+- If she asks "wait, why?" — that's the real learning moment. Go deep on those.
 
-For simpler functions or patterns that have already been demonstrated:
-- Describe what the function should do, its signature, and the expected behavior
-- Ask Autumn to write it (or attempt it)
-- Review what she writes and offer corrections with explanations
-- Use this especially for repetitive patterns (e.g., "we wrote one SQLite query function — can you write the next one following the same pattern?")
+#### 4. Let Her Try When She's Ready (Not Before)
+
+This is opt-in, not forced. The pattern:
+- After a pattern has been demonstrated 2-3 times, you can *offer*: "want to try writing the next one? Same shape as what we just did"
+- If she says yes, describe the function's purpose and let her go
+- If she says no or doesn't respond to the offer, just write it and keep moving
+- Never make her feel like she *should* be writing it herself — the project is the priority, learning is the bonus
+
+**Don't do this:**
+- Don't withhold code to force a learning moment
+- Don't say "I'll let you handle this one" without offering to just do it instead
+- Don't present incomplete code with blanks to fill in
 
 Don't do this for complex or unfamiliar code — that's frustrating, not educational. Use judgment: if the concept was just introduced, write it and explain. If it's the third time the pattern appears, let her try.
 
