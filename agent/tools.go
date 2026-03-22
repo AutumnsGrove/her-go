@@ -243,7 +243,19 @@ func ToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "no_action",
-				Description: "Explicitly skip memory management. Use when the exchange doesn't reveal new information worth saving. You still MUST call reply — no_action only means no memory updates.",
+				Description: "Explicitly skip memory management. Use when the exchange doesn't reveal new information worth saving. You still MUST call reply and done.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+		// --- Control tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "done",
+				Description: "Signal that you are completely finished with this turn. Call this LAST, after reply and any memory operations. Every turn MUST end with done.",
 				Parameters: map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
