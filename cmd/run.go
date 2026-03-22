@@ -1,10 +1,12 @@
 package cmd
 
 import (
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/bot"
 	"her/config"
@@ -15,6 +17,9 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+// log is the package-level logger for the cmd package.
+var log = charmlog.With("component", "cmd")
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -30,28 +35,36 @@ func init() {
 // runBot contains all the initialization and startup logic that was
 // previously in main(). Moved here so it can be invoked as "her run".
 func runBot(cmd *cobra.Command, args []string) error {
+	// Configure the global charm logger. SetReportTimestamp shows HH:MM:SS
+	// on each line. Charm auto-detects whether stdout is a TTY and shows
+	// colors + emoji levels in a terminal, or plain text in log files.
+	// This means launchd log files get clean plain text automatically.
+	charmlog.SetReportTimestamp(true)
+	charmlog.SetTimeFormat(time.TimeOnly)
+	charmlog.SetLevel(charmlog.InfoLevel)
+
 	// Load configuration from the file specified by --config.
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatal("Failed to load config", "err", err)
 	}
 
 	// Quick sanity checks — fail fast if critical config is missing.
 	if cfg.Telegram.Token == "" {
-		log.Fatalf("Telegram token is required. Set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
+		log.Fatal("Telegram token is required — set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}
 	if cfg.LLM.APIKey == "" {
-		log.Fatalf("LLM API key is required. Set OPENROUTER_API_KEY env var or fill in config.yaml")
+		log.Fatal("LLM API key is required — set OPENROUTER_API_KEY env var or fill in config.yaml")
 	}
 
 	// Initialize the SQLite database.
 	store, err := memory.NewStore(cfg.Memory.DBPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Fatal("Failed to initialize database", "err", err)
 	}
 	defer store.Close()
 
-	log.Printf("Database initialized at %s", cfg.Memory.DBPath)
+	log.Info("Database initialized", "path", cfg.Memory.DBPath)
 
 	// Create the LLM client (conversational model — Deepseek).
 	llmClient := llm.NewClient(
@@ -61,7 +74,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 		cfg.LLM.Temperature,
 		cfg.LLM.MaxTokens,
 	)
-	log.Printf("LLM client configured: %s (model: %s)", cfg.LLM.BaseURL, cfg.LLM.Model)
+	log.Info("LLM client configured", "url", cfg.LLM.BaseURL, "model", cfg.LLM.Model)
 
 	// Create the agent LLM client (tool-calling orchestrator).
 	// This shares the same base URL and API key as the main client
@@ -85,17 +98,16 @@ func runBot(cmd *cobra.Command, args []string) error {
 		agentTemp,
 		agentMaxTokens,
 	)
-	log.Printf("Agent client configured: %s (model: %s)", cfg.LLM.BaseURL, agentModel)
+	log.Info("Agent client configured", "url", cfg.LLM.BaseURL, "model", agentModel)
 
 	// Create the embedding client for semantic similarity.
 	// Optional — if not configured, the agent skips duplicate checking.
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model)
-		log.Printf("Embed client configured: %s (model: %s, threshold: %.2f)",
-			cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.SimilarityThreshold)
+		log.Info("Embed client configured", "url", cfg.Embed.BaseURL, "model", cfg.Embed.Model, "threshold", cfg.Embed.SimilarityThreshold)
 	} else {
-		log.Println("Embed client not configured — semantic duplicate checking disabled")
+		log.Info("Embed client not configured — semantic duplicate checking disabled")
 	}
 
 	// Create the Tavily client for web search and URL extraction.
@@ -104,15 +116,15 @@ func runBot(cmd *cobra.Command, args []string) error {
 	var tavilyClient *search.TavilyClient
 	if cfg.Search.TavilyAPIKey != "" {
 		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
-		log.Printf("Tavily client configured (web search enabled)")
+		log.Info("Tavily client configured (web search enabled)")
 	} else {
-		log.Println("Tavily client not configured — web search disabled")
+		log.Info("Tavily client not configured — web search disabled")
 	}
 
 	// Create and configure the Telegram bot.
 	tgBot, err := bot.New(cfg, llmClient, agentClient, embedClient, tavilyClient, store)
 	if err != nil {
-		log.Fatalf("Failed to create Telegram bot: %v", err)
+		log.Fatal("Failed to create Telegram bot", "err", err)
 	}
 
 	// Handle graceful shutdown.
@@ -121,13 +133,13 @@ func runBot(cmd *cobra.Command, args []string) error {
 
 	go func() {
 		sig := <-sigChan
-		log.Printf("Received %v, shutting down...", sig)
+		log.Info("Signal received, shutting down", "signal", sig)
 		tgBot.Stop()
 	}()
 
 	// Start the bot. This blocks until Stop() is called.
 	tgBot.Start()
-	log.Println("Bot stopped. Goodbye!")
+	log.Info("Bot stopped. Goodbye!")
 
 	return nil
 }

@@ -18,12 +18,16 @@ package compact
 
 import (
 	"fmt"
-	"log"
 	"strings"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/llm"
 	"her/memory"
 )
+
+// log is the package-level logger for the compact package.
+var log = charmlog.With("component", "compact")
 
 // estimateTokens gives a rough token count for a string.
 // The rule of thumb is ~4 characters per token for English text.
@@ -113,7 +117,7 @@ func MaybeCompact(
 		return existingSummary, recentMessages, nil
 	}
 
-	log.Printf("  [compact] history at %d tokens (threshold: %d), compacting...", currentTokens, threshold)
+	log.Info("history over threshold, compacting", "tokens", currentTokens, "threshold", threshold)
 
 	// Split: older half gets summarized, newer half stays verbatim.
 	// We keep at least 6 messages (3 exchanges) in full fidelity so
@@ -158,7 +162,7 @@ func MaybeCompact(
 	if err != nil {
 		// If summarization fails, just return everything unsummarized.
 		// Better to have a fat context than lose data.
-		log.Printf("  [compact] summarization failed: %v, skipping compaction", err)
+		log.Warn("summarization failed, skipping compaction", "err", err)
 		return existingSummary, recentMessages, nil
 	}
 
@@ -169,15 +173,18 @@ func MaybeCompact(
 	endID := toSummarize[len(toSummarize)-1].ID
 	_, err = store.SaveSummary(conversationID, newSummary, startID, endID)
 	if err != nil {
-		log.Printf("  [compact] failed to save summary: %v", err)
+		log.Error("failed to save summary", "err", err)
 		return existingSummary, recentMessages, nil
 	}
 
-	// Log the compaction.
 	newTokens := EstimateHistoryTokens(newSummary, toKeep)
-	log.Printf("  [compact] compacted %d messages into summary (%d→%d tokens, saved %d)",
-		len(toSummarize), currentTokens, newTokens, currentTokens-newTokens)
-	log.Printf("  [compact] summary: %s", truncate(newSummary, 200))
+	log.Info("compaction complete",
+		"messages_compacted", len(toSummarize),
+		"tokens_before", currentTokens,
+		"tokens_after", newTokens,
+		"saved", currentTokens-newTokens,
+	)
+	log.Debug("summary preview", "summary", truncate(newSummary, 200))
 
 	// Log metrics for the summarization call.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)

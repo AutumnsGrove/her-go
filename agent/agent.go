@@ -3,10 +3,11 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/compact"
 	"her/config"
@@ -17,6 +18,9 @@ import (
 	"her/scrub"
 	"her/search"
 )
+
+// log is the package-level logger for the agent package.
+var log = charmlog.With("component", "agent")
 
 // StatusCallback is a function the bot provides so the agent can update
 // the Telegram message in real time. When the agent calls web_search,
@@ -107,7 +111,7 @@ const defaultAgentPrompt = `You are Mira's brain. You orchestrate every response
 func loadAgentPrompt(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
-		log.Printf("  [agent] warning: couldn't load %s, using default prompt", path)
+		log.Warn("couldn't load agent prompt, using default", "path", path)
 		return defaultAgentPrompt
 	}
 	return string(data)
@@ -153,15 +157,14 @@ type RunResult struct {
 // The persona evolution triggers at the end still run in a goroutine
 // since they don't affect the user's response.
 func Run(params RunParams) (*RunResult, error) {
-	log.Printf("  --- agent ---")
+	log.Info("--- agent run start ---")
 
 	// Gather current facts for the agent's context.
 	facts, err := params.Store.AllActiveFacts()
 	if err != nil {
-		log.Printf("  [agent] error loading facts: %v", err)
+		log.Error("loading facts", "err", err)
 		return nil, fmt.Errorf("loading facts: %w", err)
 	}
-	log.Printf("  [agent] loaded %d active facts", len(facts))
 
 	// Split facts into user and self categories for the context.
 	var userFacts, selfFacts []memory.Fact
@@ -172,13 +175,13 @@ func Run(params RunParams) (*RunResult, error) {
 			userFacts = append(userFacts, f)
 		}
 	}
-	log.Printf("  [agent] %d user facts, %d self facts", len(userFacts), len(selfFacts))
+	log.Info("facts loaded", "user", len(userFacts), "self", len(selfFacts))
 
 	// Load recent conversation history so the agent can resolve
 	// references like "it", "that book", "what we talked about", etc.
 	recentMsgs, err := params.Store.RecentMessages(params.ConversationID, params.Cfg.Memory.RecentMessages)
 	if err != nil {
-		log.Printf("  [agent] error loading history: %v", err)
+		log.Error("loading history", "err", err)
 	}
 
 	// Run compaction if the conversation history is getting long.
@@ -192,7 +195,7 @@ func Run(params RunParams) (*RunResult, error) {
 			recentMsgs, params.Cfg.Memory.MaxHistoryTokens,
 		)
 		if err != nil {
-			log.Printf("  [agent] compaction error: %v", err)
+			log.Error("compaction error", "err", err)
 		}
 	}
 
@@ -238,26 +241,25 @@ func Run(params RunParams) (*RunResult, error) {
 	for i := 0; i < 10; i++ {
 		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
-			log.Printf("  [agent] LLM error: %v", err)
+			log.Error("LLM error", "err", err)
 			break
 		}
 
 		// Log agent metrics linked to the user message that triggered this run.
 		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
-		log.Printf("  [agent] tokens: %d prompt + %d completion | cost: $%.6f",
-			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
+		log.Info("agent tokens", "prompt", resp.PromptTokens, "completion", resp.CompletionTokens, "cost_usd", resp.CostUSD)
 
 		// If no tool calls, the agent is done.
 		if len(resp.ToolCalls) == 0 {
 			if resp.Content != "" {
-				log.Printf("  [agent] done (text only): %s", resp.Content)
+				log.Info("done (text only)", "text", resp.Content)
 			} else {
-				log.Printf("  [agent] done (no actions)")
+				log.Info("done (no actions)")
 			}
 			break
 		}
 
-		log.Printf("  [agent] %d tool call(s):", len(resp.ToolCalls))
+		log.Info("tool calls", "count", len(resp.ToolCalls))
 
 		// Append the assistant message with tool calls to the conversation.
 		messages = append(messages, llm.ChatMessage{
@@ -274,7 +276,7 @@ func Run(params RunParams) (*RunResult, error) {
 			turnIndex++
 
 			result := executeTool(tc, tctx)
-			log.Printf("  [agent]   -> %s: %s", tc.Function.Name, truncateLog(result, 200))
+			log.Info("tool result", "tool", tc.Function.Name, "result", truncateLog(result, 200))
 
 			// Save the tool result (what happened when we executed it).
 			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
@@ -289,7 +291,7 @@ func Run(params RunParams) (*RunResult, error) {
 
 		// Exit when the agent explicitly signals it's done.
 		if tctx.doneCalled {
-			log.Printf("  [agent] done signal received")
+			log.Info("done signal received")
 			break
 		}
 	}
@@ -298,10 +300,10 @@ func Run(params RunParams) (*RunResult, error) {
 	// response directly. This should be rare with a well-tuned prompt,
 	// but we never want the user to see just a placeholder.
 	if !tctx.replyCalled {
-		log.Printf("  [agent] WARNING: reply was never called, generating fallback")
+		log.Warn("reply was never called, generating fallback")
 		fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
 		if !tctx.replyCalled {
-			log.Printf("  [agent] ERROR: fallback reply also failed: %s", fallbackResult)
+			log.Error("fallback reply also failed", "result", fallbackResult)
 			return nil, fmt.Errorf("agent failed to generate a reply")
 		}
 	}
@@ -322,9 +324,9 @@ func Run(params RunParams) (*RunResult, error) {
 		if params.ReflectionThreshold > 0 {
 			factCount, err := params.Store.FactCountSinceLastReflection()
 			if err != nil {
-				log.Printf("  [persona] error checking fact count: %v", err)
+				log.Error("checking fact count for reflection trigger", "err", err)
 			} else if factCount >= params.ReflectionThreshold {
-				log.Printf("  [persona] %d facts since last reflection (threshold: %d), reflecting...", factCount, params.ReflectionThreshold)
+				log.Info("reflection triggered", "facts_since_last", factCount, "threshold", params.ReflectionThreshold)
 
 				// Gather the recent facts for the reflection prompt.
 				recentFacts, _ := params.Store.RecentFacts("user", factCount)
@@ -334,7 +336,7 @@ func Run(params RunParams) (*RunResult, error) {
 				}
 
 				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings); err != nil {
-					log.Printf("  [persona] reflection error: %v", err)
+					log.Error("reflection error", "err", err)
 				}
 			}
 		}
@@ -343,13 +345,13 @@ func Run(params RunParams) (*RunResult, error) {
 		if params.RewriteEveryN > 0 {
 			reflectionCount, err := params.Store.ReflectionCountSinceLastRewrite()
 			if err != nil {
-				log.Printf("  [persona] error checking reflection count: %v", err)
+				log.Error("checking reflection count for rewrite trigger", "err", err)
 			} else if reflectionCount >= params.RewriteEveryN {
-				log.Printf("  [persona] %d reflections since last rewrite (threshold: %d), rewriting persona...", reflectionCount, params.RewriteEveryN)
+				log.Info("persona rewrite triggered", "reflections_since_last", reflectionCount, "threshold", params.RewriteEveryN)
 				if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
-					log.Printf("  [persona] rewrite error: %v", err)
+					log.Error("persona rewrite error", "err", err)
 				} else if rewritten {
-					log.Printf("  [persona] persona.md rewritten")
+					log.Info("persona.md rewritten")
 				}
 			}
 		}
@@ -436,7 +438,7 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return "ok, no action taken"
 	case "done":
 		tctx.doneCalled = true
-		log.Printf("  [agent] done called — finishing turn")
+		log.Info("done called — finishing turn")
 		return "ok, turn complete"
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Function.Name)
@@ -480,7 +482,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// Add conversation history so the model has context of the ongoing chat.
 	recentMsgs, err := tctx.store.RecentMessages(tctx.conversationID, tctx.cfg.Memory.RecentMessages)
 	if err != nil {
-		log.Printf("  [reply] error loading history: %v", err)
+		log.Error("reply: loading history", "err", err)
 	} else {
 		for _, msg := range recentMsgs {
 			content := msg.ContentScrubbed
@@ -516,17 +518,22 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	latencyMs := int(time.Since(start).Milliseconds())
 
 	if err != nil {
-		log.Printf("  [reply] LLM error: %v", err)
+		log.Error("reply: LLM error", "err", err)
 		return fmt.Sprintf("error generating response: %v", err)
 	}
 
-	log.Printf("  [reply] tokens: %d prompt + %d completion = %d total | cost: $%.6f | latency: %dms",
-		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
+	log.Info("reply tokens",
+		"prompt", resp.PromptTokens,
+		"completion", resp.CompletionTokens,
+		"total", resp.TotalTokens,
+		"cost_usd", resp.CostUSD,
+		"latency_ms", latencyMs,
+	)
 
 	// Save the response to the database.
 	respID, err := tctx.store.SaveMessage("assistant", resp.Content, resp.Content, tctx.conversationID)
 	if err != nil {
-		log.Printf("  [reply] error saving response: %v", err)
+		log.Error("reply: saving response", "err", err)
 	}
 
 	// Update token counts on both the user message and the response.
@@ -546,7 +553,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// Send the response to Telegram by editing the placeholder message.
 	if tctx.statusCallback != nil {
 		if err := tctx.statusCallback(replyText); err != nil {
-			log.Printf("  [reply] error sending to Telegram: %v", err)
+			log.Error("reply: sending to Telegram", "err", err)
 		}
 	}
 
@@ -607,7 +614,7 @@ func execThink(argsJSON string, tctx *toolContext) string {
 		return "ok"
 	}
 
-	log.Printf("  [think] %s", args.Thought)
+	log.Debug("think", "thought", args.Thought)
 	return "ok"
 }
 
@@ -634,7 +641,7 @@ func execWebSearch(argsJSON string, tctx *toolContext) string {
 
 	resp, err := tctx.tavilyClient.Search(args.Query, 5)
 	if err != nil {
-		log.Printf("  [web_search] error: %v", err)
+		log.Error("web_search failed", "err", err)
 		return fmt.Sprintf("search failed: %v", err)
 	}
 
@@ -649,7 +656,7 @@ func execWebSearch(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "web", args.Query, formatted, len(resp.Results))
 
-	log.Printf("  [web_search] %d results for %q", len(resp.Results), args.Query)
+	log.Info("web_search", "query", args.Query, "results", len(resp.Results))
 	return formatted
 }
 
@@ -673,7 +680,7 @@ func execWebRead(argsJSON string, tctx *toolContext) string {
 
 	resp, err := tctx.tavilyClient.Extract([]string{args.URL})
 	if err != nil {
-		log.Printf("  [web_read] error: %v", err)
+		log.Error("web_read failed", "err", err)
 		return fmt.Sprintf("failed to read URL: %v", err)
 	}
 
@@ -688,7 +695,7 @@ func execWebRead(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "web_read", args.URL, formatted, len(resp.Results))
 
-	log.Printf("  [web_read] extracted content from %s", args.URL)
+	log.Info("web_read", "url", args.URL)
 	return formatted
 }
 
@@ -708,7 +715,7 @@ func execBookSearch(argsJSON string, tctx *toolContext) string {
 
 	books, err := search.SearchBooks(args.Query, 3)
 	if err != nil {
-		log.Printf("  [book_search] error: %v", err)
+		log.Error("book_search failed", "err", err)
 		return fmt.Sprintf("book search failed: %v", err)
 	}
 
@@ -723,7 +730,7 @@ func execBookSearch(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "book", args.Query, formatted, len(books))
 
-	log.Printf("  [book_search] %d results for %q", len(books), args.Query)
+	log.Info("book_search", "query", args.Query, "results", len(books))
 	return formatted
 }
 
@@ -772,7 +779,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		lower := strings.ToLower(args.Fact)
 		for _, blocked := range selfFactBlocklist {
 			if strings.Contains(lower, blocked) {
-				log.Printf("  [agent] blocked self-fact (matches blocklist %q): %s", blocked, args.Fact)
+				log.Warn("blocked self-fact (matches blocklist)", "blocklist_entry", blocked, "fact", args.Fact)
 				return fmt.Sprintf("rejected: this is a system capability, not a learned observation. Self-facts should only capture things learned through interaction.")
 			}
 		}
@@ -784,11 +791,10 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		var err error
 		newVec, err = tctx.embedClient.Embed(args.Fact)
 		if err != nil {
-			log.Printf("  [agent] warning: embedding failed, skipping duplicate check: %v", err)
+			log.Warn("embedding failed, skipping duplicate check", "err", err)
 		} else {
 			if duplicate, existingID, existingFact, sim := checkDuplicate(newVec, subject, tctx); duplicate {
-				log.Printf("  [agent] blocked duplicate fact (%.1f%% similar to ID=%d): %s",
-					sim*100, existingID, args.Fact)
+				log.Info("blocked duplicate fact", "similarity_pct", sim*100, "existing_id", existingID, "fact", args.Fact)
 				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q). Use update_fact to refine it instead.",
 					sim*100, existingID, existingFact)
 			}
@@ -812,7 +818,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
 	existingFacts, err := tctx.store.AllActiveFacts()
 	if err != nil {
-		log.Printf("  [agent] warning: couldn't load facts for duplicate check: %v", err)
+		log.Warn("couldn't load facts for duplicate check", "err", err)
 		return false, 0, "", 0
 	}
 
@@ -832,7 +838,7 @@ func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDupl
 				continue
 			}
 			_ = tctx.store.UpdateFactEmbedding(existing.ID, existVec)
-			log.Printf("  [agent] backfilled embedding for fact ID=%d", existing.ID)
+			log.Debug("backfilled embedding for fact", "fact_id", existing.ID)
 		}
 
 		sim := embed.CosineSimilarity(newVec, existVec)
@@ -874,7 +880,7 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 	if tctx.embedClient != nil {
 		if newVec, err := tctx.embedClient.Embed(args.Fact); err == nil {
 			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec)
-			log.Printf("  [agent] recomputed embedding for updated fact ID=%d", args.FactID)
+			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
 		}
 	}
 

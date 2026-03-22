@@ -4,13 +4,14 @@ package bot
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/agent"
 	"her/compact"
@@ -24,6 +25,9 @@ import (
 
 	tele "gopkg.in/telebot.v4"
 )
+
+// log is the package-level logger for the bot package.
+var log = charmlog.With("component", "bot")
 
 // Bot wraps the Telegram bot and all its dependencies.
 // This is a common Go pattern: a "god struct" that holds references
@@ -97,7 +101,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 // (or until the bot is stopped), so it's typically the last thing
 // called in main.go.
 func (b *Bot) Start() {
-	log.Println("Bot is running. Listening for messages...")
+	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
 }
 
@@ -129,13 +133,12 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Get the active conversation ID for this chat.
 	conversationID := b.getConversationID(msg.Chat.ID)
 
-	log.Printf("--- incoming message ---")
-	log.Printf("  <user> %s", truncate(userText, 100))
+	log.Info("incoming message", "text", truncate(userText, 100))
 
 	// Step 1: Log the raw message to SQLite.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
-		log.Printf("  error saving message: %v", err)
+		log.Error("saving message", "err", err)
 	}
 
 	// Step 2: PII scrub the message.
@@ -143,7 +146,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	if b.cfg.Scrub.Enabled {
 		scrubResult = scrub.Scrub(userText)
 		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
-			log.Printf("  scrub: %d PII token(s) replaced", vaultCount)
+			log.Info("PII scrubbed", "tokens", vaultCount)
 		}
 	} else {
 		scrubResult = &scrub.ScrubResult{
@@ -157,7 +160,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
 		for _, entry := range scrubResult.Vault.Entries() {
 			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
-				log.Printf("  error saving PII vault entry: %v", err)
+				log.Error("saving PII vault entry", "err", err)
 			}
 		}
 	}
@@ -184,7 +187,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
 	if sendErr != nil {
 		close(stopTyping)
-		log.Printf("  error sending placeholder: %v", sendErr)
+		log.Error("sending placeholder", "err", sendErr)
 		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
 	}
 
@@ -223,14 +226,13 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	close(stopTyping)
 
 	if err != nil {
-		log.Printf("  agent error: %v", err)
+		log.Error("agent error", "err", err)
 		// If the agent failed entirely, edit the placeholder with an error message.
 		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
 		return nil
 	}
 
-	log.Printf("  <mira> %s", truncate(result.ReplyText, 100))
-	log.Printf("  -> reply sent via agent pipeline")
+	log.Info("reply sent", "text", truncate(result.ReplyText, 100))
 
 	return nil
 }
@@ -252,7 +254,7 @@ func (b *Bot) getConversationID(chatID int64) string {
 	prefix := fmt.Sprintf("tg_%d", chatID)
 	if existing := b.store.LatestConversationID(prefix); existing != "" {
 		b.conversationIDs.Store(key, existing)
-		log.Printf("  [bot] resumed conversation: %s", existing)
+		log.Info("resumed conversation", "id", existing)
 		return existing
 	}
 
@@ -270,7 +272,7 @@ func (b *Bot) handleClear(c tele.Context) error {
 	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 	b.conversationIDs.Store(key, newID)
 
-	log.Printf("--- /clear -- conversation reset for chat %d -> %s", chatID, newID)
+	log.Info("/clear: conversation reset", "chat", chatID, "new_id", newID)
 	return c.Send("Context cleared. Fresh start!")
 }
 
@@ -321,7 +323,7 @@ func (b *Bot) handleForget(c tele.Context) error {
 		return c.Send(fmt.Sprintf("couldn't forget fact %d: %v", factID, err))
 	}
 
-	log.Printf("--- /forget -- deactivated fact ID=%d", factID)
+	log.Info("/forget: deactivated fact", "fact_id", factID)
 	return c.Send(fmt.Sprintf("Done — forgot fact #%d.", factID))
 }
 
@@ -409,7 +411,7 @@ func (b *Bot) handleReflect(c tele.Context) error {
 
 	err = persona.Reflect(b.llm, b.store, lastUser, lastMira, factStrings)
 	if err != nil {
-		log.Printf("  manual reflection error: %v", err)
+		log.Error("manual reflection", "err", err)
 		return c.Send("I tried to reflect but something went wrong. Try again?")
 	}
 
@@ -543,7 +545,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 // uses launchctl to do a clean restart. Otherwise, exits and relies
 // on the user to restart manually.
 func (b *Bot) handleRestart(c tele.Context) error {
-	log.Printf("--- /restart -- restart requested via Telegram")
+	log.Info("/restart: restart requested via Telegram")
 
 	if isLaunchdManaged() {
 		_ = c.Send("Restarting via launchd... be right back.")
@@ -554,7 +556,7 @@ func (b *Bot) handleRestart(c tele.Context) error {
 			time.Sleep(500 * time.Millisecond) // let the message send
 			cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
 			if err := cmd.Run(); err != nil {
-				log.Printf("  launchctl kickstart failed: %v, falling back to exit", err)
+				log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 				os.Exit(0) // launchd will restart us via KeepAlive
 			}
 		}()

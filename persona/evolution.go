@@ -13,13 +13,17 @@ package persona
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/llm"
 	"her/memory"
 )
+
+// log is the package-level logger for the persona package.
+var log = charmlog.With("component", "persona")
 
 // reflectionPrompt is sent to the conversational LLM after a memory-dense
 // conversation. Mira reflects on what just happened — not a persona rewrite,
@@ -80,7 +84,7 @@ func Reflect(
 	miraResponse string,
 	newFacts []string,
 ) error {
-	log.Printf("  [persona] triggering reflection (%d new facts)", len(newFacts))
+	log.Info("triggering reflection", "new_facts", len(newFacts))
 
 	// Build the exchange summary.
 	exchange := fmt.Sprintf("User: %s\n\nMira: %s", userMessage, miraResponse)
@@ -112,7 +116,7 @@ func Reflect(
 	// Log metrics for the reflection call.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
 
-	log.Printf("  [persona] reflection saved: %s", truncate(resp.Content, 120))
+	log.Info("reflection saved", "preview", truncate(resp.Content, 120))
 	return nil
 }
 
@@ -130,7 +134,7 @@ func MaybeRewrite(
 		return false, fmt.Errorf("checking last persona timestamp: %w", err)
 	}
 
-	log.Printf("  [persona] triggering persona rewrite")
+	log.Info("triggering persona rewrite")
 
 	// Read current persona.md.
 	currentPersona := "(no persona description yet — this is your first one)"
@@ -195,9 +199,8 @@ func MaybeRewrite(
 	// Log metrics.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
 
-	log.Printf("  [persona] persona rewritten (version ID=%d, %d reflections used)",
-		versionID, len(reflections))
-	log.Printf("  [persona] new persona: %s", truncate(resp.Content, 200))
+	log.Info("persona rewritten", "version_id", versionID, "reflections_used", len(reflections))
+	log.Info("new persona preview", "preview", truncate(resp.Content, 200))
 
 	return true, nil
 }

@@ -3,11 +3,15 @@ package memory
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"her/llm"
 )
+
+// log is the package-level logger for the memory package.
+var log = charmlog.With("component", "memory")
 
 // extractionPrompt is the system prompt sent to the LLM to extract facts
 // from a conversation. We ask for JSON output so we can parse it reliably.
@@ -96,7 +100,7 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 
 	var facts []extractedFact
 	if err := json.Unmarshal([]byte(jsonStr), &facts); err != nil {
-		log.Printf("Failed to parse extraction response as JSON: %v\nRaw: %s", err, resp.Content)
+		log.Error("failed to parse extraction response as JSON", "err", err, "raw", resp.Content)
 		return fmt.Errorf("parsing extraction response: %w", err)
 	}
 
@@ -114,12 +118,12 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 
 		_, err := store.SaveFact(f.Fact, f.Category, "user", lastMsgID, f.Importance, nil)
 		if err != nil {
-			log.Printf("Error saving extracted fact: %v", err)
+			log.Error("saving extracted fact", "err", err)
 			continue
 		}
-		log.Printf("Extracted fact [%s, importance=%d]: %s", f.Category, f.Importance, f.Fact)
+		log.Debug("extracted fact", "category", f.Category, "importance", f.Importance, "fact", f.Fact)
 	}
 
-	log.Printf("Extracted %d facts from %d messages", len(facts), len(messages))
+	log.Info("extraction complete", "facts", len(facts), "messages", len(messages))
 	return nil
 }

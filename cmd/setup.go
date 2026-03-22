@@ -2,13 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"text/template"
 
+	charmlog "github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 )
 
@@ -171,7 +171,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	loadCmd.Stdout = os.Stdout
 	loadCmd.Stderr = os.Stderr
 	if err := loadCmd.Run(); err != nil {
-		log.Printf("Warning: launchctl load failed: %v", err)
+		charmlog.Warn("launchctl load failed", "err", err)
 		fmt.Println("      You may need to unload first: her stop")
 	} else {
 		fmt.Println("      Service loaded!")
