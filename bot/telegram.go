@@ -398,9 +398,10 @@ func formatTokens(n int) string {
 func (b *Bot) handleReflect(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
 
-	// Get the most recent exchange for context.
-	convID := b.getConversationID(c.Message().Chat.ID)
-	recent, err := b.store.RecentMessages(convID, 10)
+	// Get the most recent messages across ALL conversations.
+	// We use GlobalRecentMessages here instead of per-conversation,
+	// because /reflect should work even after a /clear or bot restart.
+	recent, err := b.store.GlobalRecentMessages(10)
 	if err != nil || len(recent) < 2 {
 		return c.Send("Not enough conversation history to reflect on yet. Keep chatting!")
 	}

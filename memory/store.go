@@ -222,6 +222,42 @@ func (s *Store) SaveMessage(role, contentRaw, contentScrubbed, conversationID st
 	return id, nil
 }
 
+// GlobalRecentMessages retrieves the last N messages across ALL conversations,
+// ordered oldest-first. Used by /reflect which needs recent context regardless
+// of which conversation ID they belong to.
+func (s *Store) GlobalRecentMessages(limit int) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		 FROM (
+			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+			FROM messages
+			ORDER BY id DESC
+			LIMIT ?
+		 ) sub ORDER BY id ASC`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying global recent messages: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		var ts string
+		var scrubbed sql.NullString
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		if scrubbed.Valid {
+			m.ContentScrubbed = scrubbed.String
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
 // RecentMessages retrieves the last N messages for a conversation,
 // ordered oldest-first so they can be fed directly into the LLM prompt.
 func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, error) {
