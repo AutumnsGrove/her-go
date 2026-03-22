@@ -354,9 +354,8 @@ The system prompt is assembled from multiple layers at each LLM call:
 
 ### 6. Scheduler (`scheduler/`)
 
-- In-process goroutine that checks for pending reminders every minute
-- When a reminder triggers, sends a Telegram message to the user
-- Future: could support more complex scheduling (daily check-ins, weekly summaries)
+- In-process goroutine for timed events (v0.6+: mood check-ins, proactive messaging)
+- Reminders handled via Todoist integration (v0.6) rather than custom infrastructure
 
 ### 7. Configuration (`config.yaml`)
 
@@ -441,9 +440,8 @@ To prevent hot/cold personality swings:
 
 ### 6. Scheduler (`scheduler/`)
 
-- In-process goroutine that checks for pending reminders every minute
-- When a reminder triggers, sends a Telegram message to the user
-- Future: could support more complex scheduling (daily check-ins, weekly summaries)
+- In-process goroutine for timed events (v0.6+: mood check-ins, proactive messaging)
+- Reminders handled via Todoist integration (v0.6) rather than custom infrastructure
 
 ### 7. Configuration (`config.yaml`)
 
@@ -598,8 +596,6 @@ her-go/
 - [ ] Fact extraction (periodic LLM-based extraction from conversations)
 - [ ] Memory retrieval (inject relevant facts into prompt)
 - [ ] Conversation summaries (end-of-day or end-of-session)
-- [ ] `/remind` command — set reminders that fire at a specific time
-- [ ] Reminder scheduler (goroutine, checks every minute)
 - [ ] `/forget` command — deactivate specific facts
 - [ ] `/stats` command — show usage metrics (tokens, cost, message count)
 - [ ] Reflection system (Trigger B — memory-density spike → journal-like reflection entry)
@@ -610,7 +606,7 @@ her-go/
 - [ ] `/persona` command — view current persona + history
 - [ ] Layered prompt assembly (prompt.md + persona.md + reflections + facts + history)
 
-**Result:** The bot remembers things you've told it, can remind you, and its personality genuinely evolves over time based on your interactions.
+**Result:** The bot remembers things you've told it, and its personality genuinely evolves over time based on your interactions.
 
 ### v0.2.5 — She Sees
 
@@ -725,6 +721,7 @@ Mira can see your task list and help manage it. This makes her aware of what you
 
 - Read tasks: "What's on my plate today?" → Mira queries Todoist and summarizes
 - Create tasks: "Remind me to review the PR tomorrow" → Mira creates a Todoist task
+- **Reminders via Todoist:** `/remind` command creates Todoist tasks with due dates instead of custom scheduler infrastructure. Todoist handles notification delivery natively. Replaces the original v0.2 reminder system — simpler, more reliable, and the user already lives in Todoist.
 - Contextual awareness: Mira knows you have 5 overdue tasks and can reference that naturally
 - Implementation: thin wrapper around the Todoist REST API as agent tools (`todoist_list`, `todoist_create`, `todoist_complete`)
 - API key stored in `config.yaml` / `secrets.json`
