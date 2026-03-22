@@ -575,6 +575,87 @@ func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
 	return id, nil
 }
 
+// Stats holds aggregate usage statistics for the /stats command.
+type Stats struct {
+	TotalMessages    int
+	UserMessages     int
+	MiraMessages     int
+	TotalFacts       int
+	UserFacts        int
+	SelfFacts        int
+	TotalTokens      int
+	TotalCostUSD     float64
+	ChatTokens       int
+	ChatCostUSD      float64
+	AgentTokens      int
+	AgentCostUSD     float64
+	AvgLatencyMs     int
+	ConversationDays int // how many distinct days have messages
+}
+
+// GetStats computes aggregate usage statistics across all data.
+// Uses several small queries rather than one giant join — clearer
+// and fast enough for our scale.
+func (s *Store) GetStats() (*Stats, error) {
+	st := &Stats{}
+
+	// Message counts by role.
+	s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&st.TotalMessages)
+	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE role = 'user'`).Scan(&st.UserMessages)
+	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE role = 'assistant'`).Scan(&st.MiraMessages)
+
+	// Fact counts by subject.
+	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1`).Scan(&st.TotalFacts)
+	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'user'`).Scan(&st.UserFacts)
+	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'self'`).Scan(&st.SelfFacts)
+
+	// Token + cost totals, split by chat vs agent model.
+	// Chat models have latency_ms > 0 (agent calls log latency as 0).
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics`).Scan(&st.TotalTokens, &st.TotalCostUSD)
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms > 0`).Scan(&st.ChatTokens, &st.ChatCostUSD)
+	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms = 0`).Scan(&st.AgentTokens, &st.AgentCostUSD)
+
+	// Average chat latency (exclude agent calls which have 0 latency).
+	s.db.QueryRow(`SELECT COALESCE(AVG(latency_ms), 0) FROM metrics WHERE latency_ms > 0`).Scan(&st.AvgLatencyMs)
+
+	// Distinct days with messages (gives a sense of how many days active).
+	s.db.QueryRow(`SELECT COUNT(DISTINCT DATE(timestamp)) FROM messages`).Scan(&st.ConversationDays)
+
+	return st, nil
+}
+
+// FindFactsByKeyword searches active facts for a keyword match.
+// Used by /forget to help the user find facts to deactivate.
+func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
+		 FROM facts
+		 WHERE active = 1 AND fact LIKE '%' || ? || '%'
+		 ORDER BY importance DESC
+		 LIMIT 10`,
+		keyword,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("searching facts: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		var embData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
+			return nil, fmt.Errorf("scanning fact row: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
+		f.Embedding = decodeEmbedding(embData)
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
 // SavePIIVaultEntry persists a Tier 2 token↔original mapping for audit trail.
 func (s *Store) SavePIIVaultEntry(messageID int64, token, originalValue, entityType string) error {
 	_, err := s.db.Exec(

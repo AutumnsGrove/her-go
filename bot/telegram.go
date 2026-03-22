@@ -76,6 +76,9 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 	// registered separately from regular text messages. The framework
 	// strips the leading "/" for you.
 	tb.Handle("/clear", bot.handleClear)
+	tb.Handle("/stats", bot.handleStats)
+	tb.Handle("/forget", bot.handleForget)
+	tb.Handle("/facts", bot.handleFacts)
 
 	// Register message handlers. In telebot, you register handlers for
 	// different event types. tele.OnText fires for any text message.
@@ -281,6 +284,110 @@ func (b *Bot) handleClear(c tele.Context) error {
 
 	log.Printf("─── /clear ── conversation reset for chat %d → %s", chatID, newID)
 	return c.Send("Context cleared. Fresh start!")
+}
+
+// handleStats shows aggregate usage statistics.
+// Pulls data from the metrics and messages tables and formats it
+// as a Telegram message with HTML formatting.
+func (b *Bot) handleStats(c tele.Context) error {
+	stats, err := b.store.GetStats()
+	if err != nil {
+		return c.Send("couldn't load stats right now, sorry!")
+	}
+
+	// Build a nicely formatted stats message.
+	// We use HTML parse mode because it's easier to work with
+	// programmatically than MarkdownV2 (no escape character hell).
+	msg := fmt.Sprintf(
+		"<b>📊 Stats</b>\n\n"+
+			"<b>Messages:</b> %d total (%d you, %d me)\n"+
+			"<b>Active days:</b> %d\n\n"+
+			"<b>Memory:</b> %d facts (%d about you, %d about me)\n\n"+
+			"<b>Tokens:</b> %s total\n"+
+			"  Chat: %s ($%.4f)\n"+
+			"  Agent: %s ($%.4f)\n"+
+			"<b>Total cost:</b> $%.4f\n"+
+			"<b>Avg latency:</b> %dms",
+		stats.TotalMessages, stats.UserMessages, stats.MiraMessages,
+		stats.ConversationDays,
+		stats.TotalFacts, stats.UserFacts, stats.SelfFacts,
+		formatTokens(stats.TotalTokens),
+		formatTokens(stats.ChatTokens), stats.ChatCostUSD,
+		formatTokens(stats.AgentTokens), stats.AgentCostUSD,
+		stats.TotalCostUSD,
+		stats.AvgLatencyMs,
+	)
+
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleForget deactivates a fact by ID. Usage: /forget 3
+// If no ID is given, lists all active facts so the user can pick one.
+func (b *Bot) handleForget(c tele.Context) error {
+	args := strings.TrimSpace(c.Message().Payload)
+
+	// If no argument, show active facts so the user can pick.
+	if args == "" {
+		return b.handleFacts(c)
+	}
+
+	// Parse the fact ID.
+	var factID int64
+	if _, err := fmt.Sscanf(args, "%d", &factID); err != nil {
+		return c.Send("usage: /forget <fact_id>\n\nUse /facts to see all active facts with their IDs.")
+	}
+
+	if err := b.store.DeactivateFact(factID); err != nil {
+		return c.Send(fmt.Sprintf("couldn't forget fact %d: %v", factID, err))
+	}
+
+	log.Printf("─── /forget ── deactivated fact ID=%d", factID)
+	return c.Send(fmt.Sprintf("Done — forgot fact #%d.", factID))
+}
+
+// handleFacts lists all active facts, grouped by subject.
+// Useful for seeing what Mira knows and finding fact IDs for /forget.
+func (b *Bot) handleFacts(c tele.Context) error {
+	facts, err := b.store.AllActiveFacts()
+	if err != nil {
+		return c.Send("couldn't load facts right now, sorry!")
+	}
+
+	if len(facts) == 0 {
+		return c.Send("No facts saved yet. Keep chatting!")
+	}
+
+	var msg strings.Builder
+	msg.WriteString("<b>🧠 What I Know</b>\n\n")
+
+	// Group by subject, show user facts first.
+	currentSubject := ""
+	for _, f := range facts {
+		if f.Subject != currentSubject {
+			currentSubject = f.Subject
+			if currentSubject == "user" {
+				msg.WriteString("<b>About you:</b>\n")
+			} else {
+				msg.WriteString("\n<b>About me:</b>\n")
+			}
+		}
+		msg.WriteString(fmt.Sprintf("  #%d [%s, ★%d] %s\n", f.ID, f.Category, f.Importance, f.Fact))
+	}
+
+	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a fact.</i>")
+
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// formatTokens formats a token count with K/M suffixes for readability.
+func formatTokens(n int) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // runAgent kicks off the background agent (Liquid LFM) to process
