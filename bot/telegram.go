@@ -16,6 +16,7 @@ import (
 	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
+	"her-go/persona"
 	"her-go/scrub"
 
 	tele "gopkg.in/telebot.v4"
@@ -79,6 +80,8 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 	tb.Handle("/stats", bot.handleStats)
 	tb.Handle("/forget", bot.handleForget)
 	tb.Handle("/facts", bot.handleFacts)
+	tb.Handle("/reflect", bot.handleReflect)
+	tb.Handle("/persona", bot.handlePersona)
 
 	// Register message handlers. In telebot, you register handlers for
 	// different event types. tele.OnText fires for any text message.
@@ -390,6 +393,108 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
+// handleReflect manually triggers a reflection. Mira looks at her recent
+// conversations and self-facts and writes a journal entry.
+func (b *Bot) handleReflect(c tele.Context) error {
+	_ = c.Notify(tele.Typing)
+
+	// Get the most recent exchange for context.
+	convID := b.getConversationID(c.Message().Chat.ID)
+	recent, err := b.store.RecentMessages(convID, 10)
+	if err != nil || len(recent) < 2 {
+		return c.Send("Not enough conversation history to reflect on yet. Keep chatting!")
+	}
+
+	// Build a summary of recent facts for the reflection.
+	facts, _ := b.store.RecentFacts("user", 10)
+	selfFacts, _ := b.store.RecentFacts("self", 10)
+
+	var factStrings []string
+	for _, f := range facts {
+		factStrings = append(factStrings, f.Fact)
+	}
+	for _, f := range selfFacts {
+		if f.Category != "reflection" {
+			factStrings = append(factStrings, "(self) "+f.Fact)
+		}
+	}
+
+	if len(factStrings) == 0 {
+		return c.Send("I don't have enough memories to reflect on yet. Let's keep talking!")
+	}
+
+	// Use the last user message and Mira response as the exchange.
+	var lastUser, lastMira string
+	for i := len(recent) - 1; i >= 0; i-- {
+		if recent[i].Role == "user" && lastUser == "" {
+			lastUser = recent[i].ContentRaw
+		}
+		if recent[i].Role == "assistant" && lastMira == "" {
+			lastMira = recent[i].ContentRaw
+		}
+		if lastUser != "" && lastMira != "" {
+			break
+		}
+	}
+
+	err = persona.Reflect(b.llm, b.store, lastUser, lastMira, factStrings)
+	if err != nil {
+		log.Printf("  ✗ manual reflection error: %v", err)
+		return c.Send("I tried to reflect but something went wrong. Try again?")
+	}
+
+	// Fetch the reflection we just saved.
+	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-10 * time.Second))
+	if len(reflections) > 0 {
+		return c.Send(fmt.Sprintf("💭 <b>Reflection</b>\n\n<i>%s</i>", reflections[len(reflections)-1].Fact),
+			&tele.SendOptions{ParseMode: tele.ModeHTML})
+	}
+
+	return c.Send("Done reflecting. Use /facts to see what I wrote.")
+}
+
+// handlePersona shows the current persona.md content, or with "history"
+// shows past versions.
+func (b *Bot) handlePersona(c tele.Context) error {
+	args := strings.TrimSpace(c.Message().Payload)
+
+	if args == "history" {
+		return b.handlePersonaHistory(c)
+	}
+
+	// Read current persona.md from disk.
+	data, err := os.ReadFile(b.cfg.Persona.PersonaFile)
+	if err != nil || len(data) == 0 {
+		return c.Send("No persona description yet. I'll develop one as we keep chatting!")
+	}
+
+	msg := fmt.Sprintf("🪞 <b>Who I Am Right Now</b>\n\n<i>%s</i>", string(data))
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handlePersonaHistory shows past persona versions.
+func (b *Bot) handlePersonaHistory(c tele.Context) error {
+	versions, err := b.store.PersonaHistory(5)
+	if err != nil || len(versions) == 0 {
+		return c.Send("No persona history yet. My personality hasn't been rewritten yet!")
+	}
+
+	var msg strings.Builder
+	msg.WriteString("🪞 <b>Persona History</b>\n\n")
+	for _, v := range versions {
+		msg.WriteString(fmt.Sprintf("<b>v%d</b> — %s\n<i>Trigger: %s</i>\n",
+			v.ID, v.Timestamp.Format("Jan 2, 3:04 PM"), v.Trigger))
+		// Truncate long personas for the list view.
+		content := v.Content
+		if len(content) > 150 {
+			content = content[:150] + "..."
+		}
+		msg.WriteString(fmt.Sprintf("<code>%s</code>\n\n", content))
+	}
+
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
 // runAgent kicks off the background agent (Liquid LFM) to process
 // the latest exchange. The agent decides what memory operations to
 // perform and can optionally send follow-up messages through Deepseek.
@@ -412,7 +517,20 @@ func (b *Bot) runAgent(userMessage, miraResponse string, triggerMsgID int64, c t
 		return c.Send(resp.Content)
 	}
 
-	agent.Run(b.agentLLM, b.store, b.embedClient, b.cfg.Embed.SimilarityThreshold, userMessage, miraResponse, b.cfg.Persona.PersonaFile, triggerMsgID, sendMsg)
+	agent.Run(
+		b.agentLLM,
+		b.llm, // conversational model for reflections + persona rewrites
+		b.store,
+		b.embedClient,
+		b.cfg.Embed.SimilarityThreshold,
+		userMessage,
+		miraResponse,
+		b.cfg.Persona.PersonaFile,
+		b.cfg.Persona.ReflectionMemoryThreshold,
+		b.cfg.Persona.RewriteEveryNConversations,
+		triggerMsgID,
+		sendMsg,
+	)
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md

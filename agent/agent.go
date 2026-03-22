@@ -10,6 +10,7 @@ import (
 	"her-go/embed"
 	"her-go/llm"
 	"her-go/memory"
+	"her-go/persona"
 )
 
 // toolContext bundles all the dependencies that tool execution functions need.
@@ -23,6 +24,10 @@ type toolContext struct {
 	similarityThreshold float64
 	personaFile        string
 	sendMessage        SendMessageFunc
+
+	// savedFacts tracks facts saved during this agent run.
+	// Used to trigger reflection (Trigger B) when enough facts accumulate.
+	savedFacts []string
 }
 
 // SendMessageFunc is a callback the agent uses to send follow-up messages.
@@ -119,12 +124,15 @@ You may call multiple tools in one response.`
 // user's conversation.
 func Run(
 	agentLLM *llm.Client,
+	chatLLM *llm.Client, // conversational model — used for reflections + persona rewrites
 	store *memory.Store,
 	embedClient *embed.Client,
 	similarityThreshold float64,
 	userMessage string,
 	miraResponse string,
 	personaFile string,
+	reflectionThreshold int, // Trigger B: reflect if >= this many facts saved
+	rewriteEveryN int,       // Trigger A: rewrite persona every N conversations
 	triggerMsgID int64,
 	sendMessage SendMessageFunc,
 ) {
@@ -152,13 +160,24 @@ func Run(
 	// Build the context message.
 	context := buildAgentContext(userMessage, miraResponse, userFacts, selfFacts)
 
-	// Set up the conversation with Liquid.
+	// Set up the conversation with the agent model.
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: agentSystemPrompt},
 		{Role: "user", Content: context},
 	}
 
 	tools := ToolDefs()
+
+	// Shared tool context across all iterations — the savedFacts slice
+	// accumulates across the entire agent run so we can count them for
+	// the reflection trigger at the end.
+	tctx := &toolContext{
+		store:              store,
+		embedClient:        embedClient,
+		similarityThreshold: similarityThreshold,
+		personaFile:        personaFile,
+		sendMessage:        sendMessage,
+	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
 	// or it may return tool calls that require a follow-up turn.
@@ -167,7 +186,7 @@ func Run(
 		resp, err := agentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
 			log.Printf("  [agent] ✗ LLM error: %v", err)
-			return
+			break
 		}
 
 		// Log agent metrics linked to the user message that triggered this run.
@@ -175,14 +194,14 @@ func Run(
 		log.Printf("  [agent] tokens: %d prompt + %d completion | cost: $%.6f",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
 
-		// If no tool calls, the agent is done.
+		// If no tool calls, the agent is done with memory management.
 		if len(resp.ToolCalls) == 0 {
 			if resp.Content != "" {
 				log.Printf("  [agent] done (text only): %s", resp.Content)
 			} else {
 				log.Printf("  [agent] done (no actions)")
 			}
-			return
+			break
 		}
 
 		log.Printf("  [agent] %d tool call(s):", len(resp.ToolCalls))
@@ -193,15 +212,6 @@ func Run(
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		})
-
-		// Build the tool context once per iteration.
-		tctx := &toolContext{
-			store:              store,
-			embedClient:        embedClient,
-			similarityThreshold: similarityThreshold,
-			personaFile:        personaFile,
-			sendMessage:        sendMessage,
-		}
 
 		// Execute each tool call and collect results.
 		for _, tc := range resp.ToolCalls {
@@ -216,7 +226,27 @@ func Run(
 		}
 	}
 
-	log.Printf("  [agent] hit max iterations, stopping")
+	// --- Persona Evolution Triggers ---
+	// These run AFTER the agent's memory management loop finishes.
+
+	// Trigger B: Reflection — if this conversation was memory-dense
+	// (many facts saved), Mira writes a journal-like reflection.
+	if len(tctx.savedFacts) >= reflectionThreshold && reflectionThreshold > 0 {
+		if err := persona.Reflect(chatLLM, store, userMessage, miraResponse, tctx.savedFacts); err != nil {
+			log.Printf("  [persona] ✗ reflection error: %v", err)
+		}
+	}
+
+	// Trigger A: Persona rewrite — check if enough conversations have
+	// passed since the last rewrite. This is cheap (one DB query) so
+	// we check every run, but it only triggers every ~20 conversations.
+	if rewriteEveryN > 0 {
+		if rewritten, err := persona.MaybeRewrite(chatLLM, store, personaFile, rewriteEveryN); err != nil {
+			log.Printf("  [persona] ✗ rewrite error: %v", err)
+		} else if rewritten {
+			log.Printf("  [persona] ✓ persona.md rewritten")
+		}
+	}
 }
 
 // buildAgentContext formats the latest exchange and current facts
@@ -359,6 +389,10 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	if subject == "self" {
 		label = "self fact"
 	}
+
+	// Track this fact for reflection trigger (Trigger B).
+	tctx.savedFacts = append(tctx.savedFacts, args.Fact)
+
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
 

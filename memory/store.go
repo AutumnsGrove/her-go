@@ -560,6 +560,39 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 
 // SavePersonaVersion stores a snapshot of persona.md content in the
 // persona_versions table. Every rewrite is preserved for history/rollback.
+// PersonaVersion represents one historical snapshot of persona.md.
+type PersonaVersion struct {
+	ID        int64
+	Timestamp time.Time
+	Content   string
+	Trigger   string
+}
+
+// PersonaHistory returns the most recent N persona versions, newest first.
+func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, content, COALESCE(trigger, '') FROM persona_versions
+		 ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying persona history: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []PersonaVersion
+	for rows.Next() {
+		var v PersonaVersion
+		var ts string
+		if err := rows.Scan(&v.ID, &ts, &v.Content, &v.Trigger); err != nil {
+			return nil, fmt.Errorf("scanning persona version: %w", err)
+		}
+		v.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		versions = append(versions, v)
+	}
+	return versions, nil
+}
+
 func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO persona_versions (content, trigger) VALUES (?, ?)`,
@@ -651,6 +684,65 @@ func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
 		f.Embedding = decodeEmbedding(embData)
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// ConversationCountSince counts distinct conversation IDs in messages
+// created after the given timestamp. Used to determine when to trigger
+// a persona rewrite (every ~20 conversations).
+func (s *Store) ConversationCountSince(since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(DISTINCT conversation_id) FROM messages WHERE timestamp > ?`,
+		since.Format("2006-01-02 15:04:05"),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting conversations: %w", err)
+	}
+	return count, nil
+}
+
+// LastPersonaTimestamp returns the timestamp of the most recent persona
+// version. Returns zero time if no versions exist yet.
+func (s *Store) LastPersonaTimestamp() (time.Time, error) {
+	var ts string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM persona_versions ORDER BY id DESC LIMIT 1`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, nil // no versions yet, return zero time
+	}
+	t, _ := time.Parse("2006-01-02 15:04:05", ts)
+	return t, nil
+}
+
+// ReflectionsSince returns all self-facts with category 'reflection'
+// created after the given timestamp.
+func (s *Store) ReflectionsSince(since time.Time) ([]Fact, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		 FROM facts
+		 WHERE active = 1 AND COALESCE(subject, 'user') = 'self'
+		   AND category = 'reflection' AND timestamp > ?
+		 ORDER BY timestamp ASC`,
+		since.Format("2006-01-02 15:04:05"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying reflections: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+			return nil, fmt.Errorf("scanning reflection: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
 		facts = append(facts, f)
 	}
 	return facts, nil
