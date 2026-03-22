@@ -207,6 +207,9 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// Tool-calling loop. The model may return multiple tool calls,
 	// or it may return tool calls that require a follow-up turn.
+	// Track turn index for agent_turns logging.
+	turnIndex := 0
+
 	// We loop up to 10 iterations to allow for think + search + refine cycles.
 	// With the think tool, a typical complex flow might use 6-7 iterations:
 	// think → search → think(evaluate) → search(refine) → think → reply → save_fact
@@ -242,9 +245,18 @@ func Run(params RunParams) (*RunResult, error) {
 		})
 
 		// Execute each tool call and collect results.
+		// Save every step to agent_turns for full observability.
 		for _, tc := range resp.ToolCalls {
+			// Save the tool call (what the agent decided to do).
+			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
+			turnIndex++
+
 			result := executeTool(tc, tctx)
 			log.Printf("  [agent]   -> %s: %s", tc.Function.Name, truncateLog(result, 200))
+
+			// Save the tool result (what happened when we executed it).
+			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
+			turnIndex++
 
 			messages = append(messages, llm.ChatMessage{
 				Role:       "tool",
@@ -472,8 +484,12 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		log.Printf("  [reply] error saving response: %v", err)
 	}
 
-	// Save metrics for the chat model response.
+	// Update token counts on both the user message and the response.
+	if tctx.triggerMsgID > 0 {
+		tctx.store.UpdateMessageTokenCount(tctx.triggerMsgID, resp.PromptTokens)
+	}
 	if respID > 0 {
+		tctx.store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
 		tctx.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
 	}
 

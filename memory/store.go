@@ -183,6 +183,22 @@ func (s *Store) initTables() error {
 			result_count INTEGER,
 			FOREIGN KEY (message_id) REFERENCES messages(id)
 		)`,
+
+		// Agent turns — full trace of the agent's reasoning and tool calls.
+		// Each row is one step in the agent loop: a think, a tool call,
+		// a tool result, etc. Together they reconstruct the full chain
+		// of reasoning for any given user message.
+		`CREATE TABLE IF NOT EXISTS agent_turns (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			message_id INTEGER,
+			turn_index INTEGER,
+			role TEXT NOT NULL,
+			tool_name TEXT,
+			tool_args TEXT,
+			content TEXT,
+			FOREIGN KEY (message_id) REFERENCES messages(id)
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -336,6 +352,25 @@ func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTo
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)
+	}
+	return nil
+}
+
+// SaveAgentTurn logs a single step in the agent's reasoning chain.
+// turnIndex is the sequential position within the agent run (0, 1, 2...).
+// role is "assistant" (agent's decision) or "tool" (tool result).
+func (s *Store) SaveAgentTurn(messageID int64, turnIndex int, role, toolName, toolArgs, content string) error {
+	var msgID interface{} = messageID
+	if messageID == 0 {
+		msgID = nil
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO agent_turns (message_id, turn_index, role, tool_name, tool_args, content)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		msgID, turnIndex, role, toolName, toolArgs, content,
+	)
+	if err != nil {
+		return fmt.Errorf("saving agent turn: %w", err)
 	}
 	return nil
 }
