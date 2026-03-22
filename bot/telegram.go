@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"her-go/config"
@@ -23,11 +24,18 @@ import (
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb       *tele.Bot
-	llm      *llm.Client
-	store    *memory.Store
-	cfg      *config.Config
+	tb           *tele.Bot
+	llm          *llm.Client
+	store        *memory.Store
+	cfg          *config.Config
 	systemPrompt string
+
+	// conversationIDs tracks the active conversation ID per chat.
+	// When /clear is called, we rotate to a new ID so the history
+	// window starts fresh. sync.Map is Go's concurrent-safe map —
+	// like a regular dict but safe to read/write from multiple
+	// goroutines without explicit locking.
+	conversationIDs sync.Map
 }
 
 // New creates and configures a new Telegram bot.
@@ -58,6 +66,11 @@ func New(cfg *config.Config, llmClient *llm.Client, store *memory.Store) (*Bot, 
 		systemPrompt: string(promptBytes),
 	}
 
+	// Register command handlers. In telebot, commands like "/clear" are
+	// registered separately from regular text messages. The framework
+	// strips the leading "/" for you.
+	tb.Handle("/clear", bot.handleClear)
+
 	// Register message handlers. In telebot, you register handlers for
 	// different event types. tele.OnText fires for any text message.
 	// This is like a route decorator in Flask: @app.route("/")
@@ -85,9 +98,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	msg := c.Message()
 	userText := msg.Text
 
-	// Use the chat ID as the conversation ID. For a single-user bot,
-	// this effectively groups all messages into one ongoing conversation.
-	conversationID := fmt.Sprintf("tg_%d", msg.Chat.ID)
+	// Get the active conversation ID for this chat.
+	conversationID := b.getConversationID(msg.Chat.ID)
 
 	// Step 3: Log the raw message to SQLite.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
@@ -225,13 +237,48 @@ func (b *Bot) buildPrompt(currentMessage string, history []memory.Message) []llm
 	return messages
 }
 
-// buildSystemPrompt assembles the system prompt.
-// For v0.1 this is just prompt.md. In v0.2 we'll layer in persona.md,
-// reflections, and relevant facts.
+// getConversationID returns the active conversation ID for a chat.
+// If no conversation has been started (or after a /clear), it creates
+// a new one with a timestamp suffix.
+func (b *Bot) getConversationID(chatID int64) string {
+	key := fmt.Sprintf("%d", chatID)
+
+	// Load existing ID, or create a new one if none exists.
+	// sync.Map.LoadOrStore is atomic — if two goroutines race here,
+	// only one value gets stored. Same idea as Python's
+	// dict.setdefault() but thread-safe.
+	val, _ := b.conversationIDs.LoadOrStore(key, fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix()))
+	return val.(string) // type assertion: sync.Map stores interface{}, we know it's a string
+}
+
+// handleClear resets the conversation context. Old messages stay in the
+// DB but won't be included in future prompts since the conversation ID changes.
+func (b *Bot) handleClear(c tele.Context) error {
+	chatID := c.Message().Chat.ID
+	key := fmt.Sprintf("%d", chatID)
+
+	// Store a new conversation ID with a fresh timestamp.
+	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
+	b.conversationIDs.Store(key, newID)
+
+	log.Printf("Conversation cleared for chat %d, new ID: %s", chatID, newID)
+	return c.Send("Context cleared. Fresh start!")
+}
+
+// buildSystemPrompt assembles the system prompt by reading prompt.md
+// fresh from disk each time. This makes it hot-reloadable — you can
+// edit the prompt while the bot is running and changes take effect
+// on the next message, no restart needed.
 func (b *Bot) buildSystemPrompt() string {
 	var parts []string
 
-	parts = append(parts, b.systemPrompt)
+	// Read prompt.md fresh from disk each call (hot-reload).
+	// Fall back to the version loaded at startup if the read fails.
+	if promptBytes, err := os.ReadFile(b.cfg.Persona.PromptFile); err == nil {
+		parts = append(parts, string(promptBytes))
+	} else {
+		parts = append(parts, b.systemPrompt)
+	}
 
 	// Load persona.md if it exists (optional for v0.1).
 	if personaBytes, err := os.ReadFile(b.cfg.Persona.PersonaFile); err == nil {
