@@ -57,8 +57,32 @@ func main() {
 	)
 	log.Printf("LLM client configured: %s (model: %s)", cfg.LLM.BaseURL, cfg.LLM.Model)
 
+	// Create the agent LLM client (Liquid LFM for tool-calling).
+	// This shares the same base URL and API key as the main client
+	// but uses a different model optimized for tool calling.
+	agentModel := cfg.Agent.Model
+	if agentModel == "" {
+		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+	}
+	agentTemp := cfg.Agent.Temperature
+	if agentTemp == 0 {
+		agentTemp = 0.1
+	}
+	agentMaxTokens := cfg.Agent.MaxTokens
+	if agentMaxTokens == 0 {
+		agentMaxTokens = 512
+	}
+	agentClient := llm.NewClient(
+		cfg.LLM.BaseURL,
+		cfg.LLM.APIKey,
+		agentModel,
+		agentTemp,
+		agentMaxTokens,
+	)
+	log.Printf("Agent client configured: %s (model: %s)", cfg.LLM.BaseURL, agentModel)
+
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, store)
 	if err != nil {
 		log.Fatalf("Failed to create Telegram bot: %v", err)
 	}

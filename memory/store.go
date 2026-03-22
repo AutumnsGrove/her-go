@@ -177,6 +177,20 @@ func (s *Store) initTables() error {
 		}
 	}
 
+	// Migrations — add columns to existing tables.
+	// ALTER TABLE ADD COLUMN is safe to run repeatedly in SQLite —
+	// it errors if the column already exists, which we just ignore.
+	// This is a simple migration strategy: no migration files, no
+	// version tracking, just idempotent ALTER statements.
+	migrations := []string{
+		// subject: "user" for facts about the user, "self" for Mira's
+		// own self-knowledge (observations, patterns, identity).
+		`ALTER TABLE facts ADD COLUMN subject TEXT DEFAULT 'user'`,
+	}
+	for _, m := range migrations {
+		s.db.Exec(m) // ignore errors (column already exists)
+	}
+
 	return nil
 }
 
@@ -252,11 +266,16 @@ func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, err
 }
 
 // SaveMetric logs token usage and cost data for an LLM call.
+// If messageID is 0, it's stored as NULL (e.g., for agent calls).
 func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64) error {
+	var msgID interface{} = messageID
+	if messageID == 0 {
+		msgID = nil
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, messageID,
+		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID,
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)
@@ -290,6 +309,210 @@ func (s *Store) UpdateMessageTokenCount(messageID int64, tokenCount int) error {
 		return fmt.Errorf("updating token count: %w", err)
 	}
 	return nil
+}
+
+// Fact represents an extracted piece of long-term memory.
+// Subject is "user" for facts about the user, or "self" for Mira's
+// own self-knowledge (her identity, observations, patterns).
+type Fact struct {
+	ID              int64
+	Timestamp       time.Time
+	Fact            string
+	Category        string
+	Subject         string // "user" or "self"
+	SourceMessageID int64
+	Importance      int
+	Active          bool
+}
+
+// SaveFact inserts an extracted fact into the database.
+// subject is "user" or "self". If sourceMessageID is 0, it's stored as NULL.
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int) (int64, error) {
+	var srcID interface{} = sourceMessageID
+	if sourceMessageID == 0 {
+		srcID = nil
+	}
+	if subject == "" {
+		subject = "user"
+	}
+
+	result, err := s.db.Exec(
+		`INSERT INTO facts (fact, category, subject, source_message_id, importance)
+		 VALUES (?, ?, ?, ?, ?)`,
+		fact, category, subject, srcID, importance,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving fact: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting fact ID: %w", err)
+	}
+	return id, nil
+}
+
+// RecentFacts retrieves the top-K active facts for a given subject,
+// ordered by importance (descending) then recency (descending).
+func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		 FROM facts
+		 WHERE active = 1 AND COALESCE(subject, 'user') = ?
+		 ORDER BY importance DESC, timestamp DESC
+		 LIMIT ?`,
+		subject, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying facts: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+			return nil, fmt.Errorf("scanning fact row: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// MessageCountSince counts how many user messages exist in a conversation
+// after a given message ID. Used to decide when to trigger fact extraction.
+func (s *Store) MessageCountSince(conversationID string, sinceID int64) (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM messages
+		 WHERE conversation_id = ? AND id > ? AND role = 'user'`,
+		conversationID, sinceID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting messages: %w", err)
+	}
+	return count, nil
+}
+
+// MessagesAfter retrieves all messages in a conversation after a given ID.
+// Used by fact extraction to get the batch of messages to analyze.
+func (s *Store) MessagesAfter(conversationID string, sinceID int64) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		 FROM messages
+		 WHERE conversation_id = ? AND id > ?
+		 ORDER BY id ASC`,
+		conversationID, sinceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages after %d: %w", sinceID, err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		var ts string
+		var scrubbed sql.NullString
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		if scrubbed.Valid {
+			m.ContentScrubbed = scrubbed.String
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
+// LastExtractionMessageID returns the highest source_message_id in the
+// facts table for tracking where the last extraction left off. Returns 0
+// if no facts exist yet.
+func (s *Store) LastExtractionMessageID() (int64, error) {
+	var id sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT MAX(source_message_id) FROM facts`,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("querying last extraction ID: %w", err)
+	}
+	if id.Valid {
+		return id.Int64, nil
+	}
+	return 0, nil
+}
+
+// UpdateFact modifies an existing fact's text, category, or importance.
+func (s *Store) UpdateFact(factID int64, fact, category string, importance int) error {
+	_, err := s.db.Exec(
+		`UPDATE facts SET fact = ?, category = ?, importance = ? WHERE id = ?`,
+		fact, category, importance, factID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating fact %d: %w", factID, err)
+	}
+	return nil
+}
+
+// DeactivateFact soft-deletes a fact by setting active = 0.
+// The fact stays in the DB for audit trail but won't appear in retrieval.
+func (s *Store) DeactivateFact(factID int64) error {
+	_, err := s.db.Exec(
+		`UPDATE facts SET active = 0 WHERE id = ?`,
+		factID,
+	)
+	if err != nil {
+		return fmt.Errorf("deactivating fact %d: %w", factID, err)
+	}
+	return nil
+}
+
+// AllActiveFacts returns every active fact (both user and self).
+// Used by the agent to see the full memory state when deciding
+// what to update or consolidate.
+func (s *Store) AllActiveFacts() ([]Fact, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		 FROM facts WHERE active = 1
+		 ORDER BY subject ASC, importance DESC, timestamp DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying all active facts: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+			return nil, fmt.Errorf("scanning fact row: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// SavePersonaVersion stores a snapshot of persona.md content in the
+// persona_versions table. Every rewrite is preserved for history/rollback.
+func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO persona_versions (content, trigger) VALUES (?, ?)`,
+		content, trigger,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving persona version: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting persona version ID: %w", err)
+	}
+	return id, nil
 }
 
 // SavePIIVaultEntry persists a Tier 2 token↔original mapping for audit trail.

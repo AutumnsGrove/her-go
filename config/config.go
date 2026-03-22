@@ -25,6 +25,7 @@ import (
 type Config struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	LLM      LLMConfig      `yaml:"llm"`
+	Agent    AgentConfig    `yaml:"agent"`
 	Memory   MemoryConfig   `yaml:"memory"`
 	Scrub    ScrubConfig    `yaml:"scrub"`
 	Persona  PersonaConfig  `yaml:"persona"`
@@ -41,6 +42,15 @@ type TelegramConfig struct {
 type LLMConfig struct {
 	BaseURL     string  `yaml:"base_url"`
 	APIKey      string  `yaml:"api_key"`
+	Model       string  `yaml:"model"`
+	Temperature float64 `yaml:"temperature"`
+	MaxTokens   int     `yaml:"max_tokens"`
+}
+
+// AgentConfig holds settings for the background tool-calling agent.
+// This runs a separate, lightweight model (Liquid LFM) that handles
+// memory management and can trigger follow-up messages.
+type AgentConfig struct {
 	Model       string  `yaml:"model"`
 	Temperature float64 `yaml:"temperature"`
 	MaxTokens   int     `yaml:"max_tokens"`

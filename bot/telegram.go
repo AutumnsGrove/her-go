@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"her-go/agent"
 	"her-go/config"
 	"her-go/llm"
 	"her-go/memory"
@@ -26,6 +27,7 @@ import (
 type Bot struct {
 	tb           *tele.Bot
 	llm          *llm.Client
+	agentLLM     *llm.Client // Liquid LFM — background tool-calling brain
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
@@ -39,7 +41,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, store *memory.Store) (*Bot, error) {
 	// tele.Settings configures the bot's behavior.
 	// Poller controls how the bot receives updates from Telegram.
 	settings := tele.Settings{
@@ -61,6 +63,7 @@ func New(cfg *config.Config, llmClient *llm.Client, store *memory.Store) (*Bot, 
 	bot := &Bot{
 		tb:           tb,
 		llm:          llmClient,
+		agentLLM:     agentLLM,
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
@@ -92,6 +95,15 @@ func (b *Bot) Stop() {
 	b.tb.Stop()
 }
 
+// truncate shortens a string for log output, adding "..." if it was cut.
+func truncate(s string, maxLen int) string {
+	s = strings.ReplaceAll(s, "\n", " ") // flatten newlines for single-line logs
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // handleMessage is the core pipeline — this is where every text message
 // flows through. The spec's message flow (steps 1-11) happens here.
 func (b *Bot) handleMessage(c tele.Context) error {
@@ -101,17 +113,22 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Get the active conversation ID for this chat.
 	conversationID := b.getConversationID(msg.Chat.ID)
 
+	log.Printf("─── incoming message ───")
+	log.Printf("  <user> %s", truncate(userText, 100))
+
 	// Step 3: Log the raw message to SQLite.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
-		log.Printf("Error saving user message: %v", err)
-		// Continue anyway — don't fail the whole pipeline because logging broke.
+		log.Printf("  ✗ error saving message: %v", err)
 	}
 
 	// Step 4: PII scrub the message.
 	var scrubResult *scrub.ScrubResult
 	if b.cfg.Scrub.Enabled {
 		scrubResult = scrub.Scrub(userText)
+		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
+			log.Printf("  scrub: %d PII token(s) replaced", vaultCount)
+		}
 	} else {
 		scrubResult = &scrub.ScrubResult{
 			Text:  userText,
@@ -120,14 +137,11 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	}
 
 	// Update the saved message with the scrubbed version.
-	// We saved the raw version first (step 3), now we add the scrubbed copy.
 	if msgID > 0 {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
-
-		// Persist vault entries to SQLite for audit trail.
 		for _, entry := range scrubResult.Vault.Entries() {
 			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
-				log.Printf("Error saving PII vault entry: %v", err)
+				log.Printf("  ✗ error saving PII vault entry: %v", err)
 			}
 		}
 	}
@@ -135,22 +149,17 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Step 5: Retrieve recent conversation history for context.
 	recentMsgs, err := b.store.RecentMessages(conversationID, b.cfg.Memory.RecentMessages)
 	if err != nil {
-		log.Printf("Error retrieving recent messages: %v", err)
-		recentMsgs = nil // continue without history
+		log.Printf("  ✗ error retrieving history: %v", err)
+		recentMsgs = nil
 	}
+	log.Printf("  context: %d history messages", len(recentMsgs))
 
 	// Step 6: Assemble the full prompt.
 	llmMessages := b.buildPrompt(scrubResult.Text, recentMsgs)
 
 	// Step 7: Send typing indicator.
-	// We start a goroutine that re-sends the typing action every 4 seconds
-	// to keep the indicator alive while we wait for the LLM response.
-	// Goroutines are like asyncio.create_task() but backed by real
-	// lightweight threads managed by the Go runtime. They're incredibly
-	// cheap — you can spawn thousands of them.
 	stopTyping := make(chan struct{})
 	go func() {
-		// Send typing indicator immediately.
 		_ = c.Notify(tele.Typing)
 		ticker := time.NewTicker(4 * time.Second)
 		defer ticker.Stop()
@@ -167,44 +176,49 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Step 8: Call the LLM.
 	start := time.Now()
 	resp, err := b.llm.ChatCompletion(llmMessages)
-	close(stopTyping) // stop the typing indicator goroutine
+	close(stopTyping)
 	latencyMs := int(time.Since(start).Milliseconds())
 
 	if err != nil {
-		log.Printf("Error calling LLM: %v", err)
+		log.Printf("  ✗ LLM error: %v", err)
 		return c.Send("Sorry, I'm having trouble thinking right now. Try again in a moment?")
 	}
+
+	log.Printf("  <mira> %s", truncate(resp.Content, 100))
+	log.Printf("  tokens: %d prompt + %d completion = %d total | cost: $%.6f | latency: %dms",
+		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 
 	// Step 9: Log the response to SQLite.
 	respID, err := b.store.SaveMessage("assistant", resp.Content, resp.Content, conversationID)
 	if err != nil {
-		log.Printf("Error saving assistant message: %v", err)
+		log.Printf("  ✗ error saving response: %v", err)
 	}
 
-	// Update token counts on both messages now that we have usage data.
+	// Update token counts on both messages.
 	if msgID > 0 {
-		if err := b.store.UpdateMessageTokenCount(msgID, resp.PromptTokens); err != nil {
-			log.Printf("Error updating user message token count: %v", err)
-		}
+		b.store.UpdateMessageTokenCount(msgID, resp.PromptTokens)
 	}
 	if respID > 0 {
-		if err := b.store.UpdateMessageTokenCount(respID, resp.CompletionTokens); err != nil {
-			log.Printf("Error updating assistant message token count: %v", err)
-		}
+		b.store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
 	}
 
-	// Log metrics — cost comes directly from OpenRouter's response.
+	// Log metrics.
 	if respID > 0 {
-		if err := b.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID); err != nil {
-			log.Printf("Error saving metrics: %v", err)
-		}
+		b.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
 	}
 
-	// Step 10: Deanonymize the response (replace [PHONE_1] etc. with originals)
-	// and send it back to the user.
+	// Step 10: Deanonymize and send reply.
 	replyText := scrub.Deanonymize(resp.Content, scrubResult.Vault)
+	if err := c.Send(replyText); err != nil {
+		return err
+	}
 
-	return c.Send(replyText)
+	log.Printf("  → reply sent, handing off to agent")
+
+	// Step 11: Run the agent in a background goroutine.
+	go b.runAgent(userText, resp.Content, c)
+
+	return nil
 }
 
 // buildPrompt assembles the layered prompt from system prompt + history + current message.
@@ -261,28 +275,56 @@ func (b *Bot) handleClear(c tele.Context) error {
 	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 	b.conversationIDs.Store(key, newID)
 
-	log.Printf("Conversation cleared for chat %d, new ID: %s", chatID, newID)
+	log.Printf("─── /clear ── conversation reset for chat %d → %s", chatID, newID)
 	return c.Send("Context cleared. Fresh start!")
 }
 
-// buildSystemPrompt assembles the system prompt by reading prompt.md
-// fresh from disk each time. This makes it hot-reloadable — you can
-// edit the prompt while the bot is running and changes take effect
-// on the next message, no restart needed.
+// runAgent kicks off the background agent (Liquid LFM) to process
+// the latest exchange. The agent decides what memory operations to
+// perform and can optionally send follow-up messages through Deepseek.
+func (b *Bot) runAgent(userMessage, miraResponse string, c tele.Context) {
+	// Build a send_message callback that routes through Deepseek.
+	// When the agent calls send_message, we generate a response with
+	// the conversational model and send it to Telegram.
+	sendMsg := func(instruction string) error {
+		// Build a minimal prompt for the follow-up.
+		messages := []llm.ChatMessage{
+			{Role: "system", Content: b.buildSystemPrompt()},
+			{Role: "user", Content: instruction},
+		}
+
+		resp, err := b.llm.ChatCompletion(messages)
+		if err != nil {
+			return fmt.Errorf("generating follow-up: %w", err)
+		}
+
+		return c.Send(resp.Content)
+	}
+
+	agent.Run(b.agentLLM, b.store, userMessage, miraResponse, b.cfg.Persona.PersonaFile, sendMsg)
+}
+
+// buildSystemPrompt assembles the full system prompt by reading prompt.md
+// fresh from disk (hot-reloadable), then layering in persona.md and
+// memory context (extracted facts).
 func (b *Bot) buildSystemPrompt() string {
 	var parts []string
 
-	// Read prompt.md fresh from disk each call (hot-reload).
-	// Fall back to the version loaded at startup if the read fails.
+	// Layer 1: prompt.md — base identity (hot-reloaded from disk).
 	if promptBytes, err := os.ReadFile(b.cfg.Persona.PromptFile); err == nil {
 		parts = append(parts, string(promptBytes))
 	} else {
 		parts = append(parts, b.systemPrompt)
 	}
 
-	// Load persona.md if it exists (optional for v0.1).
+	// Layer 2: persona.md — evolving self-image (if it exists).
 	if personaBytes, err := os.ReadFile(b.cfg.Persona.PersonaFile); err == nil {
 		parts = append(parts, string(personaBytes))
+	}
+
+	// Layer 4: Memory context — extracted facts about the user.
+	if memCtx, err := memory.BuildMemoryContext(b.store, b.cfg.Memory.MaxFactsInContext); err == nil && memCtx != "" {
+		parts = append(parts, memCtx)
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")

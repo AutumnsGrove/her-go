@@ -10,6 +10,11 @@ llm:
   temperature: 0.85
   max_tokens: 1024
 
+agent:
+  model: "xiaomi/mimo-v2-flash"  # tool-calling model for memory management
+  temperature: 0.1                              # low temp for precise tool decisions
+  max_tokens: 512
+
 memory:
   db_path: "./her.db"
   recent_messages: 20       # sliding window size

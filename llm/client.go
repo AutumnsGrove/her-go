@@ -23,15 +23,50 @@ type Client struct {
 }
 
 // ChatMessage represents a single message in the conversation.
-// Role is "system", "user", or "assistant".
+// Role is "system", "user", "assistant", or "tool".
+// ToolCalls is populated when the model wants to call tools.
+// ToolCallID is set when Role is "tool" (the result of a tool call).
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall represents a function call requested by the model.
+// The model returns an ID, the function name, and a JSON string of arguments.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // always "function" for now
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall holds the function name and its arguments as a JSON string.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON-encoded arguments
+}
+
+// ToolDef defines a tool the model can call. This maps to the OpenAI
+// "tools" parameter format. In Python's OpenAI SDK you'd pass these as
+// dicts — in Go we use structs that marshal to the same JSON shape.
+type ToolDef struct {
+	Type     string         `json:"type"` // always "function"
+	Function ToolFunctionDef `json:"function"`
+}
+
+// ToolFunctionDef describes a function: its name, what it does, and
+// what parameters it accepts (as a JSON Schema object).
+type ToolFunctionDef struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Parameters  interface{} `json:"parameters"` // JSON Schema object
 }
 
 // ChatResponse holds the LLM's reply plus token usage data for metrics.
 type ChatResponse struct {
 	Content          string
+	ToolCalls        []ToolCall // populated if the model wants to call tools
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
@@ -40,30 +75,28 @@ type ChatResponse struct {
 }
 
 // chatRequest is the JSON body we send to the API.
-// These struct fields are lowercase (unexported) — they're internal to this
-// package. The json tags control the actual JSON field names.
 type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
 	MaxTokens   int           `json:"max_tokens"`
+	Tools       []ToolDef     `json:"tools,omitempty"`
 }
 
 // chatAPIResponse mirrors the JSON structure returned by the API.
-// We only define the fields we actually need — Go's JSON decoder
-// silently ignores fields not present in the struct (unlike Python's
-// strict mode in Pydantic, for example).
 type chatAPIResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int     `json:"prompt_tokens"`
 		CompletionTokens int     `json:"completion_tokens"`
 		TotalTokens      int     `json:"total_tokens"`
-		Cost             float64 `json:"cost"` // OpenRouter extension: actual cost in USD
+		Cost             float64 `json:"cost"`
 	} `json:"usage"`
 	Model string `json:"model"`
 }
@@ -77,33 +110,41 @@ func NewClient(baseURL, apiKey, model string, temperature float64, maxTokens int
 		temperature: temperature,
 		maxTokens:   maxTokens,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second, // LLM calls can be slow
+			Timeout: 60 * time.Second,
 		},
 	}
 }
 
 // ChatCompletion sends a conversation to the LLM and returns its response.
-// The messages slice should include the system prompt, conversation history,
-// and the current user message — fully assembled, ready to send.
+// For regular conversation — no tools.
 func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
-	// Build the request body.
+	return c.chatCompletion(messages, nil)
+}
+
+// ChatCompletionWithTools sends a conversation with tool definitions.
+// The model may respond with tool_calls instead of (or in addition to)
+// regular content. The caller is responsible for executing the tools
+// and sending results back in a follow-up call.
+func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
+	return c.chatCompletion(messages, tools)
+}
+
+// chatCompletion is the shared implementation for both regular and
+// tool-calling completions.
+func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
 	reqBody := chatRequest{
 		Model:       c.model,
 		Messages:    messages,
 		Temperature: c.temperature,
 		MaxTokens:   c.maxTokens,
+		Tools:       tools,
 	}
 
-	// json.Marshal converts a Go struct to JSON bytes.
-	// Like Python's json.dumps() but works directly with struct tags.
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	// Build the HTTP request. In Python you'd use requests.post() — in Go,
-	// you construct a Request object, set headers, then execute it with a Client.
-	// More verbose, but you get full control over every aspect of the request.
 	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -111,48 +152,38 @@ func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	// OpenRouter-specific headers for attribution/tracking
 	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
 	req.Header.Set("X-Title", "her-go")
 
-	// Execute the request. This is where the actual HTTP call happens.
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling LLM API: %w", err)
 	}
-	// ALWAYS close the response body when done. Forgetting this leaks
-	// connections — one of the most common Go mistakes. The defer ensures
-	// it happens even if we return early due to an error below.
 	defer resp.Body.Close()
-	latency := time.Since(start)
+	_ = time.Since(start)
 
-	// Read the full response body into memory.
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	// Check for HTTP errors.
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse the JSON response.
 	var apiResp chatAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("parsing response JSON: %w", err)
 	}
 
-	// Extract the assistant's message.
 	if len(apiResp.Choices) == 0 {
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
-	_ = latency // we'll use this for metrics logging in the caller
-
 	return &ChatResponse{
 		Content:          apiResp.Choices[0].Message.Content,
+		ToolCalls:        apiResp.Choices[0].Message.ToolCalls,
 		PromptTokens:     apiResp.Usage.PromptTokens,
 		CompletionTokens: apiResp.Usage.CompletionTokens,
 		TotalTokens:      apiResp.Usage.TotalTokens,
