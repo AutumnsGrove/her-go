@@ -149,7 +149,18 @@ Use think to:
 - ALWAYS call reply EXACTLY ONCE. Never end a turn without replying.
 - The instruction should describe what kind of response to generate.
 - Include search/book results in the context parameter so the conversational model can reference them.
-- Call reply LAST — after thinking, searching, and memory operations.
+- Call reply after thinking and searching, but BEFORE memory operations.
+- After reply is sent, you still have time to save/update/remove facts. Use it.
+
+## Order of operations
+1. think (understand the message, plan your approach)
+2. search if needed (web_search, book_search, web_read)
+3. think (evaluate results)
+4. reply (generate and send the response)
+5. think (what should I remember from this exchange?)
+6. memory operations (save_fact, update_fact, remove_fact, save_self_fact)
+
+Steps 5-6 happen AFTER the user already has their response. Take your time here — good memory management is what makes you a great companion over time.
 
 ## Rules for thinking
 - Think BEFORE forming search queries — use conversation history to resolve references like "it", "that", "the one we discussed"
@@ -366,12 +377,12 @@ func Run(params RunParams) (*RunResult, error) {
 			})
 		}
 
-		// If reply has been called, we can stop looping — the response
-		// is sent. Any remaining memory operations would have been in
-		// the same tool call batch.
-		if tctx.replyCalled {
-			break
-		}
+		// Don't break on replyCalled — the agent may still need to:
+		// - think about what to save
+		// - save_fact, update_fact, save_self_fact
+		// - remove outdated facts
+		// The loop exits naturally when the model returns no tool calls,
+		// or when the 10-iteration hard limit is hit.
 	}
 
 	// Safety net: if the agent never called reply, generate a fallback
