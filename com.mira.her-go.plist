@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identifier — used with launchctl commands -->
+    <key>Label</key>
+    <string>com.mira.her-go</string>
+
+    <!-- What to run — change this path to match your Mac Mini -->
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Option A: run the compiled binary -->
+        <string>/Users/autumn/Documents/Projects/her-go/her-go</string>
+        <!-- Option B: use go run (slower startup, good for dev)
+        <string>/usr/local/go/bin/go</string>
+        <string>run</string>
+        <string>main.go</string>
+        -->
+    </array>
+
+    <!-- Working directory — where config.yaml and prompt.md live -->
+    <key>WorkingDirectory</key>
+    <string>/Users/autumn/Documents/Projects/her-go</string>
+
+    <!-- Restart automatically if the process exits -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Wait 3 seconds before restarting (prevents thrashing on crash loops) -->
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+
+    <!-- Log stdout and stderr to files -->
+    <key>StandardOutPath</key>
+    <string>/Users/autumn/Documents/Projects/her-go/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/autumn/Documents/Projects/her-go/logs/stderr.log</string>
+
+    <!-- Environment variables — load from a file or set here -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin</string>
+    </dict>
+
+    <!-- Run as the current user (not root) -->
+    <key>UserName</key>
+    <string>autumn</string>
+</dict>
+</plist>

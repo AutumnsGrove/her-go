@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,7 @@ type Bot struct {
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
+	startTime    time.Time
 
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
@@ -70,6 +73,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
+		startTime:    time.Now(),
 	}
 
 	// Register command handlers.
@@ -80,6 +84,8 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, embedC
 	tb.Handle("/reflect", bot.handleReflect)
 	tb.Handle("/persona", bot.handlePersona)
 	tb.Handle("/compact", bot.handleCompact)
+	tb.Handle("/status", bot.handleStatus)
+	tb.Handle("/restart", bot.handleRestart)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -484,6 +490,91 @@ func (b *Bot) handleCompact(c tele.Context) error {
 		summary,
 	)
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleStatus shows the bot's current operational state.
+func (b *Bot) handleStatus(c tele.Context) error {
+	uptime := time.Since(b.startTime).Round(time.Second)
+	convID := b.getConversationID(c.Message().Chat.ID)
+
+	stats, _ := b.store.GetStats()
+
+	// Check which services are available.
+	embedStatus := "off"
+	if b.embedClient != nil {
+		embedStatus = "on"
+	}
+	tavilyStatus := "off"
+	if b.tavilyClient != nil {
+		tavilyStatus = "on"
+	}
+
+	// Check if running under launchd.
+	managedBy := "manual (go run)"
+	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged() {
+		managedBy = "launchd"
+	}
+
+	msg := fmt.Sprintf(
+		"\U0001F4DF <b>Status</b>\n\n"+
+			"<b>Uptime:</b> %s\n"+
+			"<b>Process:</b> %s\n"+
+			"<b>Go:</b> %s\n"+
+			"<b>Conversation:</b> %s\n\n"+
+			"<b>Models:</b>\n"+
+			"  Chat: %s\n"+
+			"  Agent: %s\n\n"+
+			"<b>Services:</b>\n"+
+			"  Embeddings: %s\n"+
+			"  Web search: %s\n\n"+
+			"<b>Session:</b>\n"+
+			"  Messages: %d\n"+
+			"  Facts: %d\n"+
+			"  Cost: $%.4f",
+		uptime, managedBy, runtime.Version(), convID,
+		b.cfg.LLM.Model, b.cfg.Agent.Model,
+		embedStatus, tavilyStatus,
+		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
+	)
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleRestart restarts the bot process. If running under launchd,
+// uses launchctl to do a clean restart. Otherwise, exits and relies
+// on the user to restart manually.
+func (b *Bot) handleRestart(c tele.Context) error {
+	log.Printf("--- /restart -- restart requested via Telegram")
+
+	if isLaunchdManaged() {
+		_ = c.Send("Restarting via launchd... be right back.")
+
+		// launchctl kickstart -k forces a restart of the service.
+		// The -k flag kills the existing instance first.
+		go func() {
+			time.Sleep(500 * time.Millisecond) // let the message send
+			cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
+			if err := cmd.Run(); err != nil {
+				log.Printf("  launchctl kickstart failed: %v, falling back to exit", err)
+				os.Exit(0) // launchd will restart us via KeepAlive
+			}
+		}()
+		return nil
+	}
+
+	// Not managed by launchd. Just exit cleanly.
+	_ = c.Send("Shutting down. Restart me manually with `go run main.go`.")
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		b.Stop()
+	}()
+	return nil
+}
+
+// isLaunchdManaged checks if the bot is running as a launchd service
+// by looking for the service in launchctl.
+func isLaunchdManaged() bool {
+	cmd := exec.Command("launchctl", "print", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
+	return cmd.Run() == nil
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
