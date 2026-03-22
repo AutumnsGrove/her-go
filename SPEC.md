@@ -83,7 +83,8 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 - Uses `telebot v4` (`gopkg.in/telebot.v4`) or `go-telegram-bot-api/v5`
 - Long-polling for development (no infra needed)
 - Webhook mode for production (behind Cloudflare Tunnel)
-- Handles: text messages, commands (`/remind`, `/forget`, `/stats`)
+- Handles: text messages, photos, commands (`/remind`, `/forget`, `/stats`)
+- Photo handling: when a photo is received, downloads a mid-size version (~1024px, second-largest from Telegram's `PhotoSize` array) and passes it to the agent for vision processing
 - Sends `sendChatAction("typing")` while waiting for LLM response (re-sent every 4s to keep indicator alive)
 - Future: live-edit streaming — send a placeholder message, then `editMessageText` as tokens arrive for a real-time typing effect
 - Future: voice messages (Ogg → Parakeet local STT → text)
@@ -96,6 +97,28 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 - Sends `HTTP-Referer` and `X-Title` headers for OpenRouter attribution
 - Supports streaming (optional, nice for long responses)
 - Returns structured response with token usage for metrics
+- Supports multi-modal messages (text + image content parts) for vision calls
+
+**Multi-model architecture:** The bot uses three models, each optimized for its role:
+
+| Model | Role | Why |
+|---|---|---|
+| Chat LLM (Deepseek V3.2) | Conversational responses | Strong at natural language, cheap |
+| Agent LLM (configurable) | Tool-calling orchestration | Fast, good at structured output |
+| Vision LLM (Gemini 3 Flash) | Image understanding | Fast VLM, good casual descriptions |
+
+The vision model is called via the `view_image` agent tool. When the user sends a photo, the agent decides whether/how to use it and calls the VLM with an appropriate prompt. The VLM's description becomes part of the agent's context, which it can reference when generating the reply via the chat LLM.
+
+**Vision flow:**
+```
+User sends photo on Telegram
+  → bot downloads mid-size version (~1024px)
+  → image passed to agent as base64
+  → agent calls view_image tool
+  → VLM (Gemini 3 Flash via OpenRouter) describes the image
+  → description returned as tool result
+  → agent uses description in reply context
+```
 
 ### 3. PII Scrubber (`scrub/`)
 
@@ -437,6 +460,12 @@ llm:
   temperature: 0.85
   max_tokens: 1024
 
+vision:
+  model: "google/gemini-3-flash-preview"
+  temperature: 0.3
+  max_tokens: 512
+  # Uses same base_url and api_key as llm section
+
 memory:
   db_path: "./her.db"
   recent_messages: 20       # sliding window size
@@ -514,6 +543,8 @@ her-go/
 │   ├── status.go        # Service status (her status)
 │   ├── logs.go          # Tail service logs (her logs)
 │   └── install.go       # Build from source (her install)
+├── vision/              # (v0.2.5+) Image understanding via VLM
+│   └── vision.go       # Gemini Flash client, base64 encoding, description extraction
 ├── voice/               # (v0.3+)
 │   ├── stt.go           # Speech-to-text: Parakeet / CF Workers AI
 │   └── tts.go           # Text-to-speech: Kokoro local TTS (v0.5+)
@@ -580,6 +611,33 @@ her-go/
 - [ ] Layered prompt assembly (prompt.md + persona.md + reflections + facts + history)
 
 **Result:** The bot remembers things you've told it, can remind you, and its personality genuinely evolves over time based on your interactions.
+
+### v0.2.5 — She Sees
+
+Mira gains the ability to understand images sent on Telegram, using a vision-language model (VLM) as a new agent tool.
+
+- [ ] Handle `tele.OnPhoto` in the bot — download mid-size image (~1024px) from Telegram
+- [ ] Add `view_image` agent tool — sends image + prompt to VLM, returns description
+- [ ] Vision LLM client: `google/gemini-3-flash-preview` via OpenRouter (same base URL/key as chat LLM)
+- [ ] Support base64 image content in `llm.ChatMessage` (OpenAI-compatible multi-modal format)
+- [ ] Image description becomes part of the agent's search context, referenced in reply
+- [ ] Add `vision` section to `config.yaml` (model, temperature, max_tokens)
+- [ ] Log vision metrics (tokens, cost) same as other LLM calls
+- [ ] Handle captions: if the user sends a photo with a caption, both the image and caption text go to the agent
+
+**Vision pipeline:**
+```
+User sends photo (with optional caption)
+  → bot picks second-largest PhotoSize (≤1024px)
+  → downloads via Telegram getFile API
+  → base64-encodes the image
+  → agent receives: "[User sent an image]" + caption (if any)
+  → agent calls view_image tool with the image
+  → VLM returns a natural description
+  → agent uses the description when generating the reply
+```
+
+**Result:** Send Mira a photo of your lunch, your workspace, a sunset, a bug in your code — she can see it and talk about it naturally.
 
 ### v0.3 — She Listens
 - [ ] Voice memo support (receive Ogg from Telegram, download via `getFile`)
