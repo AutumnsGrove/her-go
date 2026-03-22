@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/spf13/cobra"
@@ -10,6 +11,7 @@ import (
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the launchd service",
+	Long:  "Starts Mira as a launchd service. If setup hasn't been run yet, runs it automatically first.",
 	RunE:  runStart,
 }
 
@@ -21,6 +23,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	dest, err := plistPath()
 	if err != nil {
 		return err
+	}
+
+	// Check if the plist exists. If not, run setup first.
+	if _, err := os.Stat(dest); os.IsNotExist(err) {
+		fmt.Println("Service not set up yet. Running setup first...")
+		fmt.Println()
+		if err := runSetup(cmd, args); err != nil {
+			return fmt.Errorf("setup failed: %w", err)
+		}
+		// Setup already loads the service, so we're done.
+		return nil
 	}
 
 	out, err := exec.Command("launchctl", "load", dest).CombinedOutput()

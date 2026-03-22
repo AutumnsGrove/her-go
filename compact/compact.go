@@ -21,8 +21,8 @@ import (
 	"log"
 	"strings"
 
-	"her-go/llm"
-	"her-go/memory"
+	"her/llm"
+	"her/memory"
 )
 
 // estimateTokens gives a rough token count for a string.

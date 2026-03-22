@@ -64,6 +64,7 @@ type MemoryConfig struct {
 	RecentMessages     int    `yaml:"recent_messages"`
 	MaxFactsInContext  int    `yaml:"max_facts_in_context"`
 	ExtractionInterval int    `yaml:"extraction_interval"`
+	MaxHistoryTokens   int    `yaml:"max_history_tokens"`   // token budget for conversation history before compaction triggers
 }
 
 // ScrubConfig controls PII scrubbing behavior.

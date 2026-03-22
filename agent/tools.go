@@ -4,7 +4,7 @@
 // and send the actual response to the user.
 package agent
 
-import "her-go/llm"
+import "her/llm"
 
 // ToolDefs returns the tool definitions available to the agent.
 // These follow the OpenAI function calling format — each tool has a name,

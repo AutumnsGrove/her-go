@@ -17,8 +17,8 @@ import (
 	"os"
 	"strings"
 
-	"her-go/llm"
-	"her-go/memory"
+	"her/llm"
+	"her/memory"
 )
 
 // reflectionPrompt is sent to the conversational LLM after a memory-dense

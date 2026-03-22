@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"her-go/compact"
-	"her-go/config"
-	"her-go/embed"
-	"her-go/llm"
-	"her-go/memory"
-	"her-go/persona"
-	"her-go/scrub"
-	"her-go/search"
+	"her/compact"
+	"her/config"
+	"her/embed"
+	"her/llm"
+	"her/memory"
+	"her/persona"
+	"her/scrub"
+	"her/search"
 )
 
 // StatusCallback is a function the bot provides so the agent can update

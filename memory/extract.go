@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"her-go/llm"
+	"her/llm"
 )
 
 // extractionPrompt is the system prompt sent to the LLM to extract facts

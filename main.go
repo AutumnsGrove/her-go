@@ -2,7 +2,7 @@
 // All command logic lives in the cmd/ package — this just calls Execute().
 package main
 
-import "her-go/cmd"
+import "her/cmd"
 
 func main() {
 	cmd.Execute()

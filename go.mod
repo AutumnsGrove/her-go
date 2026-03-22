@@ -1,4 +1,4 @@
-module her-go
+module her
 
 go 1.25.4
 

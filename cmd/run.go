@@ -6,12 +6,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"her-go/bot"
-	"her-go/config"
-	"her-go/embed"
-	"her-go/llm"
-	"her-go/memory"
-	"her-go/search"
+	"her/bot"
+	"her/config"
+	"her/embed"
+	"her/llm"
+	"her/memory"
+	"her/search"
 
 	"github.com/spf13/cobra"
 )
