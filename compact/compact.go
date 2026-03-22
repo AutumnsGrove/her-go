@@ -20,14 +20,13 @@ import (
 	"fmt"
 	"strings"
 
-	charmlog "github.com/charmbracelet/log"
-
 	"her/llm"
+	"her/logger"
 	"her/memory"
 )
 
 // log is the package-level logger for the compact package.
-var log = charmlog.With("component", "compact")
+var log = logger.WithPrefix("compact")
 
 // estimateTokens gives a rough token count for a string.
 // The rule of thumb is ~4 characters per token for English text.
@@ -117,7 +116,7 @@ func MaybeCompact(
 		return existingSummary, recentMessages, nil
 	}
 
-	log.Info("history over threshold, compacting", "tokens", currentTokens, "threshold", threshold)
+	log.Infof("  history at %d tokens (threshold: %d), compacting...", currentTokens, threshold)
 
 	// Split: older half gets summarized, newer half stays verbatim.
 	// We keep at least 6 messages (3 exchanges) in full fidelity so
@@ -178,13 +177,9 @@ func MaybeCompact(
 	}
 
 	newTokens := EstimateHistoryTokens(newSummary, toKeep)
-	log.Info("compaction complete",
-		"messages_compacted", len(toSummarize),
-		"tokens_before", currentTokens,
-		"tokens_after", newTokens,
-		"saved", currentTokens-newTokens,
-	)
-	log.Debug("summary preview", "summary", truncate(newSummary, 200))
+	log.Infof("  compacted %d messages (%d→%d tokens, saved %d)",
+		len(toSummarize), currentTokens, newTokens, currentTokens-newTokens)
+	log.Infof("  summary: %s", truncate(newSummary, 200))
 
 	// Log metrics for the summarization call.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)

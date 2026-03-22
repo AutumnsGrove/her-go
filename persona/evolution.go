@@ -16,14 +16,13 @@ import (
 	"os"
 	"strings"
 
-	charmlog "github.com/charmbracelet/log"
-
 	"her/llm"
+	"her/logger"
 	"her/memory"
 )
 
 // log is the package-level logger for the persona package.
-var log = charmlog.With("component", "persona")
+var log = logger.WithPrefix("persona")
 
 // reflectionPrompt is sent to the conversational LLM after a memory-dense
 // conversation. Mira reflects on what just happened — not a persona rewrite,

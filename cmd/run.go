@@ -4,14 +4,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-
-	charmlog "github.com/charmbracelet/log"
 
 	"her/bot"
 	"her/config"
 	"her/embed"
 	"her/llm"
+	"her/logger"
 	"her/memory"
 	"her/search"
 
@@ -19,7 +17,7 @@ import (
 )
 
 // log is the package-level logger for the cmd package.
-var log = charmlog.With("component", "cmd")
+var log = logger.WithPrefix("cmd")
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -35,13 +33,9 @@ func init() {
 // runBot contains all the initialization and startup logic that was
 // previously in main(). Moved here so it can be invoked as "her run".
 func runBot(cmd *cobra.Command, args []string) error {
-	// Configure the global charm logger. SetReportTimestamp shows HH:MM:SS
-	// on each line. Charm auto-detects whether stdout is a TTY and shows
-	// colors + emoji levels in a terminal, or plain text in log files.
-	// This means launchd log files get clean plain text automatically.
-	charmlog.SetReportTimestamp(true)
-	charmlog.SetTimeFormat(time.TimeOnly)
-	charmlog.SetLevel(charmlog.InfoLevel)
+	// Logger is already configured in the logger package (logger/logger.go).
+	// All packages create sub-loggers via logger.With() which inherit
+	// timestamps, level, and format settings from the shared base logger.
 
 	// Load configuration from the file specified by --config.
 	cfg, err := config.Load(cfgFile)

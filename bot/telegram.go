@@ -11,12 +11,11 @@ import (
 	"sync"
 	"time"
 
-	charmlog "github.com/charmbracelet/log"
-
 	"her/agent"
 	"her/compact"
 	"her/config"
 	"her/embed"
+	"her/logger"
 	"her/llm"
 	"her/memory"
 	"her/persona"
@@ -27,7 +26,7 @@ import (
 )
 
 // log is the package-level logger for the bot package.
-var log = charmlog.With("component", "bot")
+var log = logger.WithPrefix("bot")
 
 // Bot wraps the Telegram bot and all its dependencies.
 // This is a common Go pattern: a "god struct" that holds references
@@ -133,7 +132,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Get the active conversation ID for this chat.
 	conversationID := b.getConversationID(msg.Chat.ID)
 
-	log.Info("incoming message", "text", truncate(userText, 100))
+	log.Info("─── incoming message ───")
+	log.Infof("  user: %s", truncate(userText, 100))
 
 	// Step 1: Log the raw message to SQLite.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
@@ -232,7 +232,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return nil
 	}
 
-	log.Info("reply sent", "text", truncate(result.ReplyText, 100))
+	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Info("─── reply sent ───")
 
 	return nil
 }

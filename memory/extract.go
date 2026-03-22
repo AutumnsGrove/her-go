@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	charmlog "github.com/charmbracelet/log"
-
 	"her/llm"
+	"her/logger"
 )
 
 // log is the package-level logger for the memory package.
-var log = charmlog.With("component", "memory")
+var log = logger.WithPrefix("memory")
 
 // extractionPrompt is the system prompt sent to the LLM to extract facts
 // from a conversation. We ask for JSON output so we can parse it reliably.

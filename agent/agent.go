@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	charmlog "github.com/charmbracelet/log"
-
 	"her/compact"
 	"her/config"
 	"her/embed"
@@ -16,11 +14,12 @@ import (
 	"her/memory"
 	"her/persona"
 	"her/scrub"
+	"her/logger"
 	"her/search"
 )
 
 // log is the package-level logger for the agent package.
-var log = charmlog.With("component", "agent")
+var log = logger.WithPrefix("agent")
 
 // StatusCallback is a function the bot provides so the agent can update
 // the Telegram message in real time. When the agent calls web_search,
@@ -157,7 +156,7 @@ type RunResult struct {
 // The persona evolution triggers at the end still run in a goroutine
 // since they don't affect the user's response.
 func Run(params RunParams) (*RunResult, error) {
-	log.Info("--- agent run start ---")
+	log.Info("─── agent ───")
 
 	// Gather current facts for the agent's context.
 	facts, err := params.Store.AllActiveFacts()
@@ -175,7 +174,7 @@ func Run(params RunParams) (*RunResult, error) {
 			userFacts = append(userFacts, f)
 		}
 	}
-	log.Info("facts loaded", "user", len(userFacts), "self", len(selfFacts))
+	log.Infof("  facts: %d user, %d self", len(userFacts), len(selfFacts))
 
 	// Load recent conversation history so the agent can resolve
 	// references like "it", "that book", "what we talked about", etc.
@@ -247,19 +246,20 @@ func Run(params RunParams) (*RunResult, error) {
 
 		// Log agent metrics linked to the user message that triggered this run.
 		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
-		log.Info("agent tokens", "prompt", resp.PromptTokens, "completion", resp.CompletionTokens, "cost_usd", resp.CostUSD)
+		log.Infof("  tokens: %d prompt + %d completion | $%.6f",
+			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
 
 		// If no tool calls, the agent is done.
 		if len(resp.ToolCalls) == 0 {
 			if resp.Content != "" {
-				log.Info("done (text only)", "text", resp.Content)
+				log.Infof("  done (text): %s", resp.Content)
 			} else {
-				log.Info("done (no actions)")
+				log.Info("  done (no actions)")
 			}
 			break
 		}
 
-		log.Info("tool calls", "count", len(resp.ToolCalls))
+		log.Infof("  %d tool call(s):", len(resp.ToolCalls))
 
 		// Append the assistant message with tool calls to the conversation.
 		messages = append(messages, llm.ChatMessage{
@@ -276,7 +276,7 @@ func Run(params RunParams) (*RunResult, error) {
 			turnIndex++
 
 			result := executeTool(tc, tctx)
-			log.Info("tool result", "tool", tc.Function.Name, "result", truncateLog(result, 200))
+			log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
 
 			// Save the tool result (what happened when we executed it).
 			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
@@ -291,7 +291,7 @@ func Run(params RunParams) (*RunResult, error) {
 
 		// Exit when the agent explicitly signals it's done.
 		if tctx.doneCalled {
-			log.Info("done signal received")
+			log.Info("  done signal received")
 			break
 		}
 	}
@@ -326,7 +326,7 @@ func Run(params RunParams) (*RunResult, error) {
 			if err != nil {
 				log.Error("checking fact count for reflection trigger", "err", err)
 			} else if factCount >= params.ReflectionThreshold {
-				log.Info("reflection triggered", "facts_since_last", factCount, "threshold", params.ReflectionThreshold)
+				log.Infof("  [persona] reflection triggered (%d facts, threshold: %d)", factCount, params.ReflectionThreshold)
 
 				// Gather the recent facts for the reflection prompt.
 				recentFacts, _ := params.Store.RecentFacts("user", factCount)
@@ -347,7 +347,7 @@ func Run(params RunParams) (*RunResult, error) {
 			if err != nil {
 				log.Error("checking reflection count for rewrite trigger", "err", err)
 			} else if reflectionCount >= params.RewriteEveryN {
-				log.Info("persona rewrite triggered", "reflections_since_last", reflectionCount, "threshold", params.RewriteEveryN)
+				log.Infof("  [persona] rewrite triggered (%d reflections, threshold: %d)", reflectionCount, params.RewriteEveryN)
 				if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
 					log.Error("persona rewrite error", "err", err)
 				} else if rewritten {
@@ -438,7 +438,7 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return "ok, no action taken"
 	case "done":
 		tctx.doneCalled = true
-		log.Info("done called — finishing turn")
+		log.Info("  done called — finishing turn")
 		return "ok, turn complete"
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Function.Name)
@@ -522,13 +522,8 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error generating response: %v", err)
 	}
 
-	log.Info("reply tokens",
-		"prompt", resp.PromptTokens,
-		"completion", resp.CompletionTokens,
-		"total", resp.TotalTokens,
-		"cost_usd", resp.CostUSD,
-		"latency_ms", latencyMs,
-	)
+	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
+		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 
 	// Save the response to the database.
 	respID, err := tctx.store.SaveMessage("assistant", resp.Content, resp.Content, tctx.conversationID)
@@ -614,7 +609,7 @@ func execThink(argsJSON string, tctx *toolContext) string {
 		return "ok"
 	}
 
-	log.Debug("think", "thought", args.Thought)
+	log.Infof("  think: %s", args.Thought)
 	return "ok"
 }
 
@@ -656,7 +651,7 @@ func execWebSearch(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "web", args.Query, formatted, len(resp.Results))
 
-	log.Info("web_search", "query", args.Query, "results", len(resp.Results))
+	log.Infof("  web_search: %d results for %q", len(resp.Results), args.Query)
 	return formatted
 }
 
@@ -695,7 +690,7 @@ func execWebRead(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "web_read", args.URL, formatted, len(resp.Results))
 
-	log.Info("web_read", "url", args.URL)
+	log.Infof("  web_read: extracted from %s", args.URL)
 	return formatted
 }
 
@@ -730,7 +725,7 @@ func execBookSearch(argsJSON string, tctx *toolContext) string {
 	// Save to DB for observability.
 	tctx.store.SaveSearch(tctx.triggerMsgID, "book", args.Query, formatted, len(books))
 
-	log.Info("book_search", "query", args.Query, "results", len(books))
+	log.Infof("  book_search: %d results for %q", len(books), args.Query)
 	return formatted
 }
 
