@@ -113,7 +113,7 @@ type depResult struct {
 // and wg.Wait() blocks until all are done. We close the channel after
 // Wait() so the caller knows there are no more results coming.
 func installDeps() <-chan depResult {
-	results := make(chan depResult, 4)
+	results := make(chan depResult, 5)
 	var wg sync.WaitGroup
 
 	// Check for uv (needed to install Python tools).
@@ -182,6 +182,36 @@ func installDeps() <-chan depResult {
 			return
 		}
 		results <- depResult{"parakeet-server", true, "installed"}
+	}()
+
+	// Install mlx-audio (TTS server for Kokoro).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := exec.LookPath("uv"); err != nil {
+			results <- depResult{"mlx-audio", false, "skipped (uv not available)"}
+			return
+		}
+		// mlx-audio has missing/broken dependencies in its package
+		// metadata — we need to explicitly add uvicorn, fastapi,
+		// webrtcvad-wheels, setuptools, and python-multipart.
+		out, err := exec.Command("uv", "tool", "install", "mlx-audio",
+			"--with", "uvicorn",
+			"--with", "fastapi",
+			"--with", "webrtcvad-wheels",
+			"--with", "setuptools",
+			"--with", "python-multipart",
+		).CombinedOutput()
+		msg := strings.TrimSpace(string(out))
+		if err != nil {
+			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
+				results <- depResult{"mlx-audio", true, "already installed"}
+				return
+			}
+			results <- depResult{"mlx-audio", false, msg}
+			return
+		}
+		results <- depResult{"mlx-audio", true, "installed"}
 	}()
 
 	// Close the channel once all goroutines finish.

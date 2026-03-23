@@ -208,8 +208,56 @@ func runBot(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Start the Kokoro TTS server if TTS is enabled.
+	// Same sidecar pattern as parakeet — mlx-audio ships a built-in
+	// server (mlx_audio.server) with an OpenAI-compatible speech endpoint.
+	var ttsProcess *exec.Cmd
+	ttsClient := voice.NewTTSClient(&cfg.Voice.TTS)
+	if ttsClient != nil {
+		// mlx-audio installs as mlx_audio.server — it's a Python module,
+		// not a standalone binary. We run it via "python -m mlx_audio.server".
+		// But uv tool install puts it at mlx_audio.server as an executable.
+		ttsPath, err := exec.LookPath("mlx_audio.server")
+		if err != nil {
+			log.Warn("mlx_audio.server not found in PATH — TTS will fail. Run: her setup")
+		} else {
+			ttsHost := "127.0.0.1"
+			ttsPort := "8766"
+			if u, err := url.Parse(cfg.Voice.TTS.BaseURL); err == nil {
+				if h := u.Hostname(); h != "" {
+					ttsHost = h
+				}
+				if p := u.Port(); p != "" {
+					ttsPort = p
+				}
+			}
+
+			ttsProcess = exec.Command(ttsPath,
+				"--host", ttsHost,
+				"--port", ttsPort,
+			)
+			ttsProcess.Stdout = os.Stderr
+			ttsProcess.Stderr = os.Stderr
+
+			if err := ttsProcess.Start(); err != nil {
+				log.Error("failed to start mlx-audio server", "err", err)
+			} else {
+				log.Info("mlx-audio TTS server started", "pid", ttsProcess.Process.Pid, "model", cfg.Voice.TTS.Model)
+
+				go func() {
+					time.Sleep(5 * time.Second)
+					if ttsClient.IsAvailable() {
+						log.Info("mlx-audio TTS server is ready")
+					} else {
+						log.Warn("mlx-audio TTS server not responding yet — first voice reply may be slow")
+					}
+				}()
+			}
+		}
+	}
+
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, voiceClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, voiceClient, ttsClient, store)
 	if err != nil {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}
@@ -248,6 +296,11 @@ func runBot(cmd *cobra.Command, args []string) error {
 			log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
 			_ = sttProcess.Process.Kill()
 			_, _ = sttProcess.Process.Wait()
+		}
+		if ttsProcess != nil && ttsProcess.Process != nil {
+			log.Info("stopping mlx-audio TTS server", "pid", ttsProcess.Process.Pid)
+			_ = ttsProcess.Process.Kill()
+			_, _ = ttsProcess.Process.Wait()
 		}
 		tgBot.Stop()
 	}()

@@ -126,12 +126,17 @@ type STTConfig struct {
 	Model   string `yaml:"model"`    // HuggingFace model ID or local path
 }
 
-// TTSConfig is a v0.5 stub — not wired up yet.
+// TTSConfig controls text-to-speech. The "kokoro" engine expects a local
+// HTTP server (mlx-audio) running on BaseURL with an OpenAI-compatible
+// /v1/audio/speech endpoint. The Go side POSTs JSON and gets back WAV bytes.
 type TTSConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Engine    string `yaml:"engine"`     // "kokoro" or future options
-	VoiceID   string `yaml:"voice_id"`   // which voice to use
-	ReplyMode string `yaml:"reply_mode"` // "voice" or "match"
+	Enabled   bool    `yaml:"enabled"`
+	Engine    string  `yaml:"engine"`     // "kokoro" or future options
+	BaseURL   string  `yaml:"base_url"`   // e.g. "http://localhost:8766"
+	Model     string  `yaml:"model"`      // HuggingFace model ID or local path
+	VoiceID   string  `yaml:"voice_id"`   // voice preset (e.g. "af_heart", "af_nova")
+	Speed     float64 `yaml:"speed"`      // speaking rate (1.0 = normal)
+	ReplyMode string  `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
 }
 
 // SchedulerConfig controls the task scheduler / cron system.

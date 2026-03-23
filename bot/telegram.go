@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ type Bot struct {
 	embedClient  *embed.Client        // local embedding model for similarity
 	tavilyClient *search.TavilyClient // web search and URL extraction
 	voiceClient  *voice.Client        // local STT via parakeet-server — nil if voice disabled
+	ttsClient    *voice.TTSClient    // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
@@ -57,7 +59,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -82,6 +84,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 		embedClient:  embedClient,
 		tavilyClient: tavilyClient,
 		voiceClient:  voiceClient,
+		ttsClient:    ttsClient,
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
@@ -280,6 +283,13 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	}
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+
+	// If TTS is in "voice" mode (always reply with voice), synthesize
+	// and send a voice memo alongside the text reply.
+	if b.ttsClient != nil && b.ttsClient.ReplyMode() == "voice" && result.ReplyText != "" {
+		b.sendVoiceReply(c, result.ReplyText)
+	}
+
 	log.Info("─── reply sent ───")
 
 	return nil
@@ -644,9 +654,46 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+
+	// If TTS is enabled, synthesize the reply as a voice memo and
+	// send it back. The text reply stays in the placeholder message
+	// above, so the user gets both: a text bubble + a voice memo.
+	if b.ttsClient != nil && result.ReplyText != "" {
+		b.sendVoiceReply(c, result.ReplyText)
+	}
+
 	log.Info("─── voice reply sent ───")
 
 	return nil
+}
+
+// sendVoiceReply synthesizes text to speech and sends it as a Telegram
+// voice memo. Called from handleVoice (and potentially handleMessage
+// when reply_mode is "voice").
+//
+// Telegram voice memos require Opus-encoded audio in an OGG container.
+// The TTS client handles the WAV→OGG/Opus conversion via ffmpeg.
+func (b *Bot) sendVoiceReply(c tele.Context, text string) {
+	oggBytes, err := b.ttsClient.Synthesize(text)
+	if err != nil {
+		log.Error("TTS synthesis failed", "err", err)
+		return
+	}
+
+	// In telebot, sending a voice memo requires a tele.Voice with a
+	// File that has a Reader. We wrap the OGG bytes in a bytes.Reader
+	// and set the MIME type so Telegram knows it's audio.
+	//
+	// tele.FromReader creates a File from an io.Reader — similar to how
+	// handlePhoto uses bot.File() but in reverse (sending instead of receiving).
+	voiceMsg := &tele.Voice{
+		File: tele.FromReader(bytes.NewReader(oggBytes)),
+		MIME: "audio/ogg",
+	}
+
+	if _, err := c.Bot().Send(c.Recipient(), voiceMsg); err != nil {
+		log.Error("sending voice reply", "err", err)
+	}
 }
 
 // getConversationID returns the active conversation ID for a chat.
