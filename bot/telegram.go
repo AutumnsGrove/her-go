@@ -862,12 +862,23 @@ func (b *Bot) handleRemind(c tele.Context) error {
 	}
 	now := time.Now().In(loc)
 
+	// Strip common filler words from the start. People naturally type
+	// "remind me to ..." or "remind me in 5 minutes ..." — the "me"
+	// and "me to" aren't part of the time expression or the message.
+	args = stripRemindPrefix(args)
+
 	// Split the input into words. Try parsing progressively longer
-	// prefixes as time expressions. The longest match that resolves
-	// to a future time wins.
+	// prefixes as time expressions. The key insight: only EXTEND the
+	// time prefix when adding more words produces a DIFFERENT (more
+	// specific) time. If "in 2 minutes" and "in 2 minutes test" both
+	// parse to the same time, the extra word is message, not time.
+	//
+	// This handles the tricky case where naturaldate is too greedy
+	// and happily ignores non-time words at the end of the string.
 	words := strings.Fields(args)
 	bestTime := time.Time{}
 	bestSplit := 0
+	var lastParsedTime time.Time
 
 	for i := 1; i <= len(words); i++ {
 		candidate := strings.Join(words[:i], " ")
@@ -877,9 +888,16 @@ func (b *Bot) handleRemind(c tele.Context) error {
 		}
 		// Only accept if it's meaningfully in the future (at least 1 minute).
 		// naturaldate returns "now" for unparseable input, so we filter that out.
-		if parsed.After(now.Add(30 * time.Second)) {
+		if !parsed.After(now.Add(30 * time.Second)) {
+			continue
+		}
+		// Only extend the split if this prefix gives a MORE SPECIFIC
+		// time than shorter prefixes. If the time is identical, the
+		// extra words are message content, not time info.
+		if !parsed.Equal(lastParsedTime) {
 			bestTime = parsed
 			bestSplit = i
+			lastParsedTime = parsed
 		}
 	}
 
@@ -1025,6 +1043,24 @@ func (b *Bot) handleSchedule(c tele.Context) error {
 	sb.WriteString("<i>/schedule pause|resume|delete &lt;id&gt;</i>")
 
 	return c.Send(sb.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// stripRemindPrefix removes common filler words people put after /remind.
+// "remind me to call mom" → "call mom" (time parse will fail, user gets usage hint)
+// "remind me in 5 minutes call mom" → "in 5 minutes call mom"
+// "remind me at 3pm call mom" → "at 3pm call mom"
+//
+// We check for these prefixes in order from longest to shortest so
+// "me to" is tried before "me".
+func stripRemindPrefix(s string) string {
+	lower := strings.ToLower(s)
+	prefixes := []string{"me that ", "me to ", "me "}
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return s[len(p):]
+		}
+	}
+	return s
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
