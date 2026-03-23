@@ -114,7 +114,7 @@ func (s *Scheduler) run(ctx context.Context) {
 	// time.NewTicker returns a channel that receives a value every
 	// duration. It's like setInterval in JS. We read from ticker.C
 	// in a select loop below.
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for {
