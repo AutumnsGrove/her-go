@@ -18,11 +18,13 @@ config.yaml
 # Binary
 her-go
 her-go.exe
+her
 
 # Go
 vendor/
 
-# Voice memo cache
+# Voice memos (audio files from Telegram)
+voice_memos/
 voice_cache/
 *.ogg
 *.wav

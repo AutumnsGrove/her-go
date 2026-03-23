@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/spf13/cobra"
@@ -78,19 +80,118 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Build the binary and install the launchd service",
+	Short: "Build the binary, install dependencies, and configure the launchd service",
 	Long: `Does everything needed to install Mira as a launchd service:
 
   1. Build the binary (go build)
-  2. Generate a plist file for the current machine
-  3. Create the logs directory
-  4. Install the plist to ~/Library/LaunchAgents
-  5. Load the service with launchctl`,
+  2. Install ML dependencies in background (parakeet-mlx, ffmpeg check)
+  3. Generate a plist file for the current machine
+  4. Create the logs directory
+  5. Install the plist to ~/Library/LaunchAgents
+  6. Load the service with launchctl`,
 	RunE: runSetup,
 }
 
 func init() {
 	rootCmd.AddCommand(setupCmd)
+}
+
+// depResult holds the outcome of a background dependency install.
+// Each goroutine fills one of these and we print them all at the end.
+type depResult struct {
+	Name    string
+	OK      bool
+	Message string
+}
+
+// installDeps runs all ML/tool dependency checks concurrently in the
+// background. Returns a channel that will receive results as they complete.
+// The caller should drain the channel after their own work is done.
+//
+// This uses sync.WaitGroup — Go's version of asyncio.gather(). You call
+// wg.Add(1) for each goroutine you launch, wg.Done() when it finishes,
+// and wg.Wait() blocks until all are done. We close the channel after
+// Wait() so the caller knows there are no more results coming.
+func installDeps() <-chan depResult {
+	results := make(chan depResult, 4)
+	var wg sync.WaitGroup
+
+	// Check for uv (needed to install Python tools).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := exec.LookPath("uv"); err != nil {
+			results <- depResult{"uv", false, "not found — install from https://docs.astral.sh/uv/"}
+			return
+		}
+		results <- depResult{"uv", true, "found"}
+	}()
+
+	// Check for ffmpeg (needed to convert Telegram .ogg voice memos).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		path, err := exec.LookPath("ffmpeg")
+		if err != nil {
+			results <- depResult{"ffmpeg", false, "not found — install with: brew install ffmpeg"}
+			return
+		}
+		results <- depResult{"ffmpeg", true, path}
+	}()
+
+	// Install parakeet-mlx (STT inference library + CLI).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := exec.LookPath("uv"); err != nil {
+			results <- depResult{"parakeet-mlx", false, "skipped (uv not available)"}
+			return
+		}
+		out, err := exec.Command("uv", "tool", "install", "parakeet-mlx").CombinedOutput()
+		msg := strings.TrimSpace(string(out))
+		if err != nil {
+			// "already installed" is not an error — uv returns non-zero
+			// but the tool is there. Check the output message.
+			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
+				results <- depResult{"parakeet-mlx", true, "already installed"}
+				return
+			}
+			results <- depResult{"parakeet-mlx", false, msg}
+			return
+		}
+		results <- depResult{"parakeet-mlx", true, "installed"}
+	}()
+
+	// Install parakeet-mlx-fastapi (HTTP server for STT).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := exec.LookPath("uv"); err != nil {
+			results <- depResult{"parakeet-server", false, "skipped (uv not available)"}
+			return
+		}
+		out, err := exec.Command("uv", "tool", "install",
+			"git+https://github.com/yashhere/parakeet-mlx-fastapi.git").CombinedOutput()
+		msg := strings.TrimSpace(string(out))
+		if err != nil {
+			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
+				results <- depResult{"parakeet-server", true, "already installed"}
+				return
+			}
+			results <- depResult{"parakeet-server", false, msg}
+			return
+		}
+		results <- depResult{"parakeet-server", true, "installed"}
+	}()
+
+	// Close the channel once all goroutines finish.
+	// This runs in its own goroutine so installDeps() returns immediately.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
@@ -108,8 +209,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Setting up Mira on %s as %s\n", hostname, currentUser.Username)
 	fmt.Printf("Working directory: %s\n\n", workDir)
 
+	// Kick off dependency installs in the background immediately.
+	// These run concurrently while we build the binary and set up launchd.
+	depResults := installDeps()
+
 	// Step 1: Build the binary.
-	fmt.Println("[1/5] Building binary...")
+	fmt.Println("[1/6] Building binary...")
 	binaryPath := filepath.Join(workDir, "her-go")
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	buildCmd.Dir = workDir
@@ -121,7 +226,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("      Built: %s\n\n", binaryPath)
 
 	// Step 2: Generate the plist.
-	fmt.Println("[2/5] Generating plist...")
+	fmt.Println("[2/6] Generating plist...")
 	logsDir := filepath.Join(workDir, "logs")
 	data := plistData{
 		Label:      serviceLabel,
@@ -154,18 +259,18 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("      Wrote: %s\n\n", dest)
 
 	// Step 3: Create logs directory.
-	fmt.Println("[3/5] Creating logs directory...")
+	fmt.Println("[3/6] Creating logs directory...")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
 	fmt.Printf("      Dir:   %s\n\n", logsDir)
 
 	// Step 4: (plist already written to ~/Library/LaunchAgents in step 2)
-	fmt.Println("[4/5] Plist installed to ~/Library/LaunchAgents")
+	fmt.Println("[4/6] Plist installed to ~/Library/LaunchAgents")
 	fmt.Println()
 
 	// Step 5: Load the service.
-	fmt.Println("[5/5] Loading service...")
+	fmt.Println("[5/6] Loading service...")
 	loadCmd := exec.Command("launchctl", "load", dest)
 	loadCmd.Stdout = os.Stdout
 	loadCmd.Stderr = os.Stderr
@@ -175,6 +280,22 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Println("      Service loaded!")
 	}
+	fmt.Println()
+
+	// Step 6: Wait for background dependency installs to finish.
+	// The channel was created in installDeps() — ranging over it gives
+	// us each result as it arrives, and stops when the channel closes
+	// (which happens after all goroutines call wg.Done()).
+	fmt.Println("[6/6] ML dependencies...")
+	var warnings []string
+	for r := range depResults {
+		status := "ok"
+		if !r.OK {
+			status = "MISSING"
+			warnings = append(warnings, fmt.Sprintf("  ! %s: %s", r.Name, r.Message))
+		}
+		fmt.Printf("      %-20s %s (%s)\n", r.Name, status, r.Message)
+	}
 
 	// Summary.
 	fmt.Println()
@@ -183,6 +304,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Plist:    %s\n", dest)
 	fmt.Printf("  Logs:     %s\n", logsDir)
 	fmt.Printf("  Service:  %s\n", serviceLabel)
+
+	for _, w := range warnings {
+		log.Warn(w)
+	}
+
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  her start    — start the service")

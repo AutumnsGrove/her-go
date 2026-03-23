@@ -57,13 +57,13 @@ scheduler:
   max_proactive_per_day: 5         # v0.6: cap on non-reminder scheduled messages
 
 voice:
-  enabled: false               # v0.3+
+  enabled: false                                                  # v0.3+: set true to accept voice memos
   stt:
-    engine: "parakeet"         # "parakeet" or "cf-workers-ai"
-    parakeet_path: ""          # path to parakeet binary
+    engine: "parakeet"                                            # "parakeet" or "cf-workers-ai"
+    base_url: "http://localhost:8765"                              # parakeet-mlx-fastapi server
+    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path
   tts:
-    enabled: false             # v0.5+
-    engine: "kokoro"           # "kokoro" or future options
-    kokoro_path: ""            # path to kokoro binary/server
-    voice_id: ""               # which voice to use
-    reply_mode: "voice"        # "voice" (always voice reply) or "match" (reply in same format as input)
+    enabled: false                                                # v0.5+
+    engine: "kokoro"                                              # "kokoro" or future options
+    voice_id: ""                                                  # which voice to use
+    reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)

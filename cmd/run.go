@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"her/bot"
 	"her/config"
@@ -13,6 +16,7 @@ import (
 	"her/memory"
 	"her/scheduler"
 	"her/search"
+	"her/voice"
 
 	"github.com/spf13/cobra"
 )
@@ -142,8 +146,70 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Info("Tavily client not configured — web search disabled")
 	}
 
+	// Start the parakeet STT server if voice is enabled.
+	// This launches parakeet-server as a child process — it loads the
+	// MLX model into memory and serves an OpenAI-compatible transcription
+	// endpoint. The process is killed on shutdown.
+	//
+	// Think of this like Python's subprocess.Popen() — we start it, keep
+	// a reference, and kill it when we're done. The sidecar pattern keeps
+	// ML inference (Python/MLX) separate from our Go process.
+	var sttProcess *exec.Cmd
+	voiceClient := voice.NewClient(&cfg.Voice)
+	if voiceClient != nil {
+		sttPath, err := exec.LookPath("parakeet-server")
+		if err != nil {
+			log.Warn("parakeet-server not found in PATH — voice memos will fail. Run: her setup")
+		} else {
+			// Parse host and port from the configured base_url so the
+			// sidecar listens on the same address the client will call.
+			// url.Parse splits "http://127.0.0.1:8765" into host="127.0.0.1"
+			// and port="8765" — like Python's urllib.parse.urlparse().
+			sttHost := "127.0.0.1"
+			sttPort := "8765"
+			if u, err := url.Parse(cfg.Voice.STT.BaseURL); err == nil {
+				if h := u.Hostname(); h != "" {
+					sttHost = h
+				}
+				if p := u.Port(); p != "" {
+					sttPort = p
+				}
+			}
+
+			sttProcess = exec.Command(sttPath,
+				"-m", cfg.Voice.STT.Model,
+				"-h", sttHost,
+				"-p", sttPort,
+			)
+			// Send sidecar output to our stderr so it shows up in logs.
+			// In Go, os.Stderr is the raw file descriptor — same as
+			// subprocess.Popen(stderr=subprocess.PIPE) but simpler.
+			sttProcess.Stdout = os.Stderr
+			sttProcess.Stderr = os.Stderr
+
+			if err := sttProcess.Start(); err != nil {
+				log.Error("failed to start parakeet-server", "err", err)
+			} else {
+				log.Info("parakeet-server started", "pid", sttProcess.Process.Pid, "model", cfg.Voice.STT.Model)
+
+				// Give the server a moment to load the model before we
+				// start accepting voice memos. The model loads into GPU
+				// memory on first request anyway, but this avoids a
+				// timeout on the very first voice memo.
+				go func() {
+					time.Sleep(3 * time.Second)
+					if voiceClient.IsAvailable() {
+						log.Info("parakeet-server is ready")
+					} else {
+						log.Warn("parakeet-server not responding yet — first voice memo may be slow")
+					}
+				}()
+			}
+		}
+	}
+
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, voiceClient, store)
 	if err != nil {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}
@@ -173,6 +239,15 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Info("Signal received, shutting down", "signal", sig)
 		if sched != nil {
 			sched.Stop()
+		}
+		// Kill the STT sidecar if it's running. Process.Kill() sends
+		// SIGKILL — immediate termination. We use Kill instead of a
+		// graceful signal because the parakeet-server doesn't need
+		// to flush anything, and we want a fast shutdown.
+		if sttProcess != nil && sttProcess.Process != nil {
+			log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
+			_ = sttProcess.Process.Kill()
+			_, _ = sttProcess.Process.Wait()
 		}
 		tgBot.Stop()
 	}()

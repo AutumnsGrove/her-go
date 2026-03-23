@@ -33,6 +33,7 @@ type Config struct {
 	Scrub     ScrubConfig     `yaml:"scrub"`
 	Persona   PersonaConfig   `yaml:"persona"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
+	Voice     VoiceConfig     `yaml:"voice"`
 }
 
 // TelegramConfig holds Telegram bot settings.
@@ -107,6 +108,30 @@ type PersonaConfig struct {
 	RewriteEveryNConversations int     `yaml:"rewrite_every_n_conversations"`
 	ReflectionMemoryThreshold  int     `yaml:"reflection_memory_threshold"`
 	MaxTraitShift              float64 `yaml:"max_trait_shift"`
+}
+
+// VoiceConfig controls voice memo processing (STT in v0.3, TTS in v0.5).
+type VoiceConfig struct {
+	Enabled bool      `yaml:"enabled"`
+	STT     STTConfig `yaml:"stt"`
+	TTS     TTSConfig `yaml:"tts"`
+}
+
+// STTConfig controls speech-to-text. The "parakeet" engine expects a local
+// HTTP server (parakeet-mlx-fastapi) running on BaseURL. The Go side just
+// POSTs audio files to it — no Python bindings needed.
+type STTConfig struct {
+	Engine  string `yaml:"engine"`   // "parakeet" or "cf-workers-ai"
+	BaseURL string `yaml:"base_url"` // e.g. "http://localhost:8765"
+	Model   string `yaml:"model"`    // HuggingFace model ID or local path
+}
+
+// TTSConfig is a v0.5 stub — not wired up yet.
+type TTSConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Engine    string `yaml:"engine"`     // "kokoro" or future options
+	VoiceID   string `yaml:"voice_id"`   // which voice to use
+	ReplyMode string `yaml:"reply_mode"` // "voice" or "match"
 }
 
 // SchedulerConfig controls the task scheduler / cron system.

@@ -25,6 +25,7 @@ import (
 	"her/persona"
 	"her/scrub"
 	"her/search"
+	"her/voice"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -43,6 +44,7 @@ type Bot struct {
 	visionLLM    *llm.Client          // vision language model (Gemini Flash) — nil if not configured
 	embedClient  *embed.Client        // local embedding model for similarity
 	tavilyClient *search.TavilyClient // web search and URL extraction
+	voiceClient  *voice.Client        // local STT via parakeet-server — nil if voice disabled
 	store        *memory.Store
 	cfg          *config.Config
 	systemPrompt string
@@ -55,7 +57,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -79,6 +81,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 		visionLLM:    visionLLM,
 		embedClient:  embedClient,
 		tavilyClient: tavilyClient,
+		voiceClient:  voiceClient,
 		store:        store,
 		cfg:          cfg,
 		systemPrompt: string(promptBytes),
@@ -106,6 +109,12 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	// In telebot, tele.OnPhoto fires when a user sends an image.
 	// Photos can optionally have a caption (text alongside the image).
 	tb.Handle(tele.OnPhoto, bot.handlePhoto)
+
+	// Register voice handler for speech-to-text (v0.3).
+	// tele.OnVoice fires when a user sends a voice memo (the
+	// microphone button in Telegram). Audio files sent as documents
+	// use tele.OnDocument instead — we only handle voice memos here.
+	tb.Handle(tele.OnVoice, bot.handleVoice)
 
 	return bot, nil
 }
@@ -444,6 +453,198 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
+
+	return nil
+}
+
+// handleVoice processes incoming voice memos (v0.3 — "She Listens").
+//
+// Flow:
+//  1. Check that the voice client is available
+//  2. Download the .ogg file from Telegram
+//  3. Save audio to a local file for the record
+//  4. Send to parakeet-server for transcription
+//  5. Feed transcribed text into the normal agent pipeline
+//  6. Store voice_memo_path and file_id in the database
+//
+// Telegram sends voice memos as Ogg/Opus files. The parakeet-server
+// handles format conversion internally (via ffmpeg), so we just forward
+// the raw bytes.
+func (b *Bot) handleVoice(c tele.Context) error {
+	msg := c.Message()
+	v := msg.Voice
+
+	if v == nil {
+		return c.Send("I couldn't read that voice memo. Try again?")
+	}
+
+	// Check if voice/STT is configured and available.
+	if b.voiceClient == nil {
+		return c.Send("Voice memos aren't enabled right now. Send me a text message instead?")
+	}
+
+	conversationID := b.getConversationID(msg.Chat.ID)
+
+	log.Info("─── incoming voice memo ───")
+	log.Infof("  duration: %ds, mime: %s", v.Duration, v.MIME)
+
+	// Step 1: Download the audio from Telegram.
+	// Same pattern as handlePhoto — telebot gives us a ReadCloser
+	// via bot.File(), we read all bytes with io.ReadAll.
+	reader, err := c.Bot().File(&v.File)
+	if err != nil {
+		log.Error("downloading voice memo", "err", err)
+		return c.Send("I couldn't download that voice memo. Try again?")
+	}
+	defer reader.Close()
+
+	audioBytes, err := io.ReadAll(reader)
+	if err != nil {
+		log.Error("reading voice bytes", "err", err)
+		return c.Send("I couldn't read that voice memo. Try again?")
+	}
+
+	log.Infof("  downloaded: %d bytes", len(audioBytes))
+
+	// Step 2: Save the audio locally so we have a record.
+	// Files go to voice_memos/<conversation_id>/<timestamp>.ogg
+	voiceDir := fmt.Sprintf("voice_memos/%s", conversationID)
+	if err := os.MkdirAll(voiceDir, 0o755); err != nil {
+		log.Error("creating voice memo directory", "err", err)
+	}
+	voicePath := fmt.Sprintf("%s/%d.ogg", voiceDir, msg.Unixtime)
+	if err := os.WriteFile(voicePath, audioBytes, 0o644); err != nil {
+		log.Error("saving voice memo file", "err", err)
+		voicePath = "" // non-fatal — continue with transcription
+	} else {
+		log.Infof("  saved: %s", voicePath)
+	}
+
+	// Step 3: Start the typing indicator BEFORE transcription.
+	// Transcription can take 5-15 seconds, so we need continuous
+	// typing feedback the entire time. Telegram's typing indicator
+	// expires after ~5 seconds, so we refresh it every 4.
+	stopTyping := make(chan struct{})
+	go func() {
+		_ = c.Notify(tele.Typing)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTyping:
+				return
+			case <-ticker.C:
+				_ = c.Notify(tele.Typing)
+			}
+		}
+	}()
+
+	// Step 4: Transcribe via parakeet-server.
+	transcript, err := b.voiceClient.Transcribe(audioBytes, "voice.ogg")
+	if err != nil {
+		close(stopTyping)
+		log.Error("transcription failed", "err", err)
+		return c.Send("I couldn't transcribe that voice memo. Is the speech server running? (parakeet-server)")
+	}
+
+	if transcript == "" {
+		close(stopTyping)
+		log.Warn("empty transcription")
+		return c.Send("I couldn't make out what you said. Could you try again?")
+	}
+
+	log.Infof("  transcript: %s", truncate(transcript, 100))
+
+	// Step 5: Send a placeholder showing the transcript so the user
+	// can see what was heard while the bot thinks about a response.
+	placeholderText := fmt.Sprintf("\U0001F3A4 <i>%s</i>\n\n\U0001F4AD", transcript)
+	placeholder, sendErr := c.Bot().Send(c.Recipient(), placeholderText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	if sendErr != nil {
+		close(stopTyping)
+		log.Error("sending placeholder", "err", sendErr)
+		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
+	}
+
+	// Step 6: From here, same pipeline as handleMessage.
+	// The transcribed text IS the user message — we treat it exactly
+	// like they typed it, except we also store the voice memo path.
+	userText := transcript
+
+	// Save to DB with the transcribed text as content.
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	if err != nil {
+		log.Error("saving message", "err", err)
+	}
+
+	// Store the voice memo path and Telegram file_id.
+	if msgID > 0 {
+		if voicePath != "" {
+			if err := b.store.UpdateMessageVoicePath(msgID, voicePath); err != nil {
+				log.Error("saving voice memo path", "err", err)
+			}
+		}
+		if err := b.store.UpdateMessageMedia(msgID, v.FileID, ""); err != nil {
+			log.Error("saving voice file_id", "err", err)
+		}
+	}
+
+	// PII scrub the transcribed text.
+	var scrubResult *scrub.ScrubResult
+	if b.cfg.Scrub.Enabled {
+		scrubResult = scrub.Scrub(userText)
+		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
+			log.Info("PII scrubbed", "tokens", vaultCount)
+		}
+	} else {
+		scrubResult = &scrub.ScrubResult{
+			Text:  userText,
+			Vault: scrub.NewVault(),
+		}
+	}
+
+	if msgID > 0 {
+		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
+		for _, entry := range scrubResult.Vault.Entries() {
+			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
+				log.Error("saving PII vault entry", "err", err)
+			}
+		}
+	}
+
+	statusCallback := func(status string) error {
+		_, err := c.Bot().Edit(placeholder, status, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		return err
+	}
+
+	// Run the agent pipeline with the transcribed text.
+	result, err := agent.Run(agent.RunParams{
+		AgentLLM:            b.agentLLM,
+		ChatLLM:             b.llm,
+		VisionLLM:           b.visionLLM,
+		Store:               b.store,
+		EmbedClient:         b.embedClient,
+		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:        b.tavilyClient,
+		Cfg:                 b.cfg,
+		ScrubbedUserMessage: scrubResult.Text,
+		ScrubVault:          scrubResult.Vault,
+		ConversationID:      conversationID,
+		TriggerMsgID:        msgID,
+		StatusCallback:      statusCallback,
+		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+	})
+
+	close(stopTyping)
+
+	if err != nil {
+		log.Error("agent error", "err", err)
+		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
+		return nil
+	}
+
+	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Info("─── voice reply sent ───")
 
 	return nil
 }

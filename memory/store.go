@@ -247,6 +247,9 @@ func (s *Store) initTables() error {
 		// Stored alongside the message so we have a text record of what
 		// the bot "saw" — useful for memory, search, and debugging.
 		`ALTER TABLE messages ADD COLUMN media_description TEXT`,
+		// voice_memo_path: path to original audio file for voice messages.
+		// Already in the CREATE TABLE for new DBs, but existing DBs need this.
+		`ALTER TABLE messages ADD COLUMN voice_memo_path TEXT`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -460,6 +463,19 @@ func (s *Store) UpdateMessageMedia(messageID int64, fileID, description string) 
 	)
 	if err != nil {
 		return fmt.Errorf("updating message media: %w", err)
+	}
+	return nil
+}
+
+// UpdateMessageVoicePath stores the local file path to the original
+// audio file for a voice memo message. Used for debugging and replay.
+func (s *Store) UpdateMessageVoicePath(messageID int64, path string) error {
+	_, err := s.db.Exec(
+		`UPDATE messages SET voice_memo_path = ? WHERE id = ?`,
+		path, messageID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating voice memo path: %w", err)
 	}
 	return nil
 }
