@@ -67,6 +67,6 @@ voice:
     engine: "kokoro"                                              # "kokoro" or future options
     base_url: "http://localhost:8766"                              # mlx-audio server
     model: "mlx-community/Kokoro-82M-bf16"                        # HuggingFace model ID or local path
-    voice_id: "af_heart"                                          # voice preset (see VOICES.md in model repo)
+    voice_id: "bf_lily"                                          # voice preset (see VOICES.md in model repo)
     speed: 1.0                                                    # speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
