@@ -972,31 +972,22 @@ func (s *Store) FactCountSinceLastReflection() (int, error) {
 	return count, nil
 }
 
-// ReflectionCountSinceLastRewrite counts reflections created since
-// the most recent persona rewrite. Used to trigger persona rewrites
-// based on accumulated reflections rather than conversation counts.
-func (s *Store) ReflectionCountSinceLastRewrite() (int, error) {
-	lastRewrite, err := s.LastPersonaTimestamp()
-	if err != nil {
-		return 0, err
-	}
-
+// TotalReflectionCount returns the total number of active self-reflections.
+// Used alongside PersonaRewriteCount to decide if a rewrite is due.
+func (s *Store) TotalReflectionCount() (int, error) {
 	var count int
-	if lastRewrite.IsZero() {
-		// No rewrites yet. Count all reflections.
-		s.db.QueryRow(
-			`SELECT COUNT(*) FROM facts
-			 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self' AND active = 1`,
-		).Scan(&count)
-	} else {
-		s.db.QueryRow(
-			`SELECT COUNT(*) FROM facts
-			 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self'
-			   AND active = 1 AND timestamp > ?`,
-			lastRewrite.Format("2006-01-02 15:04:05"),
-		).Scan(&count)
-	}
-	return count, nil
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM facts
+		 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self' AND active = 1`,
+	).Scan(&count)
+	return count, err
+}
+
+// PersonaRewriteCount returns how many persona rewrites have occurred.
+func (s *Store) PersonaRewriteCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM persona_versions`).Scan(&count)
+	return count, err
 }
 
 // LastPersonaTimestamp returns the timestamp of the most recent persona

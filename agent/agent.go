@@ -359,17 +359,29 @@ func Run(params RunParams) (*RunResult, error) {
 			}
 		}
 
-		// Trigger: Persona rewrite — have enough reflections accumulated since the last rewrite?
+		// Trigger: Persona rewrite — have enough reflections accumulated?
+		// Rewrites fire at N, 2N, 3N, ... reflections (e.g. 3, 6, 9).
+		// We check: totalReflections >= (rewrites+1) * threshold.
+		// This way each rewrite "consumes" a batch and won't re-trigger
+		// until the next batch accumulates.
 		if params.RewriteEveryN > 0 {
-			reflectionCount, err := params.Store.ReflectionCountSinceLastRewrite()
+			totalReflections, err := params.Store.TotalReflectionCount()
 			if err != nil {
 				log.Error("checking reflection count for rewrite trigger", "err", err)
-			} else if reflectionCount >= params.RewriteEveryN {
-				log.Infof("  [persona] rewrite triggered (%d reflections, threshold: %d)", reflectionCount, params.RewriteEveryN)
-				if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
-					log.Error("persona rewrite error", "err", err)
-				} else if rewritten {
-					log.Info("persona.md rewritten")
+			} else {
+				rewriteCount, err := params.Store.PersonaRewriteCount()
+				if err != nil {
+					log.Error("checking persona rewrite count", "err", err)
+				} else {
+					nextThreshold := (rewriteCount + 1) * params.RewriteEveryN
+					if totalReflections >= nextThreshold {
+						log.Infof("  [persona] rewrite triggered (%d reflections, next threshold: %d)", totalReflections, nextThreshold)
+						if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
+							log.Error("persona rewrite error", "err", err)
+						} else if rewritten {
+							log.Info("persona.md rewritten")
+						}
+					}
 				}
 			}
 		}
