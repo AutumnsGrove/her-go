@@ -5,8 +5,9 @@
 // back raw audio bytes (WAV by default, or OGG/Opus for Telegram).
 //
 // This is the mirror image of stt.go:
-//   STT: audio bytes in  → text out
-//   TTS: text in          → audio bytes out
+//
+//	STT: audio bytes in  → text out
+//	TTS: text in          → audio bytes out
 package voice
 
 import (
@@ -47,7 +48,7 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 
 	voiceID := cfg.VoiceID
 	if voiceID == "" {
-		voiceID = "af_heart" // warm, friendly default
+		voiceID = "bf_lily" // warm, friendly default
 	}
 
 	speed := cfg.Speed
@@ -154,12 +155,12 @@ func (c *TTSClient) Synthesize(text string) ([]byte, error) {
 	//   ffmpeg -i input.wav -c:a libopus -b:a 64k output.ogg
 	// but with stdin/stdout instead of files.
 	cmd := exec.Command("ffmpeg",
-		"-i", "pipe:0",        // read WAV from stdin
-		"-c:a", "libopus",     // encode with Opus codec
-		"-b:a", "64k",         // 64kbps — good quality for speech
+		"-i", "pipe:0", // read WAV from stdin
+		"-c:a", "libopus", // encode with Opus codec
+		"-b:a", "64k", // 64kbps — good quality for speech
 		"-application", "voip", // optimize for speech (vs music)
-		"-f", "ogg",           // output format
-		"pipe:1",              // write to stdout
+		"-f", "ogg", // output format
+		"pipe:1", // write to stdout
 	)
 	cmd.Stdin = bytes.NewReader(wavBytes)
 
