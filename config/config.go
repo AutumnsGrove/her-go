@@ -23,15 +23,16 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
-	Telegram TelegramConfig `yaml:"telegram"`
-	LLM      LLMConfig      `yaml:"llm"`
-	Agent    AgentConfig    `yaml:"agent"`
-	Vision   VisionConfig   `yaml:"vision"`
-	Memory   MemoryConfig   `yaml:"memory"`
-	Embed    EmbedConfig    `yaml:"embed"`
-	Search   SearchConfig   `yaml:"search"`
-	Scrub    ScrubConfig    `yaml:"scrub"`
-	Persona  PersonaConfig  `yaml:"persona"`
+	Telegram  TelegramConfig  `yaml:"telegram"`
+	LLM       LLMConfig       `yaml:"llm"`
+	Agent     AgentConfig     `yaml:"agent"`
+	Vision    VisionConfig    `yaml:"vision"`
+	Memory    MemoryConfig    `yaml:"memory"`
+	Embed     EmbedConfig     `yaml:"embed"`
+	Search    SearchConfig    `yaml:"search"`
+	Scrub     ScrubConfig     `yaml:"scrub"`
+	Persona   PersonaConfig   `yaml:"persona"`
+	Scheduler SchedulerConfig `yaml:"scheduler"`
 }
 
 // TelegramConfig holds Telegram bot settings.
@@ -39,6 +40,7 @@ type TelegramConfig struct {
 	Token      string `yaml:"token"`
 	Mode       string `yaml:"mode"`        // "poll" or "webhook"
 	WebhookURL string `yaml:"webhook_url"` // only needed for webhook mode
+	OwnerChat  int64  `yaml:"owner_chat"`  // chat ID for the bot owner — used by scheduler for proactive messages
 }
 
 // LLMConfig holds OpenRouter / OpenAI-compatible API settings.
@@ -105,6 +107,17 @@ type PersonaConfig struct {
 	RewriteEveryNConversations int     `yaml:"rewrite_every_n_conversations"`
 	ReflectionMemoryThreshold  int     `yaml:"reflection_memory_threshold"`
 	MaxTraitShift              float64 `yaml:"max_trait_shift"`
+}
+
+// SchedulerConfig controls the task scheduler / cron system.
+// v0.2 uses only Timezone. The rest are here for schema completeness
+// and will be wired up in v0.6 when recurring tasks and proactive
+// messaging land.
+type SchedulerConfig struct {
+	Timezone          string `yaml:"timezone"`            // IANA timezone for cron evaluation (e.g. "America/New_York")
+	QuietHoursStart   string `yaml:"quiet_hours_start"`   // v0.6: no scheduled messages after this time
+	QuietHoursEnd     string `yaml:"quiet_hours_end"`     // v0.6: resume scheduled messages after this time
+	MaxProactivePerDay int   `yaml:"max_proactive_per_day"` // v0.6: cap on non-reminder messages per day
 }
 
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.

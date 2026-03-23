@@ -240,6 +240,33 @@ func ToolDefs() []llm.ToolDef {
 				},
 			},
 		},
+		// --- Scheduler tools ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "create_reminder",
+				Description: "Create a one-shot reminder that fires at a specific time. Use when the user asks to be reminded of something. You MUST convert natural language times to an absolute ISO 8601 timestamp (e.g., 'tomorrow at 3pm' → '2026-03-23T15:00:00'). Always confirm what you're setting with the user in your reply.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"message": map[string]interface{}{
+							"type":        "string",
+							"description": "What to remind the user about",
+						},
+						"trigger_at": map[string]interface{}{
+							"type":        "string",
+							"description": "When to fire the reminder, as ISO 8601 datetime (e.g., '2026-03-22T15:00:00'). Convert the user's natural language time to this format.",
+						},
+						"natural_time": map[string]interface{}{
+							"type":        "string",
+							"description": "The original natural language time from the user (e.g., 'tomorrow at 3pm'). Used for the confirmation message.",
+						},
+					},
+					"required": []string{"message", "trigger_at"},
+				},
+			},
+		},
+
 		// --- Reasoning tool ---
 		{
 			Type: "function",

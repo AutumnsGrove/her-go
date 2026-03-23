@@ -2,6 +2,7 @@ telegram:
   token: "${TELEGRAM_BOT_TOKEN}"
   mode: "poll"  # "poll" or "webhook"
   webhook_url: ""  # only needed for webhook mode
+  owner_chat: 0    # your Telegram chat ID — needed for scheduled reminders. Send /status to the bot to find it.
 
 llm:
   base_url: "https://openrouter.ai/api/v1"
@@ -48,6 +49,12 @@ persona:
   rewrite_every_n_conversations: 3  # trigger persona rewrite after N reflections accumulate
   reflection_memory_threshold: 10  # trigger reflection after N new facts accumulate since last reflection
   max_trait_shift: 0.1             # max trait score change per rewrite cycle
+
+scheduler:
+  timezone: "America/New_York"     # IANA timezone — cron expressions evaluated in this zone
+  quiet_hours_start: "23:00"       # v0.6: no scheduled messages during this window
+  quiet_hours_end: "07:00"         # v0.6: resume after this time
+  max_proactive_per_day: 5         # v0.6: cap on non-reminder scheduled messages
 
 voice:
   enabled: false               # v0.3+

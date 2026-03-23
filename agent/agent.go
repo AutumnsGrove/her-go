@@ -457,6 +457,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
 	case "view_image":
 		return execViewImage(tc.Function.Arguments, tctx)
+	case "create_reminder":
+		return execCreateReminder(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
 	case "no_action":

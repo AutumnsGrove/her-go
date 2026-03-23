@@ -11,6 +11,7 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/scheduler"
 	"her/search"
 
 	"github.com/spf13/cobra"
@@ -147,6 +148,22 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}
 
+	// Start the scheduler if owner_chat is configured.
+	// The scheduler needs to know WHERE to send messages — that's the
+	// owner's Telegram chat ID. Without it, reminders get created in
+	// the DB but never delivered. The /status command shows your chat ID.
+	var sched *scheduler.Scheduler
+	if cfg.Telegram.OwnerChat != 0 {
+		ownerChat := cfg.Telegram.OwnerChat
+		sendFn := func(text string) error {
+			return tgBot.SendToChat(ownerChat, text)
+		}
+		sched = scheduler.New(store, sendFn, cfg.Scheduler.Timezone)
+		sched.Start()
+	} else {
+		log.Warn("scheduler disabled — set telegram.owner_chat in config.yaml (use /status to find your chat ID)")
+	}
+
 	// Handle graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -154,6 +171,9 @@ func runBot(cmd *cobra.Command, args []string) error {
 	go func() {
 		sig := <-sigChan
 		log.Info("Signal received, shutting down", "signal", sig)
+		if sched != nil {
+			sched.Stop()
+		}
 		tgBot.Stop()
 	}()
 

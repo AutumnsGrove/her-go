@@ -4,12 +4,14 @@ package bot
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"her/scrub"
 	"her/search"
 
+	"github.com/tj/go-naturaldate"
 	tele "gopkg.in/telebot.v4"
 )
 
@@ -95,6 +98,8 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	tb.Handle("/compact", bot.handleCompact)
 	tb.Handle("/status", bot.handleStatus)
 	tb.Handle("/restart", bot.handleRestart)
+	tb.Handle("/remind", bot.handleRemind)
+	tb.Handle("/schedule", bot.handleSchedule)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -118,6 +123,29 @@ func (b *Bot) Start() {
 // Stop gracefully shuts down the bot.
 func (b *Bot) Stop() {
 	b.tb.Stop()
+}
+
+// chatRecipient implements tele.Recipient for sending to a specific chat ID.
+// In Go, interfaces are satisfied implicitly — any type that has a
+// Recipient() string method satisfies tele.Recipient. No "implements"
+// keyword needed. This is like Python's duck typing but checked at
+// compile time.
+type chatRecipient struct {
+	chatID string
+}
+
+func (r chatRecipient) Recipient() string { return r.chatID }
+
+// SendToChat sends a text message to a specific Telegram chat.
+// Used by the scheduler to deliver reminders — it doesn't have a
+// tele.Context, so it calls this directly with the chat ID.
+func (b *Bot) SendToChat(chatID int64, text string) error {
+	_, err := b.tb.Send(
+		chatRecipient{chatID: fmt.Sprintf("%d", chatID)},
+		text,
+		&tele.SendOptions{ParseMode: tele.ModeHTML},
+	)
+	return err
 }
 
 // truncate shortens a string for log output, adding "..." if it was cut.
@@ -461,6 +489,9 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"<b>Persona</b>\n" +
 		"/persona — view Mira's current personality\n" +
 		"/reflect — trigger a reflection on recent conversations\n\n" +
+		"<b>Reminders</b>\n" +
+		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
+		"/schedule — list upcoming reminders\n\n" +
 		"<b>Info</b>\n" +
 		"/stats — token usage, cost, and message counts\n" +
 		"/status — uptime, models, and service health\n\n" +
@@ -747,11 +778,13 @@ func (b *Bot) handleStatus(c tele.Context) error {
 			"<b>Session:</b>\n"+
 			"  Messages: %d\n"+
 			"  Facts: %d\n"+
-			"  Cost: $%.4f",
+			"  Cost: $%.4f\n\n"+
+			"<b>Chat ID:</b> <code>%d</code>",
 		uptime, managedBy, runtime.Version(), convID,
 		b.cfg.LLM.Model, b.cfg.Agent.Model, b.cfg.Vision.Model,
 		embedStatus, tavilyStatus, visionStatus,
 		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
+		c.Message().Chat.ID,
 	)
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
@@ -792,6 +825,206 @@ func (b *Bot) handleRestart(c tele.Context) error {
 func isLaunchdManaged() bool {
 	cmd := exec.Command("launchctl", "print", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
 	return cmd.Run() == nil
+}
+
+// handleRemind creates a one-shot reminder.
+// Usage: /remind <time expression> <message>
+//
+// The tricky part is separating the time from the message. We use
+// go-naturaldate which parses natural language like "tomorrow at 3pm",
+// "in 30 minutes", "next friday at noon". It's smart enough to ignore
+// non-date text, but we need to figure out where the time expression
+// ends and the message begins.
+//
+// Strategy: try parsing progressively longer prefixes of the input.
+// The longest prefix that produces a valid future time is the time part;
+// everything after it is the message. This handles both:
+//   - /remind 3pm call the dentist        → time="3pm", msg="call the dentist"
+//   - /remind tomorrow at 10am take meds  → time="tomorrow at 10am", msg="take meds"
+func (b *Bot) handleRemind(c tele.Context) error {
+	args := strings.TrimSpace(c.Message().Payload)
+	if args == "" {
+		return c.Send(
+			"<b>Usage:</b> /remind <code>&lt;time&gt; &lt;message&gt;</code>\n\n"+
+				"<b>Examples:</b>\n"+
+				"/remind 3pm call the dentist\n"+
+				"/remind tomorrow at 10am take out the trash\n"+
+				"/remind in 30 minutes check the oven\n"+
+				"/remind next friday review the report",
+			&tele.SendOptions{ParseMode: tele.ModeHTML},
+		)
+	}
+
+	// Load the user's timezone from config for parsing.
+	loc, err := time.LoadLocation(b.cfg.Scheduler.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+
+	// Split the input into words. Try parsing progressively longer
+	// prefixes as time expressions. The longest match that resolves
+	// to a future time wins.
+	words := strings.Fields(args)
+	bestTime := time.Time{}
+	bestSplit := 0
+
+	for i := 1; i <= len(words); i++ {
+		candidate := strings.Join(words[:i], " ")
+		parsed, err := naturaldate.Parse(candidate, now, naturaldate.WithDirection(naturaldate.Future))
+		if err != nil {
+			continue
+		}
+		// Only accept if it's meaningfully in the future (at least 1 minute).
+		// naturaldate returns "now" for unparseable input, so we filter that out.
+		if parsed.After(now.Add(30 * time.Second)) {
+			bestTime = parsed
+			bestSplit = i
+		}
+	}
+
+	if bestTime.IsZero() {
+		return c.Send(
+			"I couldn't understand that time. Try something like:\n"+
+				"• /remind 3pm call the dentist\n"+
+				"• /remind in 2 hours check laundry\n"+
+				"• /remind tomorrow at 10am meeting",
+		)
+	}
+
+	// Everything after the time expression is the reminder message.
+	message := strings.TrimSpace(strings.Join(words[bestSplit:], " "))
+	if message == "" {
+		return c.Send("What should I remind you about? Add a message after the time.")
+	}
+
+	// Build the task name from the message (truncated for display).
+	taskName := "remind: " + message
+	if len(taskName) > 60 {
+		taskName = taskName[:57] + "..."
+	}
+
+	// Create the payload — a JSON object with a "message" field.
+	// json.Marshal converts a Go value to JSON bytes, like json.dumps() in Python.
+	payload, _ := json.Marshal(map[string]string{
+		"message": message,
+	})
+
+	// One-shot reminder: schedule_type="once", max_runs=1.
+	// next_run is set to trigger_at so the scheduler picks it up.
+	maxRuns := 1
+	task := &memory.ScheduledTask{
+		Name:         &taskName,
+		ScheduleType: "once",
+		TriggerAt:    &bestTime,
+		TaskType:     "send_message",
+		Payload:      payload,
+		Enabled:      true,
+		NextRun:      &bestTime,
+		MaxRuns:      &maxRuns,
+		CreatedBy:    "user",
+	}
+
+	id, err := b.store.CreateScheduledTask(task)
+	if err != nil {
+		log.Error("/remind: creating task", "err", err)
+		return c.Send("Something went wrong creating that reminder. Try again?")
+	}
+
+	// Format the confirmation with a friendly time display.
+	timeStr := bestTime.Format("Mon Jan 2 at 3:04 PM")
+	log.Info("/remind: created", "id", id, "trigger_at", bestTime, "message", message)
+
+	return c.Send(fmt.Sprintf("⏰ Got it! I'll remind you:\n\n<b>%s</b>\n%s (reminder #%d)",
+		message, timeStr, id,
+	), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleSchedule lists active scheduled tasks or manages them.
+// Usage:
+//
+//	/schedule          — list all active tasks
+//	/schedule pause N  — disable task #N
+//	/schedule resume N — re-enable task #N
+//	/schedule delete N — remove task #N
+func (b *Bot) handleSchedule(c tele.Context) error {
+	args := strings.TrimSpace(c.Message().Payload)
+
+	// Sub-commands: pause, resume, delete.
+	if args != "" {
+		parts := strings.Fields(args)
+		if len(parts) >= 2 {
+			action := strings.ToLower(parts[0])
+			taskID, err := strconv.ParseInt(parts[1], 10, 64)
+			if err != nil {
+				return c.Send("Usage: /schedule <pause|resume|delete> <id>")
+			}
+
+			switch action {
+			case "pause":
+				if err := b.store.UpdateScheduledTaskEnabled(taskID, false); err != nil {
+					return c.Send(fmt.Sprintf("Couldn't pause task #%d: %v", taskID, err))
+				}
+				return c.Send(fmt.Sprintf("⏸ Paused task #%d.", taskID))
+
+			case "resume":
+				if err := b.store.UpdateScheduledTaskEnabled(taskID, true); err != nil {
+					return c.Send(fmt.Sprintf("Couldn't resume task #%d: %v", taskID, err))
+				}
+				return c.Send(fmt.Sprintf("▶️ Resumed task #%d.", taskID))
+
+			case "delete":
+				if err := b.store.DeleteScheduledTask(taskID); err != nil {
+					return c.Send(fmt.Sprintf("Couldn't delete task #%d: %v", taskID, err))
+				}
+				return c.Send(fmt.Sprintf("🗑 Deleted task #%d.", taskID))
+
+			default:
+				return c.Send("Unknown action. Try: /schedule pause|resume|delete <id>")
+			}
+		}
+	}
+
+	// Default: list all active tasks.
+	tasks, err := b.store.ListActiveTasks()
+	if err != nil {
+		log.Error("/schedule: listing tasks", "err", err)
+		return c.Send("Couldn't load scheduled tasks right now.")
+	}
+
+	if len(tasks) == 0 {
+		return c.Send("No scheduled tasks. Use /remind to create one!")
+	}
+
+	// Load timezone for display.
+	loc, err := time.LoadLocation(b.cfg.Scheduler.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<b>📋 Scheduled Tasks</b>\n\n")
+
+	for _, t := range tasks {
+		name := "unnamed"
+		if t.Name != nil {
+			name = *t.Name
+		}
+
+		nextRun := "—"
+		if t.NextRun != nil {
+			nextRun = t.NextRun.In(loc).Format("Mon Jan 2 at 3:04 PM")
+		}
+
+		sb.WriteString(fmt.Sprintf(
+			"<b>#%d</b> %s\n  ⏰ %s | type: %s\n\n",
+			t.ID, name, nextRun, t.TaskType,
+		))
+	}
+
+	sb.WriteString("<i>/schedule pause|resume|delete &lt;id&gt;</i>")
+
+	return c.Send(sb.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
