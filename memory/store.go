@@ -223,6 +223,13 @@ func (s *Store) initTables() error {
 		// raw bytes ([]float64 serialized with binary.LittleEndian).
 		// Avoids re-computing embeddings on every duplicate check.
 		`ALTER TABLE facts ADD COLUMN embedding BLOB`,
+		// media_file_id: Telegram file_id for photos/voice/documents.
+		// Lets us re-download the file later via the Telegram API.
+		`ALTER TABLE messages ADD COLUMN media_file_id TEXT`,
+		// media_description: VLM-generated description of an attached image.
+		// Stored alongside the message so we have a text record of what
+		// the bot "saw" — useful for memory, search, and debugging.
+		`ALTER TABLE messages ADD COLUMN media_description TEXT`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -404,6 +411,25 @@ func (s *Store) UpdateMessageScrubbed(messageID int64, scrubbed string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("updating scrubbed content: %w", err)
+	}
+	return nil
+}
+
+// UpdateMessageMedia stores the Telegram file ID and/or VLM description
+// for a message that has media attached. Either field can be empty —
+// we use COALESCE to only update non-empty values, so you can call this
+// once for the file_id (from the bot) and again for the description
+// (from the agent's view_image tool) without clobbering the other.
+func (s *Store) UpdateMessageMedia(messageID int64, fileID, description string) error {
+	_, err := s.db.Exec(
+		`UPDATE messages SET
+			media_file_id = COALESCE(NULLIF(?, ''), media_file_id),
+			media_description = COALESCE(NULLIF(?, ''), media_description)
+		 WHERE id = ?`,
+		fileID, description, messageID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating message media: %w", err)
 	}
 	return nil
 }

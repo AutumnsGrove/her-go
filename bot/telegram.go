@@ -325,6 +325,15 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		log.Error("saving message", "err", err)
 	}
 
+	// Store the Telegram file ID so we can re-download the image later.
+	// The file_id is stable — Telegram keeps it around and you can fetch
+	// the file bytes again with bot.File(&tele.File{FileID: ...}).
+	if msgID > 0 {
+		if err := b.store.UpdateMessageMedia(msgID, photo.FileID, ""); err != nil {
+			log.Error("saving media file_id", "err", err)
+		}
+	}
+
 	// PII scrub the caption (not the image — images aren't text).
 	var scrubResult *scrub.ScrubResult
 	if b.cfg.Scrub.Enabled {

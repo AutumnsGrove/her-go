@@ -67,6 +67,14 @@ func execViewImage(argsJSON string, tctx *toolContext) string {
 		"cost", fmt.Sprintf("$%.6f", result.CostUSD),
 	)
 
+	// Persist the VLM description to the messages table so we have a
+	// permanent text record of what the bot "saw" in the image.
+	if tctx.store != nil && tctx.triggerMsgID > 0 {
+		if err := tctx.store.UpdateMessageMedia(tctx.triggerMsgID, "", result.Description); err != nil {
+			log.Error("saving media description", "err", err)
+		}
+	}
+
 	// Accumulate the image description in searchContext so the reply
 	// tool can reference it — same pattern as web_search results.
 	imageContext := fmt.Sprintf("## Image Description\n\n%s", result.Description)
