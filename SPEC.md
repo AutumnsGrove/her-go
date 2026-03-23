@@ -21,41 +21,48 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 ## Architecture
 
 ```
-┌─────────────┐         ┌──────────────────────────────────────────────────┐
-│  Telegram   │◀───────▶│              her-go binary                       │
-│  (user)     │         │                                                  │
-└─────────────┘         │  ┌──────────┐  ┌───────────┐  ┌──────────────┐  │
-                        │  │ Telegram │  │ Scheduler │  │  Mood        │  │
-                        │  │ Handler  │  │ (remind)  │  │  Check-ins   │  │
-                        │  └────┬─────┘  └─────┬─────┘  └──────┬───────┘  │
-                        │       │              │               │          │
-                        │       ▼              │               │          │
-                        │  ┌──────────┐◀───────┴───────────────┘          │
-                        │  │  Agent   │                                   │
-                        │  │ Pipeline │                                   │
-                        │  │          │                                   │
-                        │  │ 1. Log + scrub                               │
-                        │  │ 2. Agent orchestration                       │
-                        │  │ 3. Tool calls (search, memory, integrations) │
-                        │  │ 4. Reply generation                          │
-                        │  │ 5. Persona evolution                         │
-                        │  └────┬─────┘                                   │
-                        │       │                                         │
-                        │       ▼                                         │
-                        │  ┌──────────┐  ┌─────────────┐  ┌───────────┐  │
-                        │  │ SQLite   │  │  OpenRouter  │  │  External │  │
-                        │  │ (local)  │  │  (LLM)      │  │  APIs     │  │
-                        │  └────┬─────┘  └─────────────┘  └───────────┘  │
-                        │       │                          ▲              │
-                        │       │              ┌───────────┘              │
-                        │       │              │  Todoist, GitHub,        │
-                        │       │              │  Weather, HealthKit      │
-                        │       ▼              │                          │
-                        │  ┌──────────┐  ┌─────────────┐                  │
-                        │  │ D1 Sync  │  │  Obsidian   │                  │
-                        │  │ (v0.7)   │  │  (local fs) │                  │
-                        │  └──────────┘  └─────────────┘                  │
-                        └──────────────────────────────────────────────────┘
+┌─────────────┐         ┌───────────────────────────────────────────────────────────┐
+│  Telegram   │◀───────▶│                    her-go binary                          │
+│  (user)     │         │                                                           │
+└─────────────┘         │  ┌──────────┐  ┌───────────┐  ┌──────────────┐            │
+       ▲                │  │ Telegram │  │ Scheduler │  │  Mood        │            │
+       │                │  │ Handler  │  │ (remind)  │  │  Check-ins   │            │
+       │                │  └────┬─────┘  └─────┬─────┘  └──────┬───────┘            │
+       │                │       │              │               │                    │
+       │                │       ▼              │               │                    │
+       │                │  ┌──────────┐◀───────┴───────────────┘                    │
+       │                │  │  Agent   │                                             │
+       │                │  │ Pipeline │                                             │
+       │                │  │          │                                             │
+       │                │  │ 1. Log + scrub                                         │
+       │                │  │ 2. Agent orchestration                                 │
+       │                │  │ 3. Tool calls (search, memory, links, daily tools)     │
+       │                │  │ 4. Mini Shutter (URL fetch + content distillation)      │
+       │                │  │ 5. Reply generation                                    │
+       │                │  │ 6. Persona evolution                                   │
+       │                │  └────┬─────┘                                             │
+       │                │       │                                                   │
+       │                │       ▼                                                   │
+       │                │  ┌──────────┐  ┌─────────────┐  ┌───────────────────────┐ │
+       │                │  │ SQLite   │  │  OpenRouter  │  │  External APIs        │ │
+       │                │  │ (local)  │  │  (LLM)      │  │  Todoist, GitHub,     │ │
+       │                │  └────┬─────┘  └─────────────┘  │  Weather, Transit,    │ │
+       │                │       │                         │  IMAP, HealthKit      │ │
+       │                │       │                         └───────────────────────┘ │
+       │                │       ▼                         ▲                         │
+       │                │  ┌──────────┐  ┌─────────────┐  │  ┌──────────────────┐   │
+       │                │  │ D1 Sync  │  │  Obsidian   │  │  │ Kiwix (local     │   │
+       │                │  │ (v0.7)   │  │  (local fs) │  │  │  Wikipedia)      │   │
+       │                │  └──────────┘  └─────────────┘  │  └──────────────────┘   │
+       │                │                                 │                         │
+       │                │  ┌──────────────────────────────┘                         │
+       │                │  │                                                        │
+┌──────┴──────┐         │  ┌──────────────────────────────────────┐                 │
+│ Mini Apps   │◀────────│──│  Web App Server (v0.8+)              │                 │
+│ (WebView)   │         │  │  Links browser, reader, highlights,  │                 │
+│             │         │  │  grocery list, expenses, job tracker  │                 │
+└─────────────┘         │  └──────────────────────────────────────┘                 │
+                        └───────────────────────────────────────────────────────────┘
 ```
 
 ### Message Flow
@@ -558,9 +565,37 @@ her-go/
 │   ├── push.go          # Local → D1 sync
 │   ├── pull.go          # D1 → local sync
 │   └── merge.go         # Smart merge with embedding-based dedup
+├── webapp/              # (v0.8+) Telegram Mini Apps server
+│   ├── server.go        # HTTP server, routes, initData HMAC validation
+│   ├── templates/       # Go html/template files
+│   │   ├── base.html    # Shared layout (dark mode, Telegram theme vars)
+│   │   ├── list.html    # Generic list view (grocery, tasks)
+│   │   └── cards.html   # Card grid view (links, highlights)
+│   ├── static/
+│   │   ├── style.css    # CSS using Telegram theme variables
+│   │   └── app.js       # Shared JS (SDK init, sendData helpers)
+│   └── handlers/        # Per-feature HTTP handlers
+├── shutter/             # (v0.9+) Mini Shutter content distillation
+│   └── shutter.go       # URL fetch + goquery extraction + LLM summarization
+├── links/               # (v0.9+) Link collection, highlights, reader
+│   ├── links.go         # CRUD, tagging, search, serendipity
+│   ├── highlights.go    # Highlight storage, text anchors, photo highlights
+│   └── import.go        # Raindrop CSV import
+├── tools/               # (v1.0+) Daily life tools
+│   ├── expenses.go      # Receipt scanning + expense tracking
+│   ├── grocery.go       # Grocery list management
+│   ├── jobs.go          # Job application tracker
+│   ├── journal.go       # Auto-journaling (end-of-day narratives)
+│   ├── sandbox.go       # Local code execution sandbox
+│   └── transit.go       # Transit / directions lookup
+├── index/               # (v1.1+) External data source indexing
+│   ├── obsidian.go      # Obsidian vault watcher + FTS indexer
+│   ├── email.go         # IMAP sync + email search
+│   └── kiwix.go         # Kiwix local Wikipedia client
 ├── her-health/          # (future) Swift CLI for optional HealthKit bridge
 │   ├── main.swift       # Read/write Apple Health data as JSON
 │   └── Makefile         # Build the Swift binary
+├── thumbnails/          # (v0.9+, gitignored) Cached link thumbnails
 ├── prompt.md            # Base system prompt (static, user-authored, hot-reloadable)
 ├── persona.md           # Evolving personality (bot-authored, versioned in DB)
 ├── config.yaml          # Configuration (gitignored)
@@ -775,7 +810,58 @@ CREATE TABLE mood_entries (
 
 **Future: Apple HealthKit bridge (v0.6+, optional).** A thin Swift CLI tool (`her-health`) that bridges mood data to/from Apple Health, and pulls in additional signals like sleep duration, step count, and active energy. This enables Mira to notice correlations ("you always feel rough after short sleep nights") but is not required for mood tracking to work. See `her-health/` in the project structure.
 
-**Result:** Mira is aware of your tasks, your weather, your notes, and your wellbeing. She reaches out instead of waiting. She has buttons.
+#### Morning Briefing
+
+A scheduled recurring message (uses existing scheduler system) that makes Mira feel like she's thinking about you when you're not talking.
+
+**Contents:**
+- Weather via Open-Meteo (no API key needed — already available from weather integration)
+- Reminders and tasks due today (from Todoist integration)
+- Follow-ups from yesterday (proactive follow-up system, below)
+- Optionally: a saved link you never read, a mood trend note
+
+**Implementation:** A scheduled job that assembles context from existing tools (weather, Todoist, facts) and sends a conversational morning message. Not a dashboard dump — Mira writes it naturally.
+
+#### Medication Check-In
+
+A gentle evening ping: "hey, how are you feeling today?" — with awareness of medication schedule as context.
+
+- Knows med schedule as facts (stored via normal conversation, not a special schema)
+- Logs mood/side-effects as structured data over time
+- Timeline you can show your psychiatrist: mood + medication correlation view
+- Uses the same inline keyboard pattern as mood check-ins for quick responses
+- Future: HealthKit sync for medication reminders on phone
+
+#### Sleep Tracking (Passive)
+
+Infer approximate sleep/wake patterns from conversation timestamps — no hardware needed.
+
+- Last message of the day → first message of the next day = approximate sleep window
+- Stored as derived facts, not a separate table (keeps the schema simple)
+- Combine with mood check-ins → sleep-mood correlation data
+- Mira can notice patterns: "you've been going to bed later this week" or "you seem to feel better after 8+ hours"
+
+#### Proactive Follow-Ups
+
+Scan recent high-importance facts for things worth following up on. Uses existing scheduler + fact retrieval.
+
+- Job interview tomorrow → "good luck today" morning message
+- Mentioned feeling rough → check in next day
+- Started a new medication → ask how it's going after a few days
+- **Damping matters** — not annoying, just attentive. Max 1-2 proactive messages per day outside of scheduled check-ins.
+- Implementation: a periodic job scans facts with `importance >= 7` and `timestamp` within the last 48 hours, feeds them to the LLM with a "should I follow up on any of these?" prompt
+
+#### Location-Aware Context
+
+Telegram location sharing → Mira knows where you are. Context, not tracking.
+
+- User shares location via Telegram → stored as a transient fact
+- Library = work mode context, near a store = surface grocery list
+- Log locations as context, let the orchestrator learn relevance over time
+- **Not GPS tracking** — only when you explicitly share. Mira never asks for location.
+- Implementation: handle `tele.OnLocation` in the bot, store as a fact with `category='location'` and short TTL
+
+**Result:** Mira is aware of your tasks, your weather, your notes, your medication, your sleep patterns, and your wellbeing. She reaches out instead of waiting. She follows up on things that matter. She has buttons.
 
 ### v0.7 — She Remembers Everywhere (Future)
 
@@ -879,16 +965,514 @@ sync:
 
 **Result:** Mira's memory is durable and portable. Start chatting on your Mac Mini, pick up on your laptop. Facts, personality, and mood history travel with her. Raw conversations stay private on the originating machine.
 
+### v0.8 — She Has a Face (Future)
+
+Mira gets a visual interface via Telegram Mini Apps — web pages rendered inside the Telegram chat window.
+
+#### Telegram Mini Apps Infrastructure
+
+Telegram Mini Apps (officially "Mini Apps", formerly "Web Apps") are regular HTTPS web pages opened in Telegram's built-in WebView. The bot sends a button with a `web_app` URL, and Telegram opens it as an in-app browser. No separate app install needed.
+
+**How it works:**
+```
+Bot sends InlineKeyboardButton with WebAppInfo{URL: "https://..."}
+  → User taps button
+  → Telegram opens URL in built-in WebView
+  → Web page loads, calls Telegram.WebApp.ready()
+  → User interacts with the page
+  → Page sends data back via Telegram.WebApp.sendData() or HTTP API calls
+  → Bot receives web_app_data update (for sendData) or handles API directly
+```
+
+**Tech stack:**
+- Go's `net/http` serves the Mini App pages (HTML/CSS/JS) from the Mac Mini
+- HTTPS via Cloudflare Tunnel (already planned for production in v0.3)
+- JS SDK: `<script src="https://telegram.org/js/telegram-web-app.js"></script>`
+- Server-side auth: validate `initData` HMAC signature using bot token
+- No frontend framework required — vanilla HTML/JS for v0.8, consider Svelte for complex views later
+
+**Key JS SDK methods:**
+
+| Method | Purpose |
+|---|---|
+| `Telegram.WebApp.ready()` | Signal to Telegram that the app has loaded |
+| `Telegram.WebApp.expand()` | Expand WebView to full screen height |
+| `Telegram.WebApp.close()` | Close the Mini App |
+| `Telegram.WebApp.sendData(string)` | Send up to 4096 bytes back to the bot |
+| `Telegram.WebApp.MainButton` | Configurable primary action button at bottom |
+| `Telegram.WebApp.initData` | URL-encoded user data + HMAC for server-side validation |
+
+**Go server structure:**
+```
+webapp/
+├── server.go          # HTTP server, routes, initData validation
+├── templates/         # HTML templates (Go html/template)
+│   ├── base.html      # Shared layout (dark mode, Telegram theme vars)
+│   ├── list.html      # Generic list view (grocery, tasks, etc.)
+│   └── cards.html     # Card grid view (links, highlights)
+├── static/
+│   ├── style.css      # Minimal CSS, uses Telegram theme CSS variables
+│   └── app.js         # Shared JS (SDK init, sendData helpers)
+└── handlers/          # Per-feature HTTP handlers
+```
+
+**Milestone tasks:**
+- [ ] `webapp/server.go` — HTTP server with Telegram `initData` HMAC validation
+- [ ] Base HTML template with Telegram theme CSS variables (`var(--tg-theme-bg-color)`, etc.)
+- [ ] Dark mode support using Telegram's native theme detection
+- [ ] `Telegram.WebApp.ready()` / `expand()` integration in base template
+- [ ] First Mini App: a simple "About Mira" page (proves the pipeline works end-to-end)
+- [ ] Bot command `/app` that sends an inline keyboard button opening the Mini App
+- [ ] Server-rendered first page for fast initial paint (no SPA loading spinner)
+
+**Official docs:** https://core.telegram.org/bots/webapps | https://docs.telegram-mini-apps.com
+
+**Result:** Mira can show you visual interfaces inside Telegram. The infrastructure is ready for links, grocery lists, highlights, dashboards, and anything else that benefits from a real UI.
+
+### v0.9 — She Collects (Future)
+
+Mira becomes your personal collection system — save links, read articles, highlight passages, capture book quotes. Inspired by MyMind's zero-friction capture, Etch's intentional curation, and Readwise Reader's highlighting. Chat is the capture layer, Telegram Mini Apps are the browse/read layer.
+
+#### Mini Shutter — Content Distillation
+
+Before Mira can save and understand web content, she needs a way to fetch URLs and extract clean, relevant content. Mini Shutter is a lightweight, in-process version of the [Shutter](https://github.com/AutumnsGrove/Shutter) content distillation pattern, adapted for Mira's use case.
+
+**The pattern:** Fetch URL → cheap/fast LLM extracts relevant content → clean result. Raw web pages never bloat Mira's context.
+
+```
+User sends URL
+  → Mini Shutter fetches the page (net/http + goquery for HTML parsing)
+  → Raw HTML → goquery strips nav/ads/chrome → clean text
+  → Clean text + extraction query → cheap LLM (fast model via OpenRouter)
+  → Structured result: title, author, content type, clean markdown, summary
+  → Result stored in links table, never raw HTML
+```
+
+**Why not just use the full Shutter service?**
+- Mira runs fully local — no external service dependency for content extraction
+- Simpler: no canary/PI detection needed (Mira controls the fetch, not an untrusted agent)
+- Same core idea: cheap LLM as a compression layer between raw web and expensive processing
+
+**Content-type classification:** The extraction LLM classifies each URL into a content type, which drives what metadata to extract:
+
+| Type | Extracted Metadata |
+|---|---|
+| `article` | title, author, reading time, clean text as markdown |
+| `recipe` | title, ingredients, cook time, cuisine, steps |
+| `repo` | name, description, language, stars (from GitHub API or page) |
+| `video` | title, channel, duration, transcript (if available) |
+| `product` | name, price, brand, image URL |
+| `book` | title, author, ISBN, description |
+| `social` | author, content, platform |
+| `pdf` | title, extracted text (via local PDF parsing) |
+| `other` | title, summary, clean text |
+
+**Implementation:** `shutter/shutter.go` — a single package with `Fetch(url, query) → ShutterResult`.
+
+**Dependencies:**
+- `github.com/PuerkitoBio/goquery` — jQuery-style HTML parsing for content extraction
+- OpenRouter (same client as chat LLM) with a fast/cheap model for extraction
+
+#### Link Saving
+
+**Retrieval architecture: links are a resource, not context.** Links live behind tools (`search_links`, `get_link`), never injected into the prompt like facts. The orchestrator queries the local index on demand and only pulls relevant results into that single turn. This keeps context lean — link data never bloats the prompt assembly.
+
+**Smart intake.** Send Mira a URL → agent triggers Mini Shutter for fetch + content extraction. Classification drives metadata extraction. Store extracted text as markdown (not raw HTML) — stable format for highlighting, searching, exporting.
+
+**Auto-tagging with your vocabulary.** On save, Mira suggests 2-3 tags based on content AND your existing tag history. Conversational confirmation: "Saved! Looks like a dev-tools article. Tagged `go` and `tooling`. Add to a collection?" Learns your taxonomy over time.
+
+**`source_message_id` on every link.** Links back to the conversation where you saved it. Mira can always tell you the *context* of why you saved something.
+
+**Raindrop import.** Export Raindrop CSV (URL, title, description, tags, collection, date). One-time import script maps collections to tags, preserves all existing tags, then batch-runs Mini Shutter extraction + embedding. Jumpstarts the entire collection from day one.
+
+**Serendipity.** Mira occasionally surfaces a random or contextually relevant saved link. Morning briefing: "you saved this 3 weeks ago and never read it." Mid-conversation: "you mentioned Durable Objects — you saved a blog post about DO patterns in January."
+
+**New schema:**
+```sql
+-- Saved links / collection
+CREATE TABLE links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL UNIQUE,
+    title TEXT,
+    content_type TEXT,           -- 'article', 'recipe', 'repo', 'video', etc.
+    content_markdown TEXT,       -- clean extracted text as markdown
+    summary TEXT,                -- short summary from Mini Shutter
+    metadata JSON,               -- content-type-specific fields (author, cook_time, etc.)
+    tags TEXT,                   -- comma-separated or JSON array
+    thumbnail_path TEXT,         -- locally cached thumbnail
+    source_message_id INTEGER,  -- which conversation prompted the save
+    read BOOLEAN DEFAULT 0,     -- has the user opened it in reader view?
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_message_id) REFERENCES messages(id)
+);
+
+-- FTS5 index for keyword search on links
+CREATE VIRTUAL TABLE links_fts USING fts5(
+    title, content_markdown, summary, tags,
+    content='links', content_rowid='id'
+);
+
+-- Highlights from reading
+CREATE TABLE highlights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    link_id INTEGER NOT NULL,
+    text TEXT NOT NULL,            -- the highlighted passage
+    text_before TEXT,              -- anchor context (for re-anchoring if content shifts)
+    text_after TEXT,               -- anchor context
+    color TEXT DEFAULT 'yellow',   -- highlight color (2-3 options)
+    note TEXT,                     -- optional user annotation
+    photo_path TEXT,               -- for book highlights: path to the source photo
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (link_id) REFERENCES links(id) ON DELETE CASCADE
+);
+
+-- FTS5 index for highlight text search
+CREATE VIRTUAL TABLE highlights_fts USING fts5(
+    text, note,
+    content='highlights', content_rowid='id'
+);
+```
+
+**Semantic search.** Every link embedded at ingest (extracted text + summary). Query: "that article about memory systems in Go" → embed query → cosine similarity → results. FTS5 for keyword fallback. Uses the same `sqlite-vec` infrastructure from v0.4.
+
+#### Reader View (Telegram Mini App)
+
+Clean rendered markdown with good typography, dark mode, comfortable margins. This is where highlighting lives.
+
+**Highlighting flow:**
+- Text selection → floating toolbar → pick color (2-3 options), optional note, done
+- On mobile: long-press → selection → toolbar pattern
+- Highlights sent back to Go server via Mini App messaging bridge (`Telegram.WebApp.sendData()` or HTTP POST)
+- Stored with text anchors (`text_before` + `text` + `text_after`) for re-anchoring if content shifts
+
+#### Collection Browser (Telegram Mini App)
+
+MyMind-style card grid served from Mac Mini. `/links` command opens it.
+
+- Thumbnails cached locally during Mini Shutter extraction for instant load
+- Server-rendered first page for fast initial paint
+- Search bar with keystroke-debounced FTS
+- Filter by tag, content type, date
+- Tap card → reader view
+- Star, tag, delete inline
+
+#### Book Highlights via Photos
+
+Send Mira a photo of a physical book page, Kindle screen, any reading surface. Say "save a highlight from [book name]."
+
+1. OCR the photo to extract text (Tesseract via `github.com/otiai10/gosseract/v2`, or CLI fallback)
+2. Look up the book via search tool, save/find it in the collection
+3. Save extracted text as a highlight linked to that book
+4. Save the original photo with its own embedding (visual search)
+5. Result: the book entry accumulates highlights from multiple photos over time
+
+#### Visual Highlight Board (Telegram Mini App)
+
+`/highlights [book name]` or "show me my highlights from [book]" opens a dynamic masonry/Pinterest-style mood board. Mixes the original photos (of pages, screens, physical text) with extracted text blocks. Visual + textual together. Browseable, searchable, beautiful.
+
+**Commands:**
+- `/save [url]` — explicit save (also triggered by just sending a URL)
+- `/links` — opens collection browser Mini App
+- `/read [url]` — opens specific link in reader view
+- `/highlights` — opens highlights-only view
+- `/highlights [book]` — opens highlight board for a specific book
+
+**New config:**
+```yaml
+shutter:
+  extraction_model: "deepseek/deepseek-chat"  # cheap/fast model for content extraction
+  max_extract_tokens: 500
+  timeout_ms: 30000
+
+links:
+  thumbnail_dir: "./thumbnails/"    # locally cached thumbnails
+  auto_tag: true                    # suggest tags on save
+  serendipity: true                 # occasionally surface old links
+  raindrop_import_path: ""          # path to Raindrop CSV for one-time import
+
+ocr:
+  engine: "gosseract"               # "gosseract" (CGo/Tesseract) or "cli" (tesseract CLI)
+  tesseract_path: ""                # only needed for CLI mode
+```
+
+**Dependencies:**
+- `github.com/PuerkitoBio/goquery` — HTML parsing for Mini Shutter content extraction
+- `github.com/otiai10/gosseract/v2` — OCR for book highlight photos (requires `tesseract-ocr` system package)
+
+**Result:** Mira is your personal collection system. Save links by sending them in chat, read them in a clean reader view, highlight the important parts, capture book quotes with photos. Everything searchable, everything connected to the conversation where you saved it.
+
+### v1.0 — She Helps (Future)
+
+Mira gains a suite of practical daily-life tools. Each follows the standard pattern: new SQLite table + new agent tool + scrub pipeline as gateway.
+
+#### Receipt Scanner
+
+Photo → local OCR → structured expense data.
+
+- Send Mira a photo of a receipt
+- OCR extracts text (same Tesseract infrastructure as book highlights in v0.9)
+- LLM parses extracted text into: amount, vendor, date, category
+- Stored in `expenses` table
+- "How much did I spend this week?" → she knows
+- Feeds into Financial Pulse (below)
+
+```sql
+CREATE TABLE expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount REAL NOT NULL,
+    vendor TEXT,
+    category TEXT,               -- 'groceries', 'dining', 'transport', etc.
+    date DATE,
+    note TEXT,
+    source_message_id INTEGER,   -- photo message that triggered this
+    photo_path TEXT,              -- original receipt photo
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_message_id) REFERENCES messages(id)
+);
+```
+
+#### Financial Pulse
+
+A lightweight awareness layer on top of receipt scanner data — not a full budgeting app.
+
+- Running weekly totals by category
+- "How am I doing this month?" → real answer with category breakdown
+- Simple trend detection: "you've spent more on dining this week than usual"
+- Mini App dashboard view (uses v0.8 infrastructure): bar charts by category, weekly/monthly view
+- No bank account integration — just what you photograph
+
+#### Grocery List
+
+A running list maintained in SQLite, managed through chat.
+
+- "Add oat milk" throughout the week → added to list
+- "What's on my list?" when heading to the store → formatted response
+- Can decompose recipe links (from v0.9 collection) into ingredient lists
+- Mini App view: tap-to-check-off list, swipe to delete
+- Location-aware (v0.6): if Mira knows you're near a store, she can proactively surface the list
+
+```sql
+CREATE TABLE grocery_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item TEXT NOT NULL,
+    quantity TEXT,                -- "2", "1 lb", etc.
+    category TEXT,               -- 'produce', 'dairy', 'pantry', etc.
+    checked BOOLEAN DEFAULT 0,
+    source_link_id INTEGER,      -- if decomposed from a recipe link
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_link_id) REFERENCES links(id)
+);
+```
+
+#### Job Search Copilot
+
+Track job applications through conversation. Replaces the standalone job tracker CLI.
+
+- `log_application` tool — company, role, date, status
+- "What applications are still pending?" → live view
+- Auto follow-up reminders: "you applied to Sam's Club 5 days ago, want to follow up?"
+- Status transitions: applied → interviewing → offered → accepted/rejected
+- Mini App view: Kanban-style board by status
+
+```sql
+CREATE TABLE job_applications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company TEXT NOT NULL,
+    role TEXT NOT NULL,
+    status TEXT DEFAULT 'applied',  -- 'applied', 'interviewing', 'offered', 'accepted', 'rejected', 'withdrawn'
+    applied_date DATE,
+    last_update DATE,
+    notes TEXT,
+    source_message_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_message_id) REFERENCES messages(id)
+);
+```
+
+#### Auto-Journaling
+
+End-of-day narrative summary generated from the day's conversations.
+
+- Not a transcript — a journal entry written by Mira
+- "Today you spent the morning at the library working on Grove, then grabbed lunch at the Thai place..."
+- Stored as daily entries, searchable, browsable via Mini App
+- Uses existing conversation history + extracted facts + mood data
+- Scheduled job at end of day (configurable time, default 10pm)
+
+```sql
+CREATE TABLE journal_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date DATE NOT NULL UNIQUE,
+    content TEXT NOT NULL,        -- markdown narrative
+    mood_summary TEXT,            -- overall mood trend for the day
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### Local Code Execution Sandbox
+
+Write and run small scripts to answer concrete questions.
+
+- "What's 347 days from today?" → Mira writes a 3-line Go script → runs it → returns the answer
+- Write Go or Python to a temp directory, execute, return stdout
+- Full local access on Mac Mini, no cloud needed
+- Sandboxed: temp directory, timeout (10s default), no network access from sandbox
+- Agent tool: `run_code(language, code) → stdout/stderr`
+
+#### Local Transit / Directions
+
+"How do I get to IEC Atlanta from the library?" → answer inline.
+
+- Google Maps Directions API or free alternative (Open Source Routing Machine / OSRM)
+- ETAs, route options, transit vs. driving vs. walking
+- Uses configured home location from v0.6 weather setup
+- Agent tool: `get_directions(from, to, mode) → route summary`
+
+#### Weather (Enhanced)
+
+Builds on v0.6's weather integration with richer queries.
+
+- Standalone queries: "will it rain tomorrow?" → detailed forecast
+- Multi-day forecasts, hourly breakdowns
+- Severe weather alerts
+- Already available in v0.6 for morning briefing — this adds direct query support as an agent tool
+
+**Result:** Mira is genuinely useful for daily life. She tracks your spending, manages your grocery list, follows your job search, writes your journal, runs quick calculations, and gives you directions. Every tool follows the same pattern: SQLite table + agent tool + chat interface + optional Mini App view.
+
+### v1.1 — She Reads Your World (Future)
+
+Mira gains the ability to index and search external data sources beyond the chat window.
+
+#### Obsidian Vault Index (Enhanced)
+
+Builds on v0.6's basic Obsidian integration with real-time indexing and semantic search.
+
+- `github.com/fsnotify/fsnotify` file watcher detects changes in vault folder
+- Parse YAML frontmatter and tags, index content into SQLite FTS5
+- `search_notes` tool — orchestrator calls when conversation suggests recall
+- Tier 1 scrub still applied (you may have pasted sensitive things into notes)
+- Upgrade path: embed at ingest time for semantic search (uses v0.4 embedding infrastructure)
+
+```sql
+CREATE TABLE obsidian_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL UNIQUE,       -- relative path within vault
+    title TEXT,
+    content TEXT,                    -- raw markdown content
+    frontmatter JSON,               -- parsed YAML frontmatter
+    tags TEXT,                       -- extracted tags (JSON array)
+    last_modified DATETIME,
+    indexed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE VIRTUAL TABLE obsidian_fts USING fts5(
+    title, content, tags,
+    content='obsidian_notes', content_rowid='id'
+);
+```
+
+**New dependency:** `github.com/fsnotify/fsnotify` — cross-platform filesystem event watcher
+
+#### Email (IMAP Sync)
+
+Local IMAP sync → SQLite for metadata-first email search.
+
+- Sync email locally via IMAP — store metadata + raw body in SQLite
+- `search_email` tool — metadata-first retrieval (FTS on subject/sender/date)
+- **Stricter scrub pass than personal messages** — other people's PII gets Tier 2 tokenization, not Tier 3 passthrough
+- Optional: pre-generate scrubbed thread summaries at sync time, query summaries first, drill into raw only when needed
+- Periodic background sync (configurable interval)
+
+```sql
+CREATE TABLE emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,  -- IMAP Message-ID header
+    folder TEXT,                      -- 'INBOX', 'Sent', etc.
+    from_addr TEXT,
+    to_addr TEXT,
+    subject TEXT,
+    body_text TEXT,                   -- plain text body
+    body_scrubbed TEXT,               -- PII-scrubbed version for LLM context
+    date DATETIME,
+    flags TEXT,                       -- JSON array: 'seen', 'flagged', etc.
+    thread_id TEXT,                   -- for thread grouping
+    synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE VIRTUAL TABLE emails_fts USING fts5(
+    subject, body_text, from_addr,
+    content='emails', content_rowid='id'
+);
+```
+
+**New dependency:** `github.com/emersion/go-imap/v2` — IMAP4rev2 client (struct-based API, actively maintained)
+
+**New config:**
+```yaml
+email:
+  enabled: false
+  imap_server: ""                # e.g. "imap.gmail.com:993"
+  username: ""
+  password: "${EMAIL_PASSWORD}"  # app-specific password for Gmail
+  sync_folders: ["INBOX"]
+  sync_interval_minutes: 30
+  max_messages: 1000             # initial sync limit
+```
+
+#### Kiwix (Local Wikipedia)
+
+A local Wikipedia instance for offline knowledge lookup — the bot can reference Wikipedia without any internet dependency.
+
+- Run `kiwix-serve` locally with a Wikipedia ZIM file
+- Search via `/suggest` endpoint (returns JSON): `GET http://localhost:8080/suggest?pattern=<query>&count=10`
+- Full article retrieval via direct URL path from kiwix-serve
+- Embed articles **on first retrieval**, cache the embedding — vector index grows organically around topics you actually care about
+- Avoids the terabyte-of-vectors-upfront problem
+
+**Kiwix setup:**
+```bash
+# Install kiwix-serve
+brew install kiwix-tools
+
+# Download Wikipedia (nopic = full text, no images, ~45GB for English)
+# Or use mini (~1.5GB) for just article intros
+curl -O https://download.kiwix.org/zim/wikipedia/wikipedia_en_all_nopic_YYYY-MM.zim
+
+# Run locally
+kiwix-serve --port 8080 /path/to/wikipedia.zim
+```
+
+**API endpoints used:**
+- `/suggest?pattern=X&count=10` → JSON array of title suggestions (machine-readable)
+- `/search?pattern=X` → HTML results page (parse with goquery if needed)
+- `/<book-id>/<article-path>` → full article HTML
+
+**New config:**
+```yaml
+kiwix:
+  enabled: false
+  url: "http://localhost:8080"
+  embed_on_retrieve: true        # cache embeddings for retrieved articles
+```
+
+**Result:** Mira can search your notes, your email, and Wikipedia — all locally, all private. External data sources become part of her awareness without leaving the machine.
+
 ---
 
 ## Dependencies (Go Modules)
 
-| Package | Purpose |
-|---|---|
-| `gopkg.in/telebot.v4` | Telegram bot framework |
-| `github.com/mattn/go-sqlite3` | SQLite driver (CGo) |
-| `gopkg.in/yaml.v3` | Config parsing |
-Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). Memory system is custom. PII scrubber is custom-built with tiered regex patterns — no external dependency needed for the scope of detection we're doing.
+| Package | Purpose | Since |
+|---|---|---|
+| `gopkg.in/telebot.v4` | Telegram bot framework | v0.1 |
+| `github.com/mattn/go-sqlite3` | SQLite driver (CGo) | v0.1 |
+| `gopkg.in/yaml.v3` | Config parsing | v0.1 |
+| `github.com/PuerkitoBio/goquery` | jQuery-style HTML parsing (Mini Shutter content extraction) | v0.9 |
+| `github.com/otiai10/gosseract/v2` | Tesseract OCR bindings (book highlights, receipt scanning) | v0.9 |
+| `github.com/fsnotify/fsnotify` | Filesystem event watcher (Obsidian vault indexing) | v1.1 |
+| `github.com/emersion/go-imap/v2` | IMAP4rev2 client (email sync) | v1.1 |
+
+Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). Memory system is custom. PII scrubber is custom-built with tiered regex patterns — no external dependency needed for the scope of detection we're doing. New dependencies are added only when they solve a problem that can't be reasonably hand-rolled (CGo bindings, protocol implementations).
 
 ---
 
@@ -900,4 +1484,10 @@ Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). 
 - **PII vault** (token↔original mappings) is stored locally and never transmitted
 - **Telegram bot token** has access only to messages sent directly to the bot
 - **No telemetry, no analytics, no external logging** — everything is local
-- The only external network calls are: Telegram API (receiving/sending messages) and OpenRouter API (LLM inference — with hard identifiers stripped and contact info tokenized; names and conversational context are sent intact for coherence)
+- The only external network calls are: Telegram API (receiving/sending messages), OpenRouter API (LLM inference — with hard identifiers stripped and contact info tokenized; names and conversational context are sent intact for coherence), and optionally: Todoist, GitHub, IMAP, weather, and transit APIs
+- **Email content** gets stricter scrubbing than personal messages — other people's PII is Tier 2 tokenized, not Tier 3 passthrough
+- **Mini Shutter fetches** are outbound HTTP to URLs the user explicitly provides — no background crawling
+- **Saved links, highlights, receipts, and journal entries** all live in the same local SQLite database — same privacy guarantees as messages
+- **Mini Apps** are served over HTTPS from the same Mac Mini — no third-party hosting. The WebView communicates only with your own server
+- **Thumbnails** are cached locally, never uploaded anywhere
+- **Kiwix** runs entirely local — Wikipedia lookups never leave the machine
