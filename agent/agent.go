@@ -211,8 +211,10 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// Build the context message for the agent.
-	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "")
+	// Build the context message for the agent. We pass the current
+	// time and timezone so the agent can convert natural language times
+	// to ISO timestamps for create_reminder.
+	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.Cfg.Scheduler.Timezone)
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile)
@@ -383,8 +385,18 @@ func Run(params RunParams) (*RunResult, error) {
 // references like "it", "that book", "what you said earlier". This was the
 // cause of the wrong-search-term bug where the agent searched for AI realism
 // instead of The Martian's realism.
-func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool) string {
+func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, timezone string) string {
 	var b strings.Builder
+
+	// Current date/time — the agent needs this to convert natural
+	// language times ("in 2 hours", "tomorrow at 3pm") to absolute
+	// ISO timestamps for create_reminder.
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+	fmt.Fprintf(&b, "## Current Time\n\n%s (timezone: %s)\n\n", now.Format("2006-01-02T15:04:05 (Monday)"), loc.String())
 
 	// Recent conversation history — gives the agent context for references.
 	if len(history) > 0 {

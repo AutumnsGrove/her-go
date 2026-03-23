@@ -6,7 +6,6 @@ require (
 	github.com/charmbracelet/log v1.0.0
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/spf13/cobra v1.10.2
-	github.com/tj/go-naturaldate v1.3.0
 	gopkg.in/telebot.v4 v4.0.0-beta.7
 	gopkg.in/yaml.v3 v3.0.1
 )
