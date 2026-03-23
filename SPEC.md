@@ -232,14 +232,30 @@ CREATE TABLE pii_vault (
     FOREIGN KEY (message_id) REFERENCES messages(id)
 );
 
--- Reminders / scheduled messages
-CREATE TABLE reminders (
+-- Scheduled tasks (one-shot reminders, recurring cron jobs, conditional checks)
+CREATE TABLE scheduled_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,                        -- human-readable label ("morning briefing", "remind: call dentist")
+    schedule_type TEXT NOT NULL,      -- 'once', 'recurring', 'conditional'
+    cron_expr TEXT,                   -- cron expression for recurring (e.g. "0 8 * * *")
+    trigger_at DATETIME,             -- for one-shot tasks: when to fire
+    task_type TEXT NOT NULL,          -- 'send_message', 'run_prompt', 'mood_checkin', 'medication_checkin'
+    payload JSON NOT NULL,           -- task-type-specific config (message text, prompt, checkin config, etc.)
+    enabled BOOLEAN DEFAULT 1,
+    last_run DATETIME,
+    next_run DATETIME,               -- precomputed next execution time (indexed for fast polling)
+    run_count INTEGER DEFAULT 0,
+    max_runs INTEGER,                -- NULL = unlimited, 1 = one-shot (auto-disable after)
+    created_by TEXT DEFAULT 'user',  -- 'user', 'system', 'agent'
+    source_message_id INTEGER,       -- conversation that created this task
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    trigger_at DATETIME NOT NULL,
-    message TEXT NOT NULL,
-    delivered BOOLEAN DEFAULT 0
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_message_id) REFERENCES messages(id)
 );
+
+-- Index for the scheduler polling loop
+CREATE INDEX idx_scheduled_tasks_next_run ON scheduled_tasks(next_run)
+    WHERE enabled = 1;
 
 -- Persona version history
 CREATE TABLE persona_versions (
@@ -361,8 +377,200 @@ The system prompt is assembled from multiple layers at each LLM call:
 
 ### 6. Scheduler (`scheduler/`)
 
-- In-process goroutine for timed events (v0.6+: mood check-ins, proactive messaging)
-- Reminders handled via Todoist integration (v0.6) rather than custom infrastructure
+**Mira's internal cron system.** A goroutine-based task runner that powers all of Mira's proactive behavior — reminders, morning briefings, mood check-ins, medication check-ins, proactive follow-ups, auto-journaling, and anything else that needs to happen on a schedule.
+
+#### Design Philosophy
+
+The scheduler is a **dumb executor with a smart payload**. It doesn't know what a morning briefing is or how mood check-ins work. It knows how to:
+1. Wake up every minute
+2. Find tasks where `next_run <= now`
+3. Execute them by type
+4. Compute the next run time
+
+All the intelligence lives in the task payloads and the agent pipeline. The most powerful task type is `run_prompt` — it sends a prompt through the full agent pipeline, which means any scheduled task can do anything the agent can do. Morning briefing? A scheduled `run_prompt` with "Generate a morning briefing with weather, tasks, and follow-ups." The scheduler doesn't need to understand briefings — the agent does.
+
+#### Three Types of Scheduled Work
+
+**1. One-shot (`once`)** — fire at a specific time, then auto-disable.
+```
+"remind me to call the dentist at 3pm"
+  → schedule_type: 'once'
+  → trigger_at: '2026-03-22 15:00:00'
+  → task_type: 'send_message'
+  → payload: {"message": "Hey — you wanted to call the dentist!"}
+  → max_runs: 1
+```
+
+**2. Recurring (`recurring`)** — fire on a cron schedule, indefinitely or N times.
+```
+"check in on my mood every evening at 9pm"
+  → schedule_type: 'recurring'
+  → cron_expr: '0 21 * * *'
+  → task_type: 'mood_checkin'
+  → payload: {"style": "gentle", "follow_up": true}
+  → max_runs: NULL (forever)
+```
+
+**3. Conditional (`conditional`)** — fire on a cron schedule, but only execute if a condition is met. The condition is evaluated by the agent at runtime.
+```
+"follow up on important things from yesterday"
+  → schedule_type: 'conditional'
+  → cron_expr: '0 9 * * *'
+  → task_type: 'run_prompt'
+  → payload: {
+      "prompt": "Scan facts from the last 48 hours with importance >= 7. If any warrant a follow-up, send a brief, warm check-in. If nothing stands out, do nothing.",
+      "condition": "has_important_recent_facts"
+    }
+```
+
+The difference between `recurring` and `conditional`: recurring always fires, conditional evaluates a check first and skips silently if the condition isn't met. This prevents Mira from sending empty "nothing to report" messages.
+
+#### Built-in Task Types
+
+| Task Type | What It Does | Payload Fields |
+|---|---|---|
+| `send_message` | Send a plain text message to the user | `message` (string) |
+| `run_prompt` | Run a prompt through the full agent pipeline — the agent can use all its tools (weather, Todoist, facts, search, etc.) and generates a natural response | `prompt` (string), `condition` (optional string) |
+| `mood_checkin` | Send a mood check-in with Telegram inline keyboard | `style` ("gentle"/"direct"), `follow_up` (bool) |
+| `medication_checkin` | Send a medication check-in message | `medications` (list), `time_of_day` ("morning"/"evening") |
+| `run_extraction` | Trigger fact extraction on recent messages | `message_count` (int) |
+| `run_journal` | Generate an auto-journal entry for the day | `style` ("narrative"/"bullet") |
+
+**`run_prompt` is the escape hatch.** If a feature needs scheduled behavior that doesn't fit a built-in type, it can always be expressed as a `run_prompt`. The agent is the universal executor.
+
+#### The Runner
+
+```go
+// scheduler.go — simplified
+func (s *Scheduler) Run(ctx context.Context) {
+    ticker := time.NewTicker(1 * time.Minute)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            s.tick()
+        }
+    }
+}
+
+func (s *Scheduler) tick() {
+    // 1. Query: SELECT * FROM scheduled_tasks WHERE enabled = 1 AND next_run <= NOW()
+    // 2. For each task: execute by task_type
+    // 3. Update: last_run = NOW(), run_count++, compute next_run
+    // 4. If max_runs != NULL && run_count >= max_runs: set enabled = 0
+}
+```
+
+Uses `github.com/robfig/cron/v3` for parsing cron expressions and computing `next_run`. The scheduler itself is just a `time.Ticker` — robfig/cron handles the expression parsing, not the scheduling loop. This keeps the runner dead simple and all state in SQLite (survives restarts).
+
+**Timezone handling:** Cron expressions are evaluated in the user's local timezone (configured in `config.yaml`). robfig/cron supports `cron.WithLocation(loc)` for this. One-shot `trigger_at` timestamps are stored as UTC internally, displayed in local time.
+
+**Startup recovery:** On boot, the scheduler scans for any tasks where `next_run` is in the past (missed while the process was down). One-shot tasks that were missed get executed immediately. Recurring tasks just compute their next future run — no backfill of missed executions.
+
+#### Agent Tools
+
+The agent can create, list, and manage scheduled tasks through conversation. These are registered as tools in the agent's tool set.
+
+**`create_reminder`** — Create a one-shot reminder.
+```json
+{
+  "name": "create_reminder",
+  "parameters": {
+    "message": "Call the dentist",
+    "trigger_at": "2026-03-22T15:00:00",
+    "natural_time": "today at 3pm"
+  }
+}
+```
+The agent parses natural language times ("tomorrow morning", "in 2 hours", "next Tuesday at 3pm") and converts to an absolute timestamp. `natural_time` is stored for display purposes.
+
+**`create_schedule`** — Create a recurring or conditional scheduled task.
+```json
+{
+  "name": "create_schedule",
+  "parameters": {
+    "name": "morning briefing",
+    "cron_expr": "0 8 * * *",
+    "task_type": "run_prompt",
+    "payload": {"prompt": "Generate a morning briefing..."},
+    "description": "Every day at 8am"
+  }
+}
+```
+
+**`list_schedules`** — List active scheduled tasks.
+```json
+{
+  "name": "list_schedules",
+  "parameters": {
+    "include_disabled": false
+  }
+}
+```
+Returns a formatted list: name, next run time, schedule description, run count.
+
+**`update_schedule`** — Modify an existing scheduled task (change time, enable/disable, update payload).
+```json
+{
+  "name": "update_schedule",
+  "parameters": {
+    "task_id": 3,
+    "enabled": false
+  }
+}
+```
+
+**`delete_schedule`** — Remove a scheduled task entirely.
+```json
+{
+  "name": "delete_schedule",
+  "parameters": {
+    "task_id": 3
+  }
+}
+```
+
+#### User Commands
+
+- `/remind <time> <message>` — Quick one-shot reminder. "Remind me at 3pm to call the dentist." Parsed by the agent, creates a `send_message` one-shot task.
+- `/schedule` — List all active scheduled tasks with next run times.
+- `/schedule pause <id>` — Disable a scheduled task without deleting it.
+- `/schedule resume <id>` — Re-enable a paused task.
+- `/schedule delete <id>` — Remove a scheduled task.
+
+#### System-Created Defaults
+
+On first run (or when features are enabled in config), Mira creates default scheduled tasks:
+
+| Task | Default Schedule | Task Type | Created When |
+|---|---|---|---|
+| Morning briefing | `0 8 * * *` (8am daily) | `run_prompt` | `scheduler.morning_briefing: true` |
+| Mood check-in | `0 21 * * *` (9pm daily) | `mood_checkin` | `scheduler.mood_checkin: true` |
+| Medication check-in | `0 21 * * *` (9pm daily) | `medication_checkin` | `scheduler.medication_checkin: true` |
+| Proactive follow-ups | `0 9 * * *` (9am daily) | `run_prompt` (conditional) | `scheduler.proactive_followups: true` |
+| Auto-journal | `0 22 * * *` (10pm daily) | `run_journal` | `scheduler.auto_journal: true` |
+| Fact extraction | `@every 30m` | `run_extraction` | Always (core system) |
+
+All defaults can be customized via `/schedule` commands or conversation ("change my morning briefing to 7am"). The user can also disable any default.
+
+#### Damping & Rate Limiting
+
+To prevent Mira from being annoying:
+- **Max proactive messages per day:** Configurable (default: 5). Scheduled tasks that would exceed this limit are silently skipped and rescheduled.
+- **Quiet hours:** Configurable window (default: 11pm–7am) where no scheduled messages are sent. Tasks that fire during quiet hours are deferred to the end of the quiet period.
+- **Conversation-aware:** If the user is actively chatting (message within the last 10 minutes), mood check-ins and other interruptive tasks are deferred by 30 minutes. Reminders always fire on time.
+- **Backoff on no response:** If the user doesn't respond to 3 consecutive mood check-ins, Mira reduces frequency automatically and mentions it: "I noticed you've been skipping check-ins — I'll ease off. Just say 'resume check-ins' whenever."
+
+#### Milestone Phasing
+
+The scheduler is built incrementally:
+
+- **v0.2:** Basic one-shot reminders (`/remind`), `send_message` task type only. Simple ticker loop. The `scheduled_tasks` table is created with the full schema but only `once` + `send_message` is implemented.
+- **v0.6:** Full cron system. Recurring jobs, conditional tasks, `run_prompt` task type, all agent tools, system defaults, damping/rate limiting, quiet hours. This is what powers morning briefings, mood check-ins, medication check-ins, proactive follow-ups.
+- **v1.0:** Auto-journaling task type (`run_journal`). Job follow-up reminders created by the agent automatically.
 
 ### 7. Configuration (`config.yaml`)
 
@@ -445,11 +653,6 @@ To prevent hot/cold personality swings:
 - `/persona` — View current persona.md content
 - `/persona history` — View past persona versions with timestamps
 
-### 6. Scheduler (`scheduler/`)
-
-- In-process goroutine for timed events (v0.6+: mood check-ins, proactive messaging)
-- Reminders handled via Todoist integration (v0.6) rather than custom infrastructure
-
 ### 7. Configuration (`config.yaml`)
 
 ```yaml
@@ -500,6 +703,17 @@ voice:
     kokoro_path: ""            # path to kokoro binary/server
     voice_id: ""               # which voice to use
     reply_mode: "voice"        # "voice" (always voice reply) or "match" (reply in same format as input)
+
+scheduler:
+  timezone: "America/New_York"   # cron expressions evaluated in this timezone
+  quiet_hours_start: "23:00"     # no scheduled messages during this window
+  quiet_hours_end: "07:00"
+  max_proactive_per_day: 5       # cap on non-reminder scheduled messages
+  morning_briefing: false        # enable default morning briefing (8am)
+  mood_checkin: false            # enable default mood check-in (9pm)
+  medication_checkin: false      # enable default medication check-in (9pm)
+  proactive_followups: false     # enable proactive follow-ups (9am, conditional)
+  auto_journal: false            # enable auto-journaling (10pm)
 ```
 
 ---
@@ -536,7 +750,9 @@ her-go/
 ├── logger/
 │   └── logger.go        # Shared charmbracelet/log base logger
 ├── scheduler/
-│   └── scheduler.go     # Reminder checker + delivery
+│   ├── scheduler.go     # Task runner loop (tick every minute, execute due tasks)
+│   ├── tasks.go         # Built-in task type executors (send_message, run_prompt, etc.)
+│   └── cron.go          # Cron expression parsing + next_run computation (wraps robfig/cron)
 ├── config/
 │   └── config.go        # Config loading (YAML + env vars)
 ├── cmd/
@@ -640,8 +856,12 @@ her-go/
 - [ ] `/reflections` command — view recent reflections
 - [ ] `/persona` command — view current persona + history
 - [ ] Layered prompt assembly (prompt.md + persona.md + reflections + facts + history)
+- [ ] Scheduler phase 1: `scheduled_tasks` table, ticker loop, `send_message` task type
+- [ ] `/remind` command — one-shot reminders ("remind me at 3pm to call the dentist")
+- [ ] `create_reminder` agent tool — the agent can set reminders from natural conversation
+- [ ] `/schedule` command — list upcoming reminders
 
-**Result:** The bot remembers things you've told it, and its personality genuinely evolves over time based on your interactions.
+**Result:** The bot remembers things you've told it, its personality genuinely evolves over time, and she can remind you of things at specific times.
 
 ### v0.2.5 — She Sees
 
@@ -720,6 +940,22 @@ You speak → Telegram (.ogg)
 
 Mira becomes proactive and gains awareness of your world beyond the chat window.
 
+#### Scheduler Phase 2: Full Cron System
+
+The basic one-shot scheduler from v0.2 is upgraded to the full system described in Section 6. This is the infrastructure that powers everything else in this milestone.
+
+- [ ] Recurring task support with cron expressions (`github.com/robfig/cron/v3`)
+- [ ] Conditional task support (evaluate before executing, skip silently if no action needed)
+- [ ] `run_prompt` task type — send a prompt through the full agent pipeline on a schedule
+- [ ] `mood_checkin` and `medication_checkin` built-in task types
+- [ ] `run_journal` and `run_extraction` built-in task types
+- [ ] `create_schedule`, `list_schedules`, `update_schedule`, `delete_schedule` agent tools
+- [ ] System-created defaults (morning briefing, mood check-in, etc.) from config
+- [ ] Damping: max proactive messages/day, quiet hours, conversation-aware deferral
+- [ ] Backoff on no-response (auto-reduce frequency after 3 ignored check-ins)
+- [ ] `/schedule pause|resume|delete` commands
+- [ ] Startup recovery (execute missed one-shots, skip missed recurring)
+
 #### Proactive Mood Check-ins
 
 Mira texts YOU on a configurable schedule (every few hours, or at specific times). Uses Telegram inline keyboards for frictionless responses — no typing required.
@@ -755,11 +991,11 @@ Lightweight environmental context. Mira knows what the weather is like where you
 Mira can see your task list and help manage it. This makes her aware of what you're supposed to be doing vs. what you're actually doing.
 
 - Read tasks: "What's on my plate today?" → Mira queries Todoist and summarizes
-- Create tasks: "Remind me to review the PR tomorrow" → Mira creates a Todoist task
-- **Reminders via Todoist:** `/remind` command creates Todoist tasks with due dates instead of custom scheduler infrastructure. Todoist handles notification delivery natively. Replaces the original v0.2 reminder system — simpler, more reliable, and the user already lives in Todoist.
+- Create tasks: "Add 'review the PR' to my Todoist" → Mira creates a Todoist task
 - Contextual awareness: Mira knows you have 5 overdue tasks and can reference that naturally
 - Implementation: thin wrapper around the Todoist REST API as agent tools (`todoist_list`, `todoist_create`, `todoist_complete`)
 - API key stored in `config.yaml` / `secrets.json`
+- **Note:** Reminders are handled by Mira's own scheduler (Section 6), not Todoist. Todoist is for task management — the scheduler is for time-triggered actions.
 
 #### GitHub Issues Integration
 
@@ -812,7 +1048,7 @@ CREATE TABLE mood_entries (
 
 #### Morning Briefing
 
-A scheduled recurring message (uses existing scheduler system) that makes Mira feel like she's thinking about you when you're not talking.
+A recurring `run_prompt` scheduled task (see Section 6 — Scheduler) that makes Mira feel like she's thinking about you when you're not talking.
 
 **Contents:**
 - Weather via Open-Meteo (no API key needed — already available from weather integration)
@@ -843,7 +1079,7 @@ Infer approximate sleep/wake patterns from conversation timestamps — no hardwa
 
 #### Proactive Follow-Ups
 
-Scan recent high-importance facts for things worth following up on. Uses existing scheduler + fact retrieval.
+Scan recent high-importance facts for things worth following up on. Runs as a conditional `run_prompt` scheduled task (Section 6).
 
 - Job interview tomorrow → "good luck today" morning message
 - Mentioned feeling rough → check in next day
@@ -1467,6 +1703,7 @@ kiwix:
 | `gopkg.in/telebot.v4` | Telegram bot framework | v0.1 |
 | `github.com/mattn/go-sqlite3` | SQLite driver (CGo) | v0.1 |
 | `gopkg.in/yaml.v3` | Config parsing | v0.1 |
+| `github.com/robfig/cron/v3` | Cron expression parsing for scheduler (next_run computation) | v0.6 |
 | `github.com/PuerkitoBio/goquery` | jQuery-style HTML parsing (Mini Shutter content extraction) | v0.9 |
 | `github.com/otiai10/gosseract/v2` | Tesseract OCR bindings (book highlights, receipt scanning) | v0.9 |
 | `github.com/fsnotify/fsnotify` | Filesystem event watcher (Obsidian vault indexing) | v1.1 |
