@@ -58,7 +58,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize the SQLite database.
-	store, err := memory.NewStore(cfg.Memory.DBPath)
+	store, err := memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
 		log.Fatal("Failed to initialize database", "err", err)
 	}
@@ -130,10 +130,40 @@ func runBot(cmd *cobra.Command, args []string) error {
 	// Optional — if not configured, the agent skips duplicate checking.
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
-		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model)
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
 		log.Info("Embed client configured", "url", cfg.Embed.BaseURL, "model", cfg.Embed.Model, "threshold", cfg.Embed.SimilarityThreshold)
 	} else {
 		log.Info("Embed client not configured — semantic duplicate checking disabled")
+	}
+
+	// Backfill embeddings for existing facts and populate vec_facts.
+	// This runs at startup to ensure all facts are searchable via KNN.
+	// On first run after upgrading to v0.4, this embeds all existing facts.
+	// On subsequent runs, it only embeds new facts saved without vectors.
+	if embedClient != nil && cfg.Embed.Dimension > 0 {
+		go func() {
+			unembedded, err := store.FactsWithoutEmbeddings()
+			if err != nil {
+				log.Error("backfill: failed to query unembedded facts", "err", err)
+				return
+			}
+			if len(unembedded) == 0 {
+				return
+			}
+			log.Infof("Backfilling embeddings for %d facts...", len(unembedded))
+			for _, f := range unembedded {
+				vec, err := embedClient.Embed(f.Fact)
+				if err != nil {
+					log.Error("backfill: embedding failed", "fact_id", f.ID, "err", err)
+					continue
+				}
+				if err := store.UpdateFactEmbedding(f.ID, vec); err != nil {
+					log.Error("backfill: update failed", "fact_id", f.ID, "err", err)
+					continue
+				}
+			}
+			log.Infof("Backfill complete: %d facts embedded", len(unembedded))
+		}()
 	}
 
 	// Create the Tavily client for web search and URL extraction.

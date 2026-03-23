@@ -830,36 +830,36 @@ her-go/
 
 ### v0.1 — MVP: Talk to Her
 - [x] Project scaffolding (Go module, directory structure)
-- [ ] Config loading from YAML + environment variables
-- [ ] SQLite database initialization (create tables)
-- [ ] Telegram bot with long-polling (receive + send text messages)
-- [ ] OpenRouter LLM client (chat completions, non-streaming)
-- [ ] Basic message pipeline: receive → log → scrub → call LLM → log → reply
-- [ ] Typing indicator (`sendChatAction`) while waiting for LLM response
-- [ ] PII scrubber: Tier 1 hard redact + Tier 2 tokenize/deanonymize + Tier 3 passthrough
-- [ ] System prompt loaded from `prompt.md`
-- [ ] Metrics logging (tokens, cost, latency)
-- [ ] Basic conversation context (last N messages in prompt)
+- [x] Config loading from YAML + environment variables
+- [x] SQLite database initialization (create tables)
+- [x] Telegram bot with long-polling (receive + send text messages)
+- [x] OpenRouter LLM client (chat completions, non-streaming)
+- [x] Basic message pipeline: receive → log → scrub → call LLM → log → reply
+- [x] Typing indicator (`sendChatAction`) while waiting for LLM response
+- [x] PII scrubber: Tier 1 hard redact + Tier 2 tokenize/deanonymize + Tier 3 passthrough
+- [x] System prompt loaded from `prompt.md`
+- [x] Metrics logging (tokens, cost, latency)
+- [x] Basic conversation context (last N messages in prompt)
 
 **Result:** A working chatbot you can text on Telegram that responds with personality, strips hard identifiers, deanonymizes contact info in responses, and logs everything locally.
 
 ### v0.2 — She Remembers
-- [ ] Fact extraction (periodic LLM-based extraction from conversations)
-- [ ] Memory retrieval (inject relevant facts into prompt)
-- [ ] Conversation summaries (end-of-day or end-of-session)
+- [x] Fact extraction (periodic LLM-based extraction from conversations)
+- [x] Memory retrieval (inject relevant facts into prompt)
+- [x] Conversation summaries (compaction system)
 - [ ] `/forget` command — deactivate specific facts
-- [ ] `/stats` command — show usage metrics (tokens, cost, message count)
-- [ ] Reflection system (Trigger B — memory-density spike → journal-like reflection entry)
-- [ ] Persona evolution (Trigger A — every ~20 conversations → self-authored persona.md rewrite)
-- [ ] Persona versioning in SQLite (full history, rollback capability)
+- [x] `/stats` command — show usage metrics (tokens, cost, message count)
+- [x] Reflection system (Trigger B — memory-density spike → journal-like reflection entry)
+- [x] Persona evolution (Trigger A — fact/reflection count → self-authored persona.md rewrite)
+- [x] Persona versioning in SQLite (full history, rollback capability)
 - [ ] Trait score tracking (warmth, directness, humor_style, initiative, depth)
 - [ ] `/reflections` command — view recent reflections
 - [ ] `/persona` command — view current persona + history
-- [ ] Layered prompt assembly (prompt.md + persona.md + reflections + facts + history)
-- [ ] Scheduler phase 1: `scheduled_tasks` table, ticker loop, `send_message` task type
-- [ ] `/remind` command — one-shot reminders ("remind me at 3pm to call the dentist")
-- [ ] `create_reminder` agent tool — the agent can set reminders from natural conversation
-- [ ] `/schedule` command — list upcoming reminders
+- [x] Layered prompt assembly (prompt.md + persona.md + memory + mood + history)
+- [x] Scheduler phase 1: `scheduled_tasks` table, ticker loop, `send_message` task type
+- [x] `/remind` command — one-shot reminders ("remind me at 3pm to call the dentist")
+- [x] `create_reminder` agent tool — the agent can set reminders from natural conversation
+- [x] `/schedule` command — list upcoming reminders
 
 **Result:** The bot remembers things you've told it, its personality genuinely evolves over time, and she can remind you of things at specific times.
 
@@ -867,14 +867,14 @@ her-go/
 
 Mira gains the ability to understand images sent on Telegram, using a vision-language model (VLM) as a new agent tool.
 
-- [ ] Handle `tele.OnPhoto` in the bot — download mid-size image (~1024px) from Telegram
-- [ ] Add `view_image` agent tool — sends image + prompt to VLM, returns description
-- [ ] Vision LLM client: `google/gemini-3-flash-preview` via OpenRouter (same base URL/key as chat LLM)
-- [ ] Support base64 image content in `llm.ChatMessage` (OpenAI-compatible multi-modal format)
-- [ ] Image description becomes part of the agent's search context, referenced in reply
-- [ ] Add `vision` section to `config.yaml` (model, temperature, max_tokens)
-- [ ] Log vision metrics (tokens, cost) same as other LLM calls
-- [ ] Handle captions: if the user sends a photo with a caption, both the image and caption text go to the agent
+- [x] Handle `tele.OnPhoto` in the bot — download mid-size image (~1024px) from Telegram
+- [x] Add `view_image` agent tool — sends image + prompt to VLM, returns description
+- [x] Vision LLM client: `google/gemini-3-flash-preview` via OpenRouter (same base URL/key as chat LLM)
+- [x] Support base64 image content in `llm.ChatMessage` (OpenAI-compatible multi-modal format)
+- [x] Image description becomes part of the agent's search context, referenced in reply
+- [x] Add `vision` section to `config.yaml` (model, temperature, max_tokens)
+- [x] Log vision metrics (tokens, cost) same as other LLM calls
+- [x] Handle captions: if the user sends a photo with a caption, both the image and caption text go to the agent
 
 **Vision pipeline:**
 ```
@@ -891,24 +891,24 @@ User sends photo (with optional caption)
 **Result:** Send Mira a photo of your lunch, your workspace, a sunset, a bug in your code — she can see it and talk about it naturally.
 
 ### v0.3 — She Listens
-- [ ] Voice memo support (receive Ogg from Telegram, download via `getFile`)
-- [ ] Local STT via Parakeet (Ogg → ffmpeg convert → Parakeet → text)
+- [x] Voice memo support (receive Ogg from Telegram, download via `getFile`)
+- [x] Local STT via Parakeet (Ogg → ffmpeg convert → Parakeet → text)
 - [ ] Fallback STT via CF Workers AI Whisper (optional, for when away from Mac Mini)
-- [ ] Transcribed text enters the normal pipeline (scrub → LLM → reply as text)
-- [ ] Store original audio file path in `messages.voice_memo_path`
+- [x] Transcribed text enters the normal pipeline (scrub → LLM → reply as text)
+- [x] Store original audio file path in `messages.voice_memo_path`
 - [ ] Streaming LLM responses with live message editing (`editMessageText` as tokens arrive)
 - [ ] Production deployment: Mac Mini + Cloudflare Tunnel
 - [ ] Webhook mode for Telegram (instead of long-polling)
 
 **Result:** You can send voice memos and the bot transcribes + responds (as text). Runs 24/7 on your Mac Mini.
 
-### v0.4 — She Understands (Future)
-- [ ] Local embedding model for semantic memory search
-- [ ] `sqlite-vec` integration for vector similarity
-- [ ] Top-5 relevant memory retrieval via cosine similarity
-- [ ] Smarter proactive messaging (not just reminders)
-- [ ] Conversation mood tracking
-- [ ] Migration path to CF D1 + Vectorize
+### v0.4 — She Understands
+- [x] Local embedding model for semantic memory search
+- [x] `sqlite-vec` integration for vector similarity
+- [x] Top-5 relevant memory retrieval via cosine similarity
+- [x] Smarter proactive messaging — recall_memories agent tool for on-demand semantic search
+- [x] Conversation mood tracking (inferred + manual via log_mood tool)
+- [ ] Migration path to CF D1 + Vectorize (design-only, no code needed yet)
 
 ### v0.5 — She Speaks (Future)
 

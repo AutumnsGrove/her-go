@@ -95,6 +95,11 @@ type toolContext struct {
 	// was discussed earlier without needing the full message history.
 	conversationSummary string
 
+	// relevantFacts holds the results of semantic search on the user's message.
+	// These are the facts closest in meaning to what the user just said.
+	// Passed to BuildMemoryContext so the system prompt includes relevant context.
+	relevantFacts []memory.Fact
+
 	// searchContext accumulates search results, book data, and URL content
 	// across tool calls. When reply is called, this context is included
 	// in the prompt so the conversational model can reference it.
@@ -200,9 +205,23 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// Load recent conversation history so the agent can resolve
 	// references like "it", "that book", "what we talked about", etc.
+	// We exclude the current message (TriggerMsgID) from history because
+	// it's already shown separately under "Current Message" in the agent
+	// context. Without this filter, the agent sees the message twice and
+	// thinks the user is "repeating" themselves.
 	recentMsgs, err := params.Store.RecentMessages(params.ConversationID, params.Cfg.Memory.RecentMessages)
 	if err != nil {
 		log.Error("loading history", "err", err)
+	}
+	// Strip the current message from history to avoid duplication.
+	if params.TriggerMsgID > 0 && len(recentMsgs) > 0 {
+		filtered := make([]memory.Message, 0, len(recentMsgs))
+		for _, msg := range recentMsgs {
+			if msg.ID != params.TriggerMsgID {
+				filtered = append(filtered, msg)
+			}
+		}
+		recentMsgs = filtered
 	}
 
 	// Run compaction if the conversation history is getting long.
@@ -217,6 +236,26 @@ func Run(params RunParams) (*RunResult, error) {
 		)
 		if err != nil {
 			log.Error("compaction error", "err", err)
+		}
+	}
+
+	// Semantic search — find facts most relevant to what the user just said.
+	// This is the core of v0.4: instead of showing the LLM ALL facts sorted
+	// by importance, we embed the user's message and find the closest matches
+	// via sqlite-vec KNN. The results go into the system prompt so the
+	// conversational model has the right context without seeing everything.
+	var relevantFacts []memory.Fact
+	if params.EmbedClient != nil && params.Store.EmbedDimension > 0 {
+		queryVec, err := params.EmbedClient.Embed(params.ScrubbedUserMessage)
+		if err != nil {
+			log.Warn("semantic search: embedding failed, falling back to importance-only", "err", err)
+		} else {
+			relevantFacts, err = params.Store.SemanticSearch(queryVec, params.Cfg.Memory.MaxFactsInContext)
+			if err != nil {
+				log.Warn("semantic search: query failed, falling back to importance-only", "err", err)
+			} else {
+				log.Infof("  semantic search: %d relevant facts", len(relevantFacts))
+			}
 		}
 	}
 
@@ -253,6 +292,7 @@ func Run(params RunParams) (*RunResult, error) {
 		conversationID:      params.ConversationID,
 		triggerMsgID:        params.TriggerMsgID,
 		conversationSummary: conversationSummary,
+		relevantFacts:       relevantFacts,
 		imageBase64:         params.ImageBase64,
 		imageMIME:           params.ImageMIME,
 	}
@@ -517,6 +557,10 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execViewImage(tc.Function.Arguments, tctx)
 	case "create_reminder":
 		return execCreateReminder(tc.Function.Arguments, tctx)
+	case "recall_memories":
+		return execRecallMemories(tc.Function.Arguments, tctx)
+	case "log_mood":
+		return execLogMood(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
 	case "no_action":
@@ -681,12 +725,19 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 		parts = append(parts, string(personaBytes))
 	}
 
-	// Layer 3: Memory context — extracted facts about the user and self.
-	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext); err == nil && memCtx != "" {
+	// Layer 3: Memory context — blend of semantically relevant facts
+	// (from KNN search) and high-importance facts (always-present).
+	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
 	}
 
-	// Layer 4: Conversation summary — compacted older messages.
+	// Layer 4: Mood context — recent mood trend so Mira is aware of
+	// emotional patterns. Only included if there's mood data.
+	if moodCtx := buildMoodContext(tctx.store); moodCtx != "" {
+		parts = append(parts, moodCtx)
+	}
+
+	// Layer 5: Conversation summary — compacted older messages.
 	// This gives the model awareness of what was discussed earlier
 	// without burning tokens on the full message history.
 	if tctx.conversationSummary != "" {
@@ -719,6 +770,128 @@ func execThink(argsJSON string, tctx *toolContext) string {
 
 	log.Infof("  think: %s", args.Thought)
 	return "ok"
+}
+
+// execRecallMemories searches stored facts by semantic similarity.
+// The agent calls this when it needs to actively look something up
+// in memory — "do you remember when I told you about..." style queries.
+func execRecallMemories(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if tctx.embedClient == nil {
+		return "memory search is not available (embedding client not configured)"
+	}
+	if tctx.store.EmbedDimension == 0 {
+		return "memory search is not available (vector index not configured)"
+	}
+
+	if args.Limit <= 0 || args.Limit > 10 {
+		args.Limit = 5
+	}
+
+	// Embed the query and search.
+	queryVec, err := tctx.embedClient.Embed(args.Query)
+	if err != nil {
+		return fmt.Sprintf("error embedding query: %v", err)
+	}
+
+	facts, err := tctx.store.SemanticSearch(queryVec, args.Limit)
+	if err != nil {
+		return fmt.Sprintf("error searching memories: %v", err)
+	}
+
+	if len(facts) == 0 {
+		return "no matching memories found"
+	}
+
+	// Format results for the agent. Include distance so it can judge relevance.
+	// Cosine distance: 0 = identical, 1 = orthogonal, 2 = opposite.
+	var b strings.Builder
+	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(facts))
+	for _, f := range facts {
+		similarity := 1 - f.Distance // convert distance to similarity for readability
+		fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d, similarity=%.0f%%] %s\n",
+			f.ID, f.Category, f.Importance, similarity*100, f.Fact)
+	}
+
+	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
+	return b.String()
+}
+
+// buildMoodContext formats recent mood data for the system prompt.
+// Returns an empty string if no mood data exists.
+func buildMoodContext(store *memory.Store) string {
+	entries, err := store.RecentMoodEntries(5)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+
+	labels := map[int]string{1: "bad", 2: "rough", 3: "meh", 4: "good", 5: "great"}
+
+	var b strings.Builder
+	b.WriteString("# Mood Awareness\n\n")
+	b.WriteString("Recent emotional states (use this to be attentive, not to announce it):\n\n")
+
+	for _, e := range entries {
+		label := labels[e.Rating]
+		if label == "" {
+			label = "unknown"
+		}
+		ts := e.Timestamp.Format("Mon Jan 2, 3:04 PM")
+		if e.Note != "" {
+			fmt.Fprintf(&b, "- %s: %s (%d/5) — %s\n", ts, label, e.Rating, e.Note)
+		} else {
+			fmt.Fprintf(&b, "- %s: %s (%d/5)\n", ts, label, e.Rating)
+		}
+	}
+
+	// Add trend summary if we have enough data.
+	avg, count, err := store.MoodTrend(10)
+	if err == nil && count >= 3 {
+		var trend string
+		switch {
+		case avg >= 4.0:
+			trend = "trending positive"
+		case avg >= 3.0:
+			trend = "mostly neutral"
+		case avg >= 2.0:
+			trend = "trending down"
+		default:
+			trend = "going through a rough patch"
+		}
+		fmt.Fprintf(&b, "\nOverall trend (last %d entries): %.1f/5 — %s\n", count, avg, trend)
+	}
+
+	return b.String()
+}
+
+// execLogMood saves a mood entry from the agent when the user expresses
+// how they're feeling. This is the "manual" source — the agent explicitly
+// decided to log mood based on what the user said.
+func execLogMood(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Rating int    `json:"rating"`
+		Note   string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	id, err := tctx.store.SaveMoodEntry(args.Rating, args.Note, "", "manual", tctx.conversationID)
+	if err != nil {
+		return fmt.Sprintf("error saving mood: %v", err)
+	}
+
+	labels := map[int]string{1: "bad", 2: "rough", 3: "meh", 4: "good", 5: "great"}
+	label := labels[args.Rating]
+	log.Infof("  mood logged: %d/5 (%s) — %s", args.Rating, label, args.Note)
+	return fmt.Sprintf("mood logged ID=%d: %d/5 (%s) — %s", id, args.Rating, label, args.Note)
 }
 
 // --- Search tool execution ---
@@ -860,6 +1033,57 @@ var selfFactBlocklist = []string{
 	"i can help",
 }
 
+// styleBlocklist catches AI writing tics that poison the voice over time.
+// Facts with these patterns get rejected so they don't leak into the
+// system prompt and infect the conversational model's tone.
+var styleBlocklist = []string{
+	// Em dashes — the #1 offender
+	"\u2014", // —
+	"\u2013", // –
+
+	// "Not just X, it's Y" and variants
+	"not just",
+	"it's not just",
+	"not merely",
+
+	// Grandiose/hollow language
+	"significant moment",
+	"significant trust",
+	"deeply personal",
+	"genuinely incredible",
+	"a testament to",
+	"speaks volumes",
+
+	// Corporate AI speak
+	"actively investing",
+	"building a bridge",
+	"creating a richer",
+	"meta-level",
+	"hold space",
+	"holding space",
+
+	// Hollow filler
+	"it's worth noting",
+	"it's important to",
+	"fundamentally",
+	"remarkably",
+	"transformative",
+	"delve",
+	"foster",
+	"leverage",
+	"tapestry",
+	"realm",
+	"landscape",
+	"embark",
+	"harness",
+	"utilize",
+}
+
+// maxFactLength is the hard limit on fact text length. Facts are supposed
+// to be 1-2 sentences. Multi-paragraph reflections belong in the
+// persona evolution system, not in individual facts.
+const maxFactLength = 280
+
 func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	var args struct {
 		Fact       string `json:"fact"`
@@ -877,7 +1101,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		args.Importance = 10
 	}
 
-	// Quality gate for self-facts.
+	// Quality gate for self-facts: block system-prompt restatements.
 	if subject == "self" {
 		lower := strings.ToLower(args.Fact)
 		for _, blocked := range selfFactBlocklist {
@@ -888,8 +1112,26 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 	}
 
+	// Style gate for ALL facts: reject AI writing tics.
+	// Facts get injected into the system prompt, so sloppy style here
+	// poisons the conversational model's tone over time. This is the
+	// immune system against the AI-slop feedback loop.
+	lower := strings.ToLower(args.Fact)
+	for _, blocked := range styleBlocklist {
+		if strings.Contains(lower, blocked) {
+			log.Warn("blocked fact (style)", "pattern", blocked, "fact", args.Fact)
+			return fmt.Sprintf("rejected: rewrite this fact in plain, concise language. Avoid em dashes, 'not just X it's Y', and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
+		}
+	}
+
+	// Length gate: facts should be 1-2 sentences, not paragraphs.
+	if len(args.Fact) > maxFactLength {
+		log.Warn("blocked fact (too long)", "len", len(args.Fact), "fact", args.Fact[:100])
+		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
+	}
+
 	// Semantic duplicate check using embeddings.
-	var newVec []float64
+	var newVec []float32
 	if tctx.embedClient != nil {
 		var err error
 		newVec, err = tctx.embedClient.Embed(args.Fact)
@@ -918,7 +1160,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
 
-func checkDuplicate(newVec []float64, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
+func checkDuplicate(newVec []float32, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
 	existingFacts, err := tctx.store.AllActiveFacts()
 	if err != nil {
 		log.Warn("couldn't load facts for duplicate check", "err", err)

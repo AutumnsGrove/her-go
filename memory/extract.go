@@ -13,8 +13,13 @@ import (
 var log = logger.WithPrefix("memory")
 
 // extractionPrompt is the system prompt sent to the LLM to extract facts
-// from a conversation. We ask for JSON output so we can parse it reliably.
-const extractionPrompt = `You are a memory extraction system. Your job is to read a conversation and extract key facts, events, emotions, and decisions worth remembering long-term.
+// AND mood from a conversation. We ask for JSON output so we can parse it
+// reliably. Mood inference piggybacks on the same LLM call as fact extraction
+// to avoid an extra API call — same conversation, one extra field.
+const extractionPrompt = `You are a memory extraction system. Your job is to read a conversation and extract two things:
+
+## 1. Facts
+Key facts, events, emotions, and decisions worth remembering long-term.
 
 For each fact, provide:
 - "fact": A single clear sentence capturing the information
@@ -33,27 +38,60 @@ Do NOT extract:
 - Things the assistant said (only extract facts about the user)
 - Duplicate information if the same fact appears multiple times
 
-Respond with ONLY a JSON array. No markdown, no code fences, no explanation. Example:
-[{"fact": "User's name is Autumn", "category": "identity", "importance": 9}, {"fact": "User recently moved back to parents' house", "category": "event", "importance": 7}]
+STYLE RULES for writing facts:
+- Each fact must be 1-2 short sentences max. No paragraphs.
+- Write like a person jotting a note, not like an essay. Plain and direct.
+- NEVER use em dashes. Use periods or commas.
+- NEVER use "not just X, it's Y" constructions. Just say Y.
+- Avoid grandiose language: "significant moment", "a testament to", "speaks volumes", "deeply personal", "genuinely incredible"
+- Avoid corporate filler: "actively investing", "creating a richer", "meta-level", "fundamentally", "remarkably", "transformative"
+- Good: "User's dog is named Max. Got him as a puppy last year."
+- Bad: "User has a deeply personal bond with their dog Max, who represents not just a pet but a transformative source of companionship."
 
-If there are no meaningful facts to extract, respond with an empty array: []`
+## 2. Mood
+Infer the user's overall emotional state from the conversation.
 
-// extractedFact is the JSON structure we expect from the LLM.
+- "rating": 1-5 scale (1=bad, 2=rough, 3=meh/neutral, 4=good, 5=great)
+- "note": Brief description of WHY you rated it this way (1 sentence)
+- "tags": Object with optional keys: "energy" (low/medium/high), "stress" (low/medium/high), "social" (isolated/neutral/connected)
+
+Only include mood if you can genuinely infer it from the conversation. If the conversation is purely informational with no emotional signal, set mood to null.
+
+## Response Format
+
+Respond with ONLY a JSON object. No markdown, no code fences, no explanation.
+
+{"facts": [{"fact": "User's name is Autumn", "category": "identity", "importance": 9}], "mood": {"rating": 4, "note": "Seems upbeat, excited about new project", "tags": {"energy": "high", "stress": "low"}}}
+
+If no facts to extract and no mood signal: {"facts": [], "mood": null}`
+
+// extractionResponse is the top-level JSON structure from the LLM.
+type extractionResponse struct {
+	Facts []extractedFact `json:"facts"`
+	Mood  *extractedMood  `json:"mood"` // nil if no mood signal detected
+}
+
+// extractedFact is the JSON structure for a single fact.
 type extractedFact struct {
 	Fact       string `json:"fact"`
 	Category   string `json:"category"`
 	Importance int    `json:"importance"`
 }
 
-// ExtractFacts analyzes recent messages and extracts long-term memory facts.
-// It sends the conversation to the LLM with an extraction prompt, parses
-// the JSON response, and stores each fact in the database.
+// extractedMood is the JSON structure for inferred mood.
+type extractedMood struct {
+	Rating int               `json:"rating"`
+	Note   string            `json:"note"`
+	Tags   map[string]string `json:"tags"` // energy, stress, social, etc.
+}
+
+// ExtractFacts analyzes recent messages and extracts long-term memory facts
+// AND mood data. It sends the conversation to the LLM with an extraction
+// prompt, parses the JSON response, and stores each fact + mood in the database.
 //
 // conversationID identifies which conversation to extract from.
 // sinceID is the last message ID that was already extracted — we only
 // look at messages after this point to avoid re-extracting.
-// lastMsgID is the ID of the most recent message, used as source_message_id
-// for the extracted facts.
 func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, sinceID int64) error {
 	// Get the messages we haven't extracted from yet.
 	messages, err := store.MessagesAfter(conversationID, sinceID)
@@ -89,7 +127,7 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 		return fmt.Errorf("LLM extraction call: %w", err)
 	}
 
-	// Parse the JSON response. The LLM should return a JSON array,
+	// Parse the JSON response. The LLM should return a JSON object,
 	// but sometimes it wraps it in markdown code fences. Strip those.
 	jsonStr := strings.TrimSpace(resp.Content)
 	jsonStr = strings.TrimPrefix(jsonStr, "```json")
@@ -97,16 +135,24 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 	jsonStr = strings.TrimSuffix(jsonStr, "```")
 	jsonStr = strings.TrimSpace(jsonStr)
 
-	var facts []extractedFact
-	if err := json.Unmarshal([]byte(jsonStr), &facts); err != nil {
-		log.Error("failed to parse extraction response as JSON", "err", err, "raw", resp.Content)
-		return fmt.Errorf("parsing extraction response: %w", err)
+	var extraction extractionResponse
+	if err := json.Unmarshal([]byte(jsonStr), &extraction); err != nil {
+		// Fallback: try parsing as a plain fact array (old format).
+		// This handles models that don't follow the new schema.
+		var facts []extractedFact
+		if err2 := json.Unmarshal([]byte(jsonStr), &facts); err2 == nil {
+			extraction.Facts = facts
+			log.Debug("extraction response was old-format fact array, no mood data")
+		} else {
+			log.Error("failed to parse extraction response as JSON", "err", err, "raw", resp.Content)
+			return fmt.Errorf("parsing extraction response: %w", err)
+		}
 	}
 
 	// Store each extracted fact. Use the last message's ID as the source
 	// so we know where extraction left off.
 	lastMsgID := messages[len(messages)-1].ID
-	for _, f := range facts {
+	for _, f := range extraction.Facts {
 		// Clamp importance to valid range.
 		if f.Importance < 1 {
 			f.Importance = 1
@@ -123,6 +169,27 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 		log.Debug("extracted fact", "category", f.Category, "importance", f.Importance, "fact", f.Fact)
 	}
 
-	log.Info("extraction complete", "facts", len(facts), "messages", len(messages))
+	// Store inferred mood if the LLM detected an emotional signal.
+	if extraction.Mood != nil && extraction.Mood.Rating >= 1 && extraction.Mood.Rating <= 5 {
+		tagsJSON := ""
+		if len(extraction.Mood.Tags) > 0 {
+			if b, err := json.Marshal(extraction.Mood.Tags); err == nil {
+				tagsJSON = string(b)
+			}
+		}
+		if _, err := store.SaveMoodEntry(
+			extraction.Mood.Rating,
+			extraction.Mood.Note,
+			tagsJSON,
+			"inferred",
+			conversationID,
+		); err != nil {
+			log.Error("saving inferred mood", "err", err)
+		} else {
+			log.Debug("inferred mood", "rating", extraction.Mood.Rating, "note", extraction.Mood.Note)
+		}
+	}
+
+	log.Info("extraction complete", "facts", len(extraction.Facts), "messages", len(messages))
 	return nil
 }

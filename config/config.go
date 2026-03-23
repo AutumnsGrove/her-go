@@ -87,10 +87,11 @@ type ScrubConfig struct {
 }
 
 // EmbedConfig controls the local embedding model used for semantic
-// similarity (memory deduplication, future vector search).
+// similarity (memory deduplication and vector search via sqlite-vec).
 type EmbedConfig struct {
-	BaseURL            string  `yaml:"base_url"`
-	Model              string  `yaml:"model"`
+	BaseURL             string  `yaml:"base_url"`
+	Model               string  `yaml:"model"`
+	Dimension           int     `yaml:"dimension"`            // vector dimension (768 for nomic-embed-text-v1.5, 1536 for OpenAI, etc.)
 	SimilarityThreshold float64 `yaml:"similarity_threshold"` // above this = duplicate (0.0-1.0)
 }
 

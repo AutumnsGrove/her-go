@@ -41,6 +41,13 @@ Thumbs.db
 logs/stderr.log
 logs/stdout.log
 
+# Simulation results (personal data from test runs)
+sims/sim.db
+sims/sim.db-journal
+sims/sim.db-wal
+sims/sim.db-shm
+sims/results/
+
 # TTS model files (large, downloaded at setup time)
 scripts/kokoro-v1.0.onnx
 scripts/voices-v1.0.bin

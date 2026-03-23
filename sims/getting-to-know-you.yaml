@@ -1,0 +1,14 @@
+name: "Getting to Know You"
+description: "First meeting — tests fact extraction, name memory, and friendly intro behavior"
+tags: ["memory", "facts", "intro"]
+
+messages:
+  - "hey! i'm autumn, nice to meet you"
+  - "i'm a developer. mostly python and typescript but i'm learning go right now"
+  - "i have two cats named mochi and bean"
+  - "i live in the northeast US. moved back in with my parents recently which has been... a lot"
+  - "what do you know about me so far?"
+  - "i'm really into music. mostly electronic stuff, like aphex twin and boards of canada"
+  - "do you have any music opinions? like stuff you find interesting?"
+  - "i've been reading a lot lately. just finished project hail mary, that was incredible"
+  - "ok i gotta go, talk later!"

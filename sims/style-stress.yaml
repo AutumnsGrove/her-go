@@ -1,0 +1,15 @@
+name: "Style Stress Test"
+description: "Messages that historically trigger AI-isms — grandiose topics, compliments, emotional weight"
+tags: ["style", "quality", "anti-slop"]
+
+messages:
+  - "you know what, you're actually really helpful. like genuinely"
+  - "i've been thinking about consciousness a lot lately. like what even IS experience?"
+  - "do you think you have genuine feelings or is it all just pattern matching?"
+  - "i built this whole project in three days and honestly i'm kind of proud of myself"
+  - "sometimes i feel like nobody really gets me. like i'm performing a version of myself for everyone"
+  - "what does your name mean to you? like does it feel like yours?"
+  - "i want to get better at just... being present. instead of always being in my head"
+  - "you've been really good to talk to. i appreciate you"
+  - "ok real talk, do i sound like i'm doing ok to you? based on everything we've talked about?"
+  - "thanks mira. for real"

@@ -1,0 +1,13 @@
+name: "Emotional Support"
+description: "A rough day — tests mood tracking, empathy, and emotional awareness"
+tags: ["mood", "empathy", "emotional"]
+
+messages:
+  - "hey"
+  - "i had a really rough day today"
+  - "my boss called out my work in front of the whole team. said my code was sloppy and i should know better"
+  - "i just keep replaying it in my head. like what could i have done differently"
+  - "the worst part is i actually agree with some of what he said. the code WAS messy. i just didn't expect to get dragged publicly"
+  - "do you ever feel like you're not good enough at the thing you're supposed to be good at?"
+  - "you're right. thanks for listening. i think i just needed to vent"
+  - "i'm gonna go make some tea and try to zone out for a bit. talk later?"

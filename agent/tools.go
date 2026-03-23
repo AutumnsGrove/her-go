@@ -267,6 +267,54 @@ func ToolDefs() []llm.ToolDef {
 			},
 		},
 
+		// --- Memory search tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "recall_memories",
+				Description: "Search through stored memories using semantic similarity. Use when the user asks 'do you remember...', references something from a past conversation, or when you need specific context that isn't in the current memory window. Returns the most relevant facts matching your query.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "What to search for in memory. Be specific — 'user's dog' works better than 'pet'. Rephrase the user's question into a factual search query.",
+						},
+						"limit": map[string]interface{}{
+							"type":        "integer",
+							"description": "Max results to return (default 5, max 10)",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+
+		// --- Mood tracking tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "log_mood",
+				Description: "Log the user's current emotional state when they express how they're feeling. Use this when the user says things like 'I'm having a rough day', 'feeling great', 'stressed out', etc. Don't log mood for purely informational messages.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"rating": map[string]interface{}{
+							"type":        "integer",
+							"minimum":     1,
+							"maximum":     5,
+							"description": "Mood rating: 1=bad, 2=rough, 3=meh/neutral, 4=good, 5=great",
+						},
+						"note": map[string]interface{}{
+							"type":        "string",
+							"description": "Brief context for the rating (e.g., 'stressed about work deadline', 'excited about weekend plans')",
+						},
+					},
+					"required": []string{"rating", "note"},
+				},
+			},
+		},
+
 		// --- Reasoning tool ---
 		{
 			Type: "function",

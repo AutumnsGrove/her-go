@@ -6,14 +6,21 @@ import (
 )
 
 // BuildMemoryContext assembles a memory context string to inject into
-// the system prompt. This includes two sections:
-//   - "Things I Know About the User" — facts about the person (subject="user")
-//   - "Things I Know About Myself" — Mira's self-knowledge (subject="self")
-func BuildMemoryContext(store *Store, maxFacts int) (string, error) {
+// the system prompt. It blends two retrieval strategies:
+//
+//  1. Semantic: top-K facts closest to the user's current message (via sqlite-vec KNN)
+//  2. Importance: high-importance facts that should always be present (name, identity, etc.)
+//
+// The blend ensures Mira always knows WHO she's talking to (importance) while also
+// recalling context RELEVANT to the current conversation (semantic).
+//
+// relevantFacts can be nil if embeddings aren't available — falls back to
+// importance-only retrieval (the pre-v0.4 behavior).
+func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact) (string, error) {
 	var parts []string
 
-	// User facts — things Mira knows about the person she's talking to.
-	userFacts, err := store.RecentFacts("user", maxFacts)
+	// --- User facts ---
+	userFacts, err := blendFacts(store, "user", maxFacts, relevantFacts)
 	if err != nil {
 		return "", fmt.Errorf("retrieving user facts: %w", err)
 	}
@@ -25,8 +32,8 @@ func BuildMemoryContext(store *Store, maxFacts int) (string, error) {
 		))
 	}
 
-	// Self facts — Mira's own self-knowledge and observations.
-	selfFacts, err := store.RecentFacts("self", maxFacts)
+	// --- Self facts ---
+	selfFacts, err := blendFacts(store, "self", maxFacts, relevantFacts)
 	if err != nil {
 		return "", fmt.Errorf("retrieving self facts: %w", err)
 	}
@@ -39,6 +46,49 @@ func BuildMemoryContext(store *Store, maxFacts int) (string, error) {
 	}
 
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// blendFacts merges semantic search results with importance-based results,
+// deduplicating by fact ID. The result set contains:
+//   - Semantically relevant facts for this subject (from the KNN results)
+//   - Top-importance facts for this subject (always-present context)
+//
+// If relevantFacts is nil (no embeddings), falls back to importance-only.
+func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact) ([]Fact, error) {
+	seen := make(map[int64]bool)
+	var result []Fact
+
+	// First pass: semantic results for this subject (most relevant first).
+	// These are the facts KNN says are closest to what the user just said.
+	if relevantFacts != nil {
+		for _, f := range relevantFacts {
+			if f.Subject != subject {
+				continue
+			}
+			if !seen[f.ID] {
+				seen[f.ID] = true
+				result = append(result, f)
+			}
+		}
+	}
+
+	// Second pass: importance-based (always-present context).
+	// Fill remaining slots with the highest-importance facts.
+	importantFacts, err := store.RecentFacts(subject, maxFacts)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range importantFacts {
+		if len(result) >= maxFacts {
+			break
+		}
+		if !seen[f.ID] {
+			seen[f.ID] = true
+			result = append(result, f)
+		}
+	}
+
+	return result, nil
 }
 
 // formatFactSection builds a formatted memory section with a title,

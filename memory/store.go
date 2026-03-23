@@ -4,7 +4,6 @@ package memory
 
 import (
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -16,6 +15,11 @@ import (
 	// You'll never call go-sqlite3 functions directly — you talk to it
 	// through Go's standard database/sql interface.
 	_ "github.com/mattn/go-sqlite3"
+
+	// sqlite-vec adds vector search to SQLite via a virtual table module.
+	// Auto() registers it as an auto-extension so every new connection gets it.
+	// The cgo sub-package works with mattn/go-sqlite3 (our SQLite driver).
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 )
 
 // Store wraps a SQLite database connection and provides methods for
@@ -23,7 +27,8 @@ import (
 // In Go, this is how you build something like a Python class — a struct
 // with methods attached to it.
 type Store struct {
-	db *sql.DB
+	db             *sql.DB
+	EmbedDimension int // vector dimension for the vec_facts table (e.g. 768)
 }
 
 // Message represents a single conversation message (user or assistant).
@@ -53,7 +58,17 @@ type Metric struct {
 // NewStore opens (or creates) the SQLite database at the given path
 // and initializes all tables. The database file is created automatically
 // by SQLite if it doesn't exist — no setup step needed.
-func NewStore(dbPath string) (*Store, error) {
+//
+// embedDimension is the vector size for the sqlite-vec index (e.g. 768
+// for nomic-embed-text-v1.5). Pass 0 to skip creating the vector table
+// (useful if embeddings aren't configured).
+func NewStore(dbPath string, embedDimension int) (*Store, error) {
+	// Register sqlite-vec as an auto-extension BEFORE opening any connections.
+	// This uses sqlite3_auto_extension() under the hood — every new connection
+	// automatically loads the vec0 virtual table module. Think of it like
+	// Python's sqlite3.enable_load_extension(), but baked into the driver.
+	sqlite_vec.Auto()
+
 	// sql.Open doesn't actually connect — it just validates the driver name
 	// and prepares the connection. The real connection happens on first query.
 	// The "?_journal_mode=WAL" enables Write-Ahead Logging, which allows
@@ -69,7 +84,7 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
 
-	store := &Store{db: db}
+	store := &Store{db: db, EmbedDimension: embedDimension}
 
 	// Create all tables if they don't exist.
 	if err := store.initTables(); err != nil {
@@ -216,6 +231,22 @@ func (s *Store) initTables() error {
 			content TEXT,
 			FOREIGN KEY (message_id) REFERENCES messages(id)
 		)`,
+
+		// Mood entries — tracks the user's emotional state over time.
+		// Sources: "inferred" (LLM guesses from conversation), "manual"
+		// (Mira logs it from what the user says), "checkin" (proactive
+		// inline keyboard check-ins in v0.6).
+		// Rating is 1-5: 1=bad, 2=rough, 3=meh, 4=good, 5=great.
+		// Tags is a JSON object for structured metadata (energy, stress, etc.).
+		`CREATE TABLE IF NOT EXISTS mood_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			rating INTEGER NOT NULL,
+			note TEXT,
+			tags TEXT,
+			source TEXT DEFAULT 'inferred',
+			conversation_id TEXT
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -265,6 +296,26 @@ func (s *Store) initTables() error {
 	for _, idx := range indexes {
 		if _, err := s.db.Exec(idx); err != nil {
 			return fmt.Errorf("creating index: %w", err)
+		}
+	}
+
+	// sqlite-vec virtual table for KNN vector search on fact embeddings.
+	// vec0 is the virtual table module provided by the sqlite-vec extension.
+	// The rowid maps to facts.id so we can JOIN back for metadata.
+	// distance_metric=cosine means KNN results are ranked by cosine distance
+	// (0 = identical, 2 = opposite) instead of the default L2/Euclidean.
+	//
+	// Virtual tables are a SQLite concept with no direct Python equivalent —
+	// think of them as tables backed by a custom engine. The vec0 engine
+	// stores vectors in an optimized format and implements fast approximate
+	// nearest neighbor search behind the standard SQL interface.
+	if s.EmbedDimension > 0 {
+		vecDDL := fmt.Sprintf(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[%d] distance_metric=cosine)`,
+			s.EmbedDimension,
+		)
+		if _, err := s.db.Exec(vecDDL); err != nil {
+			return fmt.Errorf("creating vec_facts virtual table: %w", err)
 		}
 	}
 
@@ -506,42 +557,47 @@ type Fact struct {
 	SourceMessageID int64
 	Importance      int
 	Active          bool
-	Embedding       []float64 // cached embedding vector (nil if not yet computed)
+	Embedding       []float32 // cached embedding vector (nil if not yet computed)
+	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
 }
 
-// encodeEmbedding serializes a float64 slice to bytes for SQLite BLOB storage.
-// Each float64 is 8 bytes, written in little-endian order.
+// serializeEmbedding converts a float32 slice to the binary format sqlite-vec
+// expects. This is a thin wrapper around sqlite_vec.SerializeFloat32 which
+// produces a little-endian packed byte array (4 bytes per float).
 //
-// This is like Python's struct.pack() or numpy's .tobytes() — converting
-// in-memory floats to a compact binary representation. We use LittleEndian
-// because that's what most modern CPUs use natively (x86, ARM).
-func encodeEmbedding(vec []float64) []byte {
+// Like numpy's .tobytes() or Python's struct.pack('<768f', *vec).
+func serializeEmbedding(vec []float32) ([]byte, error) {
 	if len(vec) == 0 {
-		return nil
+		return nil, nil
 	}
-	buf := make([]byte, len(vec)*8)
-	for i, v := range vec {
-		binary.LittleEndian.PutUint64(buf[i*8:], math.Float64bits(v))
-	}
-	return buf
+	return sqlite_vec.SerializeFloat32(vec)
 }
 
-// decodeEmbedding deserializes bytes back into a float64 slice.
-func decodeEmbedding(data []byte) []float64 {
-	if len(data) == 0 || len(data)%8 != 0 {
+// deserializeEmbedding converts bytes from the facts.embedding BLOB column
+// back into a float32 slice. This reads the new float32 format (4 bytes/float)
+// used by sqlite-vec. Legacy float64 BLOBs (8 bytes/float) from before the
+// migration will have the wrong dimension and return nil — those facts need
+// re-embedding via BackfillEmbeddings.
+func deserializeEmbedding(data []byte) []float32 {
+	if len(data) == 0 || len(data)%4 != 0 {
 		return nil
 	}
-	vec := make([]float64, len(data)/8)
+	// sqlite-vec's SerializeFloat32 produces little-endian float32 bytes.
+	// We reverse it with math.Float32frombits.
+	vec := make([]float32, len(data)/4)
 	for i := range vec {
-		vec[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[i*8:]))
+		off := i * 4
+		bits := uint32(data[off]) | uint32(data[off+1])<<8 | uint32(data[off+2])<<16 | uint32(data[off+3])<<24
+		vec[i] = math.Float32frombits(bits)
 	}
 	return vec
 }
 
-// SaveFact inserts an extracted fact into the database.
+// SaveFact inserts an extracted fact into the database and its embedding
+// into the vec_facts virtual table for KNN search.
 // subject is "user" or "self". If sourceMessageID is 0, it's stored as NULL.
 // embedding is optional — pass nil if not yet computed.
-func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float64) (int64, error) {
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -550,10 +606,15 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 		subject = "user"
 	}
 
-	// Encode the embedding to bytes for BLOB storage.
+	// Serialize the embedding to bytes for the BLOB column on the facts table.
+	// This is the "source of truth" copy — vec_facts is the searchable index.
 	var embBlob interface{}
 	if len(embedding) > 0 {
-		embBlob = encodeEmbedding(embedding)
+		b, err := serializeEmbedding(embedding)
+		if err != nil {
+			return 0, fmt.Errorf("serializing embedding: %w", err)
+		}
+		embBlob = b
 	}
 
 	result, err := s.db.Exec(
@@ -568,19 +629,57 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 	if err != nil {
 		return 0, fmt.Errorf("getting fact ID: %w", err)
 	}
+
+	// Also insert into the vec_facts virtual table so this fact is
+	// searchable via KNN. The rowid matches facts.id for easy JOINs.
+	if len(embedding) > 0 && s.EmbedDimension > 0 {
+		vecBytes, err := serializeEmbedding(embedding)
+		if err != nil {
+			return id, nil // fact saved, vector index failed — non-fatal
+		}
+		if _, err := s.db.Exec(
+			`INSERT INTO vec_facts(rowid, embedding) VALUES (?, ?)`,
+			id, vecBytes,
+		); err != nil {
+			// Log but don't fail — the fact is saved, we just can't search it yet.
+			// This handles the case where vec_facts doesn't exist (dimension=0).
+			fmt.Printf("[memory] warning: vec_facts insert failed for fact %d: %v\n", id, err)
+		}
+	}
+
 	return id, nil
 }
 
-// UpdateFactEmbedding sets the cached embedding for a fact that was
-// saved without one (e.g., facts created before embeddings were enabled).
-func (s *Store) UpdateFactEmbedding(factID int64, embedding []float64) error {
-	_, err := s.db.Exec(
-		`UPDATE facts SET embedding = ? WHERE id = ?`,
-		encodeEmbedding(embedding), factID,
-	)
+// UpdateFactEmbedding sets the cached embedding for a fact and updates
+// the vec_facts index. Used for backfilling facts that were saved before
+// embeddings were enabled, or when a fact's text is updated.
+func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32) error {
+	vecBytes, err := serializeEmbedding(embedding)
 	if err != nil {
+		return fmt.Errorf("serializing embedding for fact %d: %w", factID, err)
+	}
+
+	// Update the BLOB on the facts table.
+	if _, err := s.db.Exec(
+		`UPDATE facts SET embedding = ? WHERE id = ?`,
+		vecBytes, factID,
+	); err != nil {
 		return fmt.Errorf("updating embedding for fact %d: %w", factID, err)
 	}
+
+	// Upsert into vec_facts — DELETE + INSERT because vec0 virtual tables
+	// don't support UPDATE. This is idempotent: if the row doesn't exist
+	// yet (new backfill), the DELETE is a no-op.
+	if s.EmbedDimension > 0 {
+		s.db.Exec(`DELETE FROM vec_facts WHERE rowid = ?`, factID)
+		if _, err := s.db.Exec(
+			`INSERT INTO vec_facts(rowid, embedding) VALUES (?, ?)`,
+			factID, vecBytes,
+		); err != nil {
+			return fmt.Errorf("updating vec_facts for fact %d: %w", factID, err)
+		}
+	}
+
 	return nil
 }
 
@@ -610,7 +709,7 @@ func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
-		f.Embedding = decodeEmbedding(embData)
+		f.Embedding = deserializeEmbedding(embData)
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -692,8 +791,9 @@ func (s *Store) UpdateFact(factID int64, fact, category string, importance int) 
 	return nil
 }
 
-// DeactivateFact soft-deletes a fact by setting active = 0.
-// The fact stays in the DB for audit trail but won't appear in retrieval.
+// DeactivateFact soft-deletes a fact by setting active = 0 and removing
+// it from the vec_facts index. The fact stays in the DB for audit trail
+// but won't appear in retrieval or vector search.
 func (s *Store) DeactivateFact(factID int64) error {
 	_, err := s.db.Exec(
 		`UPDATE facts SET active = 0 WHERE id = ?`,
@@ -701,6 +801,10 @@ func (s *Store) DeactivateFact(factID int64) error {
 	)
 	if err != nil {
 		return fmt.Errorf("deactivating fact %d: %w", factID, err)
+	}
+	// Remove from vec_facts so deactivated facts don't pollute KNN results.
+	if s.EmbedDimension > 0 {
+		s.db.Exec(`DELETE FROM vec_facts WHERE rowid = ?`, factID)
 	}
 	return nil
 }
@@ -729,10 +833,109 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
-		f.Embedding = decodeEmbedding(embData)
+		f.Embedding = deserializeEmbedding(embData)
 		facts = append(facts, f)
 	}
 	return facts, nil
+}
+
+// SemanticSearch finds the top-K facts most similar to a query vector
+// using sqlite-vec's KNN search. Returns facts with their cosine distance
+// (0 = identical, up to 2 = opposite). Only returns active facts.
+//
+// This is the core of v0.4's "She Understands" — instead of just grabbing
+// the most important facts, we find the facts most RELEVANT to what the
+// user is talking about right now.
+//
+// Under the hood, sqlite-vec uses the MATCH operator on the vec0 virtual
+// table. The query plan: KNN on vec_facts → get rowids → JOIN facts for
+// metadata → filter out inactive facts.
+func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
+	if s.EmbedDimension == 0 {
+		return nil, fmt.Errorf("semantic search not available: embed dimension is 0")
+	}
+
+	queryBytes, err := serializeEmbedding(queryVec)
+	if err != nil {
+		return nil, fmt.Errorf("serializing query vector: %w", err)
+	}
+
+	// We request more than topK from vec_facts because some results may
+	// be inactive facts (soft-deleted). We filter those out after the JOIN.
+	// Requesting 2x is a reasonable buffer.
+	rows, err := s.db.Query(
+		`SELECT f.id, f.timestamp, f.fact, f.category, COALESCE(f.subject, 'user'),
+		        f.importance, v.distance
+		 FROM vec_facts v
+		 JOIN facts f ON f.id = v.rowid
+		 WHERE v.embedding MATCH ?
+		   AND k = ?
+		   AND f.active = 1
+		 ORDER BY v.distance ASC`,
+		queryBytes, topK*2,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("semantic search query: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Distance); err != nil {
+			return nil, fmt.Errorf("scanning semantic search result: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
+		facts = append(facts, f)
+
+		// Stop once we have enough active results.
+		if len(facts) >= topK {
+			break
+		}
+	}
+	return facts, nil
+}
+
+// BackfillEmbeddings returns all active facts that don't have an embedding
+// yet (embedding BLOB is NULL or empty). The caller should embed each fact
+// and call UpdateFactEmbedding to populate both the BLOB and vec_facts index.
+func (s *Store) FactsWithoutEmbeddings() ([]Fact, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		 FROM facts
+		 WHERE active = 1 AND (embedding IS NULL OR LENGTH(embedding) = 0)
+		 ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying facts without embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var ts string
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+			return nil, fmt.Errorf("scanning fact: %w", err)
+		}
+		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		f.Active = true
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// VecFactsCount returns the number of rows in the vec_facts virtual table.
+// Useful for checking if a backfill is needed (compare against total active facts).
+func (s *Store) VecFactsCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM vec_facts`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting vec_facts: %w", err)
+	}
+	return count, nil
 }
 
 // SavePersonaVersion stores a snapshot of persona.md content in the
@@ -926,7 +1129,7 @@ func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
-		f.Embedding = decodeEmbedding(embData)
+		f.Embedding = deserializeEmbedding(embData)
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -1261,4 +1464,94 @@ func scanScheduledTasks(rows *sql.Rows) ([]ScheduledTask, error) {
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
+}
+
+// --- Mood Tracking ---
+
+// MoodEntry represents a single mood data point.
+type MoodEntry struct {
+	ID             int64
+	Timestamp      time.Time
+	Rating         int    // 1-5 scale: 1=bad, 2=rough, 3=meh, 4=good, 5=great
+	Note           string // optional free-text context
+	Tags           string // JSON: energy, stress, social context, etc.
+	Source         string // "inferred", "manual", "checkin"
+	ConversationID string
+}
+
+// SaveMoodEntry logs a mood data point. Source indicates where it came from:
+// "inferred" = LLM guessed from conversation, "manual" = agent tool,
+// "checkin" = proactive inline keyboard (v0.6).
+func (s *Store) SaveMoodEntry(rating int, note, tags, source, conversationID string) (int64, error) {
+	if rating < 1 {
+		rating = 1
+	}
+	if rating > 5 {
+		rating = 5
+	}
+	if source == "" {
+		source = "inferred"
+	}
+
+	result, err := s.db.Exec(
+		`INSERT INTO mood_entries (rating, note, tags, source, conversation_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		rating, note, tags, source, conversationID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving mood entry: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting mood entry ID: %w", err)
+	}
+	return id, nil
+}
+
+// RecentMoodEntries returns the last N mood entries, newest first.
+// Used to build mood trend context for the system prompt.
+func (s *Store) RecentMoodEntries(limit int) ([]MoodEntry, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, rating, COALESCE(note, ''), COALESCE(tags, ''),
+		        COALESCE(source, 'inferred'), COALESCE(conversation_id, '')
+		 FROM mood_entries
+		 ORDER BY timestamp DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying mood entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []MoodEntry
+	for rows.Next() {
+		var e MoodEntry
+		var ts string
+		if err := rows.Scan(&e.ID, &ts, &e.Rating, &e.Note, &e.Tags, &e.Source, &e.ConversationID); err != nil {
+			return nil, fmt.Errorf("scanning mood entry: %w", err)
+		}
+		e.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// MoodTrend returns the average mood rating over the last N entries.
+// Returns 0.0 if no entries exist.
+func (s *Store) MoodTrend(limit int) (float64, int, error) {
+	var avg sql.NullFloat64
+	var count int
+	err := s.db.QueryRow(
+		`SELECT AVG(rating), COUNT(*) FROM (
+			SELECT rating FROM mood_entries ORDER BY timestamp DESC LIMIT ?
+		)`, limit,
+	).Scan(&avg, &count)
+	if err != nil {
+		return 0, 0, fmt.Errorf("calculating mood trend: %w", err)
+	}
+	if avg.Valid {
+		return avg.Float64, count, nil
+	}
+	return 0, 0, nil
 }

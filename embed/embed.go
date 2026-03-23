@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+// Dimension is the vector size the embedding model produces.
+// nomic-embed-text-v1.5 → 768, OpenAI text-embedding-3-small → 1536, etc.
+// Set this based on your model; it's used to size the sqlite-vec virtual table.
+const DefaultDimension = 768
+
 // Client wraps an HTTP client configured to talk to an embedding API.
 // It's similar in shape to llm.Client — base URL + model name.
 //
@@ -26,16 +31,23 @@ import (
 type Client struct {
 	baseURL    string
 	model      string
+	Dimension  int // vector dimension (e.g. 768 for nomic-embed-text-v1.5)
 	httpClient *http.Client
 }
 
 // NewClient creates an embedding client pointed at the given server.
 // For LM Studio: baseURL = "http://localhost:1234/v1"
 // For Ollama: baseURL = "http://localhost:11434/v1"
-func NewClient(baseURL, model string) *Client {
+// dimension is the vector size your model produces (768 for nomic-embed-text-v1.5).
+// Pass 0 to use DefaultDimension.
+func NewClient(baseURL, model string, dimension int) *Client {
+	if dimension <= 0 {
+		dimension = DefaultDimension
+	}
 	return &Client{
-		baseURL: baseURL,
-		model:   model,
+		baseURL:   baseURL,
+		model:     model,
+		Dimension: dimension,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -50,16 +62,20 @@ type embeddingRequest struct {
 
 // embeddingResponse is the JSON response from the /embeddings endpoint.
 // The actual vector lives in Data[0].Embedding.
+// Note: the API returns float64 JSON numbers, but we convert to float32
+// immediately — embedding vectors don't need 64-bit precision, and
+// sqlite-vec (our vector index) works with float32 natively.
 type embeddingResponse struct {
 	Data []struct {
 		Embedding []float64 `json:"embedding"`
 	} `json:"data"`
 }
 
-// Embed returns the embedding vector for a single text string.
+// Embed returns the embedding vector for a single text string as float32.
 // The vector length depends on the model — nomic-embed-text-v1.5
-// returns 768-dimensional vectors.
-func (c *Client) Embed(text string) ([]float64, error) {
+// returns 768-dimensional vectors. We use float32 because that's what
+// sqlite-vec expects, and it halves storage with no meaningful precision loss.
+func (c *Client) Embed(text string) ([]float32, error) {
 	reqBody := embeddingRequest{
 		Model: c.model,
 		Input: text,
@@ -101,30 +117,45 @@ func (c *Client) Embed(text string) ([]float64, error) {
 		return nil, fmt.Errorf("empty embedding returned")
 	}
 
-	return embResp.Data[0].Embedding, nil
+	// Convert float64 (JSON default) → float32 (sqlite-vec native format).
+	// This is like numpy's .astype(np.float32) — a narrowing conversion
+	// that's safe for embedding vectors since models don't produce
+	// more than ~7 digits of precision anyway.
+	f64 := embResp.Data[0].Embedding
+	vec := make([]float32, len(f64))
+	for i, v := range f64 {
+		vec[i] = float32(v)
+	}
+
+	return vec, nil
 }
 
-// CosineSimilarity computes the cosine similarity between two vectors.
+// CosineSimilarity computes the cosine similarity between two float32 vectors.
 // Returns a value between -1.0 and 1.0, where:
 //   - 1.0 means identical direction (semantically identical)
 //   - 0.0 means orthogonal (unrelated)
 //   - -1.0 means opposite (semantically opposite)
 //
 // For memory deduplication, we typically consider > 0.85 as "too similar."
+// For semantic search, we use sqlite-vec's built-in cosine distance instead,
+// but this is still useful for quick in-memory comparisons (e.g., dedup checks
+// when the embedding is already loaded).
 //
 // The math: cos(θ) = (A · B) / (|A| × |B|)
 // In Python you'd use numpy: np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-// In Go, we do the same thing with a loop.
-func CosineSimilarity(a, b []float64) float64 {
+// In Go, we do the same thing with a loop. We accumulate in float64 for
+// numerical stability even though the inputs are float32.
+func CosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
 
 	var dot, normA, normB float64
 	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
+		ai, bi := float64(a[i]), float64(b[i])
+		dot += ai * bi
+		normA += ai * ai
+		normB += bi * bi
 	}
 
 	denominator := math.Sqrt(normA) * math.Sqrt(normB)

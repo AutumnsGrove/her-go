@@ -12,7 +12,7 @@ llm:
   max_tokens: 1024
 
 agent:
-  model: "arcee-ai/trinity-large-preview:free"  # tool-calling model for memory management
+  model: "minimax/minimax-m2.5"                 # tool-calling model for memory management (230B MoE, 10B active)
   temperature: 0.1                              # low temp for precise tool decisions
   max_tokens: 512
 
@@ -24,6 +24,7 @@ vision:
 embed:
   base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
+  dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
 
 search:
