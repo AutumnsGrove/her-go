@@ -61,12 +61,12 @@ voice:
   stt:
     engine: "parakeet"                                            # "parakeet" or "cf-workers-ai"
     base_url: "http://localhost:8765"                              # parakeet-mlx-fastapi server
-    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path
+    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path (e.g. ~/.lmstudio/models/mlx-community/parakeet-tdt-0.6b-v2)
   tts:
     enabled: false                                                # set true to reply with voice
     engine: "kokoro"                                              # "kokoro" or future options
     base_url: "http://localhost:8766"                              # mlx-audio server
-    model: "mlx-community/Kokoro-82M-bf16"                        # HuggingFace model ID or local path
+    model: "kokoro-v1.0"                                           # model name (kokoro-onnx loads from scripts/kokoro-v1.0.onnx)
     voice_id: "bf_lily"                                          # voice preset (see VOICES.md in model repo)
     speed: 1.0                                                    # speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)

@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"her/config"
 
 	"github.com/spf13/cobra"
 )
@@ -61,6 +65,40 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	// Also show run count if available.
 	if val := parseLaunchctlField(output, "runs"); val != "" {
 		fmt.Printf("  Run count:   %s\n", val)
+	}
+
+	// Show sidecar status by hitting their health endpoints.
+	cfg, err := config.Load("config.yaml")
+	if err == nil {
+		fmt.Println()
+		fmt.Println("Sidecars:")
+		httpClient := &http.Client{Timeout: 2 * time.Second}
+
+		// Parakeet STT
+		sttStatus := "disabled"
+		if cfg.Voice.Enabled && cfg.Voice.STT.BaseURL != "" {
+			sttURL := strings.TrimRight(cfg.Voice.STT.BaseURL, "/") + "/healthz"
+			if resp, err := httpClient.Get(sttURL); err == nil {
+				resp.Body.Close()
+				sttStatus = fmt.Sprintf("running (%s)", cfg.Voice.STT.BaseURL)
+			} else {
+				sttStatus = "not responding"
+			}
+		}
+		fmt.Printf("  Parakeet STT:  %s  [model: %s]\n", sttStatus, cfg.Voice.STT.Model)
+
+		// Piper TTS
+		ttsStatus := "disabled"
+		if cfg.Voice.TTS.Enabled && cfg.Voice.TTS.BaseURL != "" {
+			ttsURL := strings.TrimRight(cfg.Voice.TTS.BaseURL, "/") + "/healthz"
+			if resp, err := httpClient.Get(ttsURL); err == nil {
+				resp.Body.Close()
+				ttsStatus = fmt.Sprintf("running (%s)", cfg.Voice.TTS.BaseURL)
+			} else {
+				ttsStatus = "not responding"
+			}
+		}
+		fmt.Printf("  Piper TTS:     %s  [voice: %s]\n", ttsStatus, cfg.Voice.TTS.VoiceID)
 	}
 
 	fmt.Println()

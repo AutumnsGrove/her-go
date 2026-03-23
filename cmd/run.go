@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"os/signal"
 	"syscall"
 	"time"
@@ -186,6 +187,8 @@ func runBot(cmd *cobra.Command, args []string) error {
 			// subprocess.Popen(stderr=subprocess.PIPE) but simpler.
 			sttProcess.Stdout = os.Stderr
 			sttProcess.Stderr = os.Stderr
+			// Own process group so we can kill the entire tree on shutdown.
+			sttProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 			if err := sttProcess.Start(); err != nil {
 				log.Error("failed to start parakeet-server", "err", err)
@@ -209,17 +212,16 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Start the Kokoro TTS server if TTS is enabled.
-	// Same sidecar pattern as parakeet — mlx-audio ships a built-in
-	// server (mlx_audio.server) with an OpenAI-compatible speech endpoint.
+	// We run our custom tts_server.py via `uv run` — uv reads the inline
+	// script dependencies (PEP 723) and auto-installs piper-tts, fastapi,
+	// etc. into an isolated env. The script loads the ONNX model from
+	// scripts/ and exposes an OpenAI-compatible /v1/audio/speech endpoint.
 	var ttsProcess *exec.Cmd
 	ttsClient := voice.NewTTSClient(&cfg.Voice.TTS)
 	if ttsClient != nil {
-		// mlx-audio installs as mlx_audio.server — it's a Python module,
-		// not a standalone binary. We run it via "python -m mlx_audio.server".
-		// But uv tool install puts it at mlx_audio.server as an executable.
-		ttsPath, err := exec.LookPath("mlx_audio.server")
+		uvPath, err := exec.LookPath("uv")
 		if err != nil {
-			log.Warn("mlx_audio.server not found in PATH — TTS will fail. Run: her setup")
+			log.Warn("uv not found in PATH — TTS will fail. Run: her setup")
 		} else {
 			ttsHost := "127.0.0.1"
 			ttsPort := "8766"
@@ -232,24 +234,32 @@ func runBot(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			ttsProcess = exec.Command(ttsPath,
+			// Resolve the script path relative to the working directory.
+			ttsScript := filepath.Join("scripts", "tts_server.py")
+
+			ttsProcess = exec.Command(uvPath, "run", ttsScript,
 				"--host", ttsHost,
 				"--port", ttsPort,
 			)
 			ttsProcess.Stdout = os.Stderr
 			ttsProcess.Stderr = os.Stderr
+			// Start the TTS server in its own process group so we can
+			// kill the entire tree (uv + uvicorn) on shutdown, not just
+			// the uv parent. Without this, uvicorn gets orphaned and
+			// spills shutdown logs into the terminal after we've exited.
+			ttsProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 			if err := ttsProcess.Start(); err != nil {
-				log.Error("failed to start mlx-audio server", "err", err)
+				log.Error("failed to start TTS server", "err", err)
 			} else {
-				log.Info("mlx-audio TTS server started", "pid", ttsProcess.Process.Pid, "model", cfg.Voice.TTS.Model)
+				log.Info("piper TTS server started", "pid", ttsProcess.Process.Pid)
 
 				go func() {
 					time.Sleep(5 * time.Second)
 					if ttsClient.IsAvailable() {
-						log.Info("mlx-audio TTS server is ready")
+						log.Info("piper TTS server is ready")
 					} else {
-						log.Warn("mlx-audio TTS server not responding yet — first voice reply may be slow")
+						log.Warn("piper TTS server not responding yet — first voice reply may be slow")
 					}
 				}()
 			}
@@ -294,12 +304,14 @@ func runBot(cmd *cobra.Command, args []string) error {
 		// to flush anything, and we want a fast shutdown.
 		if sttProcess != nil && sttProcess.Process != nil {
 			log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
-			_ = sttProcess.Process.Kill()
+			_ = syscall.Kill(-sttProcess.Process.Pid, syscall.SIGKILL)
 			_, _ = sttProcess.Process.Wait()
 		}
 		if ttsProcess != nil && ttsProcess.Process != nil {
-			log.Info("stopping mlx-audio TTS server", "pid", ttsProcess.Process.Pid)
-			_ = ttsProcess.Process.Kill()
+			log.Info("stopping piper TTS server", "pid", ttsProcess.Process.Pid)
+			// Kill the entire process group (negative PID) so uvicorn
+			// dies with the uv parent — no orphaned shutdown logs.
+			_ = syscall.Kill(-ttsProcess.Process.Pid, syscall.SIGKILL)
 			_, _ = ttsProcess.Process.Wait()
 		}
 		tgBot.Stop()

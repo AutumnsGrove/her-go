@@ -40,3 +40,8 @@ Thumbs.db
 *.swo
 logs/stderr.log
 logs/stdout.log
+
+# TTS model files (large, downloaded at setup time)
+scripts/kokoro-v1.0.onnx
+scripts/voices-v1.0.bin
+scripts/piper-voices/

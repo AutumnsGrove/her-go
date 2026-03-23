@@ -48,7 +48,7 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 
 	voiceID := cfg.VoiceID
 	if voiceID == "" {
-		voiceID = "bf_lily" // warm, friendly default
+		voiceID = "bf_alice" // warm, friendly default
 	}
 
 	speed := cfg.Speed

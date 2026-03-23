@@ -84,7 +84,7 @@ var setupCmd = &cobra.Command{
 	Long: `Does everything needed to install Mira as a launchd service:
 
   1. Build the binary (go build)
-  2. Install ML dependencies in background (parakeet-mlx, ffmpeg check)
+  2. Install ML dependencies in background (parakeet-mlx, piper voice models, ffmpeg check)
   3. Generate a plist file for the current machine
   4. Create the logs directory
   5. Install the plist to ~/Library/LaunchAgents
@@ -184,35 +184,53 @@ func installDeps() <-chan depResult {
 		results <- depResult{"parakeet-server", true, "installed"}
 	}()
 
-	// Install mlx-audio (TTS server for Kokoro).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if _, err := exec.LookPath("uv"); err != nil {
-			results <- depResult{"mlx-audio", false, "skipped (uv not available)"}
-			return
-		}
-		// mlx-audio has missing/broken dependencies in its package
-		// metadata — we need to explicitly add uvicorn, fastapi,
-		// webrtcvad-wheels, setuptools, and python-multipart.
-		out, err := exec.Command("uv", "tool", "install", "mlx-audio",
-			"--with", "uvicorn",
-			"--with", "fastapi",
-			"--with", "webrtcvad-wheels",
-			"--with", "setuptools",
-			"--with", "python-multipart",
-		).CombinedOutput()
-		msg := strings.TrimSpace(string(out))
-		if err != nil {
-			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
-				results <- depResult{"mlx-audio", true, "already installed"}
+	// Download Piper TTS voice model files.
+	// These are ONNX model weights + a JSON config — we download them
+	// once to scripts/piper-voices/. The tts_server.py loads them at startup.
+	piperVoicesDir := filepath.Join("scripts", "piper-voices")
+	piperFiles := []struct {
+		name string
+		url  string
+		dest string
+	}{
+		{
+			"piper-voice-model",
+			"https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx",
+			filepath.Join(piperVoicesDir, "en_GB-southern_english_female-low.onnx"),
+		},
+		{
+			"piper-voice-config",
+			"https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/southern_english_female/low/en_GB-southern_english_female-low.onnx.json",
+			filepath.Join(piperVoicesDir, "en_GB-southern_english_female-low.onnx.json"),
+		},
+	}
+
+	// Ensure the voices directory exists.
+	_ = os.MkdirAll(piperVoicesDir, 0o755)
+
+	for _, pf := range piperFiles {
+		pf := pf // capture loop variable for the goroutine
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// Skip download if file already exists.
+			if info, err := os.Stat(pf.dest); err == nil && info.Size() > 0 {
+				results <- depResult{pf.name, true, fmt.Sprintf("already downloaded (%s)", pf.dest)}
 				return
 			}
-			results <- depResult{"mlx-audio", false, msg}
-			return
-		}
-		results <- depResult{"mlx-audio", true, "installed"}
-	}()
+
+			// Use curl to download — -L follows redirects (HuggingFace
+			// redirects to CDN), --fail returns non-zero on HTTP errors.
+			out, err := exec.Command("curl", "-L", "--fail", "-o", pf.dest, pf.url).CombinedOutput()
+			msg := strings.TrimSpace(string(out))
+			if err != nil {
+				results <- depResult{pf.name, false, fmt.Sprintf("download failed: %s", msg)}
+				return
+			}
+			results <- depResult{pf.name, true, fmt.Sprintf("downloaded to %s", pf.dest)}
+		}()
+	}
 
 	// Close the channel once all goroutines finish.
 	// This runs in its own goroutine so installDeps() returns immediately.

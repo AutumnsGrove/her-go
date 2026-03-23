@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,12 @@ var log = logger.WithPrefix("agent")
 // pass a lambda; in Go you declare the function signature as a type.
 type StatusCallback func(status string) error
 
+// TTSCallback is a function the bot provides so the agent can trigger
+// voice synthesis immediately when a reply is sent, rather than waiting
+// for the entire agent loop to finish. This runs in a goroutine so it
+// doesn't block the agent from continuing to think/act.
+type TTSCallback func(text string)
+
 // toolContext bundles all the dependencies that tool execution functions need.
 // This grew from the original version — it now includes everything the
 // reply tool needs to generate a full conversational response, plus the
@@ -42,6 +49,7 @@ type toolContext struct {
 	similarityThreshold float64
 	personaFile         string
 	statusCallback      StatusCallback
+	ttsCallback         TTSCallback
 
 	// chatLLM is the conversational model (Deepseek). The reply tool
 	// uses this to generate the actual natural language response.
@@ -147,6 +155,7 @@ type RunParams struct {
 	ConversationID      string
 	TriggerMsgID        int64
 	StatusCallback      StatusCallback
+	TTSCallback         TTSCallback
 	ReflectionThreshold int
 	RewriteEveryN       int
 	ImageBase64         string // base64-encoded image data (empty if no image)
@@ -234,6 +243,7 @@ func Run(params RunParams) (*RunResult, error) {
 		similarityThreshold: params.SimilarityThreshold,
 		personaFile:         params.Cfg.Persona.PersonaFile,
 		statusCallback:      params.StatusCallback,
+		ttsCallback:         params.TTSCallback,
 		chatLLM:             params.ChatLLM,
 		visionLLM:           params.VisionLLM,
 		tavilyClient:        params.TavilyClient,
@@ -255,6 +265,12 @@ func Run(params RunParams) (*RunResult, error) {
 	// We loop up to 10 iterations to allow for think + search + refine cycles.
 	// With the think tool, a typical complex flow might use 6-7 iterations:
 	// think → search → think(evaluate) → search(refine) → think → reply → save_fact
+	// Track the last think content to detect loops — if the agent
+	// produces the same think text twice in a row, it's stuck and
+	// we should force it to reply instead of burning iterations.
+	var lastThinkContent string
+	var repeatCount int
+
 	for i := 0; i < 10; i++ {
 		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
@@ -275,6 +291,24 @@ func Run(params RunParams) (*RunResult, error) {
 				log.Info("  done (no actions)")
 			}
 			break
+		}
+
+		// Detect think loops — if the agent calls think with the same
+		// content twice in a row, it's stuck. Break out and force a reply.
+		if len(resp.ToolCalls) == 1 && resp.ToolCalls[0].Function.Name == "think" {
+			if resp.ToolCalls[0].Function.Arguments == lastThinkContent {
+				repeatCount++
+				if repeatCount >= 2 {
+					log.Warn("think loop detected, forcing reply", "repeats", repeatCount+1)
+					break
+				}
+			} else {
+				lastThinkContent = resp.ToolCalls[0].Function.Arguments
+				repeatCount = 0
+			}
+		} else {
+			lastThinkContent = ""
+			repeatCount = 0
 		}
 
 		log.Infof("  %d tool call(s):", len(resp.ToolCalls))
@@ -591,10 +625,15 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		tctx.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
 	}
 
+	// Strip any [Agent note: ...] or [Agent instruction: ...] blocks that
+	// the LLM sometimes echoes back. These are internal reasoning artifacts
+	// that should never reach the user.
+	cleanedContent := stripAgentNotes(resp.Content)
+
 	// Deanonymize PII tokens before sending to the user.
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
-	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
+	replyText := scrub.Deanonymize(cleanedContent, tctx.scrubVault)
 
 	// Send the response to Telegram by editing the placeholder message.
 	if tctx.statusCallback != nil {
@@ -603,10 +642,28 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		}
 	}
 
+	// Fire TTS immediately — don't wait for the agent loop to finish.
+	// This runs in a goroutine so the agent can keep thinking/acting
+	// while the voice memo is being synthesized and sent.
+	if tctx.ttsCallback != nil {
+		go tctx.ttsCallback(replyText)
+	}
+
 	tctx.replyCalled = true
 	tctx.replyText = replyText
 
 	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
+}
+
+// stripAgentNotes removes [Agent note: ...] and similar bracketed meta
+// blocks that the LLM sometimes echoes back from its instructions.
+// These are internal reasoning and should never reach the user.
+func stripAgentNotes(text string) string {
+	// Match [Agent note: ...], [Agent instruction: ...], etc.
+	// The (?s) flag makes . match newlines so multi-line notes get caught.
+	re := regexp.MustCompile(`(?s)\[Agent\s+\w+:.*?\]\s*`)
+	cleaned := re.ReplaceAllString(text, "")
+	return strings.TrimSpace(cleaned)
 }
 
 // buildChatSystemPrompt assembles the full system prompt for the

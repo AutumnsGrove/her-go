@@ -255,6 +255,15 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Step 6: Run the agent SYNCHRONOUSLY. The agent is the pipeline now —
 	// it decides whether to search, what to reply, and handles memory.
 	// This blocks until the agent has called reply and finished.
+	// Build the TTS callback — fires inside execReply so voice synthesis
+	// starts immediately when text is sent, not after the whole agent loop.
+	var ttsCallback agent.TTSCallback
+	if b.ttsClient != nil && b.ttsClient.ReplyMode() == "voice" {
+		ttsCallback = func(text string) {
+			b.sendVoiceReply(c, text)
+		}
+	}
+
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
@@ -269,6 +278,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		ConversationID:      conversationID,
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
+		TTSCallback:         ttsCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 	})
@@ -277,18 +287,11 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	if err != nil {
 		log.Error("agent error", "err", err)
-		// If the agent failed entirely, edit the placeholder with an error message.
 		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
 		return nil
 	}
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
-
-	// If TTS is in "voice" mode (always reply with voice), synthesize
-	// and send a voice memo alongside the text reply.
-	if b.ttsClient != nil && b.ttsClient.ReplyMode() == "voice" && result.ReplyText != "" {
-		b.sendVoiceReply(c, result.ReplyText)
-	}
 
 	log.Info("─── reply sent ───")
 
@@ -626,6 +629,14 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		return err
 	}
 
+	// TTS callback — same pattern as handleMessage.
+	var ttsCallback agent.TTSCallback
+	if b.ttsClient != nil {
+		ttsCallback = func(text string) {
+			b.sendVoiceReply(c, text)
+		}
+	}
+
 	// Run the agent pipeline with the transcribed text.
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
@@ -641,6 +652,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		ConversationID:      conversationID,
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
+		TTSCallback:         ttsCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 	})
@@ -654,13 +666,6 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
-
-	// If TTS is enabled, synthesize the reply as a voice memo and
-	// send it back. The text reply stays in the placeholder message
-	// above, so the user gets both: a text bubble + a voice memo.
-	if b.ttsClient != nil && result.ReplyText != "" {
-		b.sendVoiceReply(c, result.ReplyText)
-	}
 
 	log.Info("─── voice reply sent ───")
 
@@ -1001,6 +1006,24 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		visionStatus = "on"
 	}
 
+	// Check voice sidecars via health endpoints.
+	sttStatus := "off"
+	if b.voiceClient != nil {
+		if b.voiceClient.IsAvailable() {
+			sttStatus = "running"
+		} else {
+			sttStatus = "not responding"
+		}
+	}
+	ttsStatus := "off"
+	if b.ttsClient != nil {
+		if b.ttsClient.IsAvailable() {
+			ttsStatus = "running"
+		} else {
+			ttsStatus = "not responding"
+		}
+	}
+
 	// Check if running under launchd.
 	managedBy := "manual (go run)"
 	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged() {
@@ -1021,6 +1044,9 @@ func (b *Bot) handleStatus(c tele.Context) error {
 			"  Embeddings: %s\n"+
 			"  Web search: %s\n"+
 			"  Vision: %s\n\n"+
+			"<b>Voice:</b>\n"+
+			"  STT (Parakeet): %s [%s]\n"+
+			"  TTS (Piper): %s [%s]\n\n"+
 			"<b>Session:</b>\n"+
 			"  Messages: %d\n"+
 			"  Facts: %d\n"+
@@ -1029,6 +1055,8 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		uptime, managedBy, runtime.Version(), convID,
 		b.cfg.LLM.Model, b.cfg.Agent.Model, b.cfg.Vision.Model,
 		embedStatus, tavilyStatus, visionStatus,
+		sttStatus, b.cfg.Voice.STT.Model,
+		ttsStatus, b.cfg.Voice.TTS.VoiceID,
 		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
 		c.Message().Chat.ID,
 	)
