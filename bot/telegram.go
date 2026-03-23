@@ -85,6 +85,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	}
 
 	// Register command handlers.
+	tb.Handle("/help", bot.handleHelp)
 	tb.Handle("/clear", bot.handleClear)
 	tb.Handle("/stats", bot.handleStats)
 	tb.Handle("/forget", bot.handleForget)
@@ -446,6 +447,30 @@ func (b *Bot) getConversationID(chatID int64) string {
 	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 	b.conversationIDs.Store(key, newID)
 	return newID
+}
+
+// handleHelp shows all available commands.
+func (b *Bot) handleHelp(c tele.Context) error {
+	msg := "\U0001F4D6 <b>Commands</b>\n\n" +
+		"<b>Conversation</b>\n" +
+		"/clear — start a fresh conversation\n" +
+		"/compact — summarize older messages to free up context\n\n" +
+		"<b>Memory</b>\n" +
+		"/facts — list all remembered facts\n" +
+		"/forget <code>&lt;id&gt;</code> — forget a specific fact\n\n" +
+		"<b>Persona</b>\n" +
+		"/persona — view Mira's current personality\n" +
+		"/reflect — trigger a reflection on recent conversations\n\n" +
+		"<b>Info</b>\n" +
+		"/stats — token usage, cost, and message counts\n" +
+		"/status — uptime, models, and service health\n\n" +
+		"<b>System</b>\n" +
+		"/restart — restart the bot process\n" +
+		"/help — this message\n\n" +
+		"<b>Features</b>\n" +
+		"Send a photo and Mira will describe what she sees.\n" +
+		"Just chat normally — she remembers your conversations."
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handleClear resets the conversation context.
