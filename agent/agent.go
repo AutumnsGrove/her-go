@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -579,6 +578,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execLogMood(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
+	case "get_current_time":
+		return execGetCurrentTime(tctx)
 	case "no_action":
 		return "ok, no action taken"
 	case "done":
@@ -678,6 +679,26 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 
+	// Guard against degenerate responses. If the chat model returned
+	// something suspiciously short (< 5 chars) or repetitive, it was
+	// likely rate-limited or glitching. These garbage responses poison
+	// the conversation history if saved, causing a feedback loop where
+	// every subsequent turn degenerates further (the "ohohoh" incident).
+	if isDegenerate(resp.Content) {
+		log.Warn("reply: degenerate response detected, retrying once", "content", truncateLog(resp.Content, 80))
+		// One retry — if the model is genuinely down, the fallback
+		// in the agent loop will catch it.
+		resp, err = tctx.chatLLM.ChatCompletion(llmMessages)
+		if err != nil {
+			log.Error("reply: retry LLM error", "err", err)
+			return fmt.Sprintf("error generating response: %v", err)
+		}
+		if isDegenerate(resp.Content) {
+			log.Error("reply: degenerate response on retry too", "content", truncateLog(resp.Content, 80))
+			return "error: model returned a degenerate response. Try again in a moment."
+		}
+	}
+
 	// Save the response to the database.
 	respID, err := tctx.store.SaveMessage("assistant", resp.Content, resp.Content, tctx.conversationID)
 	if err != nil {
@@ -718,15 +739,35 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
 }
 
-// stripAgentNotes removes [Agent note: ...] and similar bracketed meta
-// blocks that the LLM sometimes echoes back from its instructions.
-// These are internal reasoning and should never reach the user.
-func stripAgentNotes(text string) string {
-	// Match [Agent note: ...], [Agent instruction: ...], etc.
-	// The (?s) flag makes . match newlines so multi-line notes get caught.
-	re := regexp.MustCompile(`(?s)\[Agent\s+\w+:.*?\]\s*`)
-	cleaned := re.ReplaceAllString(text, "")
-	return strings.TrimSpace(cleaned)
+
+// isDegenerate detects garbage LLM outputs that would poison conversation
+// history if saved. Catches single-character responses, excessive repetition
+// (like "ohohohohoh..."), and empty responses. These typically happen when
+// the model is rate-limited, overloaded, or in a degenerate loop.
+func isDegenerate(text string) bool {
+	trimmed := strings.TrimSpace(text)
+
+	// Empty or extremely short (single char, stray punctuation).
+	if len(trimmed) < 3 {
+		return true
+	}
+
+	// Repetition detector: if any 2-4 character substring repeats to
+	// fill most of the response, it's degenerate. We check by taking
+	// a small prefix and seeing if repeating it reconstructs the text.
+	if len(trimmed) > 20 {
+		for patLen := 1; patLen <= 4; patLen++ {
+			pat := trimmed[:patLen]
+			repeated := strings.Repeat(pat, len(trimmed)/patLen+1)
+			// If the repeated pattern matches at least 90% of the text,
+			// it's a repetition loop.
+			if len(repeated) >= len(trimmed) && repeated[:len(trimmed)] == trimmed {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // buildChatSystemPrompt assembles the full system prompt for the
@@ -785,6 +826,24 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 //   web_search("The Martian Andy Weir scientific accuracy")
 //   think("these results are much better, user will want to know about...")
 //   reply(...)
+// execGetCurrentTime returns the current date and time in the user's
+// configured timezone. Simple but essential — without this, the agent
+// has no idea if it's morning or midnight.
+func execGetCurrentTime(tctx *toolContext) string {
+	loc, err := time.LoadLocation(tctx.cfg.Scheduler.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+
+	now := time.Now().In(loc)
+
+	// Include day of week, full date, time, and timezone — everything
+	// the agent might need for time-based reasoning.
+	result := now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
+	log.Info("  get_current_time", "result", result)
+	return result
+}
+
 func execThink(argsJSON string, tctx *toolContext) string {
 	var args struct {
 		Thought string `json:"thought"`

@@ -430,6 +430,18 @@ func ToolDefs() []llm.ToolDef {
 				},
 			},
 		},
+		// --- Time tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "get_current_time",
+				Description: "Get the current date and time in the user's timezone. Use when you need to know what time it is, what day of the week it is, or to reason about timing (e.g., 'is it morning or evening?', 'is this reminder for today or tomorrow?').",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
