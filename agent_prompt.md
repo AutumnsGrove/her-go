@@ -37,14 +37,15 @@ Use think to:
 - recall_memories: Search stored memories by semantic similarity. Use when the user asks "do you remember...", references something from a past conversation, or when you need specific context. Returns the most relevant matching facts.
 - update_persona: Rewrite Mira's persona (EXTREMELY RARE — only after 5+ self-facts suggest a clear pattern)
 
-### Time
-- get_current_time: Get the current date, time, and day of week. Call this BEFORE reply whenever the user's message involves time — "what time is it", "is it too late to call", "remind me tomorrow", "good morning", or anything where knowing the current time/day matters for your response. Zero cost — just call it whenever time might be relevant.
+### Time & Location
+- get_current_time: Get the current date, time, and day of week. Note: the current time is already injected into your system context automatically, so you always know what time it is. Use this tool only when you need a precise fresh timestamp (e.g., computing exact reminder times).
+- set_location: Set the user's location by city name (e.g., "Portland Oregon"). This enables weather data in conversations. Use when the user mentions where they live or you learn their location. No lat/lon needed — coordinates are looked up automatically.
 
 ### Mood Tracking
 - log_mood: Log the user's emotional state when they express how they're feeling. Use when the user says "I'm having a rough day", "feeling great", "stressed out", etc. Don't log mood for purely informational messages.
 
 ### Scheduling
-- create_reminder: Create a one-shot reminder at a specific time. You MUST call get_current_time first to know what "today", "tomorrow", "in 2 hours" actually means.
+- create_reminder: Create a one-shot reminder at a specific time. The current time is in your context — use it to compute absolute timestamps from relative times like "tomorrow at 3pm".
 - create_schedule: Create a recurring scheduled task with a cron expression.
 - list_schedules: List all active scheduled tasks.
 - update_schedule: Pause or resume a scheduled task.

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -201,6 +203,88 @@ func (c *Client) FormatContext() string {
 		precipStr,
 		weather.WindSpeed, weather.WindUnit,
 	)
+}
+
+// SetLocation updates the client's coordinates and clears the cache
+// so the next fetch gets weather for the new location. Called by the
+// set_location agent tool after geocoding a city name.
+func (c *Client) SetLocation(lat, lon float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.latitude = lat
+	c.longitude = lon
+	c.cached = nil // force re-fetch for new location
+	log.Info("location updated", "lat", lat, "lon", lon)
+}
+
+// GeoLocation holds the result of a geocoding lookup.
+type GeoLocation struct {
+	Name      string  // city name
+	Region    string  // state/province
+	Country   string  // country name
+	Latitude  float64
+	Longitude float64
+}
+
+// geocodingResponse is the JSON shape from the Open-Meteo geocoding API.
+type geocodingResponse struct {
+	Results []struct {
+		Name      string  `json:"name"`
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+		Country   string  `json:"country"`
+		Admin1    string  `json:"admin1"` // state/province
+	} `json:"results"`
+}
+
+// GeocodeLookup searches for a location by name using the Open-Meteo
+// geocoding API (free, no key needed). Returns the top result.
+// This is a package-level function — it doesn't need a Client since
+// geocoding is a one-off operation independent of weather fetching.
+func GeocodeLookup(query string) (*GeoLocation, error) {
+	// URL-encode the query so "Portland Oregon" becomes "Portland%20Oregon".
+	// Without this, spaces break the request.
+	reqURL := fmt.Sprintf(
+		"https://geocoding-api.open-meteo.com/v1/search?name=%s&count=5&language=en",
+		url.QueryEscape(query),
+	)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("geocoding lookup: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("geocoding API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result geocodingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing geocoding response: %w", err)
+	}
+
+	// If no results with the full query (e.g., "Portland Oregon"),
+	// try just the first word (e.g., "Portland"). The API treats the
+	// name parameter as a single search term, not "city + state".
+	if len(result.Results) == 0 {
+		parts := strings.Fields(query)
+		if len(parts) > 1 {
+			return GeocodeLookup(parts[0])
+		}
+		return nil, fmt.Errorf("no results found for %q", query)
+	}
+
+	r := result.Results[0]
+	return &GeoLocation{
+		Name:      r.Name,
+		Region:    r.Admin1,
+		Country:   r.Country,
+		Latitude:  r.Latitude,
+		Longitude: r.Longitude,
+	}, nil
 }
 
 // wmoDescription translates WMO weather codes to human-readable

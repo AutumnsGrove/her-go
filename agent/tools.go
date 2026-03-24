@@ -430,6 +430,25 @@ func ToolDefs() []llm.ToolDef {
 				},
 			},
 		},
+		// --- Location tool ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "set_location",
+				Description: "Set the user's location by city/place name. This enables weather data in conversations. Use when the user mentions where they live or says something like 'I'm in Portland'. Looks up the coordinates automatically — no need for lat/lon.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "City and state/country name (e.g., 'Portland Oregon', 'London UK', 'Tokyo')",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+
 		// --- Time tool ---
 		{
 			Type: "function",

@@ -591,6 +591,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execThink(tc.Function.Arguments, tctx)
 	case "get_current_time":
 		return execGetCurrentTime(tctx)
+	case "set_location":
+		return execSetLocation(tc.Function.Arguments, tctx)
 	case "no_action":
 		return "ok, no action taken"
 	case "done":
@@ -805,7 +807,12 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 		parts = append(parts, string(personaBytes))
 	}
 
-	// Layer 3: Memory context — blend of semantically relevant facts
+	// Layer 3: Current time — always injected so Mira knows what time
+	// of day it is, what day of the week, etc. This is NOT optional —
+	// without it, she has no sense of time at all.
+	parts = append(parts, buildTimeContext(tctx.cfg.Scheduler.Timezone))
+
+	// Layer 4: Memory context — blend of semantically relevant facts
 	// (from KNN search) and high-importance facts (always-present).
 	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
@@ -846,6 +853,42 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 //   web_search("The Martian Andy Weir scientific accuracy")
 //   think("these results are much better, user will want to know about...")
 //   reply(...)
+// execSetLocation looks up a city name via Open-Meteo geocoding and
+// updates the weather client's coordinates. Also saves the location
+// as a fact so it persists across restarts.
+func execSetLocation(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+	if args.Query == "" {
+		return "error: query is required (e.g., 'Portland Oregon')"
+	}
+
+	// Look up coordinates from the city name.
+	loc, err := weather.GeocodeLookup(args.Query)
+	if err != nil {
+		return fmt.Sprintf("error: couldn't find location for %q: %v", args.Query, err)
+	}
+
+	// Update the weather client so future weather fetches use the new location.
+	if tctx.weatherClient != nil {
+		tctx.weatherClient.SetLocation(loc.Latitude, loc.Longitude)
+	}
+
+	// Save as a fact so the location persists across restarts.
+	locationFact := fmt.Sprintf("User is located in %s, %s, %s (%.4f, %.4f)",
+		loc.Name, loc.Region, loc.Country, loc.Latitude, loc.Longitude)
+	_, _ = tctx.store.SaveFact(locationFact, "location", "user", tctx.triggerMsgID, 9, nil)
+
+	log.Info("set_location", "query", args.Query, "result", locationFact)
+
+	return fmt.Sprintf("Location set to %s, %s, %s. Weather data will now reflect this location.",
+		loc.Name, loc.Region, loc.Country)
+}
+
 // execGetCurrentTime returns the current date and time in the user's
 // configured timezone. Simple but essential — without this, the agent
 // has no idea if it's morning or midnight.
@@ -926,6 +969,18 @@ func execRecallMemories(argsJSON string, tctx *toolContext) string {
 
 	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
 	return b.String()
+}
+
+// buildTimeContext returns the current date/time for the system prompt.
+// Always included — this is how Mira knows if it's morning or midnight,
+// weekday or weekend, etc. Without this, time-aware responses are impossible.
+func buildTimeContext(timezone string) string {
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+	return "# Current Time\n" + now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
 }
 
 // buildWeatherContext returns a short weather summary for the system prompt.
