@@ -359,7 +359,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 				},
 				TTSCallback:         nil, // no voice for scheduled messages (for now)
 				ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
-				RewriteEveryN:       cfg.Persona.RewriteEveryNConversations,
+				RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
 			})
 			if err != nil {
 				return "", err

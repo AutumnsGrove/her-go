@@ -248,6 +248,20 @@ func (s *Store) initTables() error {
 			source TEXT DEFAULT 'inferred',
 			conversation_id TEXT
 		)`,
+
+		// Reflections — Mira's private journal entries written after
+		// memory-dense conversations. Separate from facts because reflections
+		// are holistic processing, not discrete pieces of information.
+		// fact_count: how many new facts triggered this reflection.
+		// user_message / mira_response: the exchange that sparked it.
+		`CREATE TABLE IF NOT EXISTS reflections (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			content TEXT NOT NULL,
+			fact_count INTEGER,
+			user_message TEXT,
+			mira_response TEXT
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -286,6 +300,7 @@ func (s *Store) initTables() error {
 		// checks a task is subject to. Critical tasks (reminders, medication)
 		// always fire. Existing tasks get "normal" which is the safe default.
 		`ALTER TABLE scheduled_tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`,
+
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -564,6 +579,18 @@ type Fact struct {
 	Active          bool
 	Embedding       []float32 // cached embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
+}
+
+// Reflection represents a journal-like entry Mira writes after a
+// memory-dense conversation. Separate from facts — reflections are
+// private processing, not discrete pieces of information.
+type Reflection struct {
+	ID           int64
+	Timestamp    time.Time
+	Content      string
+	FactCount    int
+	UserMessage  string
+	MiraResponse string
 }
 
 // serializeEmbedding converts a float32 slice to the binary format sqlite-vec
@@ -1155,20 +1182,32 @@ func (s *Store) ConversationCountSince(since time.Time) (int, error) {
 	return count, nil
 }
 
+// SaveReflection stores a new reflection entry in the dedicated reflections
+// table. Called by persona.Reflect() after a memory-dense conversation.
+func (s *Store) SaveReflection(content string, factCount int, userMessage, miraResponse string) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO reflections (content, fact_count, user_message, mira_response) VALUES (?, ?, ?, ?)`,
+		content, factCount, userMessage, miraResponse,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving reflection: %w", err)
+	}
+	return result.LastInsertId()
+}
+
 // FactCountSinceLastReflection counts how many facts have been saved
 // since the most recent reflection. Used to trigger reflections based
 // on accumulated new knowledge rather than per-turn counts.
+// Now queries the reflections table directly instead of filtering facts.
 func (s *Store) FactCountSinceLastReflection() (int, error) {
 	var lastReflectionTime string
 	err := s.db.QueryRow(
-		`SELECT timestamp FROM facts
-		 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self'
-		 ORDER BY id DESC LIMIT 1`,
+		`SELECT timestamp FROM reflections ORDER BY id DESC LIMIT 1`,
 	).Scan(&lastReflectionTime)
 
 	var count int
 	if err != nil {
-		// No reflections yet. Count all facts.
+		// No reflections yet. Count all active facts.
 		s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1`).Scan(&count)
 	} else {
 		// Count facts created after the last reflection.
@@ -1180,14 +1219,11 @@ func (s *Store) FactCountSinceLastReflection() (int, error) {
 	return count, nil
 }
 
-// TotalReflectionCount returns the total number of active self-reflections.
+// TotalReflectionCount returns the total number of reflections stored.
 // Used alongside PersonaRewriteCount to decide if a rewrite is due.
 func (s *Store) TotalReflectionCount() (int, error) {
 	var count int
-	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM facts
-		 WHERE category = 'reflection' AND COALESCE(subject, 'user') = 'self' AND active = 1`,
-	).Scan(&count)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM reflections`).Scan(&count)
 	return count, err
 }
 
@@ -1212,14 +1248,12 @@ func (s *Store) LastPersonaTimestamp() (time.Time, error) {
 	return t, nil
 }
 
-// ReflectionsSince returns all self-facts with category 'reflection'
-// created after the given timestamp.
-func (s *Store) ReflectionsSince(since time.Time) ([]Fact, error) {
+// ReflectionsSince returns all reflections created after the given timestamp.
+// The return type is []Reflection — the dedicated struct, not Fact.
+func (s *Store) ReflectionsSince(since time.Time) ([]Reflection, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
-		 FROM facts
-		 WHERE active = 1 AND COALESCE(subject, 'user') = 'self'
-		   AND category = 'reflection' AND timestamp > ?
+		`SELECT id, timestamp, content FROM reflections
+		 WHERE timestamp > ?
 		 ORDER BY timestamp ASC`,
 		since.Format("2006-01-02 15:04:05"),
 	)
@@ -1228,18 +1262,17 @@ func (s *Store) ReflectionsSince(since time.Time) ([]Fact, error) {
 	}
 	defer rows.Close()
 
-	var facts []Fact
+	var reflections []Reflection
 	for rows.Next() {
-		var f Fact
+		var r Reflection
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+		if err := rows.Scan(&r.ID, &ts, &r.Content); err != nil {
 			return nil, fmt.Errorf("scanning reflection: %w", err)
 		}
-		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
-		f.Active = true
-		facts = append(facts, f)
+		r.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		reflections = append(reflections, r)
 	}
-	return facts, nil
+	return reflections, nil
 }
 
 // LatestConversationID returns the most recent conversation_id used

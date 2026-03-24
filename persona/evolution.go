@@ -78,7 +78,7 @@ Guidelines:
 //
 // userMessage and miraResponse are the latest exchange.
 // newFacts are the facts that were just saved by the agent.
-// The reflection is stored as a self-fact with category "reflection".
+// The reflection is stored in the dedicated reflections table via SaveReflection.
 func Reflect(
 	llmClient *llm.Client,
 	store *memory.Store,
@@ -109,8 +109,10 @@ func Reflect(
 		return fmt.Errorf("reflection LLM call: %w", err)
 	}
 
-	// Save the reflection as a high-importance self-fact.
-	_, err = store.SaveFact(resp.Content, "reflection", "self", 0, 8, nil)
+	// Save the reflection to its dedicated table.
+	// Reflections are private processing — they're separate from the facts
+	// table so they don't pollute the user-facing memory context.
+	_, err = store.SaveReflection(resp.Content, len(newFacts), userMessage, miraResponse)
 	if err != nil {
 		return fmt.Errorf("saving reflection: %w", err)
 	}
@@ -153,7 +155,8 @@ func MaybeRewrite(
 	var reflStr strings.Builder
 	if len(reflections) > 0 {
 		for _, r := range reflections {
-			fmt.Fprintf(&reflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Fact)
+			// r is now a memory.Reflection, so we use r.Content instead of r.Fact.
+			fmt.Fprintf(&reflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Content)
 		}
 	} else {
 		reflStr.WriteString("(no reflections yet)\n")
@@ -167,9 +170,9 @@ func MaybeRewrite(
 
 	var selfStr strings.Builder
 	for _, f := range selfFacts {
-		if f.Category != "reflection" {
-			fmt.Fprintf(&selfStr, "- %s\n", f.Fact)
-		}
+		// Reflections no longer appear in the facts table, so no
+		// category filter is needed here — every self-fact is a real observation.
+		fmt.Fprintf(&selfStr, "- %s\n", f.Fact)
 	}
 	if selfStr.Len() == 0 {
 		selfStr.WriteString("(no self-observations yet)\n")

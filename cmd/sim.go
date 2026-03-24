@@ -412,7 +412,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			StatusCallback:      statusCallback,
 			TTSCallback:         nil, // no TTS in sim
 			ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
-			RewriteEveryN:       cfg.Persona.RewriteEveryNConversations,
+			RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)

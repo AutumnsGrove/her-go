@@ -316,7 +316,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		TTSCallback:         ttsCallback,
 		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 	})
 
 	close(stopTyping)
@@ -501,7 +501,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		SendCallback:        sendCallback,
 		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 		ImageBase64:         imageBase64,
 		ImageMIME:           imageMIME,
 	})
@@ -719,7 +719,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		TTSCallback:         ttsCallback,
 		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 	})
 
 	close(stopTyping)
@@ -1072,7 +1072,7 @@ func (b *Bot) handleReflect(c tele.Context) error {
 
 	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-10 * time.Second))
 	if len(reflections) > 0 {
-		return c.Send(fmt.Sprintf("\U0001F4AD <b>Reflection</b>\n\n<i>%s</i>", reflections[len(reflections)-1].Fact),
+		return c.Send(fmt.Sprintf("\U0001F4AD <b>Reflection</b>\n\n<i>%s</i>", reflections[len(reflections)-1].Content),
 			&tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 
@@ -1080,8 +1080,7 @@ func (b *Bot) handleReflect(c tele.Context) error {
 }
 
 // handleReflections shows recent reflections — Mira's journal entries
-// from meaningful conversations. These are self-facts with category
-// "reflection" stored in the facts table.
+// from meaningful conversations. Stored in the dedicated reflections table.
 func (b *Bot) handleReflections(c tele.Context) error {
 	// Get all reflections (not just since a timestamp — show recent ones).
 	reflections, err := b.store.ReflectionsSince(time.Time{}) // zero time = all
@@ -1102,7 +1101,7 @@ func (b *Bot) handleReflections(c tele.Context) error {
 	for i := len(recent) - 1; i >= 0; i-- {
 		r := recent[i]
 		ts := r.Timestamp.Format("Jan 2, 3:04 PM")
-		text := r.Fact
+		text := r.Content
 		if len(text) > 250 {
 			text = text[:250] + "..."
 		}

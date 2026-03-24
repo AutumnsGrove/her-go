@@ -108,7 +108,7 @@ type PersonaConfig struct {
 	PromptFile                 string  `yaml:"prompt_file"`
 	PersonaFile                string  `yaml:"persona_file"`
 	AgentPromptFile            string  `yaml:"agent_prompt_file"`
-	RewriteEveryNConversations int     `yaml:"rewrite_every_n_conversations"`
+	RewriteEveryNReflections int `yaml:"rewrite_every_n_reflections"`
 	ReflectionMemoryThreshold  int     `yaml:"reflection_memory_threshold"`
 	MaxTraitShift              float64 `yaml:"max_trait_shift"`
 }

@@ -170,7 +170,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		},
 		TTSCallback:         nil,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 	})
 	if err != nil {
 		log.Error("mood follow-up agent error", "err", err)

@@ -526,6 +526,11 @@ func Run(params RunParams) (*RunResult, error) {
 			} else if factCount >= params.ReflectionThreshold {
 				log.Infof("  [persona] reflection triggered (%d facts, threshold: %d)", factCount, params.ReflectionThreshold)
 
+				if tracing {
+					traceLines = append(traceLines, fmt.Sprintf("💭 <b>reflection</b> triggered (%d new facts)", factCount))
+					sendTrace()
+				}
+
 				// Gather the recent facts for the reflection prompt.
 				recentFacts, _ := params.Store.RecentFacts("user", factCount)
 				var factStrings []string
@@ -535,6 +540,13 @@ func Run(params RunParams) (*RunResult, error) {
 
 				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings); err != nil {
 					log.Error("reflection error", "err", err)
+					if tracing {
+						traceLines = append(traceLines, fmt.Sprintf("❌ <b>reflection</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
+						sendTrace()
+					}
+				} else if tracing {
+					traceLines = append(traceLines, "💭 <b>reflection</b> saved")
+					sendTrace()
 				}
 			}
 		}
@@ -556,10 +568,24 @@ func Run(params RunParams) (*RunResult, error) {
 					nextThreshold := (rewriteCount + 1) * params.RewriteEveryN
 					if totalReflections >= nextThreshold {
 						log.Infof("  [persona] rewrite triggered (%d reflections, next threshold: %d)", totalReflections, nextThreshold)
+
+						if tracing {
+							traceLines = append(traceLines, fmt.Sprintf("✨ <b>persona rewrite</b> triggered (%d reflections)", totalReflections))
+							sendTrace()
+						}
+
 						if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
 							log.Error("persona rewrite error", "err", err)
+							if tracing {
+								traceLines = append(traceLines, fmt.Sprintf("❌ <b>persona rewrite</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
+								sendTrace()
+							}
 						} else if rewritten {
 							log.Info("persona.md rewritten")
+							if tracing {
+								traceLines = append(traceLines, "✨ <b>persona rewritten</b>")
+								sendTrace()
+							}
 						}
 					}
 				}
@@ -1754,12 +1780,16 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 
 	case "save_fact":
 		// Show full fact details — category, importance, and the fact text.
+		// If the fact was rejected (too long, style gate), show that instead.
 		var args struct {
 			Fact       string `json:"fact"`
 			Category   string `json:"category"`
 			Importance int    `json:"importance"`
 		}
 		json.Unmarshal([]byte(argsJSON), &args)
+		if strings.HasPrefix(result, "rejected:") {
+			return fmt.Sprintf("🚫 <b>save_fact:</b> <i>%s</i>", escapeHTML(truncateLog(result, 120)))
+		}
 		return fmt.Sprintf("💾 <b>save_fact:</b> %s\n    category=%s, importance=%d", escapeHTML(args.Fact), args.Category, args.Importance)
 
 	case "update_fact":
@@ -1770,6 +1800,9 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 			Importance int    `json:"importance"`
 		}
 		json.Unmarshal([]byte(argsJSON), &args)
+		if strings.HasPrefix(result, "rejected:") {
+			return fmt.Sprintf("🚫 <b>update_fact:</b> #%d <i>%s</i>", args.FactID, escapeHTML(truncateLog(result, 120)))
+		}
 		return fmt.Sprintf("📝 <b>update_fact:</b> #%d → %s\n    category=%s, importance=%d", args.FactID, escapeHTML(args.Fact), args.Category, args.Importance)
 
 	case "remove_fact":
@@ -1787,6 +1820,9 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 			Importance int    `json:"importance"`
 		}
 		json.Unmarshal([]byte(argsJSON), &args)
+		if strings.HasPrefix(result, "rejected:") {
+			return fmt.Sprintf("🚫 <b>save_self_fact:</b> <i>%s</i>", escapeHTML(truncateLog(result, 120)))
+		}
 		return fmt.Sprintf("🪞 <b>save_self_fact:</b> %s\n    category=%s, importance=%d", escapeHTML(args.Fact), args.Category, args.Importance)
 
 	case "web_search":
