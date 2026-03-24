@@ -135,7 +135,9 @@ func (b *Bot) handleFacts(c tele.Context) error {
 
 	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a fact.</i>")
 
-	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+	// Use pagination — if the fact list exceeds Telegram's 4096-char
+	// limit, it'll be split into pages with ◀/▶ navigation buttons.
+	return b.sendPaginated(c, msg.String())
 }
 
 // handleRemind routes reminder requests through the agent pipeline.

@@ -49,6 +49,12 @@ type Bot struct {
 	// When /clear is called, we rotate to a new ID so the history
 	// window starts fresh.
 	conversationIDs sync.Map
+
+	// pageSessions stores active paginated views per chat.
+	// When a command produces output longer than Telegram's 4096-char
+	// limit, it's split into pages and stored here so the ◀/▶ inline
+	// buttons can serve subsequent pages. Keyed by chat ID (int64).
+	pageSessions sync.Map
 }
 
 // New creates and configures a new Telegram bot.

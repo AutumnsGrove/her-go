@@ -79,6 +79,10 @@ func (b *Bot) registerCallbackHandlers() {
 
 	// Medication check-in buttons (Action: "med")
 	b.tb.Handle(&tele.InlineButton{Unique: "med"}, b.handleMedCallback)
+
+	// Pagination buttons (Action: "page") — handles ◀/▶ navigation
+	// for any command that produces output longer than 4096 chars.
+	b.tb.Handle(&tele.InlineButton{Unique: "page"}, b.handlePageCallback)
 }
 
 // --- Mood Check-in Callback ---
