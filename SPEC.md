@@ -1141,71 +1141,45 @@ Telegram location sharing → Mira knows where you are. Context, not tracking.
 
 Mira gains resilience and portability — model fallbacks across all model types, plus cloud sync for durable memory.
 
-#### Model Fallbacks
+#### Model Fallbacks ✅
 
-When a primary model is unavailable (API down, rate limited, timeout), Mira automatically falls back to an alternative. This also opens the door to quality-tier routing — use a better (slower/pricier) model when it matters, a cheaper one when it doesn't.
+**Implemented** — pulled forward from v0.7 due to Trinity free-tier reliability issues.
 
-**Fallback architecture:**
-Each model config section gains an optional `fallback` block with the same shape as the primary config. On failure (HTTP error, timeout, empty response), the system retries once with the fallback model before returning an error. Fallback usage is logged for observability.
+When a primary model is unavailable (API down, rate limited, timeout), Mira automatically falls back to an alternative. Each model config section has an optional `fallback` block. On failure (retriable HTTP error, timeout, empty response), the LLM client retries once with the fallback model before returning an error. Fallback usage is logged via `slog.Warn` for observability, and the `ChatResponse.Model` field tracks which model actually responded (primary or fallback).
 
 ```yaml
 llm:
   model: "deepseek/deepseek-v3.2"
-  # ... existing fields ...
   fallback:
-    model: "anthropic/claude-3.5-haiku"  # or any OpenRouter model
+    model: "anthropic/claude-haiku-4.5"
     temperature: 0.85
     max_tokens: 1024
 
 agent:
   model: "arcee-ai/trinity-large-preview:free"
   fallback:
-    model: "liquid/lfm-2.5-1.2b-instruct:free"
+    model: "anthropic/claude-haiku-4.5"
     temperature: 0.1
-    max_tokens: 512
+    max_tokens: 1024
 
 vision:
   model: "google/gemini-3-flash-preview"
   fallback:
-    model: "qwen/qwen3-vl:2b"           # or another fast VLM on OpenRouter
+    model: "anthropic/claude-haiku-4.5"
     temperature: 0.3
     max_tokens: 512
-
-voice:
-  tts:
-    engine: "piper"
-    fallback:
-      engine: "elevenlabs"              # cloud API — higher quality, higher latency
-      api_key: "${ELEVENLABS_API_KEY}"
-      voice_id: "some-voice-id"
 ```
 
-**Fallback triggers:**
-- HTTP 429 (rate limited), 500-503 (server error), or request timeout
-- Empty response or malformed JSON
-- Model-specific: low confidence scores (OCR), empty transcription (STT)
+**Fallback triggers** (checked by `isRetriable()` in `llm/client.go`):
+- HTTP 429 (rate limited), 500, 502, 503 (server error)
+- Request timeout or connection errors
+- Empty response (no choices)
 
 **What does NOT get fallbacks:**
 - Embeddings — vectors are model-specific, switching models mid-stream would corrupt similarity search
 - Search APIs (Tavily, Kiwix) — these are services, not models
 
-**Implementation pattern:**
-```go
-// In llm/client.go or a new llm/fallback.go
-type FallbackClient struct {
-    primary  *Client
-    fallback *Client  // nil if no fallback configured
-}
-
-func (fc *FallbackClient) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
-    resp, err := fc.primary.ChatCompletion(messages)
-    if err != nil && fc.fallback != nil {
-        log.Warn("primary model failed, trying fallback", "err", err)
-        return fc.fallback.ChatCompletion(messages)
-    }
-    return resp, err
-}
-```
+**Implementation:** Fallback is baked directly into `llm.Client` via `WithFallback()`. No wrapper type needed — every consumer still sees `*llm.Client`. The `chatCompletion()` method tries the primary model, then on retriable error, retries with fallback model/temperature/maxTokens. See `llm/client.go` and `config/config.go` (`FallbackConfig`).
 
 #### Cloud Sync (Cloudflare D1)
 

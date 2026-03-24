@@ -45,23 +45,36 @@ type TelegramConfig struct {
 	OwnerChat  int64  `yaml:"owner_chat"`  // chat ID for the bot owner — used by scheduler for proactive messages
 }
 
-// LLMConfig holds OpenRouter / OpenAI-compatible API settings.
-type LLMConfig struct {
-	BaseURL     string  `yaml:"base_url"`
-	APIKey      string  `yaml:"api_key"`
+// FallbackConfig holds settings for a fallback model. When the primary
+// model fails with a retriable error (rate limit, timeout, server error),
+// the system automatically retries with these settings. Uses a pointer
+// in parent configs so it's nil when not configured — Go's zero value
+// for a pointer is nil, which is perfect for "optional" fields.
+type FallbackConfig struct {
 	Model       string  `yaml:"model"`
 	Temperature float64 `yaml:"temperature"`
 	MaxTokens   int     `yaml:"max_tokens"`
+}
+
+// LLMConfig holds OpenRouter / OpenAI-compatible API settings.
+type LLMConfig struct {
+	BaseURL     string          `yaml:"base_url"`
+	APIKey      string          `yaml:"api_key"`
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
 }
 
 // AgentConfig holds settings for the background tool-calling agent.
 // This runs a separate, lightweight model (Liquid LFM) that handles
 // memory management and can trigger follow-up messages.
 type AgentConfig struct {
-	Model       string  `yaml:"model"`
-	Temperature float64 `yaml:"temperature"`
-	MaxTokens   int     `yaml:"max_tokens"`
-	Trace       bool    `yaml:"trace"` // show agent thinking traces in chat
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Trace       bool            `yaml:"trace"`     // show agent thinking traces in chat
+	Fallback    *FallbackConfig `yaml:"fallback"`  // optional fallback model for when primary is unavailable
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
@@ -69,9 +82,10 @@ type AgentConfig struct {
 // view_image agent tool calls this model to describe what's in it.
 // Shares the same base_url and api_key as the main LLM section.
 type VisionConfig struct {
-	Model       string  `yaml:"model"`
-	Temperature float64 `yaml:"temperature"`
-	MaxTokens   int     `yaml:"max_tokens"`
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
 }
 
 // MemoryConfig controls the SQLite-backed memory system.

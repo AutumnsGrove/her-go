@@ -76,7 +76,12 @@ func runBot(cmd *cobra.Command, args []string) error {
 		cfg.LLM.Temperature,
 		cfg.LLM.MaxTokens,
 	)
-	log.Info("LLM client configured", "url", cfg.LLM.BaseURL, "model", cfg.LLM.Model)
+	if cfg.LLM.Fallback != nil {
+		llmClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
+		log.Info("LLM client configured", "url", cfg.LLM.BaseURL, "model", cfg.LLM.Model, "fallback", cfg.LLM.Fallback.Model)
+	} else {
+		log.Info("LLM client configured", "url", cfg.LLM.BaseURL, "model", cfg.LLM.Model)
+	}
 
 	// Create the agent LLM client (tool-calling orchestrator).
 	// This shares the same base URL and API key as the main client
@@ -100,7 +105,12 @@ func runBot(cmd *cobra.Command, args []string) error {
 		agentTemp,
 		agentMaxTokens,
 	)
-	log.Info("Agent client configured", "url", cfg.LLM.BaseURL, "model", agentModel)
+	if cfg.Agent.Fallback != nil {
+		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
+		log.Info("Agent client configured", "url", cfg.LLM.BaseURL, "model", agentModel, "fallback", cfg.Agent.Fallback.Model)
+	} else {
+		log.Info("Agent client configured", "url", cfg.LLM.BaseURL, "model", agentModel)
+	}
 
 	// Create the vision LLM client (image understanding — Gemini 3 Flash).
 	// Same pattern as the agent client: shares the base URL and API key
@@ -123,7 +133,12 @@ func runBot(cmd *cobra.Command, args []string) error {
 			visionTemp,
 			visionMaxTokens,
 		)
-		log.Info("Vision client configured", "model", cfg.Vision.Model)
+		if cfg.Vision.Fallback != nil {
+			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
+			log.Info("Vision client configured", "model", cfg.Vision.Model, "fallback", cfg.Vision.Fallback.Model)
+		} else {
+			log.Info("Vision client configured", "model", cfg.Vision.Model)
+		}
 	} else {
 		log.Info("Vision client not configured — image understanding disabled")
 	}

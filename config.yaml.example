@@ -10,17 +10,29 @@ llm:
   model: "deepseek/deepseek-v3.2"
   temperature: 0.85
   max_tokens: 1024
+  fallback:                                      # optional — used when primary model is unavailable (rate limit, timeout, server error)
+    model: "anthropic/claude-haiku-4.5"  # reliable paid fallback
+    temperature: 0.85
+    max_tokens: 1024
 
 agent:
   model: "arcee-ai/trinity-large-preview:free"  # tool-calling model for agent orchestration
   temperature: 0.1                               # low temp for precise tool decisions
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
+  fallback:                                      # optional — Trinity is free but can be flaky
+    model: "anthropic/claude-haiku-4.5"
+    temperature: 0.1
+    max_tokens: 1024
 
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
   temperature: 0.3                         # low temp for accurate descriptions
   max_tokens: 512
+  fallback:                                      # optional — Gemini Flash is free but may rate-limit
+    model: "anthropic/claude-haiku-4.5"
+    temperature: 0.3
+    max_tokens: 512
 
 embed:
   base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server

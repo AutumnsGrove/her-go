@@ -379,19 +379,15 @@ func Run(params RunParams) (*RunResult, error) {
 	for i := 0; i < 10; i++ {
 		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
-			// Retry once on timeout — OpenRouter free tier can be flaky.
-			if strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "timeout") {
-				log.Warn("LLM timeout, retrying once", "err", err)
-				resp, err = params.AgentLLM.ChatCompletionWithTools(messages, tools)
+			// The LLM client handles fallback automatically on retriable
+			// errors (429, 500-503, timeout). If we still get an error here,
+			// both primary and fallback failed — bail out of the agent loop.
+			log.Error("LLM error (primary + fallback both failed)", "err", err)
+			if tracing {
+				traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
+				sendTrace()
 			}
-			if err != nil {
-				log.Error("LLM error", "err", err)
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
-					sendTrace()
-				}
-				break
-			}
+			break
 		}
 
 		// Log agent metrics.

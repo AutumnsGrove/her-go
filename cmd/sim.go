@@ -307,6 +307,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		cfg.LLM.Temperature,
 		cfg.LLM.MaxTokens,
 	)
+	if cfg.LLM.Fallback != nil {
+		chatClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
+	}
 
 	agentTemp := cfg.Agent.Temperature
 	if agentTemp == 0 {
@@ -323,6 +326,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		agentTemp,
 		agentMaxTokens,
 	)
+	if cfg.Agent.Fallback != nil {
+		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
+	}
 
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {

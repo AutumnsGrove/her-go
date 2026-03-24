@@ -9,10 +9,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"her/logger"
 )
 
+// Package-level logger with [llm] prefix — same pattern as every other
+// package in the project. Uses charmbracelet/log under the hood.
+var log = logger.WithPrefix("llm")
+
 // Client talks to an OpenAI-compatible chat completions API.
+// If a fallback model is configured (via WithFallback), the client
+// automatically retries with the fallback on retriable errors —
+// rate limits (429), server errors (500-503), timeouts, and empty responses.
 type Client struct {
 	baseURL     string
 	apiKey      string
@@ -20,6 +30,12 @@ type Client struct {
 	temperature float64
 	maxTokens   int
 	httpClient  *http.Client
+
+	// Fallback model — used when the primary fails with a retriable error.
+	// If fallbackModel is empty, no fallback is attempted.
+	fallbackModel       string
+	fallbackTemperature float64
+	fallbackMaxTokens   int
 }
 
 // ChatMessage represents a single message in the conversation.
@@ -187,6 +203,20 @@ func NewClient(baseURL, apiKey, model string, temperature float64, maxTokens int
 	}
 }
 
+// WithFallback configures an alternative model to try when the primary
+// fails with a retriable error. Returns the same *Client for chaining.
+//
+// This is the "builder pattern" — like Python's fluent APIs where you
+// chain method calls: client = LLMClient(...).with_fallback(...).
+// In Go, the convention is to return the receiver pointer so the caller
+// can chain or ignore the return value.
+func (c *Client) WithFallback(model string, temperature float64, maxTokens int) *Client {
+	c.fallbackModel = model
+	c.fallbackTemperature = temperature
+	c.fallbackMaxTokens = maxTokens
+	return c
+}
+
 // ChatCompletion sends a conversation to the LLM and returns its response.
 // For regular conversation — no tools.
 func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
@@ -213,16 +243,91 @@ func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef
 // chatCompletion is the shared implementation for both regular and
 // tool-calling completions. toolChoice is optional — nil means the API
 // default ("auto"), "required" forces at least one tool call.
+//
+// If a fallback model is configured and the primary fails with a
+// retriable error, the request is automatically retried with the
+// fallback model. The caller doesn't need to know — it just works.
 func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef, toolChoice ...interface{}) (*ChatResponse, error) {
+	var tc interface{}
+	if len(toolChoice) > 0 {
+		tc = toolChoice[0]
+	}
+
+	// Try the primary model first.
+	resp, err := c.doRequest(c.model, c.temperature, c.maxTokens, messages, tools, tc)
+	if err != nil && c.fallbackModel != "" && isRetriable(err) {
+		// Primary failed with a retriable error — try the fallback.
+		log.Warn("primary model failed, trying fallback",
+			"primary", c.model,
+			"fallback", c.fallbackModel,
+			"err", err,
+		)
+		return c.doRequest(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, tc)
+	}
+
+	return resp, err
+}
+
+// isRetriable checks whether an error from doRequest is worth retrying
+// with a fallback model. The key question: "would the fallback model
+// hit the same error?" If yes, don't retry. If no, try fallback.
+//
+// We retry on:
+//   - HTTP 400 (model not found — the model may have been removed from OpenRouter)
+//   - HTTP 429 (rate limited)
+//   - HTTP 500, 502, 503 (server errors)
+//   - Timeouts / connection errors
+//   - Empty responses (no choices)
+//
+// We do NOT retry on:
+//   - 401/403 (auth issues — fallback shares the same API key, would fail too)
+//   - JSON marshal errors (our bug, not the model's)
+func isRetriable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+
+	// Timeout or connection errors (from net/http)
+	if strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") {
+		return true
+	}
+
+	// HTTP status-based errors (from our formatted error strings).
+	// 400 is included because OpenRouter returns 400 when a model is
+	// not found / no longer hosted — a different model would succeed.
+	if strings.Contains(msg, "LLM API returned 400") ||
+		strings.Contains(msg, "LLM API returned 429") ||
+		strings.Contains(msg, "LLM API returned 500") ||
+		strings.Contains(msg, "LLM API returned 502") ||
+		strings.Contains(msg, "LLM API returned 503") {
+		return true
+	}
+
+	// Empty response
+	if strings.Contains(msg, "LLM returned no choices") {
+		return true
+	}
+
+	return false
+}
+
+// doRequest sends a single chat completion request to the API with the
+// given model settings. This is the low-level HTTP call — no retry logic.
+// Both primary and fallback calls go through here.
+func (c *Client) doRequest(model string, temperature float64, maxTokens int, messages []ChatMessage, tools []ToolDef, toolChoice interface{}) (*ChatResponse, error) {
 	reqBody := chatRequest{
-		Model:       c.model,
+		Model:       model,
 		Messages:    messages,
-		Temperature: c.temperature,
-		MaxTokens:   c.maxTokens,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
 		Tools:       tools,
 	}
-	if len(toolChoice) > 0 && toolChoice[0] != nil {
-		reqBody.ToolChoice = toolChoice[0]
+	if toolChoice != nil {
+		reqBody.ToolChoice = toolChoice
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -240,13 +345,11 @@ func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef, toolCho
 	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
 	req.Header.Set("X-Title", "her-go")
 
-	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("calling LLM API: %w", err)
 	}
 	defer resp.Body.Close()
-	_ = time.Since(start)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
