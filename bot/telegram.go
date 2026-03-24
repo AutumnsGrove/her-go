@@ -111,6 +111,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	tb.Handle("/schedule", bot.handleSchedule)
 	tb.Handle("/traces", bot.handleTraces)
 	tb.Handle("/mood", bot.handleMood)
+	tb.Handle("/reflections", bot.handleReflections)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -803,7 +804,10 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/forget <code>&lt;id&gt;</code> — forget a specific fact\n\n" +
 		"<b>Persona</b>\n" +
 		"/persona — view Mira's current personality\n" +
-		"/reflect — trigger a reflection on recent conversations\n\n" +
+		"/persona traits — personality trait scores\n" +
+		"/persona rewrite — manually trigger a persona rewrite\n" +
+		"/reflect — trigger a reflection\n" +
+		"/reflections — view past reflections\n\n" +
 		"<b>Reminders</b>\n" +
 		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
 		"/schedule — list upcoming reminders\n\n" +
@@ -1075,6 +1079,40 @@ func (b *Bot) handleReflect(c tele.Context) error {
 	return c.Send("Done reflecting. Use /facts to see what I wrote.")
 }
 
+// handleReflections shows recent reflections — Mira's journal entries
+// from meaningful conversations. These are self-facts with category
+// "reflection" stored in the facts table.
+func (b *Bot) handleReflections(c tele.Context) error {
+	// Get all reflections (not just since a timestamp — show recent ones).
+	reflections, err := b.store.ReflectionsSince(time.Time{}) // zero time = all
+	if err != nil || len(reflections) == 0 {
+		return c.Send("No reflections yet. Reflections happen after memory-dense conversations.")
+	}
+
+	// Show the most recent 5 (newest first).
+	start := len(reflections) - 5
+	if start < 0 {
+		start = 0
+	}
+	recent := reflections[start:]
+
+	var msg strings.Builder
+	msg.WriteString("\U0001F4AD <b>Recent Reflections</b>\n\n")
+	// Reverse to show newest first.
+	for i := len(recent) - 1; i >= 0; i-- {
+		r := recent[i]
+		ts := r.Timestamp.Format("Jan 2, 3:04 PM")
+		text := r.Fact
+		if len(text) > 250 {
+			text = text[:250] + "..."
+		}
+		msg.WriteString(fmt.Sprintf("<b>%s</b>\n<i>%s</i>\n\n", ts, text))
+	}
+
+	msg.WriteString(fmt.Sprintf("<i>%d total reflections</i>", len(reflections)))
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
 // handlePersona shows the current persona.md content.
 func (b *Bot) handlePersona(c tele.Context) error {
 	args := strings.TrimSpace(c.Message().Payload)
@@ -1084,6 +1122,9 @@ func (b *Bot) handlePersona(c tele.Context) error {
 	}
 	if args == "traits" {
 		return b.handlePersonaTraits(c)
+	}
+	if args == "rewrite" || args == "write" {
+		return b.handlePersonaRewrite(c)
 	}
 
 	data, err := os.ReadFile(b.cfg.Persona.PersonaFile)
@@ -1151,6 +1192,38 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	}
 
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handlePersonaRewrite manually triggers a persona rewrite + trait extraction.
+// Bypasses the normal threshold checks — useful for testing or when you
+// want to force an evolution after a meaningful conversation.
+func (b *Bot) handlePersonaRewrite(c tele.Context) error {
+	_ = c.Notify(tele.Typing)
+
+	rewritten, err := persona.MaybeRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, 0)
+	if err != nil {
+		log.Error("manual persona rewrite", "err", err)
+		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))
+	}
+	if !rewritten {
+		return c.Send("Rewrite ran but nothing changed. This shouldn't happen — check the logs.")
+	}
+
+	// Read the freshly written persona.
+	data, err := os.ReadFile(b.cfg.Persona.PersonaFile)
+	if err != nil {
+		return c.Send("Persona rewritten but I couldn't read it back. Check persona.md.")
+	}
+
+	// Show the new persona + traits if they were extracted.
+	msg := fmt.Sprintf("\u2728 <b>Persona Rewritten</b>\n\n<i>%s</i>", string(data))
+
+	traits, _ := b.store.GetCurrentTraits()
+	if len(traits) > 0 {
+		msg += "\n\n\U0001F3AD <b>Traits updated</b> — use /persona traits to see them."
+	}
+
+	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handleCompact manually triggers conversation compaction.
