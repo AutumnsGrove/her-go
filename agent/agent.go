@@ -832,6 +832,14 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// we swap those back to the real values before the user sees it.
 	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
 
+	// Duplicate reply guard — if the agent calls reply twice with the
+	// same (or very similar) text, skip the second one. Trinity sometimes
+	// loops think→reply→think→reply with identical content.
+	if tctx.replyCalled && replyText == tctx.replyText {
+		log.Warn("reply: duplicate detected, skipping")
+		return "reply skipped (duplicate of previous reply)"
+	}
+
 	// Deliver the response to Telegram.
 	// First reply: edit the placeholder message (statusCallback).
 	// Follow-up replies: send as a new message (sendCallback) so both

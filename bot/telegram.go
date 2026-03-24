@@ -110,6 +110,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	tb.Handle("/remind", bot.handleRemind)
 	tb.Handle("/schedule", bot.handleSchedule)
 	tb.Handle("/traces", bot.handleTraces)
+	tb.Handle("/mood", bot.handleMood)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -806,6 +807,8 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"<b>Reminders</b>\n" +
 		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
 		"/schedule — list upcoming reminders\n\n" +
+		"<b>Mood &amp; Wellness</b>\n" +
+		"/mood — log your current mood (quick buttons)\n\n" +
 		"<b>Info</b>\n" +
 		"/stats — token usage, cost, and message counts\n" +
 		"/status — uptime, models, and service health\n\n" +
@@ -901,6 +904,27 @@ func (b *Bot) handleTraces(c tele.Context) error {
 		return c.Send("🧠 Agent traces <b>enabled</b> — you'll see thinking traces before each reply.", &tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 	return c.Send("🧠 Agent traces <b>disabled</b>.", &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleMood sends a mood check-in keyboard on demand — the same one
+// the scheduler sends on a cron. Lets you log your mood any time with
+// /mood instead of waiting for the scheduled check-in.
+func (b *Bot) handleMood(c tele.Context) error {
+	markup := &tele.ReplyMarkup{}
+	row1 := markup.Row(
+		markup.Data("😊 Great", "mood", "5"),
+		markup.Data("🙂 Good", "mood", "4"),
+		markup.Data("😐 Meh", "mood", "3"),
+	)
+	row2 := markup.Row(
+		markup.Data("😔 Rough", "mood", "2"),
+		markup.Data("😢 Bad", "mood", "1"),
+	)
+	markup.Inline(row1, row2)
+
+	return c.Send("how are you feeling right now?", &tele.SendOptions{
+		ReplyMarkup: markup,
+	})
 }
 
 // handleStats shows aggregate usage statistics.

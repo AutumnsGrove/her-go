@@ -24,6 +24,7 @@ import (
 	"her/agent"
 	"her/memory"
 	"her/scheduler"
+	"her/scrub"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -159,7 +160,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ScrubbedUserMessage: prompt,
-		ScrubVault:          nil,
+		ScrubVault:          scrub.NewVault(), // empty vault — no PII to deanonymize
 		ConversationID:      "mood-checkin",
 		TriggerMsgID:        0,
 		// StatusCallback sends a new message to the chat (not editing
