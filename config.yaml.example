@@ -54,7 +54,7 @@ persona:
   prompt_file: "./prompt.md"             # base template (static, user-authored)
   persona_file: "./persona.md"           # evolving self-image (bot-authored)
   agent_prompt_file: "./agent_prompt.md" # agent orchestration rules (editable, hot-reloadable)
-  rewrite_every_n_conversations: 20  # trigger persona rewrite after N reflections accumulate
+  rewrite_every_n_conversations: 3  # trigger persona rewrite after N reflections accumulate
   reflection_memory_threshold: 8     # trigger reflection after N new facts accumulate since last reflection
   max_trait_shift: 0.1               # max trait score change per rewrite cycle
 
