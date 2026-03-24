@@ -178,6 +178,19 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// stripHTML removes HTML tags for a plain-text fallback when Telegram's
+// HTML parser rejects our formatting. Crude but effective for traces.
+func stripHTML(s string) string {
+	s = strings.ReplaceAll(s, "<b>", "")
+	s = strings.ReplaceAll(s, "</b>", "")
+	s = strings.ReplaceAll(s, "<i>", "")
+	s = strings.ReplaceAll(s, "</i>", "")
+	s = strings.ReplaceAll(s, "&amp;", "&")
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	return s
+}
+
 // handleMessage is the core pipeline. In the new agent-first architecture:
 //  1. Save & scrub the message
 //  2. Send a placeholder Telegram message
@@ -834,16 +847,33 @@ func (b *Bot) makeTraceCallback(c tele.Context) agent.TraceCallback {
 	return func(text string) error {
 		if traceMsg == nil {
 			// First call — send a new message.
+			// Try HTML first, fall back to plain text if it fails
+			// (malformed HTML from tool results can break the parser).
 			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			if err != nil {
-				return err
+				log.Warn("trace: HTML send failed, retrying plain", "err", err)
+				msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
+				if err != nil {
+					return err
+				}
 			}
 			traceMsg = msg
 		} else {
 			// Subsequent calls — edit the existing message.
+			// Same HTML-then-plain fallback. Telegram also rejects edits
+			// if the text is identical, so we catch that silently.
 			_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			if err != nil {
-				return err
+				// "message is not modified" is harmless — just means nothing changed.
+				if strings.Contains(err.Error(), "not modified") {
+					return nil
+				}
+				log.Warn("trace: HTML edit failed, retrying plain", "err", err)
+				_, err = c.Bot().Edit(traceMsg, stripHTML(text))
+				if err != nil && !strings.Contains(err.Error(), "not modified") {
+					log.Warn("trace: plain edit also failed", "err", err)
+					return err
+				}
 			}
 		}
 		return nil

@@ -90,7 +90,7 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 - Uses `telebot v4` (`gopkg.in/telebot.v4`) or `go-telegram-bot-api/v5`
 - Long-polling for development (no infra needed)
 - Webhook mode for production (behind Cloudflare Tunnel)
-- Handles: text messages, photos, commands (`/remind`, `/forget`, `/stats`)
+- Handles: text messages, photos, commands (`/remind`, `/forget`, `/stats`, `/traces`)
 - Photo handling: when a photo is received, downloads a mid-size version (~1024px, second-largest from Telegram's `PhotoSize` array) and passes it to the agent for vision processing
 - Sends `sendChatAction("typing")` while waiting for LLM response (re-sent every 4s to keep indicator alive)
 - Future: live-edit streaming — send a placeholder message, then `editMessageText` as tokens arrive for a real-time typing effect
@@ -111,10 +111,12 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 | Model | Role | Why |
 |---|---|---|
 | Chat LLM (Deepseek V3.2) | Conversational responses | Strong at natural language, cheap |
-| Agent LLM (configurable) | Tool-calling orchestration | Fast, good at structured output |
+| Agent LLM (Trinity) | Tool-calling orchestration | Fast, good at structured output |
 | Vision LLM (Gemini 3 Flash) | Image understanding | Fast VLM, good casual descriptions |
 | OCR — primary (Apple Vision) | Text extraction from photos | Sub-200ms, Neural Engine, zero deps |
 | OCR — fallback (GLM-OCR 0.9B) | Text extraction when primary fails | Purpose-built OCR model, #1 OmniDocBench |
+
+**LLM client internals:** `ChatResponse` exposes `FinishReason` (why the model stopped — `"stop"`, `"tool_calls"`, `"length"`, etc.), which the agent loop uses to determine whether another iteration is needed. `ToolChoice` infrastructure is available for directing the model to call a specific tool or forcing tool use on a given turn.
 
 The vision model is called via the `view_image` agent tool. When the user sends a photo, the agent decides whether/how to use it and calls the VLM with an appropriate prompt. The VLM's description becomes part of the agent's context, which it can reference when generating the reply via the chat LLM.
 
@@ -319,6 +321,9 @@ CREATE TABLE metrics (
   ```
 - Extracted facts are stored in the `facts` table
 - This extraction call also goes through the same tiered scrubbing pipeline (the stored fact in the DB is the raw version with full fidelity)
+- **Max fact length:** 200 characters. Facts exceeding this are rejected at insertion — they indicate the model returned a paragraph rather than a single-sentence fact.
+- **Style gates:** A blocklist of AI writing tics ("it's worth noting", "certainly", "I should mention", etc.) rejects facts that read like LLM hedging rather than real information. Facts must describe the user's life, not the model's reasoning.
+- **"context" category:** Ephemeral day-to-day facts (current mood, what the user is working on today, recent events) are stored with `category='context'`. These are auto-injected with a timestamp (`[as of 2026-03-24]`) so the LLM knows how fresh they are, and are prioritized for replacement when the context window is tight.
 
 ### 5. Prompt System (Layered)
 
@@ -654,6 +659,7 @@ To prevent hot/cold personality swings:
 - `/reflections` — View recent reflections (optional check-in)
 - `/persona` — View current persona.md content
 - `/persona history` — View past persona versions with timestamps
+- `/traces` — Toggle agent thinking traces. When enabled, a separate message shows the agent's tool calls, thinking, and decision-making before each reply.
 
 ### 7. Configuration (`config.yaml`)
 
@@ -675,6 +681,12 @@ vision:
   temperature: 0.3
   max_tokens: 512
   # Uses same base_url and api_key as llm section
+
+agent:
+  model: "arcee-ai/trinity-large-preview:free"
+  temperature: 0.1
+  max_tokens: 1024
+  trace: false  # show agent thinking traces in chat (/traces to toggle)
 
 memory:
   db_path: "./her.db"
@@ -701,9 +713,9 @@ voice:
     parakeet_path: ""          # path to parakeet binary
   tts:
     enabled: false             # v0.5+
-    engine: "kokoro"           # "kokoro" or future options
-    kokoro_path: ""            # path to kokoro binary/server
-    voice_id: ""               # which voice to use
+    engine: "piper"            # "piper" or future options
+    piper_path: ""             # path to piper binary
+    voice_model: ""            # path to .onnx voice model file
     reply_mode: "voice"        # "voice" (always voice reply) or "match" (reply in same format as input)
 
 scheduler:
@@ -730,7 +742,7 @@ her-go/
 ├── llm/
 │   └── client.go        # OpenRouter / OpenAI-compatible client
 ├── agent/
-│   ├── agent.go         # Agent loop, tool dispatch, reply generation
+│   ├── agent.go         # Agent loop, tool dispatch, reply generation. Loop is finish_reason-driven: iterates until the model returns "stop". Each tool call appends a formatted trace line; when traces are enabled, these are sent to Telegram as a live-updating message before the final reply.
 │   └── tools.go         # Tool definitions for the agent
 ├── memory/
 │   ├── store.go         # SQLite operations (read/write messages, facts, summaries)
@@ -921,6 +933,10 @@ User sends photo (with optional caption)
 - [x] PII deanonymization happens BEFORE TTS (she says the real names, not tokens)
 - [x] TTS wired into both text and voice message handlers via TTSCallback
 - [x] WAV → OGG/Opus conversion via ffmpeg for Telegram compatibility
+- [x] Agent loop overhaul: finish_reason-driven loop, JSON validation on tool calls, graceful text fallback
+- [x] Thinking traces: `/traces` toggle, live-updating trace message in Telegram with per-tool emoji formatting
+- [x] Memory quality gates: 200-char max fact length, style blocklist, "context" category with auto-timestamps
+- [x] Config hot-update: `SetTrace()` surgically edits config.yaml without losing comments/formatting
 
 **Voice pipeline:**
 ```

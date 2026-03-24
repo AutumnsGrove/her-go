@@ -9,6 +9,11 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **Config:** config.yaml (copy from config.yaml.example, gitignored)
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
+- **Agent prompt:** agent_prompt.md (agent orchestration rules, hot-reloadable)
+- **Agent model:** Trinity (arcee-ai/trinity-large-preview:free) via OpenRouter
+- **Chat model:** Deepseek V3.2 via OpenRouter
+- **Vision model:** Gemini 3 Flash via OpenRouter
+- **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
 
 ## Running
 
@@ -16,14 +21,20 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 # Copy config and fill in API keys
 cp config.yaml.example config.yaml
 
-# Run
-go run main.go
+# Run directly
+go run main.go run
+
+# Or build and run
+go build -o her && ./her run
 ```
 
 ## Key Design Decisions
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
-- **Persona evolution:** Bot rewrites its own persona.md every ~20 conversations. Reflections triggered by memory-dense conversations. Changes are gradual (damped).
+- **Agent architecture:** Two-tier system. A tool-calling agent (Trinity) orchestrates memory, search, and planning. A separate chat model (Deepseek) generates the actual response. The user only sees the chat model's output.
+- **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Live-updates as the agent works.
+- **Persona evolution:** Bot rewrites its own persona.md every ~3 reflections. Reflections triggered by memory-dense conversations. Changes are gradual (damped).
+- **Memory quality:** Facts capped at 200 chars with style gates that reject AI writing tics (em dashes, "not just X it's Y" patterns). Prevents LLM-generated facts from poisoning the persona over time.
 - **Everything in SQLite:** Messages, facts, metrics, persona versions, traits, PII vault. One file, fully portable.
 - **Model agnostic:** OpenRouter API (OpenAI-compatible). Swap models by changing config.
 
@@ -32,13 +43,22 @@ go run main.go
 See SPEC.md § Project Structure for full layout.
 
 Core packages:
+- `agent/` — Tool-calling orchestrator, thinking traces, reply generation
 - `bot/` — Telegram handler
+- `cmd/` — Cobra CLI commands (run, setup, start, stop, status, logs)
+- `compact/` — Conversation history compaction (summary + sliding window)
+- `config/` — YAML + env var loading
+- `embed/` — Local embedding model client for semantic similarity
 - `llm/` — OpenRouter client
+- `logger/` — Shared structured logger (charmbracelet/log)
 - `memory/` — SQLite store, fact extraction, context building
 - `persona/` — Evolution system, trait tracking
-- `scrub/` — Tiered PII detection + deanonymization
 - `scheduler/` — Reminder delivery
-- `config/` — YAML + env var loading
+- `scrub/` — Tiered PII detection + deanonymization
+- `search/` — Tavily web search, Open Library book search
+- `vision/` — Image understanding via Gemini Flash VLM
+- `voice/` — Piper TTS + Parakeet STT
+- `weather/` — Open-Meteo weather integration
 
 ---
 
