@@ -267,6 +267,103 @@ func ToolDefs() []llm.ToolDef {
 			},
 		},
 
+		// --- Schedule management tools (v0.6) ---
+
+		// create_schedule creates recurring or conditional scheduled tasks.
+		// Unlike create_reminder (one-shot), this is for things that repeat.
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "create_schedule",
+				Description: "Create a recurring scheduled task. Use for things like daily check-ins, morning briefings, or periodic follow-ups. Requires a cron expression. Common patterns: '0 8 * * *' (8am daily), '0 21 * * *' (9pm daily), '0 9 * * 1-5' (9am weekdays), '@every 30m' (every 30 minutes).",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "Human-readable name (e.g., 'morning briefing', 'mood check-in')",
+						},
+						"cron_expr": map[string]interface{}{
+							"type":        "string",
+							"description": "Cron expression: minute hour day-of-month month day-of-week. Examples: '0 8 * * *' (8am daily), '30 9 * * 1-5' (9:30am weekdays), '@every 2h' (every 2 hours)",
+						},
+						"task_type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"run_prompt", "send_message"},
+							"description": "Type of task. 'run_prompt' runs through the full agent pipeline (can use tools, memory, etc). 'send_message' sends a static message.",
+						},
+						"payload": map[string]interface{}{
+							"type":        "object",
+							"description": "Task config — for run_prompt: {\"prompt\": \"...\"}, for send_message: {\"message\": \"...\"}",
+						},
+						"priority": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"normal", "high", "critical"},
+							"description": "Priority level. 'normal' = subject to all damping, 'high' = bypasses rate limits, 'critical' = always fires. Default: 'normal'.",
+						},
+						"max_runs": map[string]interface{}{
+							"type":        "integer",
+							"description": "Maximum number of executions. Omit for unlimited (runs forever until paused/deleted).",
+						},
+						"description": map[string]interface{}{
+							"type":        "string",
+							"description": "What this schedule does, in plain English (for the confirmation message)",
+						},
+					},
+					"required": []string{"name", "cron_expr", "task_type", "payload"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "list_schedules",
+				Description: "List all active scheduled tasks. Shows recurring jobs, upcoming reminders, and their next run times. Use when the user asks what's scheduled or wants to see their recurring tasks.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "update_schedule",
+				Description: "Pause or resume an existing scheduled task by ID. Use when the user wants to temporarily disable or re-enable a recurring task.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"task_id": map[string]interface{}{
+							"type":        "integer",
+							"description": "ID of the scheduled task to update",
+						},
+						"enabled": map[string]interface{}{
+							"type":        "boolean",
+							"description": "true to enable/resume, false to pause",
+						},
+					},
+					"required": []string{"task_id", "enabled"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "delete_schedule",
+				Description: "Permanently delete a scheduled task by ID. Use when the user wants to remove a recurring task entirely (not just pause it).",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"task_id": map[string]interface{}{
+							"type":        "integer",
+							"description": "ID of the scheduled task to delete",
+						},
+					},
+					"required": []string{"task_id"},
+				},
+			},
+		},
+
 		// --- Memory search tool ---
 		{
 			Type: "function",

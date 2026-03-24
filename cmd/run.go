@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"her/agent"
 	"her/bot"
 	"her/config"
 	"her/embed"
@@ -309,10 +310,105 @@ func runBot(cmd *cobra.Command, args []string) error {
 	var sched *scheduler.Scheduler
 	if cfg.Telegram.OwnerChat != 0 {
 		ownerChat := cfg.Telegram.OwnerChat
+
+		// sendFn delivers a plain text message to the owner's chat.
 		sendFn := func(text string) error {
 			return tgBot.SendToChat(ownerChat, text)
 		}
-		sched = scheduler.New(store, sendFn, cfg.Scheduler.Timezone)
+
+		// agentFn runs a prompt through the full agent pipeline.
+		// This is the callback for "run_prompt" scheduled tasks.
+		//
+		// The closure captures the same dependencies that bot.handleMessage
+		// passes to agent.Run, but with a synthetic scheduled prompt
+		// instead of a real user message. The StatusCallback sends a
+		// NEW message (not edits a placeholder) since there's no
+		// placeholder for scheduled runs.
+		agentFn := func(prompt string) (string, error) {
+			result, err := agent.Run(agent.RunParams{
+				AgentLLM:            agentClient,
+				ChatLLM:             llmClient,
+				VisionLLM:           visionClient,
+				Store:               store,
+				EmbedClient:         embedClient,
+				SimilarityThreshold: cfg.Embed.SimilarityThreshold,
+				TavilyClient:        tavilyClient,
+				Cfg:                 cfg,
+				ScrubbedUserMessage: prompt, // the scheduled prompt IS the input
+				ScrubVault:          nil,    // no PII scrubbing for system prompts
+				ConversationID:      "scheduled",
+				TriggerMsgID:        0,
+				// For scheduled runs, the StatusCallback sends a new
+				// Telegram message rather than editing a placeholder.
+				// The agent's reply tool calls this to deliver the response.
+				StatusCallback: func(text string) error {
+					return tgBot.SendToChat(ownerChat, text)
+				},
+				TTSCallback:         nil, // no voice for scheduled messages (for now)
+				ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
+				RewriteEveryN:       cfg.Persona.RewriteEveryNConversations,
+			})
+			if err != nil {
+				return "", err
+			}
+			return result.ReplyText, nil
+		}
+
+		// Build the list of default tasks from config flags.
+		// Each enabled flag creates a system task on first startup.
+		var defaults []scheduler.DefaultTask
+		if cfg.Scheduler.MorningBriefing {
+			defaults = append(defaults, scheduler.DefaultTask{
+				Name:     "morning briefing",
+				CronExpr: "0 8 * * *",
+				TaskType: "run_prompt",
+				Priority: "normal",
+				Payload:  []byte(`{"prompt":"Generate a morning briefing for the user. Include anything relevant: weather if available, upcoming tasks, recent follow-ups worth mentioning. Keep it warm and concise — a few sentences, not a report."}`),
+			})
+		}
+		if cfg.Scheduler.MoodCheckin {
+			defaults = append(defaults, scheduler.DefaultTask{
+				Name:     "mood check-in",
+				CronExpr: "0 21 * * *",
+				TaskType: "mood_checkin",
+				Priority: "normal",
+				Payload:  []byte(`{"style":"gentle","follow_up":true}`),
+			})
+		}
+		if cfg.Scheduler.MedicationCheckin {
+			defaults = append(defaults, scheduler.DefaultTask{
+				Name:     "medication check-in",
+				CronExpr: "0 21 * * *",
+				TaskType: "medication_checkin",
+				Priority: "critical",
+				Payload:  []byte(`{"time_of_day":"evening"}`),
+			})
+		}
+		if cfg.Scheduler.ProactiveFollowups {
+			defaults = append(defaults, scheduler.DefaultTask{
+				Name:     "proactive follow-ups",
+				CronExpr: "0 9 * * *",
+				TaskType: "run_prompt",
+				Priority: "normal",
+				Payload:  []byte(`{"prompt":"Scan facts from the last 48 hours with importance >= 7. If any warrant a follow-up (job interview, feeling rough, new medication, etc.), send a brief, warm check-in. If nothing stands out, do nothing — do NOT send a message just to say there's nothing to follow up on."}`),
+			})
+		}
+		if cfg.Scheduler.AutoJournal {
+			defaults = append(defaults, scheduler.DefaultTask{
+				Name:     "auto-journal",
+				CronExpr: "0 22 * * *",
+				TaskType: "run_journal",
+				Priority: "normal",
+				Payload:  []byte(`{"style":"narrative"}`),
+			})
+		}
+
+		sched = scheduler.New(store, sendFn, agentFn, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
+			QuietHoursStart:    cfg.Scheduler.QuietHoursStart,
+			QuietHoursEnd:      cfg.Scheduler.QuietHoursEnd,
+			MaxProactivePerDay: cfg.Scheduler.MaxProactivePerDay,
+			Defaults:           defaults,
+		})
 		sched.Start()
 	} else {
 		log.Warn("scheduler disabled — set telegram.owner_chat in config.yaml (use /status to find your chat ID)")

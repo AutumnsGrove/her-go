@@ -910,17 +910,13 @@ User sends photo (with optional caption)
 - [x] Conversation mood tracking (inferred + manual via log_mood tool)
 - [ ] Migration path to CF D1 + Vectorize (design-only, no code needed yet)
 
-### v0.5 — She Speaks (Future)
-
-Full end-to-end voice: you speak, she speaks back.
-
-- [ ] Local TTS via Kokoro (text → WAV → Ogg/Opus → Telegram voice memo)
-- [ ] Voice selection and configuration (pick a voice that fits the persona)
-- [ ] Reply mode: "voice" (always reply with voice) or "match" (mirror input format)
-- [ ] PII deanonymization happens BEFORE TTS (she says the real names, not tokens)
-- [ ] Audio caching for repeated phrases (greetings, acknowledgments)
-- [ ] Latency optimization: stream LLM tokens → batch into sentences → TTS each sentence → send first sentence as voice memo while generating the rest
-- [ ] Emotion-aware TTS: adjust speed/tone based on conversation mood (if Kokoro supports it)
+### v0.5 — She Speaks
+- [x] Local TTS via Piper (text → WAV → Ogg/Opus → Telegram voice memo)
+- [x] Voice selection and configuration (pick a voice that fits the persona)
+- [x] Reply mode: "voice" (always reply with voice) or "match" (mirror input format)
+- [x] PII deanonymization happens BEFORE TTS (she says the real names, not tokens)
+- [x] TTS wired into both text and voice message handlers via TTSCallback
+- [x] WAV → OGG/Opus conversion via ffmpeg for Telegram compatibility
 
 **Voice pipeline:**
 ```
@@ -928,13 +924,18 @@ You speak → Telegram (.ogg)
   → ffmpeg → Parakeet (local STT) → text
   → PII scrub → memory context → LLM (OpenRouter)
   → response text → PII deanonymize
-  → Kokoro (local TTS) → .ogg
+  → Piper (local TTS) → .wav → ffmpeg → .ogg
   → Telegram voice memo back to you
 ```
 
 **Everything local.** No audio ever leaves the Mac Mini except as Telegram voice memos between you and the bot. STT and TTS both run on-device.
 
 **Result:** A full voice conversation loop. You talk to her, she talks back. Like the movie.
+
+#### Future voice enhancements (not blocking v0.5)
+These are nice-to-have options for later, similar to CF Workers AI as an alternative STT backend:
+- [ ] Cloud TTS option (ElevenLabs or similar) for emotion-aware voice with mood-based tone/speed adjustment
+- [ ] Streaming sentence batching: stream LLM tokens → batch into sentences → TTS each → send first while generating the rest
 
 ### v0.6 — She Reaches Out (Future)
 

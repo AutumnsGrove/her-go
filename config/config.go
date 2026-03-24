@@ -141,14 +141,19 @@ type TTSConfig struct {
 }
 
 // SchedulerConfig controls the task scheduler / cron system.
-// v0.2 uses only Timezone. The rest are here for schema completeness
-// and will be wired up in v0.6 when recurring tasks and proactive
-// messaging land.
 type SchedulerConfig struct {
-	Timezone          string `yaml:"timezone"`            // IANA timezone for cron evaluation (e.g. "America/New_York")
-	QuietHoursStart   string `yaml:"quiet_hours_start"`   // v0.6: no scheduled messages after this time
-	QuietHoursEnd     string `yaml:"quiet_hours_end"`     // v0.6: resume scheduled messages after this time
-	MaxProactivePerDay int   `yaml:"max_proactive_per_day"` // v0.6: cap on non-reminder messages per day
+	Timezone           string `yaml:"timezone"`              // IANA timezone for cron evaluation (e.g. "America/New_York")
+	QuietHoursStart    string `yaml:"quiet_hours_start"`     // no scheduled messages after this time (e.g. "23:00")
+	QuietHoursEnd      string `yaml:"quiet_hours_end"`       // resume scheduled messages after this time (e.g. "07:00")
+	MaxProactivePerDay int    `yaml:"max_proactive_per_day"` // cap on non-reminder messages per day (0 = unlimited)
+
+	// Default task flags — when true, the scheduler creates these tasks
+	// on startup if they don't already exist. All are idempotent.
+	MorningBriefing    bool `yaml:"morning_briefing"`     // daily briefing at 8am via run_prompt
+	MoodCheckin        bool `yaml:"mood_checkin"`          // daily mood check-in at 9pm
+	MedicationCheckin  bool `yaml:"medication_checkin"`    // daily medication check-in at 9pm (critical priority)
+	ProactiveFollowups bool `yaml:"proactive_followups"`   // scan for follow-up opportunities at 9am
+	AutoJournal        bool `yaml:"auto_journal"`          // auto-journal entry at 10pm
 }
 
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.

@@ -53,9 +53,17 @@ persona:
 
 scheduler:
   timezone: "America/New_York"     # IANA timezone — cron expressions evaluated in this zone
-  quiet_hours_start: "23:00"       # v0.6: no scheduled messages during this window
-  quiet_hours_end: "07:00"         # v0.6: resume after this time
-  max_proactive_per_day: 5         # v0.6: cap on non-reminder scheduled messages
+  quiet_hours_start: "23:00"       # no scheduled messages during this window
+  quiet_hours_end: "07:00"         # resume after this time
+  max_proactive_per_day: 5         # cap on non-reminder scheduled messages (0 = unlimited)
+
+  # Default recurring tasks — created on startup if enabled.
+  # All can be customized or deleted via /schedule commands.
+  morning_briefing: false          # daily briefing at 8am (weather, tasks, follow-ups)
+  mood_checkin: false              # daily mood check-in at 9pm (inline keyboard)
+  medication_checkin: false        # daily medication check-in at 9pm (critical — always fires)
+  proactive_followups: false       # scan for follow-ups at 9am (conditional — only if needed)
+  auto_journal: false              # auto-journal entry at 10pm
 
 voice:
   enabled: false                                                  # set true to accept voice memos

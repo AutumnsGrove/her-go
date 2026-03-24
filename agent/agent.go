@@ -557,6 +557,14 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execViewImage(tc.Function.Arguments, tctx)
 	case "create_reminder":
 		return execCreateReminder(tc.Function.Arguments, tctx)
+	case "create_schedule":
+		return execCreateSchedule(tc.Function.Arguments, tctx)
+	case "list_schedules":
+		return execListSchedules(tc.Function.Arguments, tctx)
+	case "update_schedule":
+		return execUpdateSchedule(tc.Function.Arguments, tctx)
+	case "delete_schedule":
+		return execDeleteSchedule(tc.Function.Arguments, tctx)
 	case "recall_memories":
 		return execRecallMemories(tc.Function.Arguments, tctx)
 	case "log_mood":

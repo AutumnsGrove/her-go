@@ -163,6 +163,7 @@ func (s *Store) initTables() error {
 			next_run DATETIME,
 			run_count INTEGER DEFAULT 0,
 			max_runs INTEGER,
+			priority TEXT NOT NULL DEFAULT 'normal',
 			created_by TEXT DEFAULT 'user',
 			source_message_id INTEGER,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -281,6 +282,10 @@ func (s *Store) initTables() error {
 		// voice_memo_path: path to original audio file for voice messages.
 		// Already in the CREATE TABLE for new DBs, but existing DBs need this.
 		`ALTER TABLE messages ADD COLUMN voice_memo_path TEXT`,
+		// priority: "normal", "high", or "critical". Controls which damping
+		// checks a task is subject to. Critical tasks (reminders, medication)
+		// always fire. Existing tasks get "normal" which is the safe default.
+		`ALTER TABLE scheduled_tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -1294,6 +1299,7 @@ type ScheduledTask struct {
 	NextRun         *time.Time
 	RunCount        int
 	MaxRuns         *int             // nil = unlimited
+	Priority        string           // "normal", "high", "critical" — controls damping behavior
 	CreatedBy       string           // "user", "system", "agent"
 	SourceMessageID *int64
 	CreatedAt       time.Time
@@ -1305,11 +1311,17 @@ type ScheduledTask struct {
 // is just trigger_at, for recurring tasks (v0.6) it's computed from
 // the cron expression.
 func (s *Store) CreateScheduledTask(task *ScheduledTask) (int64, error) {
+	// Default priority to "normal" if not set.
+	priority := task.Priority
+	if priority == "" {
+		priority = "normal"
+	}
+
 	result, err := s.db.Exec(
 		`INSERT INTO scheduled_tasks
 		 (name, schedule_type, cron_expr, trigger_at, task_type, payload,
-		  enabled, next_run, max_runs, created_by, source_message_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  enabled, next_run, max_runs, priority, created_by, source_message_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.Name,
 		task.ScheduleType,
 		task.CronExpr,
@@ -1319,6 +1331,7 @@ func (s *Store) CreateScheduledTask(task *ScheduledTask) (int64, error) {
 		task.Enabled,
 		task.NextRun,
 		task.MaxRuns,
+		priority,
 		task.CreatedBy,
 		task.SourceMessageID,
 	)
@@ -1339,7 +1352,7 @@ func (s *Store) GetDueTasks(now time.Time) ([]ScheduledTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, schedule_type, cron_expr, trigger_at, task_type,
 		        payload, enabled, last_run, next_run, run_count, max_runs,
-		        created_by, source_message_id, created_at, updated_at
+		        priority, created_by, source_message_id, created_at, updated_at
 		 FROM scheduled_tasks
 		 WHERE enabled = 1 AND next_run <= ?
 		 ORDER BY next_run ASC`,
@@ -1362,7 +1375,7 @@ func (s *Store) ListActiveTasks() ([]ScheduledTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, schedule_type, cron_expr, trigger_at, task_type,
 		        payload, enabled, last_run, next_run, run_count, max_runs,
-		        created_by, source_message_id, created_at, updated_at
+		        priority, created_by, source_message_id, created_at, updated_at
 		 FROM scheduled_tasks
 		 WHERE enabled = 1
 		 ORDER BY next_run ASC`,
@@ -1454,7 +1467,7 @@ func scanScheduledTasks(rows *sql.Rows) ([]ScheduledTask, error) {
 		err := rows.Scan(
 			&t.ID, &t.Name, &t.ScheduleType, &t.CronExpr, &t.TriggerAt,
 			&t.TaskType, &payload, &t.Enabled, &t.LastRun, &t.NextRun,
-			&t.RunCount, &t.MaxRuns, &t.CreatedBy, &t.SourceMessageID,
+			&t.RunCount, &t.MaxRuns, &t.Priority, &t.CreatedBy, &t.SourceMessageID,
 			&t.CreatedAt, &t.UpdatedAt,
 		)
 		if err != nil {
@@ -1464,6 +1477,77 @@ func scanScheduledTasks(rows *sql.Rows) ([]ScheduledTask, error) {
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
+}
+
+// --- Scheduler Helpers (v0.6 damping + defaults) ---
+
+// CountTasksRunToday returns the number of non-once tasks that have
+// executed since midnight in the given timezone. Used by the scheduler
+// to enforce the max_proactive_per_day limit.
+func (s *Store) CountTasksRunToday(now time.Time) (int, error) {
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM scheduled_tasks
+		 WHERE schedule_type != 'once' AND last_run >= ?`,
+		startOfDay,
+	).Scan(&count)
+	return count, err
+}
+
+// DeferTask pushes a task's next_run to a later time. Used by the
+// scheduler for quiet hours (defer to end of quiet window) and
+// conversation-aware deferral (defer by 30 min if user is active).
+func (s *Store) DeferTask(taskID int64, until time.Time) error {
+	_, err := s.db.Exec(
+		`UPDATE scheduled_tasks SET next_run = ?, updated_at = ? WHERE id = ?`,
+		until, time.Now(), taskID,
+	)
+	return err
+}
+
+// LastUserMessageTime returns the timestamp of the most recent user
+// message. Used by the scheduler to detect active conversations —
+// if the user sent a message within the last 10 minutes, proactive
+// check-ins get deferred to avoid interrupting the flow.
+func (s *Store) LastUserMessageTime() (time.Time, error) {
+	var ts time.Time
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM messages WHERE role = 'user'
+		 ORDER BY timestamp DESC LIMIT 1`,
+	).Scan(&ts)
+	if err == sql.ErrNoRows {
+		return time.Time{}, nil
+	}
+	return ts, err
+}
+
+// GetTaskByName finds an enabled task by name and creator. Used by
+// the scheduler's ensureDefaults() to check if a system-created
+// default task already exists before creating it (idempotent).
+func (s *Store) GetTaskByName(name string, createdBy string) (*ScheduledTask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, name, schedule_type, cron_expr, trigger_at, task_type,
+		        payload, enabled, last_run, next_run, run_count, max_runs,
+		        priority, created_by, source_message_id, created_at, updated_at
+		 FROM scheduled_tasks
+		 WHERE name = ? AND created_by = ?
+		 LIMIT 1`,
+		name, createdBy,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying task by name: %w", err)
+	}
+	defer rows.Close()
+
+	tasks, err := scanScheduledTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil // not found — callers check for nil
+	}
+	return &tasks[0], nil
 }
 
 // --- Mood Tracking ---
