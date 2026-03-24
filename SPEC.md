@@ -106,13 +106,15 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 - Returns structured response with token usage for metrics
 - Supports multi-modal messages (text + image content parts) for vision calls
 
-**Multi-model architecture:** The bot uses three models, each optimized for its role:
+**Multi-model architecture:** The bot uses multiple models, each optimized for its role:
 
 | Model | Role | Why |
 |---|---|---|
 | Chat LLM (Deepseek V3.2) | Conversational responses | Strong at natural language, cheap |
 | Agent LLM (configurable) | Tool-calling orchestration | Fast, good at structured output |
 | Vision LLM (Gemini 3 Flash) | Image understanding | Fast VLM, good casual descriptions |
+| OCR — primary (Apple Vision) | Text extraction from photos | Sub-200ms, Neural Engine, zero deps |
+| OCR — fallback (GLM-OCR 0.9B) | Text extraction when primary fails | Purpose-built OCR model, #1 OmniDocBench |
 
 The vision model is called via the `view_image` agent tool. When the user sends a photo, the agent decides whether/how to use it and calls the VLM with an appropriate prompt. The VLM's description becomes part of the agent's context, which it can reference when generating the reply via the chat LLM.
 
@@ -766,6 +768,8 @@ her-go/
 │   └── install.go       # Build from source (her install)
 ├── vision/              # (v0.2.5+) Image understanding via VLM
 │   └── vision.go       # Gemini Flash client, base64 encoding, description extraction
+├── ocr/                 # (v0.9+) Text extraction from photos
+│   └── ocr.go          # Apple Vision CLI (primary) + GLM-OCR via LM Studio (fallback)
 ├── voice/               # (v0.3+)
 │   ├── stt.go           # Speech-to-text: Parakeet / CF Workers AI
 │   └── tts.go           # Text-to-speech: Kokoro local TTS (v0.5+)
@@ -1398,7 +1402,7 @@ MyMind-style card grid served from Mac Mini. `/links` command opens it.
 
 Send Mira a photo of a physical book page, Kindle screen, any reading surface. Say "save a highlight from [book name]."
 
-1. OCR the photo to extract text (Tesseract via `github.com/otiai10/gosseract/v2`, or CLI fallback)
+1. OCR the photo to extract text (Apple Vision via `macos-vision-ocr` CLI, GLM-OCR via LM Studio as fallback)
 2. Look up the book via search tool, save/find it in the collection
 3. Save extracted text as a highlight linked to that book
 4. Save the original photo with its own embedding (visual search)
@@ -1429,13 +1433,53 @@ links:
   raindrop_import_path: ""          # path to Raindrop CSV for one-time import
 
 ocr:
-  engine: "gosseract"               # "gosseract" (CGo/Tesseract) or "cli" (tesseract CLI)
-  tesseract_path: ""                # only needed for CLI mode
+  engine: "apple-vision"            # "apple-vision" (primary, macOS-native) or "glm-ocr" (LM Studio fallback)
+  vision_ocr_path: "macos-vision-ocr"  # path to macos-vision-ocr CLI binary (build once from source)
+  fallback:
+    engine: "glm-ocr"              # GLM-OCR 0.9B — purpose-built OCR model, #1 on OmniDocBench
+    base_url: "http://localhost:1234/v1"  # LM Studio (same instance as embeddings)
+    model: "glm-ocr"               # 0.9B params, 1.6-2.2 GB — fits easily alongside other models
+```
+
+**OCR pipeline:**
+```
+Photo received (book page, receipt, Kindle screen)
+  → write to temp file
+  → call macos-vision-ocr CLI via os/exec → parse JSON (text + confidence + bounding boxes)
+  → if confidence < threshold OR empty result → fallback to GLM-OCR via LM Studio API
+  → return extracted text
+  → clean up temp file
+```
+
+**Why Apple Vision + GLM-OCR over Tesseract:**
+- Apple Vision runs on Neural Engine — sub-200ms, zero dependencies, 16 languages
+- GLM-OCR (0.9B) is purpose-built for OCR (not a general VLM), MIT licensed, scores 94.62 on OmniDocBench
+- Tesseract degrades significantly on phone photos with glare, curve, or tilt — the exact inputs we're handling
+- No CGo dependency (gosseract required CGo + system Tesseract package). Apple Vision is pure CLI, GLM-OCR is HTTP
+- Both are smaller and faster than using a general VLM like Qwen for OCR
+
+**`macos-vision-ocr` setup (one-time):**
+```bash
+git clone https://github.com/bytefer/macos-vision-ocr.git
+cd macos-vision-ocr
+swift build -c release --arch arm64
+# Binary at .build/release/macos-vision-ocr — copy to PATH or reference in config
+```
+
+**`macos-vision-ocr` output format:**
+```json
+{
+  "texts": "All extracted text concatenated",
+  "info": {"filepath": "/path/to/image.png", "width": 1920, "height": 1080},
+  "observations": [
+    {"text": "Hello World", "confidence": 0.97, "quad": {"topLeft": {"x": 0.09, "y": 0.28}, ...}}
+  ]
+}
 ```
 
 **Dependencies:**
 - `github.com/PuerkitoBio/goquery` — HTML parsing for Mini Shutter content extraction
-- `github.com/otiai10/gosseract/v2` — OCR for book highlight photos (requires `tesseract-ocr` system package)
+- `macos-vision-ocr` CLI binary — Apple Vision framework wrapper (Swift, build from source, no runtime deps)
 
 **Result:** Mira is your personal collection system. Save links by sending them in chat, read them in a clean reader view, highlight the important parts, capture book quotes with photos. Everything searchable, everything connected to the conversation where you saved it.
 
@@ -1448,7 +1492,7 @@ Mira gains a suite of practical daily-life tools. Each follows the standard patt
 Photo → local OCR → structured expense data.
 
 - Send Mira a photo of a receipt
-- OCR extracts text (same Tesseract infrastructure as book highlights in v0.9)
+- OCR extracts text (same Apple Vision + GLM-OCR infrastructure as book highlights in v0.9)
 - LLM parses extracted text into: amount, vendor, date, category
 - Stored in `expenses` table
 - "How much did I spend this week?" → she knows
@@ -1695,6 +1739,74 @@ kiwix:
 
 **Result:** Mira can search your notes, your email, and Wikipedia — all locally, all private. External data sources become part of her awareness without leaving the machine.
 
+### v1.2 — She Adapts (Future)
+
+Mira gains model fallbacks across all model types. When a primary model is unavailable (API down, rate limited, timeout), she automatically falls back to an alternative. This also opens the door to quality-tier routing — use a better (slower/pricier) model when it matters, a cheaper one when it doesn't.
+
+**Fallback architecture:**
+Each model config section gains an optional `fallback` block with the same shape as the primary config. On failure (HTTP error, timeout, empty response), the system retries once with the fallback model before returning an error. Fallback usage is logged for observability.
+
+```yaml
+llm:
+  model: "deepseek/deepseek-v3.2"
+  # ... existing fields ...
+  fallback:
+    model: "anthropic/claude-3.5-haiku"  # or any OpenRouter model
+    temperature: 0.85
+    max_tokens: 1024
+
+agent:
+  model: "arcee-ai/trinity-large-preview:free"
+  fallback:
+    model: "liquid/lfm-2.5-1.2b-instruct:free"
+    temperature: 0.1
+    max_tokens: 512
+
+vision:
+  model: "google/gemini-3-flash-preview"
+  fallback:
+    model: "qwen/qwen3-vl:2b"           # or another fast VLM on OpenRouter
+    temperature: 0.3
+    max_tokens: 512
+
+voice:
+  tts:
+    engine: "piper"
+    fallback:
+      engine: "elevenlabs"              # cloud API — higher quality, higher latency
+      api_key: "${ELEVENLABS_API_KEY}"
+      voice_id: "some-voice-id"
+```
+
+**Fallback triggers:**
+- HTTP 429 (rate limited), 500-503 (server error), or request timeout
+- Empty response or malformed JSON
+- Model-specific: low confidence scores (OCR), empty transcription (STT)
+
+**What does NOT get fallbacks:**
+- Embeddings — vectors are model-specific, switching models mid-stream would corrupt similarity search
+- Search APIs (Tavily, Kiwix) — these are services, not models
+
+**Implementation pattern:**
+```go
+// In llm/client.go or a new llm/fallback.go
+type FallbackClient struct {
+    primary  *Client
+    fallback *Client  // nil if no fallback configured
+}
+
+func (fc *FallbackClient) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
+    resp, err := fc.primary.ChatCompletion(messages)
+    if err != nil && fc.fallback != nil {
+        log.Warn("primary model failed, trying fallback", "err", err)
+        return fc.fallback.ChatCompletion(messages)
+    }
+    return resp, err
+}
+```
+
+**Result:** Mira stays responsive even when a model provider has issues. No more "sorry, I can't respond right now" — she just quietly switches to the backup and keeps going.
+
 ---
 
 ## Dependencies (Go Modules)
@@ -1706,7 +1818,7 @@ kiwix:
 | `gopkg.in/yaml.v3` | Config parsing | v0.1 |
 | `github.com/robfig/cron/v3` | Cron expression parsing for scheduler (next_run computation) | v0.6 |
 | `github.com/PuerkitoBio/goquery` | jQuery-style HTML parsing (Mini Shutter content extraction) | v0.9 |
-| `github.com/otiai10/gosseract/v2` | Tesseract OCR bindings (book highlights, receipt scanning) | v0.9 |
+| `macos-vision-ocr` (CLI binary) | Apple Vision OCR — primary engine for book highlights, receipt scanning (no Go module — called via `os/exec`) | v0.9 |
 | `github.com/fsnotify/fsnotify` | Filesystem event watcher (Obsidian vault indexing) | v1.1 |
 | `github.com/emersion/go-imap/v2` | IMAP4rev2 client (email sync) | v1.1 |
 
