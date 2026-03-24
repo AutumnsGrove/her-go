@@ -403,7 +403,13 @@ func runBot(cmd *cobra.Command, args []string) error {
 			})
 		}
 
-		sched = scheduler.New(store, sendFn, agentFn, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
+		// sendKeyboardFn sends messages with inline keyboards (mood check-ins,
+		// medication check-ins, confirmations, etc.).
+		sendKeyboardFn := func(msg scheduler.KeyboardMessage) error {
+			return tgBot.SendKeyboardToChat(ownerChat, msg)
+		}
+
+		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentFn, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
 			QuietHoursStart:    cfg.Scheduler.QuietHoursStart,
 			QuietHoursEnd:      cfg.Scheduler.QuietHoursEnd,
 			MaxProactivePerDay: cfg.Scheduler.MaxProactivePerDay,

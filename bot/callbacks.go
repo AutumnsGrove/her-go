@@ -1,0 +1,263 @@
+// callbacks.go — Inline keyboard sending and callback handling.
+//
+// This file bridges the scheduler's Telegram-agnostic keyboard types
+// (scheduler.Button, scheduler.InlineKeyboard) to real telebot types,
+// and routes callback queries when users click buttons.
+//
+// The flow:
+//   1. Scheduler fires a task (e.g., mood_checkin)
+//   2. Task executor builds a KeyboardMessage with shared types
+//   3. Scheduler calls sendKeyboardFn (a closure wired in cmd/run.go)
+//   4. That closure calls SendKeyboardToChat here, which translates
+//      to telebot types and sends via the Telegram API
+//   5. User clicks a button → Telegram sends a callback query
+//   6. telebot routes it by the button's Unique field to the right handler
+//   7. Handler processes the action (save mood, log meds, etc.)
+package bot
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"her/agent"
+	"her/memory"
+	"her/scheduler"
+
+	tele "gopkg.in/telebot.v4"
+)
+
+// SendKeyboardToChat sends a message with an inline keyboard to a
+// specific chat. This is the concrete implementation behind
+// scheduler.SendKeyboardFunc — it translates the scheduler's
+// Telegram-free types into real telebot API calls.
+//
+// In telebot v4, inline keyboards use a builder pattern:
+//   markup := &tele.ReplyMarkup{}
+//   btn := markup.Data("display text", "unique_key", "data_value")
+//   markup.Inline(markup.Row(btn1, btn2, ...))
+//
+// The "unique_key" is what routes callbacks to handlers (registered
+// via tb.Handle(&tele.InlineButton{Unique: "key"}, handler)).
+// The "data_value" is the payload the handler receives.
+func (b *Bot) SendKeyboardToChat(chatID int64, msg scheduler.KeyboardMessage) error {
+	markup := &tele.ReplyMarkup{}
+
+	var rows []tele.Row
+	for _, kbRow := range msg.Keyboard {
+		var btns []tele.Btn
+		for _, btn := range kbRow {
+			// markup.Data(text, unique, data...) creates an inline button.
+			// "unique" routes the callback, "data" is the payload.
+			btns = append(btns, markup.Data(btn.Text, btn.Action, btn.Value))
+		}
+		rows = append(rows, markup.Row(btns...))
+	}
+	markup.Inline(rows...)
+
+	_, err := b.tb.Send(
+		chatRecipient{chatID: fmt.Sprintf("%d", chatID)},
+		msg.Text,
+		&tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: markup,
+		},
+	)
+	return err
+}
+
+// registerCallbackHandlers sets up handlers for inline button callbacks.
+// Each Action value used in Button types needs a corresponding handler
+// registered here. Adding a new button type is a one-liner.
+//
+// Called from New() during bot initialization.
+func (b *Bot) registerCallbackHandlers() {
+	// Mood check-in buttons (Action: "mood")
+	b.tb.Handle(&tele.InlineButton{Unique: "mood"}, b.handleMoodCallback)
+
+	// Medication check-in buttons (Action: "med")
+	b.tb.Handle(&tele.InlineButton{Unique: "med"}, b.handleMedCallback)
+}
+
+// --- Mood Check-in Callback ---
+
+// moodLabels maps rating numbers to their display labels.
+var moodLabels = map[int]string{
+	1: "😢 Bad",
+	2: "😔 Rough",
+	3: "😐 Meh",
+	4: "🙂 Good",
+	5: "😊 Great",
+}
+
+// handleMoodCallback fires when the user clicks a mood check-in button.
+// It saves the mood entry, edits the message to show the selection,
+// and runs the agent for a dynamic, contextual follow-up.
+func (b *Bot) handleMoodCallback(c tele.Context) error {
+	data := strings.TrimSpace(c.Callback().Data)
+	rating, err := strconv.Atoi(data)
+	if err != nil || rating < 1 || rating > 5 {
+		return c.Respond(&tele.CallbackResponse{Text: "Invalid rating"})
+	}
+
+	// Save the mood entry to the database.
+	_, err = b.store.SaveMoodEntry(rating, "", "", "checkin", "scheduled")
+	if err != nil {
+		log.Error("saving mood from callback", "rating", rating, "err", err)
+		return c.Respond(&tele.CallbackResponse{Text: "Something went wrong"})
+	}
+
+	log.Info("mood check-in recorded", "rating", rating, "label", moodLabels[rating])
+
+	// Acknowledge the click (removes the loading spinner on the button).
+	_ = c.Respond(&tele.CallbackResponse{Text: "Got it!"})
+
+	// Edit the original message to show the selection and remove the
+	// keyboard. Once you've clicked, the buttons disappear — replaced
+	// by a confirmation of what you chose.
+	_ = c.Edit(fmt.Sprintf("mood logged: %s", moodLabels[rating]))
+
+	// Run the agent for a dynamic follow-up. Instead of a canned
+	// "What's going on?" every time, the agent draws on mood trends,
+	// medication history, recent facts, and everything else to craft
+	// a response that actually feels alive.
+	go b.runMoodFollowUp(c, rating)
+
+	return nil
+}
+
+// runMoodFollowUp runs the agent pipeline to generate a contextual
+// follow-up after a mood check-in. Runs in a goroutine so it doesn't
+// block the callback response.
+func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
+	label := moodLabels[rating]
+
+	// Build a prompt that gives the agent full context about the
+	// mood rating. The agent decides how to respond — warm
+	// acknowledgment for good moods, gentle check-in for rough ones.
+	prompt := fmt.Sprintf(
+		"The user just completed a mood check-in and rated their mood as %d/5 (%s). "+
+			"Respond naturally and briefly. For low moods (1-2), gently ask what's going on — "+
+			"you have access to their recent context, medication status, and facts. "+
+			"For neutral moods (3), a brief acknowledgment is fine. "+
+			"For good moods (4-5), share in their positivity briefly. "+
+			"Keep it to 1-2 sentences. Don't mention the rating number, just respond to the vibe.",
+		rating, label,
+	)
+
+	chatID := c.Chat().ID
+
+	result, err := agent.Run(agent.RunParams{
+		AgentLLM:            b.agentLLM,
+		ChatLLM:             b.llm,
+		VisionLLM:           b.visionLLM,
+		Store:               b.store,
+		EmbedClient:         b.embedClient,
+		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:        b.tavilyClient,
+		Cfg:                 b.cfg,
+		ScrubbedUserMessage: prompt,
+		ScrubVault:          nil,
+		ConversationID:      "mood-checkin",
+		TriggerMsgID:        0,
+		// StatusCallback sends a new message to the chat (not editing
+		// a placeholder — there isn't one for callback-triggered runs).
+		StatusCallback: func(text string) error {
+			return b.SendToChat(chatID, text)
+		},
+		TTSCallback:         nil,
+		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
+	})
+	if err != nil {
+		log.Error("mood follow-up agent error", "err", err)
+		return
+	}
+
+	log.Info("mood follow-up sent", "rating", rating, "reply_len", len(result.ReplyText))
+}
+
+// --- Medication Check-in Callback ---
+
+// handleMedCallback fires when the user clicks a medication check-in button.
+// Handles three actions: yes (took meds), no (didn't), snooze (ask again later).
+func (b *Bot) handleMedCallback(c tele.Context) error {
+	data := strings.TrimSpace(c.Callback().Data)
+
+	switch data {
+	case "yes":
+		// Log as a fact — medication adherence tracked through the
+		// existing fact system rather than a separate table.
+		_, err := b.store.SaveFact(
+			"User took their evening medication",
+			"health", "user",
+			0,   // no source message
+			8,   // high importance — health data
+			nil, // no embedding needed
+		)
+		if err != nil {
+			log.Error("saving med fact", "err", err)
+		}
+		_ = c.Respond(&tele.CallbackResponse{Text: "Logged!"})
+		_ = c.Edit("💊 meds taken ✅ — nice job!")
+
+	case "no":
+		_, err := b.store.SaveFact(
+			"User did not take their evening medication",
+			"health", "user",
+			0, 8, nil,
+		)
+		if err != nil {
+			log.Error("saving med fact", "err", err)
+		}
+		_ = c.Respond(&tele.CallbackResponse{Text: "Got it"})
+		// Gentle — no judgment. The bot is tracking, not nagging.
+		_ = c.Edit("💊 no meds tonight — noted. no pressure 💙")
+
+	case "snooze":
+		_ = c.Respond(&tele.CallbackResponse{Text: "I'll ask again in 30 minutes"})
+		_ = c.Edit("💊 snoozed — I'll check back in 30 minutes ⏰")
+
+		// Create a one-shot medication check-in 30 minutes from now.
+		// The scheduler picks it up on its next tick. Priority is
+		// critical because medication reminders always fire.
+		b.snoozeMedCheckin(30 * time.Minute)
+
+	default:
+		_ = c.Respond(&tele.CallbackResponse{Text: "Unknown option"})
+	}
+
+	return nil
+}
+
+// snoozeMedCheckin creates a one-shot medication check-in task that
+// fires after the given delay. Used when the user taps "Snooze" on
+// a medication check-in.
+func (b *Bot) snoozeMedCheckin(delay time.Duration) {
+	triggerAt := time.Now().Add(delay)
+	name := "medication check-in (snoozed)"
+
+	maxRuns := 1
+	task := &memory.ScheduledTask{
+		Name:         &name,
+		ScheduleType: "once",
+		TriggerAt:    &triggerAt,
+		TaskType:     "medication_checkin",
+		Payload:      []byte(`{"time_of_day":"evening"}`),
+		Enabled:      true,
+		NextRun:      &triggerAt,
+		MaxRuns:      &maxRuns,
+		Priority:     "critical", // medication always fires
+		CreatedBy:    "system",
+	}
+
+	id, err := b.store.CreateScheduledTask(task)
+	if err != nil {
+		log.Error("creating snoozed med check-in", "err", err)
+		return
+	}
+
+	log.Info("snoozed medication check-in", "id", id,
+		"trigger_at", triggerAt.Format("3:04 PM"))
+}

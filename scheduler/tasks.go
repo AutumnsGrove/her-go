@@ -5,12 +5,12 @@
 // method dispatches to these based on task.TaskType.
 //
 // Current task types:
-//   - "send_message" — send a plain text message to the user
-//   - "run_prompt"   — run a prompt through the full agent pipeline
-//
-// Future types (v0.6 inline keyboards phase):
+//   - "send_message"       — send a plain text message to the user
+//   - "run_prompt"         — run a prompt through the full agent pipeline
 //   - "mood_checkin"       — send mood check-in with inline keyboard
-//   - "medication_checkin" — send medication check-in
+//   - "medication_checkin" — send medication check-in with inline keyboard
+//
+// Future types:
 //   - "run_extraction"     — trigger fact extraction
 //   - "run_journal"        — generate auto-journal entry
 package scheduler
@@ -104,4 +104,87 @@ func (s *Scheduler) executeRunPrompt(task memory.ScheduledTask) {
 
 	log.Info("run_prompt completed", "id", task.ID, "name", name,
 		"reply_len", len(replyText))
+}
+
+// executeMoodCheckin handles the "mood_checkin" task type.
+// Sends a message with emoji buttons for the user to rate their mood.
+// The actual mood logging happens in the bot's callback handler when
+// the user clicks a button — the scheduler just sends the prompt.
+//
+// Button layout: two rows (3 + 2) to fit comfortably on phone screens.
+func (s *Scheduler) executeMoodCheckin(task memory.ScheduledTask) {
+	if s.sendKeyboardFn == nil {
+		log.Error("mood_checkin task but no sendKeyboardFn configured", "id", task.ID)
+		return
+	}
+
+	var payload struct {
+		Style    string `json:"style"`     // "gentle" or "direct"
+		FollowUp bool   `json:"follow_up"` // whether low-mood triggers follow-up
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		log.Error("parsing mood_checkin payload", "id", task.ID, "err", err)
+		return
+	}
+
+	// The message text varies by style. Gentle is the default — warm
+	// and casual. Direct is more straightforward.
+	text := "hey, how are you feeling right now?"
+	if payload.Style == "direct" {
+		text = "mood check — how's it going?"
+	}
+
+	keyboard := InlineKeyboard{
+		// Row 1: positive + neutral
+		{
+			{Text: "😊 Great", Action: "mood", Value: "5"},
+			{Text: "🙂 Good", Action: "mood", Value: "4"},
+			{Text: "😐 Meh", Action: "mood", Value: "3"},
+		},
+		// Row 2: negative (fewer buttons = more thumb room)
+		{
+			{Text: "😔 Rough", Action: "mood", Value: "2"},
+			{Text: "😢 Bad", Action: "mood", Value: "1"},
+		},
+	}
+
+	if err := s.sendKeyboardFn(KeyboardMessage{Text: text, Keyboard: keyboard}); err != nil {
+		log.Error("sending mood check-in", "id", task.ID, "err", err)
+	}
+}
+
+// executeMedicationCheckin handles the "medication_checkin" task type.
+// Sends a message with Yes/No/Snooze buttons for medication tracking.
+// Like mood check-ins, the actual logging happens in the bot's callback
+// handler — the scheduler just delivers the prompt.
+func (s *Scheduler) executeMedicationCheckin(task memory.ScheduledTask) {
+	if s.sendKeyboardFn == nil {
+		log.Error("medication_checkin task but no sendKeyboardFn configured", "id", task.ID)
+		return
+	}
+
+	var payload struct {
+		TimeOfDay string `json:"time_of_day"` // "morning" or "evening"
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		log.Error("parsing medication_checkin payload", "id", task.ID, "err", err)
+		return
+	}
+
+	text := "💊 hey, did you take your meds tonight?"
+	if payload.TimeOfDay == "morning" {
+		text = "💊 good morning! did you take your meds?"
+	}
+
+	keyboard := InlineKeyboard{
+		{
+			{Text: "✅ Yes", Action: "med", Value: "yes"},
+			{Text: "❌ No", Action: "med", Value: "no"},
+			{Text: "⏰ Snooze 30m", Action: "med", Value: "snooze"},
+		},
+	}
+
+	if err := s.sendKeyboardFn(KeyboardMessage{Text: text, Keyboard: keyboard}); err != nil {
+		log.Error("sending medication check-in", "id", task.ID, "err", err)
+	}
 }

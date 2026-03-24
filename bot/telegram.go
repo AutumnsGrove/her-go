@@ -119,6 +119,11 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	// use tele.OnDocument instead — we only handle voice memos here.
 	tb.Handle(tele.OnVoice, bot.handleVoice)
 
+	// Register inline keyboard callback handlers (v0.6).
+	// Each Action value in scheduler.Button needs a handler here.
+	// See bot/callbacks.go for the implementations.
+	bot.registerCallbackHandlers()
+
 	return bot, nil
 }
 

@@ -72,13 +72,14 @@ type DefaultTask struct {
 // Scheduler polls the database for due tasks and executes them.
 // It runs in its own goroutine and communicates via context cancellation.
 type Scheduler struct {
-	store    *memory.Store
-	sendFn   SendFunc
-	agentFn  AgentFunc      // runs prompts through the agent pipeline — nil if not wired
-	location *time.Location // timezone for cron evaluation
-	opts     *SchedulerOpts // damping configuration
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	store          *memory.Store
+	sendFn         SendFunc         // sends plain text messages
+	sendKeyboardFn SendKeyboardFunc // sends messages with inline keyboards — nil if not wired
+	agentFn        AgentFunc        // runs prompts through the agent pipeline — nil if not wired
+	location       *time.Location   // timezone for cron evaluation
+	opts           *SchedulerOpts   // damping configuration
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 // New creates a scheduler. Call Start() to begin the polling loop.
@@ -89,7 +90,7 @@ type Scheduler struct {
 //
 // agentFn can be nil if the agent pipeline isn't available (e.g., during
 // testing). Tasks that need it (run_prompt) will log an error and skip.
-func New(store *memory.Store, sendFn SendFunc, agentFn AgentFunc, timezone string, opts SchedulerOpts) *Scheduler {
+func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, agentFn AgentFunc, timezone string, opts SchedulerOpts) *Scheduler {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		log.Warn("invalid timezone, falling back to UTC", "timezone", timezone, "err", err)
@@ -97,11 +98,12 @@ func New(store *memory.Store, sendFn SendFunc, agentFn AgentFunc, timezone strin
 	}
 
 	return &Scheduler{
-		store:    store,
-		sendFn:   sendFn,
-		agentFn:  agentFn,
-		location: loc,
-		opts:     &opts,
+		store:          store,
+		sendFn:         sendFn,
+		sendKeyboardFn: sendKeyboardFn,
+		agentFn:        agentFn,
+		location:       loc,
+		opts:           &opts,
 	}
 }
 
@@ -421,6 +423,10 @@ func (s *Scheduler) executeTask(task memory.ScheduledTask) {
 		s.executeSendMessage(task)
 	case "run_prompt":
 		s.executeRunPrompt(task)
+	case "mood_checkin":
+		s.executeMoodCheckin(task)
+	case "medication_checkin":
+		s.executeMedicationCheckin(task)
 	default:
 		// Unknown task type — log and skip. Don't disable it in case
 		// it's a future type that'll be supported after an upgrade
