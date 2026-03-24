@@ -1082,6 +1082,9 @@ func (b *Bot) handlePersona(c tele.Context) error {
 	if args == "history" {
 		return b.handlePersonaHistory(c)
 	}
+	if args == "traits" {
+		return b.handlePersonaTraits(c)
+	}
 
 	data, err := os.ReadFile(b.cfg.Persona.PersonaFile)
 	if err != nil || len(data) == 0 {
@@ -1090,6 +1093,42 @@ func (b *Bot) handlePersona(c tele.Context) error {
 
 	msg := fmt.Sprintf("\U0001FA9E <b>Who I Am Right Now</b>\n\n<i>%s</i>", string(data))
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handlePersonaTraits shows current personality trait scores as a
+// visual dashboard with emoji progress bars.
+func (b *Bot) handlePersonaTraits(c tele.Context) error {
+	traits, err := b.store.GetCurrentTraits()
+	if err != nil || len(traits) == 0 {
+		return c.Send("No trait scores yet. Traits are extracted after persona rewrites — keep chatting and they'll appear!")
+	}
+
+	var msg strings.Builder
+	msg.WriteString("\U0001F3AD <b>Personality Traits</b>\n\n")
+
+	for _, t := range traits {
+		if t.TraitName == "humor_style" {
+			msg.WriteString(fmt.Sprintf("<b>Humor style:</b> %s\n", t.Value))
+			continue
+		}
+
+		// Parse float and build a 10-char progress bar.
+		f := 0.0
+		fmt.Sscanf(t.Value, "%f", &f)
+		filled := int(f * 10)
+		if filled > 10 {
+			filled = 10
+		}
+		bar := strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+
+		// Title-case the trait name.
+		displayName := strings.ToUpper(t.TraitName[:1]) + t.TraitName[1:]
+		msg.WriteString(fmt.Sprintf("<code>%-11s %s</code> %s\n", displayName, bar, t.Value))
+	}
+
+	msg.WriteString(fmt.Sprintf("\n<i>Updated: persona v%d</i>", traits[0].PersonaVersionID))
+
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handlePersonaHistory shows past persona versions.

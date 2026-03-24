@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -917,6 +918,13 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 		parts = append(parts, string(personaBytes))
 	}
 
+	// Layer 2.5: Personality traits — soft guidance for tone and style.
+	// These come from the most recent persona rewrite and nudge the
+	// chatLLM toward the right warmth, directness, humor, etc.
+	if traitCtx := buildTraitContext(tctx.store); traitCtx != "" {
+		parts = append(parts, traitCtx)
+	}
+
 	// Layer 3: Current time — always injected so Mira knows what time
 	// of day it is, what day of the week, etc. This is NOT optional —
 	// without it, she has no sense of time at all.
@@ -1160,6 +1168,70 @@ func buildWeatherContext(client *weather.Client) string {
 
 // buildMoodContext formats recent mood data for the system prompt.
 // Returns an empty string if no mood data exists.
+// buildTraitContext formats the current personality trait scores as a
+// soft guidance section for the system prompt. These nudge the chatLLM
+// toward the right tone without being explicit instructions.
+func buildTraitContext(store *memory.Store) string {
+	traits, err := store.GetCurrentTraits()
+	if err != nil || len(traits) == 0 {
+		return ""
+	}
+
+	// Map trait descriptions for natural language guidance.
+	descriptions := map[string]func(string) string{
+		"warmth": func(v string) string {
+			f, _ := strconv.ParseFloat(v, 64)
+			if f >= 0.7 {
+				return "lean warm and emotionally present"
+			} else if f <= 0.3 {
+				return "keep a bit of emotional distance"
+			}
+			return "balanced warmth"
+		},
+		"directness": func(v string) string {
+			f, _ := strconv.ParseFloat(v, 64)
+			if f >= 0.7 {
+				return "be straightforward and blunt"
+			} else if f <= 0.3 {
+				return "be diplomatic and gentle"
+			}
+			return "balanced directness"
+		},
+		"initiative": func(v string) string {
+			f, _ := strconv.ParseFloat(v, 64)
+			if f >= 0.7 {
+				return "proactively lead conversations"
+			} else if f <= 0.3 {
+				return "follow the user's lead"
+			}
+			return "balanced initiative"
+		},
+		"depth": func(v string) string {
+			f, _ := strconv.ParseFloat(v, 64)
+			if f >= 0.7 {
+				return "comfortable going deep and philosophical"
+			} else if f <= 0.3 {
+				return "keep things light and casual"
+			}
+			return "balanced depth"
+		},
+	}
+
+	var b strings.Builder
+	b.WriteString("# Personality Traits\n\n")
+	b.WriteString("These describe your current communication tendencies. Let them guide your tone naturally — don't mention them explicitly.\n\n")
+
+	for _, t := range traits {
+		if t.TraitName == "humor_style" {
+			fmt.Fprintf(&b, "- Humor style: %s\n", t.Value)
+		} else if descFn, ok := descriptions[t.TraitName]; ok {
+			fmt.Fprintf(&b, "- %s: %s (%s)\n", strings.Title(t.TraitName), t.Value, descFn(t.Value))
+		}
+	}
+
+	return b.String()
+}
+
 func buildMoodContext(store *memory.Store) string {
 	entries, err := store.RecentMoodEntries(5)
 	if err != nil || len(entries) == 0 {

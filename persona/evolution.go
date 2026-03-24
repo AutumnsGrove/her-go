@@ -12,8 +12,11 @@
 package persona
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 
 	"her/llm"
@@ -201,7 +204,159 @@ func MaybeRewrite(
 	log.Info("persona rewritten", "version_id", versionID, "reflections_used", len(reflections))
 	log.Info("new persona preview", "preview", truncate(resp.Content, 200))
 
+	// Extract and save trait scores for this persona version.
+	// Runs after the rewrite so it doesn't slow down the response pipeline.
+	if err := ExtractTraits(llmClient, store, resp.Content, versionID, 0.1); err != nil {
+		log.Error("trait extraction failed", "err", err)
+		// Non-fatal — persona rewrite still succeeded.
+	}
+
 	return true, nil
+}
+
+// traitExtractionPrompt asks the LLM to score personality traits based
+// on the persona text. Returns JSON so we can parse it programmatically.
+const traitExtractionPrompt = `Score these personality traits based on the persona description below.
+Return ONLY valid JSON, no other text: {"warmth": 0.7, "directness": 0.5, "humor_style": "dry", "initiative": 0.4, "depth": 0.6}
+
+Trait definitions:
+- warmth (0.0-1.0): 0.0 = cold/reserved, 1.0 = deeply warm/emotionally present
+- directness (0.0-1.0): 0.0 = very diplomatic/indirect, 1.0 = blunt/straightforward
+- humor_style (one of: dry, playful, sardonic, warm, deadpan): the dominant humor type
+- initiative (0.0-1.0): 0.0 = purely reactive/follows, 1.0 = proactively leads conversations
+- depth (0.0-1.0): 0.0 = keeps things light/casual, 1.0 = tends toward deep/philosophical
+
+Persona description:
+---
+%s
+---
+
+%s`
+
+// ExtractTraits asks the LLM to score personality traits from a persona
+// description, applies damping to prevent wild swings, and saves the
+// results linked to the persona version.
+//
+// maxShift caps how much any numeric trait can change per rewrite cycle
+// (default 0.1). humor_style is categorical — no damping needed.
+func ExtractTraits(
+	llmClient *llm.Client,
+	store *memory.Store,
+	personaText string,
+	personaVersionID int64,
+	maxShift float64,
+) error {
+	// Get previous traits for continuity context and damping.
+	prevTraits, err := store.GetCurrentTraits()
+	if err != nil {
+		log.Warn("couldn't load previous traits for damping", "err", err)
+	}
+
+	prevContext := "Previous trait scores: none yet (first scoring)"
+	prevMap := make(map[string]string)
+	if len(prevTraits) > 0 {
+		var parts []string
+		for _, t := range prevTraits {
+			parts = append(parts, fmt.Sprintf("%s=%s", t.TraitName, t.Value))
+			prevMap[t.TraitName] = t.Value
+		}
+		prevContext = fmt.Sprintf("Previous trait scores (shift gradually): %s", strings.Join(parts, ", "))
+	}
+
+	prompt := fmt.Sprintf(traitExtractionPrompt, personaText, prevContext)
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: prompt},
+		{Role: "user", Content: "Score the traits now. Return only JSON."},
+	}
+
+	resp, err := llmClient.ChatCompletion(messages)
+	if err != nil {
+		return fmt.Errorf("trait extraction LLM call: %w", err)
+	}
+
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+
+	// Parse the JSON response.
+	var scores struct {
+		Warmth     float64 `json:"warmth"`
+		Directness float64 `json:"directness"`
+		HumorStyle string  `json:"humor_style"`
+		Initiative float64 `json:"initiative"`
+		Depth      float64 `json:"depth"`
+	}
+
+	// The LLM might wrap JSON in markdown code fences — strip them.
+	cleaned := strings.TrimSpace(resp.Content)
+	cleaned = strings.TrimPrefix(cleaned, "```json")
+	cleaned = strings.TrimPrefix(cleaned, "```")
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	cleaned = strings.TrimSpace(cleaned)
+
+	if err := json.Unmarshal([]byte(cleaned), &scores); err != nil {
+		return fmt.Errorf("parsing trait scores JSON: %w (raw: %s)", err, truncate(resp.Content, 100))
+	}
+
+	// Apply damping — clamp numeric traits to ±maxShift from previous.
+	scores.Warmth = dampTrait(scores.Warmth, prevMap["warmth"], maxShift)
+	scores.Directness = dampTrait(scores.Directness, prevMap["directness"], maxShift)
+	scores.Initiative = dampTrait(scores.Initiative, prevMap["initiative"], maxShift)
+	scores.Depth = dampTrait(scores.Depth, prevMap["depth"], maxShift)
+
+	// Validate humor_style.
+	validHumor := map[string]bool{"dry": true, "playful": true, "sardonic": true, "warm": true, "deadpan": true}
+	if !validHumor[scores.HumorStyle] {
+		scores.HumorStyle = "dry" // safe default
+	}
+
+	// Build trait records and save.
+	traits := []memory.Trait{
+		{TraitName: "warmth", Value: fmt.Sprintf("%.2f", scores.Warmth)},
+		{TraitName: "directness", Value: fmt.Sprintf("%.2f", scores.Directness)},
+		{TraitName: "humor_style", Value: scores.HumorStyle},
+		{TraitName: "initiative", Value: fmt.Sprintf("%.2f", scores.Initiative)},
+		{TraitName: "depth", Value: fmt.Sprintf("%.2f", scores.Depth)},
+	}
+
+	if err := store.SaveTraits(traits, personaVersionID); err != nil {
+		return fmt.Errorf("saving traits: %w", err)
+	}
+
+	log.Info("traits extracted",
+		"warmth", scores.Warmth,
+		"directness", scores.Directness,
+		"humor", scores.HumorStyle,
+		"initiative", scores.Initiative,
+		"depth", scores.Depth,
+	)
+	return nil
+}
+
+// dampTrait clamps a new trait value to within ±maxShift of the previous
+// value. If there's no previous value, the new value is used as-is.
+// All numeric traits are clamped to 0.0–1.0.
+func dampTrait(newVal float64, prevStr string, maxShift float64) float64 {
+	// Clamp to valid range first.
+	newVal = math.Max(0, math.Min(1, newVal))
+
+	if prevStr == "" {
+		return newVal // no previous, use raw
+	}
+
+	prev, err := strconv.ParseFloat(prevStr, 64)
+	if err != nil {
+		return newVal // can't parse previous, use raw
+	}
+
+	// Clamp the delta.
+	delta := newVal - prev
+	if delta > maxShift {
+		delta = maxShift
+	} else if delta < -maxShift {
+		delta = -maxShift
+	}
+
+	return math.Max(0, math.Min(1, prev+delta))
 }
 
 // truncate shortens a string for log output.

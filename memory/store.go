@@ -1639,3 +1639,100 @@ func (s *Store) MoodTrend(limit int) (float64, int, error) {
 	}
 	return 0, 0, nil
 }
+
+// --- Trait Tracking ---
+
+// Trait represents a single personality trait score, linked to a
+// persona version. Numeric traits (warmth, directness, etc.) store
+// float values as strings. Categorical traits (humor_style) store
+// the category label directly.
+type Trait struct {
+	ID               int64
+	TraitName        string
+	Value            string // "0.72" for numeric, "dry" for categorical
+	PersonaVersionID int64
+	Timestamp        time.Time
+}
+
+// SaveTraits bulk-inserts trait scores for a persona version.
+// Called after a persona rewrite to snapshot the current trait state.
+func (s *Store) SaveTraits(traits []Trait, personaVersionID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting trait transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO traits (trait_name, value, persona_version_id) VALUES (?, ?, ?)`,
+	)
+	if err != nil {
+		return fmt.Errorf("preparing trait insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, t := range traits {
+		if _, err := stmt.Exec(t.TraitName, t.Value, personaVersionID); err != nil {
+			return fmt.Errorf("inserting trait %s: %w", t.TraitName, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentTraits returns the trait scores from the most recent
+// persona version. Returns nil (not an error) if no traits exist yet.
+func (s *Store) GetCurrentTraits() ([]Trait, error) {
+	rows, err := s.db.Query(
+		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
+		 FROM traits t
+		 INNER JOIN persona_versions pv ON t.persona_version_id = pv.id
+		 WHERE pv.id = (SELECT MAX(id) FROM persona_versions)
+		 ORDER BY t.trait_name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying current traits: %w", err)
+	}
+	defer rows.Close()
+
+	var traits []Trait
+	for rows.Next() {
+		var t Trait
+		var ts string
+		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
+			return nil, fmt.Errorf("scanning trait: %w", err)
+		}
+		t.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		traits = append(traits, t)
+	}
+	return traits, nil
+}
+
+// GetTraitHistory returns historical values for a single trait across
+// persona versions, newest first. Useful for showing how a trait has
+// drifted over time.
+func (s *Store) GetTraitHistory(traitName string, limit int) ([]Trait, error) {
+	rows, err := s.db.Query(
+		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
+		 FROM traits t
+		 ORDER BY t.persona_version_id DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying trait history: %w", err)
+	}
+	defer rows.Close()
+
+	var traits []Trait
+	for rows.Next() {
+		var t Trait
+		var ts string
+		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
+			return nil, fmt.Errorf("scanning trait history: %w", err)
+		}
+		t.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		traits = append(traits, t)
+	}
+	return traits, nil
+}
