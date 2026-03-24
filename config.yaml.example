@@ -12,8 +12,8 @@ llm:
   max_tokens: 1024
 
 agent:
-  model: "minimax/minimax-m2.5"                 # tool-calling model for memory management (230B MoE, 10B active)
-  temperature: 0.1                              # low temp for precise tool decisions
+  model: "arcee-ai/trinity-large-preview:free"  # tool-calling model for agent orchestration
+  temperature: 0.1                               # low temp for precise tool decisions
   max_tokens: 512
 
 vision:
@@ -32,11 +32,11 @@ search:
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
 
 weather:
-  latitude: 40.7128            # your location — used for weather context in conversations
-  longitude: -74.0060          # Open-Meteo is free, no API key needed
-  temp_unit: "fahrenheit"      # "fahrenheit" or "celsius"
-  wind_speed_unit: "mph"       # "mph" or "kmh"
-  cache_ttl: 3600              # seconds between API refreshes (default: 1 hour)
+  latitude: 0                    # your location — set via set_location tool or manually here
+  longitude: 0                   # Open-Meteo is free, no API key needed
+  temp_unit: "fahrenheit"        # "fahrenheit" or "celsius"
+  wind_speed_unit: "mph"         # "mph" or "kmh"
+  cache_ttl: 3600                # seconds between API refreshes (default: 1 hour)
 
 memory:
   db_path: "./her.db"
@@ -54,9 +54,9 @@ persona:
   prompt_file: "./prompt.md"             # base template (static, user-authored)
   persona_file: "./persona.md"           # evolving self-image (bot-authored)
   agent_prompt_file: "./agent_prompt.md" # agent orchestration rules (editable, hot-reloadable)
-  rewrite_every_n_conversations: 3  # trigger persona rewrite after N reflections accumulate
-  reflection_memory_threshold: 10  # trigger reflection after N new facts accumulate since last reflection
-  max_trait_shift: 0.1             # max trait score change per rewrite cycle
+  rewrite_every_n_conversations: 20  # trigger persona rewrite after N reflections accumulate
+  reflection_memory_threshold: 8     # trigger reflection after N new facts accumulate since last reflection
+  max_trait_shift: 0.1               # max trait score change per rewrite cycle
 
 scheduler:
   timezone: "America/New_York"     # IANA timezone — cron expressions evaluated in this zone
@@ -77,12 +77,12 @@ voice:
   stt:
     engine: "parakeet"                                            # "parakeet" or "cf-workers-ai"
     base_url: "http://localhost:8765"                              # parakeet-mlx-fastapi server
-    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path (e.g. ~/.lmstudio/models/mlx-community/parakeet-tdt-0.6b-v2)
+    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path
   tts:
     enabled: false                                                # set true to reply with voice
-    engine: "kokoro"                                              # "kokoro" or future options
-    base_url: "http://localhost:8766"                              # mlx-audio server
-    model: "kokoro-v1.0"                                           # model name (kokoro-onnx loads from scripts/kokoro-v1.0.onnx)
-    voice_id: "bf_lily"                                          # voice preset (see VOICES.md in model repo)
+    engine: "piper"                                               # "piper" (local) or future cloud options
+    base_url: "http://localhost:8766"                              # piper TTS server
+    model: "en_GB-southern_english_female-low"                     # piper voice model
+    voice_id: "en_GB-southern_english_female-low"                  # voice preset
     speed: 1.0                                                    # speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
