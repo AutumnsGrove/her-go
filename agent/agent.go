@@ -17,6 +17,7 @@ import (
 	"her/scrub"
 	"her/logger"
 	"her/search"
+	"her/weather"
 )
 
 // log is the package-level logger for the agent package.
@@ -69,6 +70,11 @@ type toolContext struct {
 	// Can be nil if Tavily is not configured — search tools will
 	// return an error message instead of crashing.
 	tavilyClient *search.TavilyClient
+
+	// weatherClient fetches and caches current weather from Open-Meteo.
+	// Used by buildWeatherContext to inject weather into the system prompt.
+	// Nil if weather is not configured (no lat/lon).
+	weatherClient *weather.Client
 
 	// cfg holds the full config for building prompts (prompt file paths,
 	// memory limits, etc.).
@@ -154,6 +160,7 @@ type RunParams struct {
 	EmbedClient         *embed.Client
 	SimilarityThreshold float64
 	TavilyClient        *search.TavilyClient
+	WeatherClient       *weather.Client
 	Cfg                 *config.Config
 	ScrubbedUserMessage string
 	ScrubVault          *scrub.Vault
@@ -286,6 +293,7 @@ func Run(params RunParams) (*RunResult, error) {
 		chatLLM:             params.ChatLLM,
 		visionLLM:           params.VisionLLM,
 		tavilyClient:        params.TavilyClient,
+		weatherClient:       params.WeatherClient,
 		cfg:                 params.Cfg,
 		scrubVault:          params.ScrubVault,
 		scrubbedUserMessage: params.ScrubbedUserMessage,
@@ -633,20 +641,28 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		}
 	}
 
-	// Build the user message. If we have search context, we inject it
-	// as a system note before the user's actual message so the model
-	// knows what information is available.
-	userContent := tctx.scrubbedUserMessage
-	if fullContext != "" {
-		userContent = fmt.Sprintf("[Search/reference context for this response — use this information naturally, don't quote it verbatim or mention that you searched unless appropriate:]\n\n%s\n\n[End context]\n\n[Agent instruction: %s]\n\n%s",
-			fullContext, args.Instruction, tctx.scrubbedUserMessage)
-	} else {
-		userContent = fmt.Sprintf("[Agent instruction: %s]\n\n%s",
-			args.Instruction, tctx.scrubbedUserMessage)
+	// Build the user message. Search context and the agent's instruction
+	// go into a lightweight system note so they don't masquerade as user
+	// speech (which confused some models and caused degenerate outputs).
+	if args.Instruction != "" || fullContext != "" {
+		var note strings.Builder
+		if fullContext != "" {
+			note.WriteString("The following reference material may be useful for your response — use it naturally, don't quote verbatim or mention that you searched unless appropriate:\n\n")
+			note.WriteString(fullContext)
+			note.WriteString("\n\n")
+		}
+		if args.Instruction != "" {
+			note.WriteString("Guidance from the assistant's planning layer: ")
+			note.WriteString(args.Instruction)
+		}
+		llmMessages = append(llmMessages, llm.ChatMessage{
+			Role:    "system",
+			Content: note.String(),
+		})
 	}
 	llmMessages = append(llmMessages, llm.ChatMessage{
 		Role:    "user",
-		Content: userContent,
+		Content: tctx.scrubbedUserMessage,
 	})
 
 	// Call the conversational model.
@@ -677,15 +693,10 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		tctx.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
 	}
 
-	// Strip any [Agent note: ...] or [Agent instruction: ...] blocks that
-	// the LLM sometimes echoes back. These are internal reasoning artifacts
-	// that should never reach the user.
-	cleanedContent := stripAgentNotes(resp.Content)
-
 	// Deanonymize PII tokens before sending to the user.
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
-	replyText := scrub.Deanonymize(cleanedContent, tctx.scrubVault)
+	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
 
 	// Send the response to Telegram by editing the placeholder message.
 	if tctx.statusCallback != nil {
@@ -739,7 +750,13 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 		parts = append(parts, memCtx)
 	}
 
-	// Layer 4: Mood context — recent mood trend so Mira is aware of
+	// Layer 4: Weather context — current conditions so Mira can reference
+	// the weather naturally. Only included if weather is configured.
+	if weatherCtx := buildWeatherContext(tctx.weatherClient); weatherCtx != "" {
+		parts = append(parts, weatherCtx)
+	}
+
+	// Layer 5: Mood context — recent mood trend so Mira is aware of
 	// emotional patterns. Only included if there's mood data.
 	if moodCtx := buildMoodContext(tctx.store); moodCtx != "" {
 		parts = append(parts, moodCtx)
@@ -830,6 +847,25 @@ func execRecallMemories(argsJSON string, tctx *toolContext) string {
 
 	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
 	return b.String()
+}
+
+// buildWeatherContext returns a short weather summary for the system prompt.
+// Returns "" if weather is not configured or unavailable.
+//
+// This is "passive context" — Mira doesn't announce the weather unprompted,
+// but she can weave it into conversation when relevant ("stay dry today",
+// "nice day to work outside", etc.).
+func buildWeatherContext(client *weather.Client) string {
+	if client == nil {
+		return ""
+	}
+
+	summary := client.FormatContext()
+	if summary == "" {
+		return ""
+	}
+
+	return "# Current Weather\n" + summary
 }
 
 // buildMoodContext formats recent mood data for the system prompt.

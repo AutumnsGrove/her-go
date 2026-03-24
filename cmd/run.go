@@ -19,6 +19,7 @@ import (
 	"her/scheduler"
 	"her/search"
 	"her/voice"
+	"her/weather"
 
 	"github.com/spf13/cobra"
 )
@@ -178,6 +179,17 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Info("Tavily client not configured — web search disabled")
 	}
 
+	// Create the weather client. Open-Meteo is free — no API key needed.
+	// Returns nil if no location is configured (lat/lon both zero).
+	weatherClient := weather.NewClient(
+		cfg.Weather.Latitude, cfg.Weather.Longitude,
+		cfg.Weather.TempUnit, cfg.Weather.WindSpeedUnit,
+		cfg.Weather.CacheTTL,
+	)
+	if weatherClient != nil {
+		log.Info("Weather client configured", "lat", cfg.Weather.Latitude, "lon", cfg.Weather.Longitude)
+	}
+
 	// Start the parakeet STT server if voice is enabled.
 	// This launches parakeet-server as a child process — it loads the
 	// MLX model into memory and serves an OpenAI-compatible transcription
@@ -298,7 +310,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, voiceClient, ttsClient, store)
+	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store)
 	if err != nil {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}
@@ -333,6 +345,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 				EmbedClient:         embedClient,
 				SimilarityThreshold: cfg.Embed.SimilarityThreshold,
 				TavilyClient:        tavilyClient,
+				WeatherClient:       weatherClient,
 				Cfg:                 cfg,
 				ScrubbedUserMessage: prompt, // the scheduled prompt IS the input
 				ScrubVault:          nil,    // no PII scrubbing for system prompts

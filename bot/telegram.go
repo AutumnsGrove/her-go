@@ -27,6 +27,7 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/voice"
+	"her/weather"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -44,8 +45,9 @@ type Bot struct {
 	agentLLM     *llm.Client          // tool-calling orchestrator
 	visionLLM    *llm.Client          // vision language model (Gemini Flash) — nil if not configured
 	embedClient  *embed.Client        // local embedding model for similarity
-	tavilyClient *search.TavilyClient // web search and URL extraction
-	voiceClient  *voice.Client        // local STT via parakeet-server — nil if voice disabled
+	tavilyClient  *search.TavilyClient  // web search and URL extraction
+	weatherClient *weather.Client      // Open-Meteo weather — nil if not configured
+	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
 	ttsClient    *voice.TTSClient    // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store        *memory.Store
 	cfg          *config.Config
@@ -59,7 +61,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -77,18 +79,19 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	}
 
 	bot := &Bot{
-		tb:           tb,
-		llm:          llmClient,
-		agentLLM:     agentLLM,
-		visionLLM:    visionLLM,
-		embedClient:  embedClient,
-		tavilyClient: tavilyClient,
-		voiceClient:  voiceClient,
-		ttsClient:    ttsClient,
-		store:        store,
-		cfg:          cfg,
-		systemPrompt: string(promptBytes),
-		startTime:    time.Now(),
+		tb:            tb,
+		llm:           llmClient,
+		agentLLM:      agentLLM,
+		visionLLM:     visionLLM,
+		embedClient:   embedClient,
+		tavilyClient:  tavilyClient,
+		weatherClient: weatherClient,
+		voiceClient:   voiceClient,
+		ttsClient:     ttsClient,
+		store:         store,
+		cfg:           cfg,
+		systemPrompt:  string(promptBytes),
+		startTime:     time.Now(),
 	}
 
 	// Register command handlers.
@@ -277,6 +280,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
+		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ScrubbedUserMessage: scrubResult.Text,
 		ScrubVault:          scrubResult.Vault,
@@ -449,6 +453,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
+		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ScrubbedUserMessage: scrubResult.Text,
 		ScrubVault:          scrubResult.Vault,
@@ -651,6 +656,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
+		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ScrubbedUserMessage: scrubResult.Text,
 		ScrubVault:          scrubResult.Vault,

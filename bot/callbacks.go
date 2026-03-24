@@ -156,6 +156,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
+		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ScrubbedUserMessage: prompt,
 		ScrubVault:          nil,

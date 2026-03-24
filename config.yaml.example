@@ -31,6 +31,13 @@ search:
   tavily_api_key: "${TAVILY_API_KEY}"
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
 
+weather:
+  latitude: 40.7128            # your location — used for weather context in conversations
+  longitude: -74.0060          # Open-Meteo is free, no API key needed
+  temp_unit: "fahrenheit"      # "fahrenheit" or "celsius"
+  wind_speed_unit: "mph"       # "mph" or "kmh"
+  cache_ttl: 3600              # seconds between API refreshes (default: 1 hour)
+
 memory:
   db_path: "./her.db"
   recent_messages: 20       # sliding window size

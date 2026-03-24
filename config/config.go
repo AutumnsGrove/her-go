@@ -34,6 +34,7 @@ type Config struct {
 	Persona   PersonaConfig   `yaml:"persona"`
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Voice     VoiceConfig     `yaml:"voice"`
+	Weather   WeatherConfig   `yaml:"weather"`
 }
 
 // TelegramConfig holds Telegram bot settings.
@@ -154,6 +155,17 @@ type SchedulerConfig struct {
 	MedicationCheckin  bool `yaml:"medication_checkin"`    // daily medication check-in at 9pm (critical priority)
 	ProactiveFollowups bool `yaml:"proactive_followups"`   // scan for follow-up opportunities at 9am
 	AutoJournal        bool `yaml:"auto_journal"`          // auto-journal entry at 10pm
+}
+
+// WeatherConfig controls the Open-Meteo weather integration.
+// Weather data is fetched periodically and injected into the system
+// prompt as environmental context. No API key needed — Open-Meteo is free.
+type WeatherConfig struct {
+	Latitude      float64 `yaml:"latitude"`        // WGS84 latitude (e.g., 40.7128 for New York)
+	Longitude     float64 `yaml:"longitude"`       // WGS84 longitude (e.g., -74.0060 for New York)
+	TempUnit      string  `yaml:"temp_unit"`       // "fahrenheit" (default) or "celsius"
+	WindSpeedUnit string  `yaml:"wind_speed_unit"` // "mph" (default) or "kmh"
+	CacheTTL      int     `yaml:"cache_ttl"`       // seconds between API calls (default: 3600 = 1 hour)
 }
 
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.
