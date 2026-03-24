@@ -275,6 +275,9 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Build the status callback — edits the placeholder with the final
 	// reply text (or intermediate status updates like "searching...").
+	// This closes over `placeholder` so that stageResetCallback can swap
+	// it to a new message after reply sends, and statusCallback automatically
+	// targets the new one.
 	statusCallback := func(status string) error {
 		_, err := c.Bot().Edit(placeholder, status)
 		return err
@@ -286,6 +289,26 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	sendCallback := func(text string) error {
 		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		return err
+	}
+
+	// stageResetCallback sends a fresh placeholder after a reply is sent.
+	// Because statusCallback closes over the `placeholder` variable,
+	// reassigning it here means statusCallback automatically edits the
+	// new message on subsequent calls. The sent reply is left untouched.
+	stageResetCallback := func() error {
+		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
+		if err != nil {
+			return fmt.Errorf("stage reset: sending new placeholder: %w", err)
+		}
+		placeholder = newPlaceholder
+		return nil
+	}
+
+	// deletePlaceholderCallback removes the current placeholder message.
+	// Called after the agent loop exits to clean up the orphan 💭 left
+	// by the last stage reset.
+	deletePlaceholderCallback := func() error {
+		return c.Bot().Delete(placeholder)
 	}
 
 	// Build the TTS callback — fires inside execReply so voice synthesis
@@ -313,10 +336,12 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
-		TTSCallback:         ttsCallback,
-		TraceCallback:       traceCallback,
-		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
+		StageResetCallback:       stageResetCallback,
+		DeletePlaceholderCallback: deletePlaceholderCallback,
+		TTSCallback:              ttsCallback,
+		TraceCallback:            traceCallback,
+		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
 	})
 
 	close(stopTyping)
@@ -482,6 +507,18 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		return err
 	}
 
+	stageResetCallback := func() error {
+		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
+		if err != nil {
+			return fmt.Errorf("stage reset: sending new placeholder: %w", err)
+		}
+		placeholder = newPlaceholder
+		return nil
+	}
+	deletePlaceholderCallback := func() error {
+		return c.Bot().Delete(placeholder)
+	}
+
 	// Run the agent with image data attached.
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
@@ -499,11 +536,13 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
-		TraceCallback:       traceCallback,
-		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
-		ImageBase64:         imageBase64,
-		ImageMIME:           imageMIME,
+		StageResetCallback:       stageResetCallback,
+		DeletePlaceholderCallback: deletePlaceholderCallback,
+		TraceCallback:            traceCallback,
+		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
+		ImageBase64:              imageBase64,
+		ImageMIME:                imageMIME,
 	})
 
 	close(stopTyping)
@@ -690,6 +729,17 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		return err
 	}
+	stageResetCallback := func() error {
+		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
+		if err != nil {
+			return fmt.Errorf("stage reset: sending new placeholder: %w", err)
+		}
+		placeholder = newPlaceholder
+		return nil
+	}
+	deletePlaceholderCallback := func() error {
+		return c.Bot().Delete(placeholder)
+	}
 
 	// TTS callback — same pattern as handleMessage.
 	var ttsCallback agent.TTSCallback
@@ -716,10 +766,12 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
-		TTSCallback:         ttsCallback,
-		TraceCallback:       traceCallback,
-		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
+		StageResetCallback:       stageResetCallback,
+		DeletePlaceholderCallback: deletePlaceholderCallback,
+		TTSCallback:              ttsCallback,
+		TraceCallback:            traceCallback,
+		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
 	})
 
 	close(stopTyping)

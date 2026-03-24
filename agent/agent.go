@@ -55,6 +55,21 @@ type TTSCallback func(text string)
 // Returns the message (for subsequent edits) and any error.
 type TraceCallback func(text string) error
 
+// StageResetCallback is a function the bot provides so the agent can get
+// a fresh Telegram placeholder after sending a reply. Without this, the
+// statusCallback would keep editing the message that already contains the
+// reply text — so a follow-up "searching..." status would overwrite the
+// user's response. After the reset, statusCallback targets the new
+// placeholder and the sent reply is left untouched.
+type StageResetCallback func() error
+
+// DeletePlaceholderCallback deletes the current Telegram placeholder
+// message. Called after the agent loop exits to clean up the orphan
+// placeholder left by the last stage reset — if the agent replied and
+// then finished, there's an empty 💭 sitting in the chat that needs
+// removing.
+type DeletePlaceholderCallback func() error
+
 // toolContext bundles all the dependencies that tool execution functions need.
 // This grew from the original version — it now includes everything the
 // reply tool needs to generate a full conversational response, plus the
@@ -132,10 +147,25 @@ type toolContext struct {
 	// in the prompt so the conversational model can reference it.
 	searchContext string
 
-	// replyCalled tracks whether the reply tool has been called during
-	// this agent run. We check this after the loop to ensure the user
-	// always gets a response.
+	// stageResetCallback sends a new Telegram placeholder so that
+	// statusCallback targets a fresh message after a reply is sent.
+	// Nil if not provided (e.g., in tests).
+	stageResetCallback StageResetCallback
+
+	// deletePlaceholderCallback removes the current placeholder message.
+	// Used for cleanup after the agent loop exits — the last stage reset
+	// leaves an orphan 💭 that needs deleting.
+	deletePlaceholderCallback DeletePlaceholderCallback
+
+	// replyCalled tracks whether the reply tool has been called since
+	// the last stage reset. Reset to false after each stage reset so
+	// the next reply edits the new placeholder instead of using sendCallback.
 	replyCalled bool
+
+	// replyCount tracks the total number of replies sent during this
+	// agent run. Used for the fallback check — if zero, the user never
+	// got a response and we need to generate one.
+	replyCount int
 
 	// doneCalled tracks whether the done tool has been called,
 	// signaling the agent is finished with all actions for this turn.
@@ -190,8 +220,10 @@ type RunParams struct {
 	StatusCallback      StatusCallback
 	SendCallback        SendCallback
 	TTSCallback         TTSCallback
-	TraceCallback       TraceCallback // nil if traces disabled
-	ReflectionThreshold int
+	TraceCallback       TraceCallback      // nil if traces disabled
+	StageResetCallback       StageResetCallback       // nil-safe — sends new placeholder after reply
+	DeletePlaceholderCallback DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
+	ReflectionThreshold      int
 	RewriteEveryN       int
 	ImageBase64         string // base64-encoded image data (empty if no image)
 	ImageMIME           string // MIME type of the image (e.g., "image/jpeg")
@@ -318,7 +350,9 @@ func Run(params RunParams) (*RunResult, error) {
 		sendCallback:        params.SendCallback,
 		ttsCallback:         params.TTSCallback,
 		traceCallback:       params.TraceCallback,
-		chatLLM:             params.ChatLLM,
+		stageResetCallback:       params.StageResetCallback,
+		deletePlaceholderCallback: params.DeletePlaceholderCallback,
+		chatLLM:                  params.ChatLLM,
 		visionLLM:           params.VisionLLM,
 		tavilyClient:        params.TavilyClient,
 		weatherClient:       params.WeatherClient,
@@ -487,25 +521,34 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// --- Fallback: ensure the user always gets a response ---
 	// If the agent never called the reply tool, we still need to respond.
-	// If the agent produced text (it "talked" instead of calling tools),
-	// use that as the instruction so the response is at least guided by
-	// what the agent intended. Otherwise, generate a generic response.
-	if !tctx.replyCalled {
+	// We use replyCount (not replyCalled) because replyCalled gets reset
+	// after each stage reset — but replyCount tracks lifetime replies.
+	if tctx.replyCount == 0 {
 		if agentFinalText != "" {
 			log.Warn("reply was never called, using agent text as instruction")
 			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
 			fallbackResult := execReply(instruction, tctx)
-			if !tctx.replyCalled {
+			if tctx.replyCount == 0 {
 				log.Error("fallback reply failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
 			}
 		} else {
 			log.Warn("reply was never called, generating generic fallback")
 			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
-			if !tctx.replyCalled {
+			if tctx.replyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
 			}
+		}
+	}
+
+	// --- Cleanup: delete orphan placeholder ---
+	// The last stage reset (after the final reply) sends a new 💭
+	// placeholder that never gets used. If replyCalled is false but
+	// we DID reply at least once, the current placeholder is orphaned.
+	if !tctx.replyCalled && tctx.replyCount > 0 && tctx.deletePlaceholderCallback != nil {
+		if err := tctx.deletePlaceholderCallback(); err != nil {
+			log.Warn("cleanup: failed to delete orphan placeholder", "err", err)
 		}
 	}
 
@@ -774,6 +817,16 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		log.Error("reply: loading history", "err", err)
 	} else {
 		for _, msg := range recentMsgs {
+			// For continuation replies (2nd, 3rd, etc.), strip out this
+			// turn's messages — the trigger message and any replies we
+			// already sent. Without this, the model sees its own first
+			// reply in history plus the same user message appended below,
+			// thinks it already answered, and generates identical output.
+			// We keep everything BEFORE this turn so the model still has
+			// the broader conversation context.
+			if tctx.replyCount > 0 && msg.ID >= tctx.triggerMsgID {
+				continue
+			}
 			content := msg.ContentScrubbed
 			if content == "" {
 				content = msg.ContentRaw
@@ -894,7 +947,21 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	}
 
 	tctx.replyCalled = true
+	tctx.replyCount++
 	tctx.replyText = replyText
+
+	// Stage reset: send a new Telegram placeholder so that any follow-up
+	// work (search status updates, additional replies) doesn't overwrite
+	// the reply we just sent. After the reset, statusCallback targets the
+	// new placeholder and replyCalled is cleared so the next reply edits
+	// it instead of using sendCallback.
+	if tctx.stageResetCallback != nil {
+		if err := tctx.stageResetCallback(); err != nil {
+			log.Warn("reply: stage reset failed", "err", err)
+		} else {
+			tctx.replyCalled = false
+		}
+	}
 
 	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
 }
