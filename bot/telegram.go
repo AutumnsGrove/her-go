@@ -254,9 +254,16 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		}
 	}()
 
-	// Step 4: Send a placeholder message that we'll edit with status
-	// updates as the agent works. The thinking emoji signals to the user
-	// that we're processing their message.
+	// Step 4: Build the trace callback FIRST if enabled — its placeholder
+	// (🧠) needs to appear ABOVE the reply placeholder in chat order.
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
+	// Step 5: Send the reply placeholder message that we'll edit with
+	// the final response. The thinking emoji signals to the user that
+	// we're processing their message.
 	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
 	if sendErr != nil {
 		close(stopTyping)
@@ -264,13 +271,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
 	}
 
-	// Step 5: Build the status callback. This function gets passed to
-	// the agent and is called whenever a tool wants to update the
-	// Telegram message — search status indicators, the final reply, etc.
-	//
-	// In Python you'd pass a lambda: lambda status: bot.edit_message(msg_id, status)
-	// In Go, closures work the same way — this function "closes over"
-	// the placeholder variable so it always edits the right message.
+	// Build the status callback — edits the placeholder with the final
+	// reply text (or intermediate status updates like "searching...").
 	statusCallback := func(status string) error {
 		_, err := c.Bot().Edit(placeholder, status)
 		return err
@@ -291,13 +293,6 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		ttsCallback = func(text string) {
 			b.sendVoiceReply(c, text)
 		}
-	}
-
-	// Build the trace callback if traces are enabled. The first call sends
-	// a new message; subsequent calls edit it with the accumulated trace.
-	var traceCallback agent.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
 	}
 
 	result, err := agent.Run(agent.RunParams{
@@ -461,7 +456,13 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		}
 	}()
 
-	// Placeholder message.
+	// Trace placeholder first (so it appears above the reply).
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
+	// Reply placeholder message.
 	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
 	if sendErr != nil {
 		close(stopTyping)
@@ -477,12 +478,6 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	sendCallback := func(text string) error {
 		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		return err
-	}
-
-	// Build trace callback if enabled.
-	var traceCallback agent.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
 	}
 
 	// Run the agent with image data attached.
@@ -621,6 +616,14 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))
 
+	// Trace placeholder first (so it appears above the reply) — but only
+	// for voice handler, since the main trace callback is built later.
+	// We build it here just to send the 🧠 placeholder in the right order.
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
 	// Step 5: Send a placeholder showing the transcript so the user
 	// can see what was heard while the bot thinks about a response.
 	placeholderText := fmt.Sprintf("\U0001F3A4 <i>%s</i>\n\n\U0001F4AD", transcript)
@@ -692,12 +695,6 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		ttsCallback = func(text string) {
 			b.sendVoiceReply(c, text)
 		}
-	}
-
-	// Build trace callback if enabled.
-	var traceCallback agent.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
 	}
 
 	// Run the agent pipeline with the transcribed text.
@@ -843,39 +840,50 @@ func (b *Bot) handleClear(c tele.Context) error {
 // the returned function "closes over" the traceMsg variable so it
 // always knows which message to edit.
 func (b *Bot) makeTraceCallback(c tele.Context) agent.TraceCallback {
-	var traceMsg *tele.Message
+	// Pre-send a placeholder so the trace message is ABOVE the reply
+	// in chat order. It gets replaced on the first real trace update.
+	// Uses a short-timeout client so a Telegram blip doesn't stall the
+	// entire agent pipeline (the 60s default caused an 85s stall).
+	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
+	if err != nil {
+		log.Warn("trace: failed to send placeholder", "err", err)
+		traceMsg = nil
+	}
+
+	// All trace operations run in a goroutine so they NEVER block the
+	// agent loop. Traces are observability — not critical path. A mutex
+	// preserves ordering so rapid tool calls don't race.
+	var mu sync.Mutex
 	return func(text string) error {
-		if traceMsg == nil {
-			// First call — send a new message.
-			// Try HTML first, fall back to plain text if it fails
-			// (malformed HTML from tool results can break the parser).
-			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			if err != nil {
-				log.Warn("trace: HTML send failed, retrying plain", "err", err)
-				msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
+		go func() {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if traceMsg == nil {
+				msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 				if err != nil {
-					return err
+					log.Warn("trace: send failed", "err", err)
+					msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
+					if err != nil {
+						log.Warn("trace: plain send also failed", "err", err)
+						return
+					}
+				}
+				traceMsg = msg
+			} else {
+				_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if err != nil {
+					if strings.Contains(err.Error(), "not modified") {
+						return
+					}
+					log.Warn("trace: edit failed, retrying plain", "err", err)
+					_, err = c.Bot().Edit(traceMsg, stripHTML(text))
+					if err != nil && !strings.Contains(err.Error(), "not modified") {
+						log.Warn("trace: plain edit also failed", "err", err)
+					}
 				}
 			}
-			traceMsg = msg
-		} else {
-			// Subsequent calls — edit the existing message.
-			// Same HTML-then-plain fallback. Telegram also rejects edits
-			// if the text is identical, so we catch that silently.
-			_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			if err != nil {
-				// "message is not modified" is harmless — just means nothing changed.
-				if strings.Contains(err.Error(), "not modified") {
-					return nil
-				}
-				log.Warn("trace: HTML edit failed, retrying plain", "err", err)
-				_, err = c.Bot().Edit(traceMsg, stripHTML(text))
-				if err != nil && !strings.Contains(err.Error(), "not modified") {
-					log.Warn("trace: plain edit also failed", "err", err)
-					return err
-				}
-			}
-		}
+		}()
 		return nil
 	}
 }

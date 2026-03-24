@@ -64,6 +64,10 @@ type toolContext struct {
 	similarityThreshold float64
 	personaFile         string
 	statusCallback      StatusCallback
+	// activeTools points to the tools slice in the agent loop. The
+	// use_tools handler appends deferred tools to it so they become
+	// available in subsequent iterations without restarting the loop.
+	activeTools *[]llm.ToolDef
 	sendCallback        SendCallback
 	ttsCallback         TTSCallback
 	traceCallback       TraceCallback
@@ -298,7 +302,10 @@ func Run(params RunParams) (*RunResult, error) {
 		{Role: "user", Content: context},
 	}
 
-	tools := ToolDefs()
+	// Start with only the hot tools (7 instead of 26). The agent can
+	// load deferred tools on demand via use_tools(["search"]) etc.
+	// This reduces context pressure on the agent model significantly.
+	tools := HotToolDefs()
 
 	// Build the tool context with everything the tools need.
 	tctx := &toolContext{
@@ -323,6 +330,7 @@ func Run(params RunParams) (*RunResult, error) {
 		relevantFacts:       relevantFacts,
 		imageBase64:         params.ImageBase64,
 		imageMIME:           params.ImageMIME,
+		activeTools:         &tools,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -683,6 +691,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execGetCurrentTime(tctx)
 	case "set_location":
 		return execSetLocation(tc.Function.Arguments, tctx)
+	case "use_tools":
+		return execUseTools(tc.Function.Arguments, tctx)
 	case "no_action":
 		return "ok, no action taken"
 	case "done":
@@ -859,8 +869,10 @@ func execReply(argsJSON string, tctx *toolContext) string {
 func isDegenerate(text string) bool {
 	trimmed := strings.TrimSpace(text)
 
-	// Empty or extremely short (single char, stray punctuation).
-	if len(trimmed) < 3 {
+	// Empty or extremely short — a real reply should be at least a
+	// short sentence. Single words like "you", "ok", "hi" indicate
+	// the chatLLM choked (rate limit, timeout, degenerate output).
+	if len(trimmed) < 10 {
 		return true
 	}
 
@@ -995,6 +1007,52 @@ func execGetCurrentTime(tctx *toolContext) string {
 	result := now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
 	log.Info("  get_current_time", "result", result)
 	return result
+}
+
+// execUseTools loads deferred tools into the active tool set. The agent
+// calls this to gain access to tools it needs for the current turn —
+// e.g., use_tools(["search"]) before calling web_search.
+//
+// This is the Go equivalent of Claude Code's ToolSearch: reduce the
+// default tool count so the model focuses on core actions, and let it
+// pull in extras when actually needed.
+func execUseTools(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		Tools []string `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if len(args.Tools) == 0 {
+		return "no tools requested. Available categories: search, vision, memory, scheduling, context"
+	}
+
+	newTools := LookupTools(args.Tools)
+	if len(newTools) == 0 {
+		return "no matching tools found. Available categories: search, vision, memory, scheduling, context"
+	}
+
+	// Deduplicate — don't add tools already in the active set.
+	existing := make(map[string]bool)
+	for _, t := range *tctx.activeTools {
+		existing[t.Function.Name] = true
+	}
+
+	var added []string
+	for _, t := range newTools {
+		if !existing[t.Function.Name] {
+			*tctx.activeTools = append(*tctx.activeTools, t)
+			added = append(added, t.Function.Name)
+		}
+	}
+
+	if len(added) == 0 {
+		return "all requested tools are already loaded"
+	}
+
+	log.Infof("  loaded deferred tools: %s", strings.Join(added, ", "))
+	return fmt.Sprintf("loaded: %s. You can now call them.", strings.Join(added, ", "))
 }
 
 func execThink(argsJSON string, tctx *toolContext) string {
@@ -1728,6 +1786,9 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 
 	case "get_current_time":
 		return fmt.Sprintf("🕐 <b>get_current_time:</b> → %s", escapeHTML(truncateLog(result, 60)))
+
+	case "use_tools":
+		return fmt.Sprintf("🔧 <b>use_tools:</b> %s", escapeHTML(truncateLog(result, 100)))
 
 	default:
 		return fmt.Sprintf("🔧 <b>%s:</b> → %s", escapeHTML(toolName), escapeHTML(truncateLog(result, 80)))

@@ -6,30 +6,150 @@ package agent
 
 import "her/llm"
 
-// ToolDefs returns the tool definitions available to the agent.
-// These follow the OpenAI function calling format — each tool has a name,
-// description, and a JSON Schema describing its parameters.
+// --- Tool Registry ---
+// Tools are split into "hot" (always loaded) and "deferred" (loaded on demand).
+// This reduces the number of tool schemas the agent model sees from 26 to 7,
+// improving tool selection accuracy — especially for smaller/free models that
+// degrade when presented with too many options at once.
 //
-// Think of these like Python function signatures with type hints — they
-// tell the model what it can call and what arguments each function expects.
-func ToolDefs() []llm.ToolDef {
+// Inspired by Claude Code's ToolSearch and Cloudflare's Code Mode:
+// - Claude Code saw 49% → 74% accuracy by deferring niche tools
+// - We go from ~2,490 tokens of tool schemas to ~900 for hot tools only
+//
+// The agent calls use_tools(["search"]) or use_tools(["web_search"]) to load
+// deferred tools on demand. Loaded tools persist for the rest of the agent loop.
+
+// hotToolNames lists tools that are always available to the agent.
+// These are the tools used in nearly every conversation turn.
+var hotToolNames = []string{
+	"think",       // reasoning — used every turn
+	"reply",       // generate response — REQUIRED every turn
+	"done",        // signal completion — REQUIRED every turn
+	"save_fact",   // save user facts — very frequent
+	"update_fact", // update existing facts — frequent
+	"no_action",   // explicit skip — frequent
+}
+
+// toolCategories groups deferred tools by function. The agent can load
+// entire categories at once: use_tools(["search"]) loads all three search tools.
+var toolCategories = map[string][]string{
+	"search":     {"web_search", "web_read", "book_search"},
+	"vision":     {"view_image"},
+	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
+	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
+	"context":    {"log_mood", "get_current_time", "set_location"},
+}
+
+// toolRegistry maps every tool name to its full definition.
+// Built once at package init, used by HotToolDefs and LookupTools.
+var toolRegistry map[string]llm.ToolDef
+
+func init() {
+	allTools := allToolDefs()
+	toolRegistry = make(map[string]llm.ToolDef, len(allTools))
+	for _, t := range allTools {
+		toolRegistry[t.Function.Name] = t
+	}
+}
+
+// HotToolDefs returns the always-loaded tools plus the use_tools meta-tool.
+// This is what gets passed to ChatCompletionWithTools on the first iteration.
+// ~7 tools instead of 26 — a major reduction in context pressure.
+func HotToolDefs() []llm.ToolDef {
+	tools := make([]llm.ToolDef, 0, len(hotToolNames)+1)
+	for _, name := range hotToolNames {
+		if t, ok := toolRegistry[name]; ok {
+			tools = append(tools, t)
+		}
+	}
+	// Add the use_tools meta-tool for loading deferred tools.
+	tools = append(tools, useToolsDef())
+	return tools
+}
+
+// LookupTools resolves a mix of tool names and category names into full
+// tool definitions. Unknown names are silently skipped.
+//
+// Examples:
+//
+//	LookupTools(["search"])                → web_search, web_read, book_search
+//	LookupTools(["web_search"])            → web_search
+//	LookupTools(["search", "log_mood"])    → web_search, web_read, book_search, log_mood
+func LookupTools(names []string) []llm.ToolDef {
+	seen := make(map[string]bool)
+	var result []llm.ToolDef
+
+	for _, name := range names {
+		// Check if it's a category first.
+		if members, ok := toolCategories[name]; ok {
+			for _, member := range members {
+				if !seen[member] {
+					if t, ok := toolRegistry[member]; ok {
+						result = append(result, t)
+						seen[member] = true
+					}
+				}
+			}
+			continue
+		}
+		// Otherwise treat it as a tool name.
+		if !seen[name] {
+			if t, ok := toolRegistry[name]; ok {
+				result = append(result, t)
+				seen[name] = true
+			}
+		}
+	}
+	return result
+}
+
+// useToolsDef returns the meta-tool that loads deferred tools on demand.
+func useToolsDef() llm.ToolDef {
+	return llm.ToolDef{
+		Type: "function",
+		Function: llm.ToolFunctionDef{
+			Name:        "use_tools",
+			Description: "Load additional tools you need for this turn. Call BEFORE using a deferred tool. Pass category names or individual tool names. Loaded tools stay available for the rest of this turn.\n\nCategories: search (web_search, web_read, book_search) | vision (view_image) | memory (remove_fact, save_self_fact, update_persona, recall_memories) | scheduling (create_reminder, create_schedule, list_schedules, update_schedule, delete_schedule) | context (log_mood, get_current_time, set_location)",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"tools": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Tool names or category names to load. E.g., [\"search\"], [\"vision\", \"scheduling\"], [\"web_search\", \"log_mood\"]",
+					},
+				},
+				"required": []string{"tools"},
+			},
+		},
+	}
+}
+
+// allToolDefs returns every tool definition in the system.
+// This is called once at init to populate the registry.
+// If you add a new tool, add it here AND update agent_prompt.md.
+func allToolDefs() []llm.ToolDef {
 	return []llm.ToolDef{
-		// --- Response tool (REQUIRED every turn) ---
+		// =====================================================================
+		// HOT TOOLS — always loaded, used nearly every turn
+		// =====================================================================
+
+		// --- Response (REQUIRED every turn) ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "reply",
-				Description: "Generate and send a response to the user. REQUIRED — you MUST call this exactly once per turn. Call it after gathering any context you need (search results, book info, etc.). The instruction tells the conversational model what to respond about.",
+				Description: "Generate and send a response to the user. REQUIRED — you MUST call this at least once per turn. The instruction tells the conversational model what to respond about.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"instruction": map[string]interface{}{
 							"type":        "string",
-							"description": "What to tell the conversational model to respond about. Include any search results or context. Example: 'User asked about the weather in Portland. Respond warmly and mention it looks rainy.'",
+							"description": "What to tell the conversational model to respond about. Include any search results or context.",
 						},
 						"context": map[string]interface{}{
 							"type":        "string",
-							"description": "Optional additional context (search results, book data, URL content) to include in the prompt. If you searched or read something, paste the relevant results here.",
+							"description": "Optional additional context (search results, book data, URL content) to include in the prompt.",
 						},
 					},
 					"required": []string{"instruction"},
@@ -37,79 +157,26 @@ func ToolDefs() []llm.ToolDef {
 			},
 		},
 
-		// --- Search tools ---
+		// --- Reasoning ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
-				Name:        "web_search",
-				Description: "Search the web for current information. Use when the user asks about something you don't know, current events, factual questions, or anything that benefits from real-time data. Search BEFORE calling reply.",
+				Name:        "think",
+				Description: "Pause and reason before acting. Use this to evaluate search results, resolve contradictions in memory, plan your next step, or decide between multiple approaches. This tool does nothing except give you space to think — call it whenever you need to deliberate before making a decision.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
+						"thought": map[string]interface{}{
 							"type":        "string",
-							"description": "A concise, specific search query",
+							"description": "Your internal reasoning. What are you considering? What's the best next step?",
 						},
 					},
-					"required": []string{"query"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "web_read",
-				Description: "Read a specific URL to get its content. Use when the user shares a link or you need details from a specific web page.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"url": map[string]interface{}{
-							"type":        "string",
-							"description": "The URL to read and extract content from",
-						},
-					},
-					"required": []string{"url"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "book_search",
-				Description: "Search for book information using Open Library. Use when discussing books, looking for recommendations, or when the user mentions a book title or author.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "Book title, author, or search terms",
-						},
-					},
-					"required": []string{"query"},
+					"required": []string{"thought"},
 				},
 			},
 		},
 
-		// --- Vision tool ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "view_image",
-				Description: "Analyze an image the user sent. Returns a detailed description of what's in it. Call this BEFORE reply when the user sends a photo, so you can talk about the image in your response.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"prompt": map[string]interface{}{
-							"type":        "string",
-							"description": "What to focus on when describing the image. E.g., 'describe this photo', 'what food is this', 'read any text in this image'. Tailor this to what the user seems interested in.",
-						},
-					},
-					"required": []string{"prompt"},
-				},
-			},
-		},
-
-		// --- Memory management tools ---
+		// --- Memory (hot) ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
@@ -170,6 +237,108 @@ func ToolDefs() []llm.ToolDef {
 				},
 			},
 		},
+
+		// --- Control ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "no_action",
+				Description: "Explicitly skip memory management. Use when the exchange doesn't reveal new information worth saving. You still MUST call reply and done.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "done",
+				Description: "Signal that you are completely finished with this turn. Call this LAST, after reply and any memory operations. Every turn MUST end with done.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+
+		// =====================================================================
+		// DEFERRED TOOLS — loaded on demand via use_tools
+		// =====================================================================
+
+		// --- Search (category: "search") ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "web_search",
+				Description: "Search the web for current information. Use when the user asks about something you don't know, current events, factual questions, or anything that benefits from real-time data.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "A concise, specific search query",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "web_read",
+				Description: "Read a specific URL to get its content. Use when the user shares a link or you need details from a specific web page.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"url": map[string]interface{}{
+							"type":        "string",
+							"description": "The URL to read and extract content from",
+						},
+					},
+					"required": []string{"url"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "book_search",
+				Description: "Search for book information using Open Library. Use when discussing books, looking for recommendations, or when the user mentions a book title or author.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "Book title, author, or search terms",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+
+		// --- Vision (category: "vision") ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "view_image",
+				Description: "Analyze an image the user sent. Returns a detailed description of what's in it. Call this BEFORE reply when the user sends a photo.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"prompt": map[string]interface{}{
+							"type":        "string",
+							"description": "What to focus on when describing the image. E.g., 'describe this photo', 'what food is this', 'read any text in this image'.",
+						},
+					},
+					"required": []string{"prompt"},
+				},
+			},
+		},
+
+		// --- Memory extras (category: "memory") ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
@@ -240,12 +409,34 @@ func ToolDefs() []llm.ToolDef {
 				},
 			},
 		},
-		// --- Scheduler tools ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "recall_memories",
+				Description: "Search through stored memories using semantic similarity. Use when the user asks 'do you remember...', references something from a past conversation, or when you need specific context that isn't in the current memory window.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "What to search for in memory. Be specific — 'user's dog' works better than 'pet'.",
+						},
+						"limit": map[string]interface{}{
+							"type":        "integer",
+							"description": "Max results to return (default 5, max 10)",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+
+		// --- Scheduling (category: "scheduling") ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "create_reminder",
-				Description: "Create a one-shot reminder that fires at a specific time. Use when the user asks to be reminded of something. You MUST convert natural language times to an absolute ISO 8601 timestamp (e.g., 'tomorrow at 3pm' → '2026-03-23T15:00:00'). Always confirm what you're setting with the user in your reply.",
+				Description: "Create a one-shot reminder that fires at a specific time. Convert natural language times to ISO 8601 timestamps.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -255,42 +446,37 @@ func ToolDefs() []llm.ToolDef {
 						},
 						"trigger_at": map[string]interface{}{
 							"type":        "string",
-							"description": "When to fire the reminder, as ISO 8601 datetime (e.g., '2026-03-22T15:00:00'). Convert the user's natural language time to this format.",
+							"description": "When to fire, as ISO 8601 datetime (e.g., '2026-03-24T15:00:00')",
 						},
 						"natural_time": map[string]interface{}{
 							"type":        "string",
-							"description": "The original natural language time from the user (e.g., 'tomorrow at 3pm'). Used for the confirmation message.",
+							"description": "The original natural language time (e.g., 'tomorrow at 3pm')",
 						},
 					},
 					"required": []string{"message", "trigger_at"},
 				},
 			},
 		},
-
-		// --- Schedule management tools (v0.6) ---
-
-		// create_schedule creates recurring or conditional scheduled tasks.
-		// Unlike create_reminder (one-shot), this is for things that repeat.
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "create_schedule",
-				Description: "Create a recurring scheduled task. Use for things like daily check-ins, morning briefings, or periodic follow-ups. Requires a cron expression. Common patterns: '0 8 * * *' (8am daily), '0 21 * * *' (9pm daily), '0 9 * * 1-5' (9am weekdays), '@every 30m' (every 30 minutes).",
+				Description: "Create a recurring scheduled task with a cron expression.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"name": map[string]interface{}{
 							"type":        "string",
-							"description": "Human-readable name (e.g., 'morning briefing', 'mood check-in')",
+							"description": "Human-readable name (e.g., 'morning briefing')",
 						},
 						"cron_expr": map[string]interface{}{
 							"type":        "string",
-							"description": "Cron expression: minute hour day-of-month month day-of-week. Examples: '0 8 * * *' (8am daily), '30 9 * * 1-5' (9:30am weekdays), '@every 2h' (every 2 hours)",
+							"description": "Cron expression: '0 8 * * *' (8am daily), '0 9 * * 1-5' (9am weekdays)",
 						},
 						"task_type": map[string]interface{}{
 							"type":        "string",
 							"enum":        []string{"run_prompt", "send_message"},
-							"description": "Type of task. 'run_prompt' runs through the full agent pipeline (can use tools, memory, etc). 'send_message' sends a static message.",
+							"description": "'run_prompt' runs through the full agent pipeline. 'send_message' sends a static message.",
 						},
 						"payload": map[string]interface{}{
 							"type":        "object",
@@ -299,15 +485,15 @@ func ToolDefs() []llm.ToolDef {
 						"priority": map[string]interface{}{
 							"type":        "string",
 							"enum":        []string{"normal", "high", "critical"},
-							"description": "Priority level. 'normal' = subject to all damping, 'high' = bypasses rate limits, 'critical' = always fires. Default: 'normal'.",
+							"description": "Priority level. Default: 'normal'.",
 						},
 						"max_runs": map[string]interface{}{
 							"type":        "integer",
-							"description": "Maximum number of executions. Omit for unlimited (runs forever until paused/deleted).",
+							"description": "Maximum number of executions. Omit for unlimited.",
 						},
 						"description": map[string]interface{}{
 							"type":        "string",
-							"description": "What this schedule does, in plain English (for the confirmation message)",
+							"description": "What this schedule does, in plain English",
 						},
 					},
 					"required": []string{"name", "cron_expr", "task_type", "payload"},
@@ -318,7 +504,7 @@ func ToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "list_schedules",
-				Description: "List all active scheduled tasks. Shows recurring jobs, upcoming reminders, and their next run times. Use when the user asks what's scheduled or wants to see their recurring tasks.",
+				Description: "List all active scheduled tasks with next run times.",
 				Parameters: map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
@@ -329,7 +515,7 @@ func ToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "update_schedule",
-				Description: "Pause or resume an existing scheduled task by ID. Use when the user wants to temporarily disable or re-enable a recurring task.",
+				Description: "Pause or resume an existing scheduled task by ID.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -350,7 +536,7 @@ func ToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "delete_schedule",
-				Description: "Permanently delete a scheduled task by ID. Use when the user wants to remove a recurring task entirely (not just pause it).",
+				Description: "Permanently delete a scheduled task by ID.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -364,35 +550,12 @@ func ToolDefs() []llm.ToolDef {
 			},
 		},
 
-		// --- Memory search tool ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "recall_memories",
-				Description: "Search through stored memories using semantic similarity. Use when the user asks 'do you remember...', references something from a past conversation, or when you need specific context that isn't in the current memory window. Returns the most relevant facts matching your query.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "What to search for in memory. Be specific — 'user's dog' works better than 'pet'. Rephrase the user's question into a factual search query.",
-						},
-						"limit": map[string]interface{}{
-							"type":        "integer",
-							"description": "Max results to return (default 5, max 10)",
-						},
-					},
-					"required": []string{"query"},
-				},
-			},
-		},
-
-		// --- Mood tracking tool ---
+		// --- Context (category: "context") ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "log_mood",
-				Description: "Log the user's current emotional state when they express how they're feeling. Use this when the user says things like 'I'm having a rough day', 'feeling great', 'stressed out', etc. Don't log mood for purely informational messages.",
+				Description: "Log the user's current emotional state when they express how they're feeling.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -404,80 +567,35 @@ func ToolDefs() []llm.ToolDef {
 						},
 						"note": map[string]interface{}{
 							"type":        "string",
-							"description": "Brief context for the rating (e.g., 'stressed about work deadline', 'excited about weekend plans')",
+							"description": "Brief context for the rating",
 						},
 					},
 					"required": []string{"rating", "note"},
 				},
 			},
 		},
-
-		// --- Reasoning tool ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "think",
-				Description: "Pause and reason before acting. Use this to evaluate search results, resolve contradictions in memory, plan your next step, or decide between multiple approaches. This tool does nothing except give you space to think — call it whenever you need to deliberate before making a decision.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"thought": map[string]interface{}{
-							"type":        "string",
-							"description": "Your internal reasoning. What are you considering? What's the best next step?",
-						},
-					},
-					"required": []string{"thought"},
-				},
-			},
-		},
-		// --- Location tool ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "set_location",
-				Description: "Set the user's location by city/place name. This enables weather data in conversations. Use when the user mentions where they live or says something like 'I'm in Portland'. Looks up the coordinates automatically — no need for lat/lon.",
+				Description: "Set the user's location by city/place name. Enables weather data in conversations.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"query": map[string]interface{}{
 							"type":        "string",
-							"description": "City and state/country name (e.g., 'Portland Oregon', 'London UK', 'Tokyo')",
+							"description": "City and state/country name (e.g., 'Portland Oregon', 'Tokyo')",
 						},
 					},
 					"required": []string{"query"},
 				},
 			},
 		},
-
-		// --- Time tool ---
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "get_current_time",
-				Description: "Get the current date and time in the user's timezone. Use when you need to know what time it is, what day of the week it is, or to reason about timing (e.g., 'is it morning or evening?', 'is this reminder for today or tomorrow?').",
-				Parameters: map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "no_action",
-				Description: "Explicitly skip memory management. Use when the exchange doesn't reveal new information worth saving. You still MUST call reply and done.",
-				Parameters: map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
-				},
-			},
-		},
-		// --- Control tool ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "done",
-				Description: "Signal that you are completely finished with this turn. Call this LAST, after reply and any memory operations. Every turn MUST end with done.",
+				Description: "Get the current date and time in the user's timezone.",
 				Parameters: map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
