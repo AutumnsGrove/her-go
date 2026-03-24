@@ -310,7 +310,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and configure the Telegram bot.
-	tgBot, err := bot.New(cfg, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store)
 	if err != nil {
 		log.Fatal("Failed to create Telegram bot", "err", err)
 	}

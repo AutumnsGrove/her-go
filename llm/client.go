@@ -132,6 +132,7 @@ type ToolFunctionDef struct {
 type ChatResponse struct {
 	Content          string
 	ToolCalls        []ToolCall // populated if the model wants to call tools
+	FinishReason     string     // "stop", "tool_calls", "length", etc. — drives the agent loop
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
@@ -146,6 +147,12 @@ type chatRequest struct {
 	Temperature float64       `json:"temperature"`
 	MaxTokens   int           `json:"max_tokens"`
 	Tools       []ToolDef     `json:"tools,omitempty"`
+	// ToolChoice controls whether the model must call tools.
+	// "auto" (default) = model decides, "required" = must call at least one,
+	// "none" = text only. Uses interface{} because the OpenAI spec also
+	// allows an object like {"type":"function","function":{"name":"X"}}
+	// to force a specific tool.
+	ToolChoice interface{} `json:"tool_choice,omitempty"`
 }
 
 // chatAPIResponse mirrors the JSON structure returned by the API.
@@ -190,19 +197,32 @@ func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
 // The model may respond with tool_calls instead of (or in addition to)
 // regular content. The caller is responsible for executing the tools
 // and sending results back in a follow-up call.
-func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
-	return c.chatCompletion(messages, tools)
+//
+// toolChoice is optional — pass nil for "auto" (model decides), or a
+// string like "required" to force tool use. The agent uses "required"
+// so it always calls tools (think/reply/done) instead of outputting
+// text directly.
+func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef, toolChoice ...interface{}) (*ChatResponse, error) {
+	var choice interface{}
+	if len(toolChoice) > 0 {
+		choice = toolChoice[0]
+	}
+	return c.chatCompletion(messages, tools, choice)
 }
 
 // chatCompletion is the shared implementation for both regular and
-// tool-calling completions.
-func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatResponse, error) {
+// tool-calling completions. toolChoice is optional — nil means the API
+// default ("auto"), "required" forces at least one tool call.
+func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef, toolChoice ...interface{}) (*ChatResponse, error) {
 	reqBody := chatRequest{
 		Model:       c.model,
 		Messages:    messages,
 		Temperature: c.temperature,
 		MaxTokens:   c.maxTokens,
 		Tools:       tools,
+	}
+	if len(toolChoice) > 0 && toolChoice[0] != nil {
+		reqBody.ToolChoice = toolChoice[0]
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -249,6 +269,7 @@ func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef) (*ChatR
 	return &ChatResponse{
 		Content:          apiResp.Choices[0].Message.Content,
 		ToolCalls:        apiResp.Choices[0].Message.ToolCalls,
+		FinishReason:     apiResp.Choices[0].FinishReason,
 		PromptTokens:     apiResp.Usage.PromptTokens,
 		CompletionTokens: apiResp.Usage.CompletionTokens,
 		TotalTokens:      apiResp.Usage.TotalTokens,

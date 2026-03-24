@@ -124,8 +124,8 @@ func ToolDefs() []llm.ToolDef {
 						},
 						"category": map[string]interface{}{
 							"type":        "string",
-							"enum":        []string{"identity", "relationship", "health", "work", "mood", "goal", "event", "preference", "other"},
-							"description": "Category of the fact",
+							"enum":        []string{"identity", "relationship", "health", "work", "mood", "goal", "event", "preference", "context", "other"},
+							"description": "Category of the fact. Use 'context' for day-to-day activities that change frequently (e.g., what the user is working on today). Context facts get auto-timestamped and should be updated rather than duplicated.",
 						},
 						"importance": map[string]interface{}{
 							"type":        "integer",
@@ -156,8 +156,8 @@ func ToolDefs() []llm.ToolDef {
 						},
 						"category": map[string]interface{}{
 							"type":        "string",
-							"enum":        []string{"identity", "relationship", "health", "work", "mood", "goal", "event", "preference", "other"},
-							"description": "Updated category",
+							"enum":        []string{"identity", "relationship", "health", "work", "mood", "goal", "event", "preference", "context", "other"},
+							"description": "Updated category. Use 'context' for ephemeral day-to-day info.",
 						},
 						"importance": map[string]interface{}{
 							"type":        "integer",

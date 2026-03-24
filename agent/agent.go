@@ -47,6 +47,13 @@ type SendCallback func(text string) error
 // doesn't block the agent from continuing to think/act.
 type TTSCallback func(text string)
 
+// TraceCallback is a function the bot provides for sending/updating the
+// agent thinking trace message. The first call sends a new message; subsequent
+// calls edit it with the accumulated trace. The agent builds up trace lines
+// as it processes each tool call and sends updates after each step.
+// Returns the message (for subsequent edits) and any error.
+type TraceCallback func(text string) error
+
 // toolContext bundles all the dependencies that tool execution functions need.
 // This grew from the original version — it now includes everything the
 // reply tool needs to generate a full conversational response, plus the
@@ -59,6 +66,7 @@ type toolContext struct {
 	statusCallback      StatusCallback
 	sendCallback        SendCallback
 	ttsCallback         TTSCallback
+	traceCallback       TraceCallback
 
 	// chatLLM is the conversational model (Deepseek). The reply tool
 	// uses this to generate the actual natural language response.
@@ -177,6 +185,7 @@ type RunParams struct {
 	StatusCallback      StatusCallback
 	SendCallback        SendCallback
 	TTSCallback         TTSCallback
+	TraceCallback       TraceCallback // nil if traces disabled
 	ReflectionThreshold int
 	RewriteEveryN       int
 	ImageBase64         string // base64-encoded image data (empty if no image)
@@ -300,6 +309,7 @@ func Run(params RunParams) (*RunResult, error) {
 		statusCallback:      params.StatusCallback,
 		sendCallback:        params.SendCallback,
 		ttsCallback:         params.TTSCallback,
+		traceCallback:       params.TraceCallback,
 		chatLLM:             params.ChatLLM,
 		visionLLM:           params.VisionLLM,
 		tavilyClient:        params.TavilyClient,
@@ -323,41 +333,86 @@ func Run(params RunParams) (*RunResult, error) {
 	// We loop up to 10 iterations to allow for think + search + refine cycles.
 	// With the think tool, a typical complex flow might use 6-7 iterations:
 	// think → search → think(evaluate) → search(refine) → think → reply → save_fact
-	// Track the last think content to detect loops — if the agent
-	// produces the same think text twice in a row, it's stuck and
-	// we should force it to reply instead of burning iterations.
+	// --- Agent tool-calling loop ---
+	// Modeled after Crush (charmbracelet/fantasy): loop while the model
+	// keeps returning tool calls (finish_reason == "tool_calls"). When the
+	// model stops calling tools (finish_reason == "stop"), the loop ends.
+	// No tool_choice forcing — the model decides, and we handle gracefully
+	// when it doesn't cooperate.
+	//
+	// Loop detection: track think content to catch the agent repeating
+	// itself. Crush uses SHA-256 signatures; we keep it simpler since
+	// our tool set is smaller and think loops are the main failure mode.
 	var lastThinkContent string
 	var repeatCount int
+	// agentFinalText captures any text the agent outputs when it stops
+	// calling tools. Used as fallback instruction if reply wasn't called.
+	var agentFinalText string
+
+	// --- Trace builder ---
+	// Accumulates formatted trace lines as the agent executes. If tracing
+	// is enabled, the trace message gets sent/updated after each tool call
+	// so the user can watch the agent think in real time.
+	var traceLines []string
+	tracing := tctx.traceCallback != nil
+
+	// sendTrace pushes the current trace to Telegram (sends or edits).
+	sendTrace := func() {
+		if !tracing || len(traceLines) == 0 {
+			return
+		}
+		text := strings.Join(traceLines, "\n")
+		if err := tctx.traceCallback(text); err != nil {
+			log.Warn("trace: failed to send/update", "err", err)
+		}
+	}
 
 	for i := 0; i < 10; i++ {
 		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
 		if err != nil {
 			log.Error("LLM error", "err", err)
+			if tracing {
+				traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
+				sendTrace()
+			}
 			break
 		}
 
-		// Log agent metrics linked to the user message that triggered this run.
+		// Log agent metrics.
 		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
-		log.Infof("  tokens: %d prompt + %d completion | $%.6f",
-			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD)
+		log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
+			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
 
-		// If no tool calls, the agent is done.
-		if len(resp.ToolCalls) == 0 {
+		// --- Check finish_reason to decide how to proceed ---
+		hasToolCalls := len(resp.ToolCalls) > 0
+
+		if !hasToolCalls {
 			if resp.Content != "" {
-				log.Infof("  done (text): %s", resp.Content)
+				trimmed := strings.TrimSpace(strings.ToLower(resp.Content))
+				// If the agent just typed "done" as text instead of calling
+				// the done tool, treat it as a done signal. MiniMax does this.
+				if trimmed == "done" || trimmed == "done." {
+					log.Info("  agent typed 'done' as text (treating as done signal)")
+					break
+				}
+				log.Infof("  agent text (no tools): %s", truncateLog(resp.Content, 200))
+				agentFinalText = resp.Content
 			} else {
 				log.Info("  done (no actions)")
 			}
 			break
 		}
 
-		// Detect think loops — if the agent calls think with the same
-		// content twice in a row, it's stuck. Break out and force a reply.
+		// --- Loop detection ---
 		if len(resp.ToolCalls) == 1 && resp.ToolCalls[0].Function.Name == "think" {
 			if resp.ToolCalls[0].Function.Arguments == lastThinkContent {
 				repeatCount++
 				if repeatCount >= 2 {
-					log.Warn("think loop detected, forcing reply", "repeats", repeatCount+1)
+					log.Warn("think loop detected, forcing exit", "repeats", repeatCount+1)
+					if tracing {
+						traceLines = append(traceLines, "⚠️ <i>loop detected — forcing exit</i>")
+						sendTrace()
+					}
 					break
 				}
 			} else {
@@ -378,17 +433,21 @@ func Run(params RunParams) (*RunResult, error) {
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call and collect results.
-		// Save every step to agent_turns for full observability.
+		// Execute each tool call, feed results back to the model,
+		// and build trace lines for observability.
 		for _, tc := range resp.ToolCalls {
-			// Save the tool call (what the agent decided to do).
 			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
 			turnIndex++
 
 			result := executeTool(tc, tctx)
 			log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
 
-			// Save the tool result (what happened when we executed it).
+			// Build the trace line for this tool call.
+			if tracing {
+				traceLines = append(traceLines, formatTraceLine(tc.Function.Name, tc.Function.Arguments, result))
+				sendTrace()
+			}
+
 			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
 			turnIndex++
 
@@ -400,21 +459,41 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 
 		// Exit when the agent explicitly signals it's done.
+		// (The "done" trace line is already added by formatTraceLine above.)
 		if tctx.doneCalled {
 			log.Info("  done signal received")
 			break
 		}
+
+		// Also exit if finish_reason was "stop" even though tools were
+		// present — some providers do this (the OpenCode #14972 bug).
+		if resp.FinishReason == "stop" {
+			log.Info("  finish_reason=stop after tool execution")
+			break
+		}
 	}
 
-	// Safety net: if the agent never called reply, generate a fallback
-	// response directly. This should be rare with a well-tuned prompt,
-	// but we never want the user to see just a placeholder.
+	// --- Fallback: ensure the user always gets a response ---
+	// If the agent never called the reply tool, we still need to respond.
+	// If the agent produced text (it "talked" instead of calling tools),
+	// use that as the instruction so the response is at least guided by
+	// what the agent intended. Otherwise, generate a generic response.
 	if !tctx.replyCalled {
-		log.Warn("reply was never called, generating fallback")
-		fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
-		if !tctx.replyCalled {
-			log.Error("fallback reply also failed", "result", fallbackResult)
-			return nil, fmt.Errorf("agent failed to generate a reply")
+		if agentFinalText != "" {
+			log.Warn("reply was never called, using agent text as instruction")
+			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
+			fallbackResult := execReply(instruction, tctx)
+			if !tctx.replyCalled {
+				log.Error("fallback reply failed", "result", fallbackResult)
+				return nil, fmt.Errorf("agent failed to generate a reply")
+			}
+		} else {
+			log.Warn("reply was never called, generating generic fallback")
+			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
+			if !tctx.replyCalled {
+				log.Error("fallback reply also failed", "result", fallbackResult)
+				return nil, fmt.Errorf("agent failed to generate a reply")
+			}
 		}
 	}
 
@@ -551,7 +630,18 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 }
 
 // executeTool runs a single tool call and returns a result string.
+// If the tool call has truncated/malformed JSON arguments (usually from
+// hitting max_tokens mid-generation), we return an error message that
+// tells the model what happened so it can retry with shorter arguments.
 func executeTool(tc llm.ToolCall, tctx *toolContext) string {
+	// Validate JSON before dispatching. Truncated tool calls happen when
+	// the model hits max_tokens while generating the arguments JSON.
+	// Rather than letting each tool fail with a confusing parse error,
+	// give the model clear feedback so it can self-correct.
+	if tc.Function.Arguments != "" && !json.Valid([]byte(tc.Function.Arguments)) {
+		return fmt.Sprintf("error: malformed JSON in arguments (likely truncated by token limit). Please retry with shorter arguments. Got: %s", truncateLog(tc.Function.Arguments, 100))
+	}
+
 	switch tc.Function.Name {
 	case "reply":
 		return execReply(tc.Function.Arguments, tctx)
@@ -1260,7 +1350,7 @@ var styleBlocklist = []string{
 // maxFactLength is the hard limit on fact text length. Facts are supposed
 // to be 1-2 sentences. Multi-paragraph reflections belong in the
 // persona evolution system, not in individual facts.
-const maxFactLength = 280
+const maxFactLength = 200
 
 func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	var args struct {
@@ -1306,6 +1396,17 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	if len(args.Fact) > maxFactLength {
 		log.Warn("blocked fact (too long)", "len", len(args.Fact), "fact", args.Fact[:100])
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
+	}
+
+	// Auto-inject timestamp for "context" category facts.
+	if args.Category == "context" {
+		tz := tctx.cfg.Scheduler.Timezone
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			loc = time.UTC
+		}
+		stamp := time.Now().In(loc).Format("2006-01-02")
+		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
 	}
 
 	// Semantic duplicate check using embeddings.
@@ -1396,6 +1497,34 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		args.Importance = 10
 	}
 
+	// Same style and length gates as save_fact — updates shouldn't
+	// sneak in AI-slop or paragraphs either.
+	lower := strings.ToLower(args.Fact)
+	for _, blocked := range styleBlocklist {
+		if strings.Contains(lower, blocked) {
+			log.Warn("blocked fact update (style)", "pattern", blocked, "fact", args.Fact)
+			return fmt.Sprintf("rejected: rewrite in plain, concise language. Blocked pattern: %q", blocked)
+		}
+	}
+	if len(args.Fact) > maxFactLength {
+		log.Warn("blocked fact update (too long)", "len", len(args.Fact))
+		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
+	}
+
+	// Auto-inject timestamp for "context" category facts. These are
+	// ephemeral day-to-day facts (like "working on X today") that need
+	// a date stamp so they age out naturally. The agent doesn't need to
+	// worry about timestamps — we inject them behind the scenes.
+	if args.Category == "context" {
+		tz := tctx.cfg.Scheduler.Timezone
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			loc = time.UTC
+		}
+		stamp := time.Now().In(loc).Format("2006-01-02")
+		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
+	}
+
 	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance); err != nil {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
@@ -1447,10 +1576,168 @@ func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string)
 }
 
 // truncateLog shortens a string for log output, adding "..." if it was cut.
+// mustJSON marshals a string to a JSON string literal (with quotes and
+// escaping). Used to safely embed agent text into a JSON object without
+// risking broken JSON from quotes or newlines in the content.
+func mustJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 func truncateLog(s string, maxLen int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// formatTraceLine builds an HTML-formatted trace line for a single tool call.
+// Each tool type gets its own emoji and formatting style so you can scan
+// the trace message at a glance.
+func formatTraceLine(toolName, argsJSON, result string) string {
+	switch toolName {
+	case "think":
+		// Show the full thinking text in italics.
+		var args struct {
+			Thought string `json:"thought"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🧠 <b>think:</b> <i>%s</i>", escapeHTML(args.Thought))
+
+	case "reply":
+		// Show the instruction (what the agent told Mira to say) in italics.
+		// Don't show the actual reply text — that's already visible as a message.
+		var args struct {
+			Instruction string `json:"instruction"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("📝 <b>reply:</b> <i>%s</i>", escapeHTML(truncateLog(args.Instruction, 200)))
+
+	case "save_fact":
+		// Show full fact details — category, importance, and the fact text.
+		var args struct {
+			Fact       string `json:"fact"`
+			Category   string `json:"category"`
+			Importance int    `json:"importance"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("💾 <b>save_fact:</b> %s\n    category=%s, importance=%d", escapeHTML(args.Fact), args.Category, args.Importance)
+
+	case "update_fact":
+		var args struct {
+			FactID     int    `json:"fact_id"`
+			Fact       string `json:"fact"`
+			Category   string `json:"category"`
+			Importance int    `json:"importance"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("📝 <b>update_fact:</b> #%d → %s\n    category=%s, importance=%d", args.FactID, escapeHTML(args.Fact), args.Category, args.Importance)
+
+	case "remove_fact":
+		var args struct {
+			FactID int64  `json:"fact_id"`
+			Reason string `json:"reason"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🗑 <b>remove_fact:</b> #%d — %s", args.FactID, escapeHTML(args.Reason))
+
+	case "save_self_fact":
+		var args struct {
+			Fact       string `json:"fact"`
+			Category   string `json:"category"`
+			Importance int    `json:"importance"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🪞 <b>save_self_fact:</b> %s\n    category=%s, importance=%d", escapeHTML(args.Fact), args.Category, args.Importance)
+
+	case "web_search":
+		var args struct {
+			Query string `json:"query"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🔍 <b>web_search:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
+
+	case "web_read":
+		var args struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🌐 <b>web_read:</b> %s\n    → %s", escapeHTML(truncateLog(args.URL, 60)), escapeHTML(truncateLog(result, 80)))
+
+	case "book_search":
+		var args struct {
+			Query string `json:"query"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("📚 <b>book_search:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
+
+	case "view_image":
+		return fmt.Sprintf("👁 <b>view_image:</b> → %s", escapeHTML(truncateLog(result, 80)))
+
+	case "recall_memories":
+		var args struct {
+			Query string `json:"query"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🔎 <b>recall_memories:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
+
+	case "log_mood":
+		var args struct {
+			Rating int    `json:"rating"`
+			Note   string `json:"note"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("😊 <b>log_mood:</b> %d/5 — %s", args.Rating, escapeHTML(args.Note))
+
+	case "create_reminder":
+		var args struct {
+			Message     string `json:"message"`
+			NaturalTime string `json:"natural_time"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("⏰ <b>create_reminder:</b> \"%s\" at %s", escapeHTML(args.Message), escapeHTML(args.NaturalTime))
+
+	case "create_schedule":
+		var args struct {
+			Name     string `json:"name"`
+			CronExpr string `json:"cron_expr"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("📅 <b>create_schedule:</b> \"%s\" (%s)", escapeHTML(args.Name), args.CronExpr)
+
+	case "set_location":
+		var args struct {
+			Query string `json:"query"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("📍 <b>set_location:</b> %s", escapeHTML(args.Query))
+
+	case "update_persona":
+		var args struct {
+			Reason string `json:"reason"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("✨ <b>update_persona:</b> %s", escapeHTML(args.Reason))
+
+	case "no_action":
+		return "➖ <b>no_action</b>"
+
+	case "done":
+		return "✅ <b>done</b>"
+
+	case "get_current_time":
+		return fmt.Sprintf("🕐 <b>get_current_time:</b> → %s", escapeHTML(truncateLog(result, 60)))
+
+	default:
+		return fmt.Sprintf("🔧 <b>%s:</b> → %s", escapeHTML(toolName), escapeHTML(truncateLog(result, 80)))
+	}
+}
+
+// escapeHTML escapes special characters for Telegram's HTML parse mode.
+func escapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }

@@ -51,6 +51,7 @@ type Bot struct {
 	ttsClient    *voice.TTSClient    // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store        *memory.Store
 	cfg          *config.Config
+	configPath   string               // path to config.yaml — needed for /traces toggle
 	systemPrompt string
 	startTime    time.Time
 
@@ -61,7 +62,7 @@ type Bot struct {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -90,6 +91,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 		ttsClient:     ttsClient,
 		store:         store,
 		cfg:           cfg,
+		configPath:    configPath,
 		systemPrompt:  string(promptBytes),
 		startTime:     time.Now(),
 	}
@@ -107,6 +109,7 @@ func New(cfg *config.Config, llmClient *llm.Client, agentLLM *llm.Client, vision
 	tb.Handle("/restart", bot.handleRestart)
 	tb.Handle("/remind", bot.handleRemind)
 	tb.Handle("/schedule", bot.handleSchedule)
+	tb.Handle("/traces", bot.handleTraces)
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -277,6 +280,13 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		}
 	}
 
+	// Build the trace callback if traces are enabled. The first call sends
+	// a new message; subsequent calls edit it with the accumulated trace.
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
@@ -294,6 +304,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
 		TTSCallback:         ttsCallback,
+		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 	})
@@ -455,6 +466,12 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		return err
 	}
 
+	// Build trace callback if enabled.
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
 	// Run the agent with image data attached.
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
@@ -472,6 +489,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
+		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 		ImageBase64:         imageBase64,
@@ -663,6 +681,12 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		}
 	}
 
+	// Build trace callback if enabled.
+	var traceCallback agent.TraceCallback
+	if b.cfg.Agent.Trace {
+		traceCallback = b.makeTraceCallback(c)
+	}
+
 	// Run the agent pipeline with the transcribed text.
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
@@ -681,6 +705,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		StatusCallback:      statusCallback,
 		SendCallback:        sendCallback,
 		TTSCallback:         ttsCallback,
+		TraceCallback:       traceCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 	})
@@ -775,6 +800,7 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/stats — token usage, cost, and message counts\n" +
 		"/status — uptime, models, and service health\n\n" +
 		"<b>System</b>\n" +
+		"/traces — toggle agent thinking traces in chat\n" +
 		"/restart — restart the bot process\n" +
 		"/help — this message\n\n" +
 		"<b>Features</b>\n" +
@@ -793,6 +819,50 @@ func (b *Bot) handleClear(c tele.Context) error {
 
 	log.Info("/clear: conversation reset", "chat", chatID, "new_id", newID)
 	return c.Send("Context cleared. Fresh start!")
+}
+
+// makeTraceCallback creates a closure that sends/edits the agent trace
+// message in Telegram. First call sends a new message; subsequent calls
+// edit it with the accumulated trace text. The message uses HTML parse
+// mode for formatting (bold tool names, italic thinking, etc.).
+//
+// This is the same closure pattern as statusCallback and sendCallback —
+// the returned function "closes over" the traceMsg variable so it
+// always knows which message to edit.
+func (b *Bot) makeTraceCallback(c tele.Context) agent.TraceCallback {
+	var traceMsg *tele.Message
+	return func(text string) error {
+		if traceMsg == nil {
+			// First call — send a new message.
+			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil {
+				return err
+			}
+			traceMsg = msg
+		} else {
+			// Subsequent calls — edit the existing message.
+			_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// handleTraces toggles agent thinking traces on/off.
+// When enabled, Mira sends a separate message before each reply showing
+// the agent's tool calls, thinking, and decision-making process.
+func (b *Bot) handleTraces(c tele.Context) error {
+	newState := !b.cfg.Agent.Trace
+	if err := b.cfg.SetTrace(b.configPath, newState); err != nil {
+		log.Error("/traces: failed to update config", "err", err)
+		return c.Send(fmt.Sprintf("Failed to update config: %v", err))
+	}
+	if newState {
+		return c.Send("🧠 Agent traces <b>enabled</b> — you'll see thinking traces before each reply.", &tele.SendOptions{ParseMode: tele.ModeHTML})
+	}
+	return c.Send("🧠 Agent traces <b>disabled</b>.", &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handleStats shows aggregate usage statistics.
