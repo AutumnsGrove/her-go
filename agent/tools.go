@@ -139,13 +139,13 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "reply",
-				Description: "Generate and send a response to the user. REQUIRED — you MUST call this at least once per turn. The instruction tells the conversational model what to respond about.",
+				Description: "Generate and send a response to the user. REQUIRED — you MUST call this at least once per turn. The instruction is a DIRECTIVE to a separate conversational model — describe what to say, not the words themselves.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"instruction": map[string]interface{}{
 							"type":        "string",
-							"description": "What to tell the conversational model to respond about. Include any search results or context.",
+							"description": "A directive to the conversational model describing what to respond about, the tone, and key points. Do NOT write the actual reply text — another model generates that. Example: 'Warmly greet the user and ask about their day' NOT 'hey! how's your day going?'",
 						},
 						"context": map[string]interface{}{
 							"type":        "string",
