@@ -1104,7 +1104,77 @@ Telegram location sharing → Mira knows where you are. Context, not tracking.
 
 **Result:** Mira is aware of your tasks, your weather, your notes, your medication, your sleep patterns, and your wellbeing. She reaches out instead of waiting. She follows up on things that matter. She has buttons.
 
-### v0.7 — She Remembers Everywhere (Future)
+### v0.7 — She Adapts (Future)
+
+Mira gains resilience and portability — model fallbacks across all model types, plus cloud sync for durable memory.
+
+#### Model Fallbacks
+
+When a primary model is unavailable (API down, rate limited, timeout), Mira automatically falls back to an alternative. This also opens the door to quality-tier routing — use a better (slower/pricier) model when it matters, a cheaper one when it doesn't.
+
+**Fallback architecture:**
+Each model config section gains an optional `fallback` block with the same shape as the primary config. On failure (HTTP error, timeout, empty response), the system retries once with the fallback model before returning an error. Fallback usage is logged for observability.
+
+```yaml
+llm:
+  model: "deepseek/deepseek-v3.2"
+  # ... existing fields ...
+  fallback:
+    model: "anthropic/claude-3.5-haiku"  # or any OpenRouter model
+    temperature: 0.85
+    max_tokens: 1024
+
+agent:
+  model: "arcee-ai/trinity-large-preview:free"
+  fallback:
+    model: "liquid/lfm-2.5-1.2b-instruct:free"
+    temperature: 0.1
+    max_tokens: 512
+
+vision:
+  model: "google/gemini-3-flash-preview"
+  fallback:
+    model: "qwen/qwen3-vl:2b"           # or another fast VLM on OpenRouter
+    temperature: 0.3
+    max_tokens: 512
+
+voice:
+  tts:
+    engine: "piper"
+    fallback:
+      engine: "elevenlabs"              # cloud API — higher quality, higher latency
+      api_key: "${ELEVENLABS_API_KEY}"
+      voice_id: "some-voice-id"
+```
+
+**Fallback triggers:**
+- HTTP 429 (rate limited), 500-503 (server error), or request timeout
+- Empty response or malformed JSON
+- Model-specific: low confidence scores (OCR), empty transcription (STT)
+
+**What does NOT get fallbacks:**
+- Embeddings — vectors are model-specific, switching models mid-stream would corrupt similarity search
+- Search APIs (Tavily, Kiwix) — these are services, not models
+
+**Implementation pattern:**
+```go
+// In llm/client.go or a new llm/fallback.go
+type FallbackClient struct {
+    primary  *Client
+    fallback *Client  // nil if no fallback configured
+}
+
+func (fc *FallbackClient) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
+    resp, err := fc.primary.ChatCompletion(messages)
+    if err != nil && fc.fallback != nil {
+        log.Warn("primary model failed, trying fallback", "err", err)
+        return fc.fallback.ChatCompletion(messages)
+    }
+    return resp, err
+}
+```
+
+#### Cloud Sync (Cloudflare D1)
 
 Mira's memory becomes portable and durable via Cloudflare D1 sync.
 
@@ -1204,7 +1274,7 @@ sync:
   sync_messages: false        # opt-in: sync scrubbed message content
 ```
 
-**Result:** Mira's memory is durable and portable. Start chatting on your Mac Mini, pick up on your laptop. Facts, personality, and mood history travel with her. Raw conversations stay private on the originating machine.
+**Result:** Mira stays responsive even when a model provider has issues, and her memory is durable and portable. Start chatting on your Mac Mini, pick up on your laptop. Facts, personality, and mood history travel with her. Raw conversations stay private on the originating machine.
 
 ### v0.8 — She Has a Face (Future)
 
@@ -1738,74 +1808,6 @@ kiwix:
 ```
 
 **Result:** Mira can search your notes, your email, and Wikipedia — all locally, all private. External data sources become part of her awareness without leaving the machine.
-
-### v1.2 — She Adapts (Future)
-
-Mira gains model fallbacks across all model types. When a primary model is unavailable (API down, rate limited, timeout), she automatically falls back to an alternative. This also opens the door to quality-tier routing — use a better (slower/pricier) model when it matters, a cheaper one when it doesn't.
-
-**Fallback architecture:**
-Each model config section gains an optional `fallback` block with the same shape as the primary config. On failure (HTTP error, timeout, empty response), the system retries once with the fallback model before returning an error. Fallback usage is logged for observability.
-
-```yaml
-llm:
-  model: "deepseek/deepseek-v3.2"
-  # ... existing fields ...
-  fallback:
-    model: "anthropic/claude-3.5-haiku"  # or any OpenRouter model
-    temperature: 0.85
-    max_tokens: 1024
-
-agent:
-  model: "arcee-ai/trinity-large-preview:free"
-  fallback:
-    model: "liquid/lfm-2.5-1.2b-instruct:free"
-    temperature: 0.1
-    max_tokens: 512
-
-vision:
-  model: "google/gemini-3-flash-preview"
-  fallback:
-    model: "qwen/qwen3-vl:2b"           # or another fast VLM on OpenRouter
-    temperature: 0.3
-    max_tokens: 512
-
-voice:
-  tts:
-    engine: "piper"
-    fallback:
-      engine: "elevenlabs"              # cloud API — higher quality, higher latency
-      api_key: "${ELEVENLABS_API_KEY}"
-      voice_id: "some-voice-id"
-```
-
-**Fallback triggers:**
-- HTTP 429 (rate limited), 500-503 (server error), or request timeout
-- Empty response or malformed JSON
-- Model-specific: low confidence scores (OCR), empty transcription (STT)
-
-**What does NOT get fallbacks:**
-- Embeddings — vectors are model-specific, switching models mid-stream would corrupt similarity search
-- Search APIs (Tavily, Kiwix) — these are services, not models
-
-**Implementation pattern:**
-```go
-// In llm/client.go or a new llm/fallback.go
-type FallbackClient struct {
-    primary  *Client
-    fallback *Client  // nil if no fallback configured
-}
-
-func (fc *FallbackClient) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
-    resp, err := fc.primary.ChatCompletion(messages)
-    if err != nil && fc.fallback != nil {
-        log.Warn("primary model failed, trying fallback", "err", err)
-        return fc.fallback.ChatCompletion(messages)
-    }
-    return resp, err
-}
-```
-
-**Result:** Mira stays responsive even when a model provider has issues. No more "sorry, I can't respond right now" — she just quietly switches to the backup and keeps going.
 
 ---
 
