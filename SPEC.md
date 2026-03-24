@@ -1118,6 +1118,23 @@ Telegram location sharing → Mira knows where you are. Context, not tracking.
 - **Not GPS tracking** — only when you explicitly share. Mira never asks for location.
 - Implementation: handle `tele.OnLocation` in the bot, store as a fact with `category='location'` and short TTL
 
+#### Nearby Search (Places API)
+
+"Find me a coffee shop nearby" / "are there any bookstores around here?" — Mira can search for real places using the user's location.
+
+- Requires a places/maps API — candidates:
+  - **Google Places API** (most complete, $17/1K requests for Nearby Search)
+  - **Mapbox Search** (generous free tier — 100K requests/month)
+  - **Overpass API** (OpenStreetMap, free, but limited metadata and no ratings)
+  - **Foursquare Places** (free tier available, good for casual "what's nearby" queries)
+- Exposed as a deferred agent tool: `nearby_search` in a `"places"` category
+  - Parameters: `query` (what to search for), `radius_km` (default 5), `limit` (default 5)
+  - Uses the user's stored location (from `set_location` or Telegram location share)
+  - Returns: name, address, distance, rating (if available), open/closed status
+- Mira doesn't dump a list — she weaves results into conversation naturally: "there's a cozy-looking place called The Roasted Bean about a 10 minute walk from you"
+- **Privacy:** only the configured location + search query leave the device. No location history stored beyond the transient fact.
+- Falls back to Tavily web search if places API isn't configured (current behavior, good enough for casual queries)
+
 **Result:** Mira is aware of your tasks, your weather, your notes, your medication, your sleep patterns, and your wellbeing. She reaches out instead of waiting. She follows up on things that matter. She has buttons.
 
 ### v0.7 — She Adapts (Future)
