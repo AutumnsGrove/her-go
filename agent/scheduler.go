@@ -224,13 +224,15 @@ func execListSchedules(argsJSON string, tctx *toolContext) string {
 			nextStr = t.NextRun.In(loc).Format("Mon Jan 2 at 3:04 PM")
 		}
 
-		cronStr := ""
+		// Convert cron to human-readable so the agent doesn't have to
+		// parse cron syntax (Trinity was misreading "30 9 * * *" as 3pm).
+		scheduleStr := ""
 		if t.CronExpr != nil && *t.CronExpr != "" {
-			cronStr = fmt.Sprintf(" [%s]", *t.CronExpr)
+			scheduleStr = fmt.Sprintf(" | Schedule: %s", scheduler.DescribeCron(*t.CronExpr))
 		}
 
 		result += fmt.Sprintf("\n#%d %s\n  Type: %s%s | Priority: %s | Next: %s | Runs: %d",
-			t.ID, name, t.TaskType, cronStr, t.Priority, nextStr, t.RunCount)
+			t.ID, name, t.TaskType, scheduleStr, t.Priority, nextStr, t.RunCount)
 	}
 
 	return result
