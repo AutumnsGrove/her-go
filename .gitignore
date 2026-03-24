@@ -4,9 +4,8 @@ her.db-journal
 her.db-wal
 her.db-shm
 
-# Evolving persona (bot-authored, versioned in DB, may contain personal reflections)
-# Uncomment the line below if you want to track persona.md in git
-# persona.md
+# Evolving persona (bot-authored, versioned in DB)
+persona.md
 
 # Config with secrets (use config.yaml.example as template)
 config.yaml
