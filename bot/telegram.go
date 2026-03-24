@@ -260,9 +260,14 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return err
 	}
 
-	// Step 6: Run the agent SYNCHRONOUSLY. The agent is the pipeline now —
-	// it decides whether to search, what to reply, and handles memory.
-	// This blocks until the agent has called reply and finished.
+	// sendCallback sends a NEW message (rather than editing the placeholder).
+	// Used by the reply tool for follow-up replies — e.g., after "let me
+	// look that up", the actual answer comes as a separate message.
+	sendCallback := func(text string) error {
+		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		return err
+	}
+
 	// Build the TTS callback — fires inside execReply so voice synthesis
 	// starts immediately when text is sent, not after the whole agent loop.
 	var ttsCallback agent.TTSCallback
@@ -287,6 +292,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		ConversationID:      conversationID,
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
+		SendCallback:        sendCallback,
 		TTSCallback:         ttsCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
@@ -444,6 +450,11 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		return err
 	}
 
+	sendCallback := func(text string) error {
+		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		return err
+	}
+
 	// Run the agent with image data attached.
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
@@ -460,6 +471,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		ConversationID:      conversationID,
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
+		SendCallback:        sendCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,
 		ImageBase64:         imageBase64,
@@ -638,6 +650,10 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		_, err := c.Bot().Edit(placeholder, status, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		return err
 	}
+	sendCallback := func(text string) error {
+		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		return err
+	}
 
 	// TTS callback — same pattern as handleMessage.
 	var ttsCallback agent.TTSCallback
@@ -663,6 +679,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		ConversationID:      conversationID,
 		TriggerMsgID:        msgID,
 		StatusCallback:      statusCallback,
+		SendCallback:        sendCallback,
 		TTSCallback:         ttsCallback,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNConversations,

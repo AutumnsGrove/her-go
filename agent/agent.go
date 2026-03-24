@@ -33,6 +33,14 @@ var log = logger.WithPrefix("agent")
 // pass a lambda; in Go you declare the function signature as a type.
 type StatusCallback func(status string) error
 
+// SendCallback is a function the bot provides for sending NEW messages
+// (as opposed to editing the placeholder). Used by the reply tool for
+// follow-up replies — the first reply edits the placeholder via
+// StatusCallback, subsequent replies send new messages via SendCallback.
+// This lets Mira say "let me look that up" and then "here's what I found"
+// as separate visible messages.
+type SendCallback func(text string) error
+
 // TTSCallback is a function the bot provides so the agent can trigger
 // voice synthesis immediately when a reply is sent, rather than waiting
 // for the entire agent loop to finish. This runs in a goroutine so it
@@ -49,6 +57,7 @@ type toolContext struct {
 	similarityThreshold float64
 	personaFile         string
 	statusCallback      StatusCallback
+	sendCallback        SendCallback
 	ttsCallback         TTSCallback
 
 	// chatLLM is the conversational model (Deepseek). The reply tool
@@ -166,6 +175,7 @@ type RunParams struct {
 	ConversationID      string
 	TriggerMsgID        int64
 	StatusCallback      StatusCallback
+	SendCallback        SendCallback
 	TTSCallback         TTSCallback
 	ReflectionThreshold int
 	RewriteEveryN       int
@@ -288,6 +298,7 @@ func Run(params RunParams) (*RunResult, error) {
 		similarityThreshold: params.SimilarityThreshold,
 		personaFile:         params.Cfg.Persona.PersonaFile,
 		statusCallback:      params.StatusCallback,
+		sendCallback:        params.SendCallback,
 		ttsCallback:         params.TTSCallback,
 		chatLLM:             params.ChatLLM,
 		visionLLM:           params.VisionLLM,
@@ -719,8 +730,17 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// we swap those back to the real values before the user sees it.
 	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
 
-	// Send the response to Telegram by editing the placeholder message.
-	if tctx.statusCallback != nil {
+	// Deliver the response to Telegram.
+	// First reply: edit the placeholder message (statusCallback).
+	// Follow-up replies: send as a new message (sendCallback) so both
+	// are visible — e.g., "let me look that up" → "here's what I found".
+	if tctx.replyCalled && tctx.sendCallback != nil {
+		// Follow-up reply — send as a new message.
+		if err := tctx.sendCallback(replyText); err != nil {
+			log.Error("reply: sending follow-up to Telegram", "err", err)
+		}
+	} else if tctx.statusCallback != nil {
+		// First reply — edit the placeholder.
 		if err := tctx.statusCallback(replyText); err != nil {
 			log.Error("reply: sending to Telegram", "err", err)
 		}
