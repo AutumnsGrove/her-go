@@ -4,10 +4,10 @@
 //
 // Supports one-shot reminders, recurring cron jobs, and conditional tasks.
 // Task types include "send_message" (plain text) and "run_prompt" (full
-// agent pipeline). Damping controls (quiet hours, rate limiting,
-// conversation-aware deferral) prevent proactive messages from being
-// annoying. The priority system (normal/high/critical) ensures important
-// tasks like user reminders and medication check-ins always get through.
+// agent pipeline). Damping controls (quiet hours, rate limiting, agent
+// busy check) prevent proactive messages from being annoying. The priority
+// system (normal/high/critical) ensures important tasks like user reminders
+// and medication check-ins always get through.
 //
 // Design philosophy: the scheduler is a "dumb executor with a smart
 // payload." It wakes up, finds due tasks, executes them by type, and
@@ -48,6 +48,17 @@ type SendFunc func(text string) error
 // for cron utilities).
 type AgentFunc func(prompt string) (string, error)
 
+// BusyFunc returns true when the agent is currently processing a turn.
+// The scheduler uses this to avoid firing tasks while a conversation is
+// mid-reply — the task just stays in the queue and gets picked up on
+// the next tick (30 seconds later), so the delay is imperceptible.
+//
+// This replaces the old "last message within 10 min → defer 30 min"
+// approach, which could cascade for hours if the user was chatting
+// on and off. The new approach: if the agent isn't busy right now,
+// fire immediately. If it is, wait one tick cycle.
+type BusyFunc func() bool
+
 // SchedulerOpts holds configuration for damping and rate limiting.
 // These are passed from config at startup so the scheduler doesn't
 // need to import the config package directly.
@@ -76,6 +87,7 @@ type Scheduler struct {
 	sendFn         SendFunc         // sends plain text messages
 	sendKeyboardFn SendKeyboardFunc // sends messages with inline keyboards — nil if not wired
 	agentFn        AgentFunc        // runs prompts through the agent pipeline — nil if not wired
+	busyFn         BusyFunc         // returns true when the agent is mid-turn — nil = never busy
 	location       *time.Location   // timezone for cron evaluation
 	opts           *SchedulerOpts   // damping configuration
 	cancel         context.CancelFunc
@@ -90,7 +102,7 @@ type Scheduler struct {
 //
 // agentFn can be nil if the agent pipeline isn't available (e.g., during
 // testing). Tasks that need it (run_prompt) will log an error and skip.
-func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, agentFn AgentFunc, timezone string, opts SchedulerOpts) *Scheduler {
+func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, agentFn AgentFunc, busyFn BusyFunc, timezone string, opts SchedulerOpts) *Scheduler {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		log.Warn("invalid timezone, falling back to UTC", "timezone", timezone, "err", err)
@@ -102,6 +114,7 @@ func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, 
 		sendFn:         sendFn,
 		sendKeyboardFn: sendKeyboardFn,
 		agentFn:        agentFn,
+		busyFn:         busyFn,
 		location:       loc,
 		opts:           &opts,
 	}
@@ -186,15 +199,16 @@ func (s *Scheduler) run(ctx context.Context) {
 // The damping cascade (checked in order, using priority to decide
 // which checks apply):
 //
-//  1. critical priority → always fire, skip ALL checks
-//  2. Quiet hours       → defer normal + high tasks
-//  3. high priority     → fire now (passed quiet hours)
-//  4. Conversation active (last 10 min) → defer normal tasks by 30 min
-//  5. Daily cap hit     → skip normal tasks, advance to next run
+//  1. critical priority   → always fire, skip ALL checks
+//  2. Quiet hours         → defer normal + high tasks
+//  3. high priority       → fire now (passed quiet hours)
+//  4. Agent busy          → skip normal tasks this tick (retry in ~30s)
+//  5. Daily cap hit       → skip normal tasks, advance to next run
 //
 // This ensures user reminders and medication check-ins ALWAYS get
 // through, while preventing chatty proactive messages from being
-// annoying.
+// annoying. Step 4 is a lightweight "polite wait" — if the agent is
+// mid-turn we just try again next tick, no deferral penalty.
 func (s *Scheduler) tick() {
 	now := time.Now().In(s.location)
 
@@ -233,19 +247,21 @@ func (s *Scheduler) tick() {
 
 		// --- Everything below applies only to "normal" priority ---
 
-		// 4. Conversation-aware deferral: if the user sent a message
-		// within the last 10 minutes, defer check-ins by 30 minutes
-		// to avoid interrupting an active conversation.
-		lastMsg, err := s.store.LastUserMessageTime()
-		if err == nil && !lastMsg.IsZero() && now.Sub(lastMsg) < 10*time.Minute {
-			deferUntil := now.Add(30 * time.Minute)
+		// 4. Agent busy check: if the agent is currently mid-turn,
+		// skip this task for now. It stays due in the database and
+		// will be picked up on the next tick (~30 seconds). No
+		// deferral, no time penalty — just a polite "wait your turn."
+		//
+		// This replaced a broken "last message within 10 min → defer
+		// 30 min" system that could cascade for hours (9:30am task
+		// firing at 2pm because the user chatted on and off all morning).
+		if s.busyFn != nil && s.busyFn() {
 			name := "<unnamed>"
 			if task.Name != nil {
 				name = *task.Name
 			}
-			log.Info("deferring task (user active)",
-				"id", task.ID, "name", name, "until", deferUntil.In(s.location))
-			_ = s.store.DeferTask(task.ID, deferUntil)
+			log.Info("skipping task (agent busy, will retry next tick)",
+				"id", task.ID, "name", name)
 			continue
 		}
 

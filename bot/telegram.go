@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"her/agent"
@@ -66,6 +67,14 @@ type Bot struct {
 	// When true, handlePhoto runs pre-flight OCR on every photo before
 	// the agent decides what to do. The OCR is local and fast (sub-200ms).
 	ocrEnabled bool
+
+	// agentBusy is an atomic flag the scheduler checks to avoid firing
+	// tasks while a conversation turn is in progress. Set before
+	// agent.Run(), cleared after. atomic.Bool is lock-free — no mutex
+	// needed for a simple "is something happening?" check. Think of it
+	// like a thread-safe boolean in Python (except Python's GIL makes
+	// plain bools thread-safe already — Go doesn't have a GIL).
+	agentBusy atomic.Bool
 }
 
 // New creates and configures a new Telegram bot.
@@ -167,6 +176,13 @@ func (b *Bot) Start() {
 // Stop gracefully shuts down the bot.
 func (b *Bot) Stop() {
 	b.tb.Stop()
+}
+
+// IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).
+// The scheduler calls this to decide whether to hold a task for the next
+// tick cycle rather than firing during an active conversation.
+func (b *Bot) IsAgentBusy() bool {
+	return b.agentBusy.Load()
 }
 
 // chatRecipient implements tele.Recipient for sending to a specific chat ID.
@@ -352,6 +368,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		})
 	}
 
+	b.agentBusy.Store(true)
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:                  b.agentLLM,
 		ChatLLM:                   b.llm,
@@ -377,6 +394,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
 		EventBus:                  b.eventBus,
 	})
+	b.agentBusy.Store(false)
 
 	close(stopTyping)
 

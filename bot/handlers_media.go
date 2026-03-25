@@ -208,6 +208,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}
 
 	// Run the agent with image data attached.
+	b.agentBusy.Store(true)
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:                  b.agentLLM,
 		ChatLLM:                   b.llm,
@@ -234,6 +235,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		OCRText:                   ocrText,
 		EventBus:                  b.eventBus,
 	})
+	b.agentBusy.Store(false)
 
 	close(stopTyping)
 
@@ -440,6 +442,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	// Run the agent pipeline with the transcribed text.
+	b.agentBusy.Store(true)
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:                  b.agentLLM,
 		ChatLLM:                   b.llm,
@@ -463,6 +466,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
 	})
+	b.agentBusy.Store(false)
 
 	close(stopTyping)
 

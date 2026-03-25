@@ -296,6 +296,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 				StatusCallback:      func(text string) error { return tgBot.SendToChat(ownerChat, text) },
 				ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
 				RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
+				EventBus:            bus,
 			})
 			if err != nil {
 				return "", err
@@ -339,7 +340,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 			return tgBot.SendKeyboardToChat(ownerChat, msg)
 		}
 
-		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentFn, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
+		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentFn, tgBot.IsAgentBusy, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
 			QuietHoursStart: cfg.Scheduler.QuietHoursStart, QuietHoursEnd: cfg.Scheduler.QuietHoursEnd,
 			MaxProactivePerDay: cfg.Scheduler.MaxProactivePerDay, Defaults: defaults,
 		})

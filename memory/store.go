@@ -1616,22 +1616,6 @@ func (s *Store) DeferTask(taskID int64, until time.Time) error {
 	return err
 }
 
-// LastUserMessageTime returns the timestamp of the most recent user
-// message. Used by the scheduler to detect active conversations —
-// if the user sent a message within the last 10 minutes, proactive
-// check-ins get deferred to avoid interrupting the flow.
-func (s *Store) LastUserMessageTime() (time.Time, error) {
-	var ts time.Time
-	err := s.db.QueryRow(
-		`SELECT timestamp FROM messages WHERE role = 'user'
-		 ORDER BY timestamp DESC LIMIT 1`,
-	).Scan(&ts)
-	if err == sql.ErrNoRows {
-		return time.Time{}, nil
-	}
-	return ts, err
-}
-
 // GetTaskByName finds an enabled task by name and creator. Used by
 // the scheduler's ensureDefaults() to check if a system-created
 // default task already exists before creating it (idempotent).

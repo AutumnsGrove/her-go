@@ -198,7 +198,11 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 	// the result — the chat model hallucinated vendor/amount details.
 	// Same pattern as weather and mood context injection.
 	tctx.expenseContext = fmt.Sprintf(
-		"# Recent Receipt Scan\n\nYou just scanned a receipt. Use ONLY these exact details in your reply:\n\n%s",
+		"# Recent Receipt Scan\n\n"+
+			"You just scanned a receipt. Use ONLY these exact details in your reply.\n"+
+			"IMPORTANT: Item names from receipts are often abbreviated or coded (e.g., 'CHIO BANANAS' means bananas, "+
+			"'APL HNYCRISP' means honeycrisp apples). You may lightly interpret obvious abbreviations but do NOT "+
+			"invent items that aren't listed here. If an item name is unclear, use it as-is.\n\n%s",
 		result.String(),
 	)
 
