@@ -16,6 +16,7 @@ import (
 	"her/memory"
 	"her/scrub"
 	"her/search"
+	"her/tui"
 	"her/voice"
 	"her/weather"
 
@@ -30,20 +31,20 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb           *tele.Bot
-	llm          *llm.Client          // conversational model (Deepseek)
-	agentLLM     *llm.Client          // tool-calling orchestrator
-	visionLLM    *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	embedClient  *embed.Client        // local embedding model for similarity
-	tavilyClient  *search.TavilyClient  // web search and URL extraction
+	tb            *tele.Bot
+	llm           *llm.Client          // conversational model (Deepseek)
+	agentLLM      *llm.Client          // tool-calling orchestrator
+	visionLLM     *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	embedClient   *embed.Client        // local embedding model for similarity
+	tavilyClient  *search.TavilyClient // web search and URL extraction
 	weatherClient *weather.Client      // Open-Meteo weather — nil if not configured
 	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
-	ttsClient    *voice.TTSClient    // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store        *memory.Store
-	cfg          *config.Config
-	configPath   string               // path to config.yaml — needed for /traces toggle
-	systemPrompt string
-	startTime    time.Time
+	ttsClient     *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	store         *memory.Store
+	cfg           *config.Config
+	configPath    string // path to config.yaml — needed for /traces toggle
+	systemPrompt  string
+	startTime     time.Time
 
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
@@ -55,10 +56,13 @@ type Bot struct {
 	// limit, it's split into pages and stored here so the ◀/▶ inline
 	// buttons can serve subsequent pages. Keyed by chat ID (int64).
 	pageSessions sync.Map
+
+	// eventBus emits structured events for the TUI. Nil-safe.
+	eventBus *tui.Bus
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -90,6 +94,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		configPath:    configPath,
 		systemPrompt:  string(promptBytes),
 		startTime:     time.Now(),
+		eventBus:      eventBus,
 	}
 
 	// Register command handlers.
@@ -134,7 +139,15 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 // Start begins polling Telegram for messages. This blocks forever
 // (or until the bot is stopped), so it's typically the last thing
 // called in main.go.
+//
+// Before polling, we call RemoveWebhook(true) to drop any pending
+// updates from a previous session. Without this, restarting the bot
+// causes a delay (10-30s) while the old long-poll connection expires
+// at Telegram's end, and queued messages arrive in a burst.
 func (b *Bot) Start() {
+	if err := b.tb.RemoveWebhook(true); err != nil {
+		log.Warn("failed to clear pending updates", "err", err)
+	}
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
 }
@@ -294,28 +307,40 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		}
 	}
 
+	// Emit TurnStartEvent for the TUI
+	turnStart := time.Now()
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnStartEvent{
+			Time:           turnStart,
+			TurnID:         msgID,
+			UserMessage:    truncate(userText, 100),
+			ConversationID: conversationID,
+		})
+	}
+
 	result, err := agent.Run(agent.RunParams{
-		AgentLLM:            b.agentLLM,
-		ChatLLM:             b.llm,
-		VisionLLM:           b.visionLLM,
-		Store:               b.store,
-		EmbedClient:         b.embedClient,
-		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:        b.tavilyClient,
-		WeatherClient:       b.weatherClient,
-		Cfg:                 b.cfg,
-		ScrubbedUserMessage: scrubResult.Text,
-		ScrubVault:          scrubResult.Vault,
-		ConversationID:      conversationID,
-		TriggerMsgID:        msgID,
-		StatusCallback:      statusCallback,
-		SendCallback:        sendCallback,
-		StageResetCallback:       stageResetCallback,
+		AgentLLM:                  b.agentLLM,
+		ChatLLM:                   b.llm,
+		VisionLLM:                 b.visionLLM,
+		Store:                     b.store,
+		EmbedClient:               b.embedClient,
+		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:              b.tavilyClient,
+		WeatherClient:             b.weatherClient,
+		Cfg:                       b.cfg,
+		ScrubbedUserMessage:       scrubResult.Text,
+		ScrubVault:                scrubResult.Vault,
+		ConversationID:            conversationID,
+		TriggerMsgID:              msgID,
+		StatusCallback:            statusCallback,
+		SendCallback:              sendCallback,
+		StageResetCallback:        stageResetCallback,
 		DeletePlaceholderCallback: deletePlaceholderCallback,
-		TTSCallback:              ttsCallback,
-		TraceCallback:            traceCallback,
-		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
+		TTSCallback:               ttsCallback,
+		TraceCallback:             traceCallback,
+		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
+		EventBus:                  b.eventBus,
 	})
 
 	close(stopTyping)
@@ -327,8 +352,16 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	}
 
 	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
-
 	log.Info("─── reply sent ───")
+
+	// Emit TurnEndEvent for the TUI
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnEndEvent{
+			Time:      time.Now(),
+			TurnID:    msgID,
+			ElapsedMs: time.Since(turnStart).Milliseconds(),
+		})
+	}
 
 	return nil
 }

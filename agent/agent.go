@@ -12,11 +12,12 @@ import (
 	"her/config"
 	"her/embed"
 	"her/llm"
+	"her/logger"
 	"her/memory"
 	"her/persona"
 	"her/scrub"
-	"her/logger"
 	"her/search"
+	"her/tui"
 	"her/weather"
 )
 
@@ -83,10 +84,10 @@ type toolContext struct {
 	// activeTools points to the tools slice in the agent loop. The
 	// use_tools handler appends deferred tools to it so they become
 	// available in subsequent iterations without restarting the loop.
-	activeTools *[]llm.ToolDef
-	sendCallback        SendCallback
-	ttsCallback         TTSCallback
-	traceCallback       TraceCallback
+	activeTools   *[]llm.ToolDef
+	sendCallback  SendCallback
+	ttsCallback   TTSCallback
+	traceCallback TraceCallback
 
 	// chatLLM is the conversational model (Deepseek). The reply tool
 	// uses this to generate the actual natural language response.
@@ -178,22 +179,27 @@ type toolContext struct {
 	// savedFacts tracks facts saved during this agent run.
 	// Used to trigger reflection (Trigger B) when enough facts accumulate.
 	savedFacts []string
+
+	// eventBus emits rich typed events for the TUI. Nil-safe.
+	eventBus *tui.Bus
 }
 
 // defaultAgentPrompt is used as a fallback if agent_prompt.md can't be loaded.
-const defaultAgentPrompt = `You are Mira's brain. You orchestrate every response. Call think to reason, reply to respond, memory tools to remember, and done when finished. Every turn must include reply and done.`
+// Uses {{her}} placeholder so it still works with the template expansion.
+const defaultAgentPrompt = `You are {{her}}'s brain. You orchestrate every response. Call think to reason, reply to respond, memory tools to remember, and done when finished. Every turn must include reply and done.`
 
 // loadAgentPrompt reads the agent prompt from disk (hot-reloadable),
 // falling back to a minimal default if the file doesn't exist.
+// After reading, it expands {{her}}/{{user}} placeholders via cfg.ExpandPrompt.
 // This is the same pattern as prompt.md — edit the file, restart the
 // bot (or it reloads on next message), and the behavior changes.
-func loadAgentPrompt(path string) string {
+func loadAgentPrompt(path string, cfg *config.Config) string {
 	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
 		log.Warn("couldn't load agent prompt, using default", "path", path)
-		return defaultAgentPrompt
+		return cfg.ExpandPrompt(defaultAgentPrompt)
 	}
-	return string(data)
+	return cfg.ExpandPrompt(string(data))
 }
 
 // RunParams bundles all the parameters for an agent run.
@@ -204,29 +210,30 @@ func loadAgentPrompt(path string) string {
 // In Python you might use **kwargs or a dataclass. In Go, a params struct
 // is the idiomatic way to handle functions with many inputs.
 type RunParams struct {
-	AgentLLM            *llm.Client
-	ChatLLM             *llm.Client
-	VisionLLM           *llm.Client // vision language model — nil if not configured
-	Store               *memory.Store
-	EmbedClient         *embed.Client
-	SimilarityThreshold float64
-	TavilyClient        *search.TavilyClient
-	WeatherClient       *weather.Client
-	Cfg                 *config.Config
-	ScrubbedUserMessage string
-	ScrubVault          *scrub.Vault
-	ConversationID      string
-	TriggerMsgID        int64
-	StatusCallback      StatusCallback
-	SendCallback        SendCallback
-	TTSCallback         TTSCallback
-	TraceCallback       TraceCallback      // nil if traces disabled
-	StageResetCallback       StageResetCallback       // nil-safe — sends new placeholder after reply
+	AgentLLM                  *llm.Client
+	ChatLLM                   *llm.Client
+	VisionLLM                 *llm.Client // vision language model — nil if not configured
+	Store                     *memory.Store
+	EmbedClient               *embed.Client
+	SimilarityThreshold       float64
+	TavilyClient              *search.TavilyClient
+	WeatherClient             *weather.Client
+	Cfg                       *config.Config
+	ScrubbedUserMessage       string
+	ScrubVault                *scrub.Vault
+	ConversationID            string
+	TriggerMsgID              int64
+	StatusCallback            StatusCallback
+	SendCallback              SendCallback
+	TTSCallback               TTSCallback
+	TraceCallback             TraceCallback             // nil if traces disabled
+	StageResetCallback        StageResetCallback        // nil-safe — sends new placeholder after reply
 	DeletePlaceholderCallback DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
-	ReflectionThreshold      int
-	RewriteEveryN       int
-	ImageBase64         string // base64-encoded image data (empty if no image)
-	ImageMIME           string // MIME type of the image (e.g., "image/jpeg")
+	ReflectionThreshold       int
+	RewriteEveryN             int
+	ImageBase64               string   // base64-encoded image data (empty if no image)
+	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
+	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
 }
 
 // RunResult holds the outcome of an agent run — primarily the reply
@@ -264,6 +271,13 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 	log.Infof("  facts: %d user, %d self", len(userFacts), len(selfFacts))
+
+	// Helper for nil-safe event emission — avoids if-checks everywhere.
+	emit := func(e tui.Event) {
+		if params.EventBus != nil {
+			params.EventBus.Emit(e)
+		}
+	}
 
 	// Load recent conversation history so the agent can resolve
 	// references like "it", "that book", "what we talked about", etc.
@@ -321,13 +335,20 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
+	// Emit context event for the TUI
+	emit(tui.ContextEvent{
+		Time: time.Now(), TurnID: params.TriggerMsgID,
+		UserFacts: len(userFacts), SelfFacts: len(selfFacts),
+		RelevantFacts: len(relevantFacts),
+	})
+
 	// Build the context message for the agent. We pass the current
 	// time and timezone so the agent can convert natural language times
 	// to ISO timestamps for create_reminder.
-	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.Cfg.Scheduler.Timezone)
+	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.Cfg.Scheduler.Timezone, params.Cfg.Identity.Her, params.Cfg.Identity.User)
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
-	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile)
+	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile, params.Cfg)
 
 	// Set up the conversation with the agent model.
 	messages := []llm.ChatMessage{
@@ -342,30 +363,31 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// Build the tool context with everything the tools need.
 	tctx := &toolContext{
-		store:               params.Store,
-		embedClient:         params.EmbedClient,
-		similarityThreshold: params.SimilarityThreshold,
-		personaFile:         params.Cfg.Persona.PersonaFile,
-		statusCallback:      params.StatusCallback,
-		sendCallback:        params.SendCallback,
-		ttsCallback:         params.TTSCallback,
-		traceCallback:       params.TraceCallback,
-		stageResetCallback:       params.StageResetCallback,
+		store:                     params.Store,
+		embedClient:               params.EmbedClient,
+		similarityThreshold:       params.SimilarityThreshold,
+		personaFile:               params.Cfg.Persona.PersonaFile,
+		statusCallback:            params.StatusCallback,
+		sendCallback:              params.SendCallback,
+		ttsCallback:               params.TTSCallback,
+		traceCallback:             params.TraceCallback,
+		stageResetCallback:        params.StageResetCallback,
 		deletePlaceholderCallback: params.DeletePlaceholderCallback,
-		chatLLM:                  params.ChatLLM,
-		visionLLM:           params.VisionLLM,
-		tavilyClient:        params.TavilyClient,
-		weatherClient:       params.WeatherClient,
-		cfg:                 params.Cfg,
-		scrubVault:          params.ScrubVault,
-		scrubbedUserMessage: params.ScrubbedUserMessage,
-		conversationID:      params.ConversationID,
-		triggerMsgID:        params.TriggerMsgID,
-		conversationSummary: conversationSummary,
-		relevantFacts:       relevantFacts,
-		imageBase64:         params.ImageBase64,
-		imageMIME:           params.ImageMIME,
-		activeTools:         &tools,
+		chatLLM:                   params.ChatLLM,
+		visionLLM:                 params.VisionLLM,
+		tavilyClient:              params.TavilyClient,
+		weatherClient:             params.WeatherClient,
+		cfg:                       params.Cfg,
+		scrubVault:                params.ScrubVault,
+		scrubbedUserMessage:       params.ScrubbedUserMessage,
+		conversationID:            params.ConversationID,
+		triggerMsgID:              params.TriggerMsgID,
+		conversationSummary:       conversationSummary,
+		relevantFacts:             relevantFacts,
+		imageBase64:               params.ImageBase64,
+		imageMIME:                 params.ImageMIME,
+		activeTools:               &tools,
+		eventBus:                  params.EventBus,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -428,6 +450,11 @@ func Run(params RunParams) (*RunResult, error) {
 		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
 		log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
+		emit(tui.AgentIterEvent{
+			Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i,
+			PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+			CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
+		})
 
 		// --- Check finish_reason to decide how to proceed ---
 		hasToolCalls := len(resp.ToolCalls) > 0
@@ -487,6 +514,12 @@ func Run(params RunParams) (*RunResult, error) {
 
 			result := executeTool(tc, tctx)
 			log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
+			emit(tui.ToolCallEvent{
+				Time: time.Now(), TurnID: params.TriggerMsgID,
+				ToolName: tc.Function.Name,
+				Args:     truncateLog(tc.Function.Arguments, 200),
+				Result:   truncateLog(result, 200),
+			})
 
 			// Build the trace line for this tool call.
 			if tracing {
@@ -571,6 +604,11 @@ func Run(params RunParams) (*RunResult, error) {
 				log.Error("checking fact count for reflection trigger", "err", err)
 			} else if factCount >= params.ReflectionThreshold {
 				log.Infof("  [persona] reflection triggered (%d facts, threshold: %d)", factCount, params.ReflectionThreshold)
+				emit(tui.PersonaEvent{
+					Time: time.Now(), TurnID: params.TriggerMsgID,
+					Action: "reflection_triggered",
+					Detail: fmt.Sprintf("%d facts (threshold: %d)", factCount, params.ReflectionThreshold),
+				})
 
 				if tracing {
 					traceLines = append(traceLines, fmt.Sprintf("💭 <b>reflection</b> triggered (%d new facts)", factCount))
@@ -614,6 +652,11 @@ func Run(params RunParams) (*RunResult, error) {
 					nextThreshold := (rewriteCount + 1) * params.RewriteEveryN
 					if totalReflections >= nextThreshold {
 						log.Infof("  [persona] rewrite triggered (%d reflections, next threshold: %d)", totalReflections, nextThreshold)
+						emit(tui.PersonaEvent{
+							Time: time.Now(), TurnID: params.TriggerMsgID,
+							Action: "rewrite_triggered",
+							Detail: fmt.Sprintf("%d reflections (next: %d)", totalReflections, nextThreshold),
+						})
 
 						if tracing {
 							traceLines = append(traceLines, fmt.Sprintf("✨ <b>persona rewrite</b> triggered (%d reflections)", totalReflections))
@@ -649,7 +692,7 @@ func Run(params RunParams) (*RunResult, error) {
 // references like "it", "that book", "what you said earlier". This was the
 // cause of the wrong-search-term bug where the agent searched for AI realism
 // instead of The Martian's realism.
-func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, timezone string) string {
+func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, timezone string, botName, userName string) string {
 	var b strings.Builder
 
 	// Current date/time — the agent needs this to convert natural
@@ -666,9 +709,9 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 	if len(history) > 0 {
 		b.WriteString("## Recent Conversation\n\n")
 		for _, msg := range history {
-			role := "User"
+			role := userName
 			if msg.Role == "assistant" {
-				role = "Mira"
+				role = botName
 			}
 			content := msg.ContentScrubbed
 			if content == "" {
@@ -697,7 +740,7 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 		b.WriteString("(none yet)\n")
 	}
 
-	b.WriteString("\n## Self Memories (Mira's own knowledge)\n\n")
+	b.WriteString(fmt.Sprintf("\n## Self Memories (%s's own knowledge)\n\n", botName))
 	if len(selfFacts) > 0 {
 		for _, f := range selfFacts {
 			fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d] %s\n", f.ID, f.Category, f.Importance, f.Fact)
@@ -767,11 +810,11 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	case "use_tools":
 		return execUseTools(tc.Function.Arguments, tctx)
 	case "no_action":
-		return "ok, no action taken"
+		return "tool call complete, no action taken"
 	case "done":
 		tctx.doneCalled = true
 		log.Info("  done called — finishing turn")
-		return "ok, turn complete"
+		return "tool call complete, turn complete"
 	default:
 		return fmt.Sprintf("unknown tool: %s", tc.Function.Name)
 	}
@@ -874,6 +917,17 @@ func execReply(argsJSON string, tctx *toolContext) string {
 
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
+	if tctx.eventBus != nil {
+		tctx.eventBus.Emit(tui.ReplyEvent{
+			Time: time.Now(), TurnID: tctx.triggerMsgID,
+			Text:             truncateLog(resp.Content, 200),
+			PromptTokens:     resp.PromptTokens,
+			CompletionTokens: resp.CompletionTokens,
+			TotalTokens:      resp.TotalTokens,
+			CostUSD:          resp.CostUSD,
+			LatencyMs:        latencyMs,
+		})
+	}
 
 	// Guard against degenerate responses. If the chat model returned
 	// something suspiciously short (< 5 chars) or repetitive, it was
@@ -966,7 +1020,6 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
 }
 
-
 // isDegenerate detects garbage LLM outputs that would poison conversation
 // history if saved. Catches single-character responses, excessive repetition
 // (like "ohohohohoh..."), and empty responses. These typically happen when
@@ -1005,13 +1058,14 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	var parts []string
 
 	// Layer 1: prompt.md — base identity (hot-reloaded from disk).
+	// ExpandPrompt replaces {{her}}/{{user}} with configured names.
 	if promptBytes, err := os.ReadFile(tctx.cfg.Persona.PromptFile); err == nil {
-		parts = append(parts, string(promptBytes))
+		parts = append(parts, tctx.cfg.ExpandPrompt(string(promptBytes)))
 	}
 
 	// Layer 2: persona.md — evolving self-image (if it exists).
 	if personaBytes, err := os.ReadFile(tctx.cfg.Persona.PersonaFile); err == nil {
-		parts = append(parts, string(personaBytes))
+		parts = append(parts, tctx.cfg.ExpandPrompt(string(personaBytes)))
 	}
 
 	// Layer 2.5: Personality traits — soft guidance for tone and style.
@@ -1057,16 +1111,18 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 // --- Reasoning tool ---
 
 // execThink is the agent's "pause and think" tool. It does nothing
-// except log the thought and return "ok" — but it gives the agent a
+// except log the thought and return a confirmation — but it gives the agent a
 // structured place to reason before deciding what to do next.
 //
 // This is a common pattern in agentic systems. Without it, the model
 // often skips reasoning and jumps straight to tool calls. With it,
 // you get traces like:
-//   think("search results are about AI, not The Martian — need to refine")
-//   web_search("The Martian Andy Weir scientific accuracy")
-//   think("these results are much better, user will want to know about...")
-//   reply(...)
+//
+//	think("search results are about AI, not The Martian — need to refine")
+//	web_search("The Martian Andy Weir scientific accuracy")
+//	think("these results are much better, user will want to know about...")
+//	reply(...)
+//
 // execSetLocation looks up a city name via Open-Meteo geocoding and
 // updates the weather client's coordinates. Also saves the location
 // as a fact so it persists across restarts.
@@ -1093,7 +1149,8 @@ func execSetLocation(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Save as a fact so the location persists across restarts.
-	locationFact := fmt.Sprintf("User is located in %s, %s, %s (%.4f, %.4f)",
+	locationFact := fmt.Sprintf("%s is located in %s, %s, %s (%.4f, %.4f)",
+		tctx.cfg.Identity.User,
 		loc.Name, loc.Region, loc.Country, loc.Latitude, loc.Longitude)
 	_, _ = tctx.store.SaveFact(locationFact, "location", "user", tctx.triggerMsgID, 9, nil)
 
@@ -1172,11 +1229,14 @@ func execThink(argsJSON string, tctx *toolContext) string {
 		Thought string `json:"thought"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "ok"
+		return "tool call complete"
 	}
 
 	log.Infof("  think: %s", args.Thought)
-	return "ok"
+	// Don't return "ok" — the agent sees tool results in its conversation
+	// history and was interpreting "ok" as the user saying "ok", causing
+	// infinite think→reply loops.
+	return "tool call complete"
 }
 
 // execRecallMemories searches stored facts by semantic similarity.
@@ -1523,8 +1583,8 @@ var selfFactBlocklist = []string{
 	"i have the ability",
 	"my role is",
 	"i am an ai",
-	"i am mira",
-	"my name is mira",
+	// Note: "i am <name>" and "my name is <name>" are checked dynamically
+	// using cfg.Identity.Her — see isSelfFactBlocked().
 	"i should be",
 	"i try to be",
 	"i am designed to",
@@ -1611,6 +1671,13 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 				log.Warn("blocked self-fact (matches blocklist)", "blocklist_entry", blocked, "fact", args.Fact)
 				return fmt.Sprintf("rejected: this is a system capability, not a learned observation. Self-facts should only capture things learned through interaction.")
 			}
+		}
+		// Dynamic name check — "i am <name>" and "my name is <name>"
+		// are identity restatements from the system prompt, not learned facts.
+		nameLower := strings.ToLower(tctx.cfg.Identity.Her)
+		if strings.Contains(lower, "i am "+nameLower) || strings.Contains(lower, "my name is "+nameLower) {
+			log.Warn("blocked self-fact (identity restatement)", "fact", args.Fact)
+			return "rejected: this is an identity restatement from the system prompt, not a learned observation."
 		}
 	}
 

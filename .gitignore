@@ -39,6 +39,7 @@ Thumbs.db
 *.swo
 logs/stderr.log
 logs/stdout.log
+her.log
 
 # Simulation results (personal data from test runs)
 sims/sim.db
