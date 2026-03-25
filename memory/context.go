@@ -40,7 +40,11 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	var allInjected []InjectedFact
 
 	// --- User facts ---
-	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist)
+	// User facts are ONLY injected when semantically relevant to the current
+	// message. If nothing passes the distance filter, we inject nothing —
+	// Mira can use her recall tool if she needs more context.
+	// Importance-based backfill was flooding irrelevant facts into every turn.
+	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist, false)
 	if err != nil {
 		return "", nil, fmt.Errorf("retrieving user facts: %w", err)
 	}
@@ -54,7 +58,9 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	}
 
 	// --- Self facts ---
-	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist)
+	// Self facts always backfill by importance — they steer Mira's personality
+	// and voice, so they should be present even when nothing is semantically close.
+	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist, true)
 	if err != nil {
 		return "", nil, fmt.Errorf("retrieving self facts: %w", err)
 	}
@@ -74,8 +80,14 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 // deduplicating by fact ID. Returns both the facts and observability data
 // about how each was selected.
 //
-// If relevantFacts is nil (no embeddings), falls back to importance-only.
-func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64) ([]Fact, []InjectedFact, error) {
+// If backfillImportance is true, remaining slots are filled with
+// high-importance facts even when nothing is semantically close. This is
+// useful for self-facts (personality steering) but not for user-facts,
+// where irrelevant backfill just overwhelms the chat model.
+//
+// If relevantFacts is nil (no embeddings), falls back to importance-only
+// when backfillImportance is true, or returns nothing when false.
+func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64, backfillImportance bool) ([]Fact, []InjectedFact, error) {
 	seen := make(map[int64]bool)
 	var result []Fact
 	var injected []InjectedFact
@@ -112,24 +124,28 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 	}
 
 	// Second pass: importance-based (always-present context).
-	// Fill remaining slots with the highest-importance facts.
-	importantFacts, err := store.RecentFacts(subject, maxFacts)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, f := range importantFacts {
-		if len(result) >= maxFacts {
-			break
+	// Only runs when backfillImportance is true (self-facts).
+	// For user-facts this is skipped — Mira can use her recall tool
+	// if she needs more context beyond what semantic search found.
+	if backfillImportance {
+		importantFacts, err := store.RecentFacts(subject, maxFacts)
+		if err != nil {
+			return nil, nil, err
 		}
-		if !seen[f.ID] {
-			seen[f.ID] = true
-			result = append(result, f)
-			injected = append(injected, InjectedFact{
-				ID: f.ID, Fact: f.Fact, Category: f.Category,
-				Subject: f.Subject, Importance: f.Importance,
-				Distance: -1, // not from semantic search
-				Source:   "importance",
-			})
+		for _, f := range importantFacts {
+			if len(result) >= maxFacts {
+				break
+			}
+			if !seen[f.ID] {
+				seen[f.ID] = true
+				result = append(result, f)
+				injected = append(injected, InjectedFact{
+					ID: f.ID, Fact: f.Fact, Category: f.Category,
+					Subject: f.Subject, Importance: f.Importance,
+					Distance: -1, // not from semantic search
+					Source:   "importance",
+				})
+			}
 		}
 	}
 
