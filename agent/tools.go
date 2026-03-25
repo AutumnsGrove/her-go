@@ -25,12 +25,13 @@ import (
 // hotToolNames lists tools that are always available to the agent.
 // These are the tools used in nearly every conversation turn.
 var hotToolNames = []string{
-	"think",       // reasoning — used every turn
-	"reply",       // generate response — REQUIRED every turn
-	"done",        // signal completion — REQUIRED every turn
-	"save_fact",   // save user facts — very frequent
-	"update_fact", // update existing facts — frequent
-	"no_action",   // explicit skip — frequent
+	"think",         // reasoning — used every turn
+	"reply",         // generate response — REQUIRED every turn
+	"done",          // signal completion — REQUIRED every turn
+	"save_fact",     // save user facts — very frequent
+	"update_fact",   // update existing facts — frequent
+	"no_action",     // explicit skip — frequent
+	"reply_confirm", // confirmation before destructive actions — always available
 }
 
 // toolCategories groups deferred tools by function. The agent can load
@@ -41,7 +42,7 @@ var toolCategories = map[string][]string{
 	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
 	"context":    {"log_mood", "get_current_time", "set_location"},
-	"expenses":   {"scan_receipt", "query_expenses"},
+	"expenses":   {"scan_receipt", "query_expenses", "delete_expense", "update_expense"},
 }
 
 // toolRegistry maps every tool name to its full definition.
@@ -178,7 +179,7 @@ func useToolsDef() llm.ToolDef {
 		Type: "function",
 		Function: llm.ToolFunctionDef{
 			Name:        "use_tools",
-			Description: "Load additional tools you need for this turn. Call BEFORE using a deferred tool. Pass category names or individual tool names. Loaded tools stay available for the rest of this turn.\n\nCategories: search (web_search, web_read, book_search) | vision (view_image) | memory (remove_fact, save_self_fact, update_persona, recall_memories) | scheduling (create_reminder, create_schedule, list_schedules, update_schedule, delete_schedule) | context (log_mood, get_current_time, set_location)",
+			Description: "Load additional tools you need for this turn. Call BEFORE using a deferred tool. Pass category names or individual tool names. Loaded tools stay available for the rest of this turn.\n\nCategories: search (web_search, web_read, book_search) | vision (view_image) | memory (remove_fact, save_self_fact, update_persona, recall_memories) | scheduling (create_reminder, create_schedule, list_schedules, update_schedule, delete_schedule) | context (log_mood, get_current_time, set_location) | expenses (scan_receipt, query_expenses, delete_expense, update_expense)",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -335,6 +336,41 @@ func allToolDefs() []llm.ToolDef {
 				Parameters: map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
+				},
+			},
+		},
+
+		// --- Confirmation ---
+		//
+		// reply_confirm sends a Yes/No inline keyboard for destructive actions.
+		// Instead of the agent executing delete_expense directly, it calls
+		// reply_confirm with the action details. The user clicks a button,
+		// and the callback handler executes (or cancels) the action.
+		// This prevents the "lost context" problem where a plain-text "are
+		// you sure?" causes the user's "yes" to arrive as a new turn.
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "reply_confirm",
+				Description: "Send a Yes/No confirmation prompt with inline buttons before executing a destructive action. The action executes ONLY when the user clicks Yes. Use this for: deleting expenses, removing facts, deleting schedules. After calling this, proceed to reply and done — the action runs asynchronously when the user responds.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"message": map[string]interface{}{
+							"type":        "string",
+							"description": "The confirmation question to display. Be specific about what will happen. Example: 'Delete the £47.23 Trader Joe's expense from March 25?'",
+						},
+						"action_type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"delete_expense", "remove_fact", "delete_schedule"},
+							"description": "The type of destructive action to execute on confirmation.",
+						},
+						"action_payload": map[string]interface{}{
+							"type":        "string",
+							"description": "JSON payload for the action. delete_expense: {\"id\": 42}. remove_fact: {\"fact_id\": 17}. delete_schedule: {\"task_id\": 5}.",
+						},
+					},
+					"required": []string{"message", "action_type", "action_payload"},
 				},
 			},
 		},
@@ -781,6 +817,71 @@ func allToolDefs() []llm.ToolDef {
 						},
 					},
 					"required": []string{"period"},
+				},
+			},
+		},
+
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "delete_expense",
+				Description: "Delete an expense by ID. Use when {{user}} wants to remove a mistaken or test entry. Also deletes all associated line items.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "integer",
+							"description": "The expense ID to delete (shown in query_expenses results).",
+						},
+					},
+					"required": []string{"id"},
+				},
+			},
+		},
+
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "update_expense",
+				Description: "Update fields on an existing expense. Use when {{user}} wants to correct a scanned receipt (wrong amount, vendor, category, or date). Only pass the fields that need changing.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"id": map[string]interface{}{
+							"type":        "integer",
+							"description": "The expense ID to update.",
+						},
+						"amount": map[string]interface{}{
+							"type":        "number",
+							"description": "Corrected total amount (omit to keep current).",
+						},
+						"vendor": map[string]interface{}{
+							"type":        "string",
+							"description": "Corrected vendor name (omit to keep current).",
+						},
+						"category": map[string]interface{}{
+							"type": "string",
+							"enum": []string{
+								"groceries", "dining", "coffee", "transport", "shopping",
+								"entertainment", "health", "utilities", "housing",
+								"subscriptions", "personal_care", "other",
+							},
+							"description": "Corrected category (omit to keep current).",
+						},
+						"date": map[string]interface{}{
+							"type":        "string",
+							"description": "Corrected date in YYYY-MM-DD format (omit to keep current).",
+						},
+						"currency": map[string]interface{}{
+							"type":        "string",
+							"description": "Corrected currency code (omit to keep current).",
+						},
+						"note": map[string]interface{}{
+							"type":        "string",
+							"description": "Updated note (omit to keep current).",
+						},
+					},
+					"required": []string{"id"},
 				},
 			},
 		},

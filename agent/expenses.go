@@ -178,13 +178,31 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 	log.Infof("  scan_receipt: %s%.2f at %s (%s, %s) → ID=%d, %d items",
 		args.Currency, args.Amount, args.Vendor, args.Category, args.Date, id, itemCount)
 
-	// Return a confirmation the agent can reference in its reply.
-	result := fmt.Sprintf("expense saved ID=%d: %s %.2f at %s (%s, %s)",
+	// Build a detailed result string with all the data.
+	var result strings.Builder
+	fmt.Fprintf(&result, "expense saved ID=%d: %s %.2f at %s (%s, %s)",
 		id, args.Currency, args.Amount, args.Vendor, args.Category, args.Date)
 	if itemCount > 0 {
-		result += fmt.Sprintf(" with %d line items", itemCount)
+		result.WriteString("\nItems:")
+		for _, item := range args.Items {
+			desc := strings.TrimSpace(item.Description)
+			if desc == "" {
+				continue
+			}
+			fmt.Fprintf(&result, "\n  • %s: %s %.2f", desc, args.Currency, item.TotalPrice)
+		}
 	}
-	return result
+
+	// Inject into expenseContext so the CHAT MODEL sees the exact receipt
+	// data in its system prompt. Without this, only the agent model sees
+	// the result — the chat model hallucinated vendor/amount details.
+	// Same pattern as weather and mood context injection.
+	tctx.expenseContext = fmt.Sprintf(
+		"# Recent Receipt Scan\n\nYou just scanned a receipt. Use ONLY these exact details in your reply:\n\n%s",
+		result.String(),
+	)
+
+	return result.String()
 }
 
 // execQueryExpenses handles the query_expenses tool call. Returns expense
@@ -261,7 +279,7 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 	if err == nil && len(expenses) > 0 {
 		b.WriteString("**Recent transactions:**\n")
 		for _, e := range expenses {
-			fmt.Fprintf(&b, "- %s: %s %.2f at %s (%s)", e.Date, e.Currency, e.Amount, e.Vendor, e.Category)
+			fmt.Fprintf(&b, "- [ID=%d] %s: %s %.2f at %s (%s)", e.ID, e.Date, e.Currency, e.Amount, e.Vendor, e.Category)
 			if e.Note != "" {
 				fmt.Fprintf(&b, " — %s", e.Note)
 			}
@@ -282,4 +300,89 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 	log.Infof("  query_expenses: %s to %s → $%.2f, %d transactions", startDate, endDate, total, count)
 
 	return b.String()
+}
+
+// execDeleteExpense handles the delete_expense tool call. Removes an expense
+// and its line items by ID. Used when the user wants to clear test data or
+// correct a mistaken entry.
+func execDeleteExpense(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if args.ID <= 0 {
+		return "error: expense ID is required"
+	}
+
+	if tctx.store == nil {
+		return "error: database not available"
+	}
+
+	err := tctx.store.DeleteExpense(args.ID)
+	if err != nil {
+		log.Error("deleting expense", "err", err)
+		return fmt.Sprintf("error deleting expense: %v", err)
+	}
+
+	log.Infof("  delete_expense: removed ID=%d", args.ID)
+	return fmt.Sprintf("expense ID=%d deleted (including any line items)", args.ID)
+}
+
+// execUpdateExpense handles the update_expense tool call. Modifies fields
+// on an existing expense. The agent passes only the fields that need changing.
+func execUpdateExpense(argsJSON string, tctx *toolContext) string {
+	var args struct {
+		ID       int64   `json:"id"`
+		Amount   float64 `json:"amount"`
+		Currency string  `json:"currency"`
+		Vendor   string  `json:"vendor"`
+		Category string  `json:"category"`
+		Date     string  `json:"date"`
+		Note     string  `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if args.ID <= 0 {
+		return "error: expense ID is required"
+	}
+
+	if tctx.store == nil {
+		return "error: database not available"
+	}
+
+	// Validate category if provided.
+	if args.Category != "" {
+		args.Category = strings.ToLower(strings.TrimSpace(args.Category))
+		if !validExpenseCategories[args.Category] {
+			return fmt.Sprintf("error: invalid category %q", args.Category)
+		}
+	}
+
+	// Validate date if provided.
+	if args.Date != "" && !datePattern.MatchString(args.Date) {
+		return fmt.Sprintf("error: date must be YYYY-MM-DD format, got %q", args.Date)
+	}
+
+	// Normalize vendor if provided.
+	if args.Vendor != "" {
+		args.Vendor = normalizeVendor(args.Vendor)
+	}
+
+	if args.Currency != "" {
+		args.Currency = strings.ToUpper(strings.TrimSpace(args.Currency))
+	}
+
+	err := tctx.store.UpdateExpense(args.ID, args.Amount, args.Currency, args.Vendor, args.Category, args.Date, args.Note)
+	if err != nil {
+		log.Error("updating expense", "err", err)
+		return fmt.Sprintf("error updating expense: %v", err)
+	}
+
+	log.Infof("  update_expense: updated ID=%d", args.ID)
+	return fmt.Sprintf("expense ID=%d updated successfully", args.ID)
 }

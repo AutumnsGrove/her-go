@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	// The underscore import is a Go idiom: it imports the package purely for
@@ -285,6 +286,26 @@ func (s *Store) initTables() error {
 			unit_price REAL,
 			total_price REAL,
 			FOREIGN KEY (expense_id) REFERENCES expenses(id)
+		)`,
+
+		// Pending confirmations — stores actions that need user approval
+		// via inline keyboard buttons before executing. Keyed by the
+		// Telegram message ID of the confirmation message, so the callback
+		// handler can look it up when the user clicks Yes or No.
+		//
+		// This is the infra behind the reply_confirm agent tool. The agent
+		// sends a confirmation prompt with buttons, and the action_type +
+		// action_payload describe what to execute on confirmation. Resolved
+		// confirmations are kept for audit (resolved_at + resolved_action).
+		`CREATE TABLE IF NOT EXISTS pending_confirmations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			telegram_msg_id INTEGER NOT NULL,
+			action_type TEXT NOT NULL,
+			action_payload JSON NOT NULL,
+			description TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			resolved_at DATETIME,
+			resolved_action TEXT
 		)`,
 
 		// Reflections — Mira's private journal entries written after
@@ -1892,6 +1913,81 @@ func (s *Store) SaveExpense(amount float64, currency, vendor, category, date, no
 // SaveExpenseItem inserts a line item linked to a parent expense.
 // Called in a loop after SaveExpense when the agent extracts individual
 // items from receipt OCR text.
+// DeleteExpense removes an expense and all its line items.
+// Uses a transaction so both deletes succeed or neither does.
+func (s *Store) DeleteExpense(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting transaction: %w", err)
+	}
+	// Delete child items first (foreign key), then parent expense.
+	if _, err := tx.Exec(`DELETE FROM expense_items WHERE expense_id = ?`, id); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("deleting expense items: %w", err)
+	}
+	result, err := tx.Exec(`DELETE FROM expenses WHERE id = ?`, id)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("deleting expense: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		tx.Rollback()
+		return fmt.Errorf("expense ID=%d not found", id)
+	}
+	return tx.Commit()
+}
+
+// UpdateExpense modifies fields on an existing expense. Only non-zero/non-empty
+// values are updated — pass zero/empty to leave a field unchanged.
+func (s *Store) UpdateExpense(id int64, amount float64, currency, vendor, category, date, note string) error {
+	// Build SET clause dynamically — only include fields that have values.
+	var sets []string
+	var args []interface{}
+
+	if amount > 0 {
+		sets = append(sets, "amount = ?")
+		args = append(args, amount)
+	}
+	if currency != "" {
+		sets = append(sets, "currency = ?")
+		args = append(args, currency)
+	}
+	if vendor != "" {
+		sets = append(sets, "vendor = ?")
+		args = append(args, vendor)
+	}
+	if category != "" {
+		sets = append(sets, "category = ?")
+		args = append(args, category)
+	}
+	if date != "" {
+		sets = append(sets, "date = ?")
+		args = append(args, date)
+	}
+	if note != "" {
+		sets = append(sets, "note = ?")
+		args = append(args, note)
+	}
+
+	if len(sets) == 0 {
+		return fmt.Errorf("no fields to update")
+	}
+
+	query := fmt.Sprintf("UPDATE expenses SET %s WHERE id = ?", strings.Join(sets, ", "))
+	args = append(args, id)
+
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("updating expense: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("expense ID=%d not found", id)
+	}
+	return nil
+}
+
 func (s *Store) SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error {
 	if quantity < 1 {
 		quantity = 1
@@ -1992,4 +2088,98 @@ func (s *Store) ExpenseSummary(startDate, endDate string) (total float64, byCate
 	}
 
 	return total, byCategory, count, nil
+}
+
+// --- Pending Confirmations ---
+//
+// These support the reply_confirm agent tool. When the agent wants to
+// execute a destructive action (delete expense, remove fact, etc.), it
+// sends a confirmation message with Yes/No buttons instead of executing
+// immediately. The pending confirmation is stored here, and the callback
+// handler looks it up when the user clicks a button.
+//
+// This is similar to how mood check-ins work (save data when user clicks
+// an inline button), but agent-driven instead of scheduler-driven.
+
+// PendingConfirmation represents a destructive action waiting for user
+// approval via an inline keyboard button click.
+type PendingConfirmation struct {
+	ID             int64
+	TelegramMsgID  int64
+	ActionType     string          // e.g., "delete_expense", "remove_fact", "delete_schedule"
+	ActionPayload  json.RawMessage // JSON blob with action-specific params
+	Description    string          // human-readable description shown after resolution
+	CreatedAt      time.Time
+	ResolvedAt     *time.Time // nil until the user clicks a button
+	ResolvedAction *string    // "confirmed", "cancelled", or "error"
+}
+
+// CreatePendingConfirmation stores a new pending confirmation keyed by
+// the Telegram message ID of the confirmation message. The callback
+// handler will look this up when the user clicks Yes or No.
+//
+// This follows the same pattern as SaveMoodEntry — simple INSERT, return
+// the auto-generated ID. The telegramMsgID comes from the bot's Send()
+// call, which returns the message object with its ID.
+func (s *Store) CreatePendingConfirmation(telegramMsgID int64, actionType string, actionPayload json.RawMessage, description string) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO pending_confirmations (telegram_msg_id, action_type, action_payload, description)
+		 VALUES (?, ?, ?, ?)`,
+		telegramMsgID, actionType, string(actionPayload), description,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("creating pending confirmation: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting pending confirmation ID: %w", err)
+	}
+	return id, nil
+}
+
+// GetPendingConfirmation looks up an unresolved confirmation by the
+// Telegram message ID. Returns nil (not error) if not found, already
+// resolved, or older than 1 hour (expired).
+//
+// The 1-hour TTL prevents stale confirmations from executing days later
+// if the user scrolls back and clicks an old button. This is a soft
+// safety net — the worst case is the user has to re-ask.
+func (s *Store) GetPendingConfirmation(telegramMsgID int64) (*PendingConfirmation, error) {
+	row := s.db.QueryRow(
+		`SELECT id, telegram_msg_id, action_type, action_payload, description, created_at
+		 FROM pending_confirmations
+		 WHERE telegram_msg_id = ?
+		   AND resolved_at IS NULL
+		   AND created_at > datetime('now', '-1 hour')`,
+		telegramMsgID,
+	)
+
+	var pc PendingConfirmation
+	var payloadStr string
+	err := row.Scan(&pc.ID, &pc.TelegramMsgID, &pc.ActionType, &payloadStr, &pc.Description, &pc.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil // not found or expired — not an error
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting pending confirmation: %w", err)
+	}
+	pc.ActionPayload = json.RawMessage(payloadStr)
+	return &pc, nil
+}
+
+// ResolvePendingConfirmation marks a confirmation as resolved with the
+// given action ("confirmed", "cancelled", or "error"). This prevents
+// double-clicks — once resolved, GetPendingConfirmation won't return it.
+func (s *Store) ResolvePendingConfirmation(id int64, action string) error {
+	_, err := s.db.Exec(
+		`UPDATE pending_confirmations
+		 SET resolved_at = CURRENT_TIMESTAMP, resolved_action = ?
+		 WHERE id = ?`,
+		action, id,
+	)
+	if err != nil {
+		return fmt.Errorf("resolving pending confirmation %d: %w", id, err)
+	}
+	return nil
 }
