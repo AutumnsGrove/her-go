@@ -309,6 +309,7 @@ func Run(params RunParams) (*RunResult, error) {
 		conversationSummary, recentMsgs, err = compact.MaybeCompact(
 			params.ChatLLM, params.Store, params.ConversationID,
 			recentMsgs, params.Cfg.Memory.MaxHistoryTokens,
+			params.Cfg.Identity.Her, params.Cfg.Identity.User,
 		)
 		if err != nil {
 			log.Error("compaction error", "err", err)
@@ -359,7 +360,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// Start with only the hot tools (7 instead of 26). The agent can
 	// load deferred tools on demand via use_tools(["search"]) etc.
 	// This reduces context pressure on the agent model significantly.
-	tools := HotToolDefs()
+	tools := HotToolDefs(params.Cfg)
 
 	// Build the tool context with everything the tools need.
 	tctx := &toolContext{
@@ -622,7 +623,7 @@ func Run(params RunParams) (*RunResult, error) {
 					factStrings = append(factStrings, f.Fact)
 				}
 
-				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings); err != nil {
+				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings, params.Cfg.Identity.Her, params.Cfg.Identity.User); err != nil {
 					log.Error("reflection error", "err", err)
 					if tracing {
 						traceLines = append(traceLines, fmt.Sprintf("❌ <b>reflection</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
@@ -663,7 +664,7 @@ func Run(params RunParams) (*RunResult, error) {
 							sendTrace()
 						}
 
-						if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0); err != nil {
+						if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0, params.Cfg.Identity.Her); err != nil {
 							log.Error("persona rewrite error", "err", err)
 							if tracing {
 								traceLines = append(traceLines, fmt.Sprintf("❌ <b>persona rewrite</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
@@ -784,7 +785,7 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	case "remove_fact":
 		return execRemoveFact(tc.Function.Arguments, tctx.store)
 	case "update_persona":
-		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile)
+		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile, tctx.cfg.Identity.Her)
 	case "view_image":
 		return execViewImage(tc.Function.Arguments, tctx)
 	case "create_reminder":
@@ -1082,7 +1083,7 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 
 	// Layer 4: Memory context — blend of semantically relevant facts
 	// (from KNN search) and high-importance facts (always-present).
-	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts); err == nil && memCtx != "" {
+	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts, tctx.cfg.Identity.User); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
 	}
 
@@ -1197,7 +1198,7 @@ func execUseTools(argsJSON string, tctx *toolContext) string {
 		return "no tools requested. Available categories: search, vision, memory, scheduling, context"
 	}
 
-	newTools := LookupTools(args.Tools)
+	newTools := LookupTools(args.Tools, tctx.cfg)
 	if len(newTools) == 0 {
 		return "no matching tools found. Available categories: search, vision, memory, scheduling, context"
 	}
@@ -1855,7 +1856,7 @@ func execRemoveFact(argsJSON string, store *memory.Store) string {
 	return fmt.Sprintf("removed fact ID=%d (reason: %s)", args.FactID, args.Reason)
 }
 
-func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string) string {
+func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string, botName string) string {
 	var args struct {
 		Content string `json:"content"`
 		Reason  string `json:"reason"`
@@ -1864,10 +1865,15 @@ func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string)
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	if err := os.WriteFile(personaFile, []byte(args.Content), 0644); err != nil {
+	// Swap the bot's literal name back to {{her}} before writing to disk,
+	// keeping the persona file as a portable template.
+	personaContent := strings.ReplaceAll(args.Content, botName, "{{her}}")
+
+	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
 		return fmt.Sprintf("error writing persona file: %v", err)
 	}
 
+	// Store the raw LLM output (with literal name) in the DB for history.
 	id, err := store.SavePersonaVersion(args.Content, "agent: "+args.Reason)
 	if err != nil {
 		return fmt.Sprintf("persona file updated but failed to save version: %v", err)

@@ -1,3 +1,7 @@
+identity:
+  her: "Mira"      # the bot's name — injected into prompts as {{her}}
+  user: "Autumn"    # your name — injected into prompts as {{user}}
+
 telegram:
   token: "${TELEGRAM_BOT_TOKEN}"
   mode: "poll"  # "poll" or "webhook"

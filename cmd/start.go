@@ -11,7 +11,7 @@ import (
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the launchd service",
-	Long:  "Starts Mira as a launchd service. If setup hasn't been run yet, runs it automatically first.",
+	Long:  "Starts her-go as a launchd service. If setup hasn't been run yet, runs it automatically first.",
 	RunE:  runStart,
 }
 
@@ -20,7 +20,11 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	dest, err := plistPath()
+	botName, err := loadBotName()
+	if err != nil {
+		return err
+	}
+	dest, err := plistPath(botName)
 	if err != nil {
 		return err
 	}

@@ -58,7 +58,8 @@ func EstimateHistoryTokens(summary string, messages []memory.Message) int {
 // summaryPrompt is sent to the LLM to summarize older messages.
 // It's designed to preserve conversational flow and emotional context
 // while being much shorter than the raw messages.
-const summaryPrompt = `You are summarizing an earlier part of a conversation between a user and Mira (an AI companion). Your goal is to capture what matters for continuing the conversation naturally.
+// summaryPromptTmpl uses %s placeholders: userName, botName.
+const summaryPromptTmpl = `You are summarizing an earlier part of a conversation between %s and %s (an AI companion). Your goal is to capture what matters for continuing the conversation naturally.
 
 Preserve:
 - What topics were discussed and any conclusions reached
@@ -83,18 +84,19 @@ If there's an existing summary of even earlier conversation, incorporate it natu
 // remain in the context window.
 //
 // The algorithm:
-// 1. Load existing summary + recent messages
-// 2. Estimate total tokens
-// 3. If under 75% of budget, do nothing
-// 4. If over, take the older half of messages, summarize them
-//    (incorporating any existing summary), and store the new summary
-// 5. Return the new summary + remaining recent messages
+//  1. Load existing summary + recent messages
+//  2. Estimate total tokens
+//  3. If under 75% of budget, do nothing
+//  4. If over, take the older half of messages, summarize them
+//     (incorporating any existing summary), and store the new summary
+//  5. Return the new summary + remaining recent messages
 func MaybeCompact(
 	chatLLM *llm.Client,
 	store *memory.Store,
 	conversationID string,
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
+	botName, userName string,
 ) (summary string, keptMessages []memory.Message, err error) {
 	if maxHistoryTokens <= 0 {
 		maxHistoryTokens = 8000 // default
@@ -140,9 +142,9 @@ func MaybeCompact(
 		fmt.Fprintf(&transcript, "[Summary of earlier conversation:]\n%s\n\n[Continuing from there:]\n\n", existingSummary)
 	}
 	for _, msg := range toSummarize {
-		role := "User"
+		role := userName
 		if msg.Role == "assistant" {
-			role = "Mira"
+			role = botName
 		}
 		content := msg.ContentScrubbed
 		if content == "" {
@@ -153,7 +155,7 @@ func MaybeCompact(
 
 	// Ask the LLM to summarize.
 	llmMessages := []llm.ChatMessage{
-		{Role: "system", Content: summaryPrompt},
+		{Role: "system", Content: fmt.Sprintf(summaryPromptTmpl, userName, botName)},
 		{Role: "user", Content: transcript.String()},
 	}
 

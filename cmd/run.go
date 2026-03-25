@@ -115,7 +115,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 
 	quitCh := make(chan struct{})
 	eventCh := bus.Subscribe(256)
-	model := tui.NewModel(eventCh, quitCh)
+	model := tui.NewModel(eventCh, quitCh, cfg)
 	program := tea.NewProgram(model)
 
 	// Run all remaining initialization + the bot in a background goroutine.

@@ -24,9 +24,15 @@ func init() {
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	botName, err := loadBotName()
+	if err != nil {
+		return err
+	}
+	label := serviceLabel(botName)
+
 	// Get the current user's UID for the launchctl print command.
 	uid := os.Getuid()
-	target := fmt.Sprintf("gui/%d/%s", uid, serviceLabel)
+	target := fmt.Sprintf("gui/%d/%s", uid, label)
 
 	out, err := exec.Command("launchctl", "print", target).CombinedOutput()
 	if err != nil {
@@ -39,7 +45,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	output := string(out)
 
 	// Parse key fields from launchctl print output.
-	fmt.Printf("Service: %s\n", serviceLabel)
+	fmt.Printf("Service: %s\n", label)
 	fmt.Println()
 
 	// State (e.g., "state = running")

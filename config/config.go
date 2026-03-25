@@ -23,6 +23,7 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
+	Identity  IdentityConfig  `yaml:"identity"`
 	Telegram  TelegramConfig  `yaml:"telegram"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Agent     AgentConfig     `yaml:"agent"`
@@ -35,6 +36,23 @@ type Config struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Voice     VoiceConfig     `yaml:"voice"`
 	Weather   WeatherConfig   `yaml:"weather"`
+}
+
+// IdentityConfig holds the bot and owner names. These get injected into
+// prompt files via {{her}} and {{user}} placeholders, and used as role
+// labels in conversation transcripts, tool descriptions, etc.
+type IdentityConfig struct {
+	Her  string `yaml:"her"`  // the bot's name (default: "Mira")
+	User string `yaml:"user"` // the owner's name (default: "Autumn")
+}
+
+// ExpandPrompt replaces {{her}} and {{user}} placeholders in a prompt
+// string with the configured identity names. This is intentionally simple
+// — just two string replacements, no template engine needed.
+func (c *Config) ExpandPrompt(content string) string {
+	content = strings.ReplaceAll(content, "{{her}}", c.Identity.Her)
+	content = strings.ReplaceAll(content, "{{user}}", c.Identity.User)
+	return content
 }
 
 // TelegramConfig holds Telegram bot settings.
@@ -73,8 +91,8 @@ type AgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Trace       bool            `yaml:"trace"`     // show agent thinking traces in chat
-	Fallback    *FallbackConfig `yaml:"fallback"`  // optional fallback model for when primary is unavailable
+	Trace       bool            `yaml:"trace"`    // show agent thinking traces in chat
+	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
@@ -94,7 +112,7 @@ type MemoryConfig struct {
 	RecentMessages     int    `yaml:"recent_messages"`
 	MaxFactsInContext  int    `yaml:"max_facts_in_context"`
 	ExtractionInterval int    `yaml:"extraction_interval"`
-	MaxHistoryTokens   int    `yaml:"max_history_tokens"`   // token budget for conversation history before compaction triggers
+	MaxHistoryTokens   int    `yaml:"max_history_tokens"` // token budget for conversation history before compaction triggers
 }
 
 // ScrubConfig controls PII scrubbing behavior.
@@ -113,18 +131,18 @@ type EmbedConfig struct {
 
 // SearchConfig controls web search and book search integrations.
 type SearchConfig struct {
-	TavilyAPIKey string `yaml:"tavily_api_key"`
+	TavilyAPIKey  string `yaml:"tavily_api_key"`
 	TavilyBaseURL string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
 }
 
 // PersonaConfig controls the persona evolution system.
 type PersonaConfig struct {
-	PromptFile                 string  `yaml:"prompt_file"`
-	PersonaFile                string  `yaml:"persona_file"`
-	AgentPromptFile            string  `yaml:"agent_prompt_file"`
-	RewriteEveryNReflections int `yaml:"rewrite_every_n_reflections"`
-	ReflectionMemoryThreshold  int     `yaml:"reflection_memory_threshold"`
-	MaxTraitShift              float64 `yaml:"max_trait_shift"`
+	PromptFile                string  `yaml:"prompt_file"`
+	PersonaFile               string  `yaml:"persona_file"`
+	AgentPromptFile           string  `yaml:"agent_prompt_file"`
+	RewriteEveryNReflections  int     `yaml:"rewrite_every_n_reflections"`
+	ReflectionMemoryThreshold int     `yaml:"reflection_memory_threshold"`
+	MaxTraitShift             float64 `yaml:"max_trait_shift"`
 }
 
 // VoiceConfig controls voice memo processing (STT in v0.3, TTS in v0.5).
@@ -165,11 +183,11 @@ type SchedulerConfig struct {
 
 	// Default task flags — when true, the scheduler creates these tasks
 	// on startup if they don't already exist. All are idempotent.
-	MorningBriefing    bool `yaml:"morning_briefing"`     // daily briefing at 8am via run_prompt
-	MoodCheckin        bool `yaml:"mood_checkin"`          // daily mood check-in at 9pm
-	MedicationCheckin  bool `yaml:"medication_checkin"`    // daily medication check-in at 9pm (critical priority)
-	ProactiveFollowups bool `yaml:"proactive_followups"`   // scan for follow-up opportunities at 9am
-	AutoJournal        bool `yaml:"auto_journal"`          // auto-journal entry at 10pm
+	MorningBriefing    bool `yaml:"morning_briefing"`    // daily briefing at 8am via run_prompt
+	MoodCheckin        bool `yaml:"mood_checkin"`        // daily mood check-in at 9pm
+	MedicationCheckin  bool `yaml:"medication_checkin"`  // daily medication check-in at 9pm (critical priority)
+	ProactiveFollowups bool `yaml:"proactive_followups"` // scan for follow-up opportunities at 9am
+	AutoJournal        bool `yaml:"auto_journal"`        // auto-journal entry at 10pm
 }
 
 // WeatherConfig controls the Open-Meteo weather integration.

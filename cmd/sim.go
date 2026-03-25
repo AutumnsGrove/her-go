@@ -378,7 +378,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	for i, msg := range messages {
 		turnStart := time.Now()
 
-		fmt.Printf("[%d/%d] User: %s\n", i+1, total, msg)
+		fmt.Printf("[%d/%d] %s: %s\n", i+1, total, cfg.Identity.User, msg)
 
 		// Save the user message to the temp store.
 		msgID, err := store.SaveMessage("user", msg, "", conversationID)
@@ -422,7 +422,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
-			fmt.Printf("       Mira: [ERROR: %s]\n\n", err)
+			fmt.Printf("       %s: [ERROR: %s]\n\n", cfg.Identity.Her, err)
 			turnResults = append(turnResults, simTurnResult{
 				userMsg:  msg,
 				botReply: fmt.Sprintf("[ERROR: %s]", err),
@@ -432,7 +432,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		elapsed := time.Since(turnStart)
-		fmt.Printf("       Mira: %s\n", result.ReplyText)
+		fmt.Printf("       %s: %s\n", cfg.Identity.Her, result.ReplyText)
 		fmt.Printf("       (%s)\n\n", elapsed.Round(time.Millisecond))
 
 		turnResults = append(turnResults, simTurnResult{
@@ -771,8 +771,8 @@ func generateReport(
 	b.WriteString("## Conversation\n\n")
 	for i, turn := range turns {
 		fmt.Fprintf(&b, "### Turn %d\n", i+1)
-		fmt.Fprintf(&b, "**User:** %s\n\n", turn.userMsg)
-		fmt.Fprintf(&b, "**Mira:** %s\n\n", turn.botReply)
+		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, turn.userMsg)
+		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, turn.botReply)
 
 		// Add agent trace as a collapsible details block.
 		writeAgentTrace(&b, simDB, runID, i+1)

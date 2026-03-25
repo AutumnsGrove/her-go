@@ -16,7 +16,7 @@ import (
 //
 // relevantFacts can be nil if embeddings aren't available — falls back to
 // importance-only retrieval (the pre-v0.4 behavior).
-func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact) (string, error) {
+func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userName string) (string, error) {
 	var parts []string
 
 	// --- User facts ---
@@ -26,8 +26,8 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact) (strin
 	}
 	if len(userFacts) > 0 {
 		parts = append(parts, formatFactSection(
-			"Things I Know About the User",
-			"These are facts about the person I'm talking to, gathered from our past conversations. These are THEIR experiences, THEIR life, THEIR details — not mine. Use them to be a better friend, not to adopt their identity.",
+			fmt.Sprintf("Things I Know About %s", userName),
+			fmt.Sprintf("These are facts about %s, gathered from our past conversations. These are THEIR experiences, THEIR life, THEIR details — not mine. Use them to be a better friend, not to adopt their identity.", userName),
 			userFacts,
 		))
 	}

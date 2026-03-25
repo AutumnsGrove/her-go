@@ -59,20 +59,20 @@ func (b *Bot) handleReflect(c tele.Context) error {
 		return c.Send("I don't have enough memories to reflect on yet. Let's keep talking!")
 	}
 
-	var lastUser, lastMira string
+	var lastUser, lastBot string
 	for i := len(recent) - 1; i >= 0; i-- {
 		if recent[i].Role == "user" && lastUser == "" {
 			lastUser = recent[i].ContentRaw
 		}
-		if recent[i].Role == "assistant" && lastMira == "" {
-			lastMira = recent[i].ContentRaw
+		if recent[i].Role == "assistant" && lastBot == "" {
+			lastBot = recent[i].ContentRaw
 		}
-		if lastUser != "" && lastMira != "" {
+		if lastUser != "" && lastBot != "" {
 			break
 		}
 	}
 
-	err = persona.Reflect(b.llm, b.store, lastUser, lastMira, factStrings)
+	err = persona.Reflect(b.llm, b.store, lastUser, lastBot, factStrings, b.cfg.Identity.Her, b.cfg.Identity.User)
 	if err != nil {
 		log.Error("manual reflection", "err", err)
 		return c.Send("I tried to reflect but something went wrong. Try again?")
@@ -207,7 +207,7 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 func (b *Bot) handlePersonaRewrite(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
 
-	rewritten, err := persona.MaybeRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, 0)
+	rewritten, err := persona.MaybeRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, 0, b.cfg.Identity.Her)
 	if err != nil {
 		log.Error("manual persona rewrite", "err", err)
 		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))

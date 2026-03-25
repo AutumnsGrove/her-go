@@ -4,7 +4,10 @@
 // and send the actual response to the user.
 package agent
 
-import "her/llm"
+import (
+	"her/config"
+	"her/llm"
+)
 
 // --- Tool Registry ---
 // Tools are split into "hot" (always loaded) and "deferred" (loaded on demand).
@@ -52,14 +55,79 @@ func init() {
 	}
 }
 
+// expandToolIdentity replaces {{her}} and {{user}} placeholders in a tool's
+// description and parameter descriptions with the configured identity names.
+// Tool defs are built at init() time (before config exists), so placeholders
+// are resolved per-request when tools are served to the LLM.
+func expandToolIdentity(t llm.ToolDef, cfg *config.Config) llm.ToolDef {
+	t.Function.Description = cfg.ExpandPrompt(t.Function.Description)
+
+	// Also expand in parameter descriptions (one level deep).
+	// We need type assertions because Parameters is interface{}.
+	params, ok := t.Function.Parameters.(map[string]interface{})
+	if !ok {
+		return t
+	}
+	props, ok := params["properties"].(map[string]interface{})
+	if !ok {
+		return t
+	}
+
+	// Check if any descriptions need expansion before copying.
+	needsCopy := false
+	for _, val := range props {
+		if prop, ok := val.(map[string]interface{}); ok {
+			if desc, ok := prop["description"].(string); ok {
+				if cfg.ExpandPrompt(desc) != desc {
+					needsCopy = true
+					break
+				}
+			}
+		}
+	}
+	if !needsCopy {
+		return t
+	}
+
+	// Copy the maps to avoid mutating the shared registry.
+	newParams := make(map[string]interface{}, len(params))
+	for k, v := range params {
+		newParams[k] = v
+	}
+	newProps := make(map[string]interface{}, len(props))
+	for k, v := range props {
+		newProps[k] = v
+	}
+	newParams["properties"] = newProps
+	t.Function.Parameters = newParams
+
+	for key, val := range newProps {
+		if prop, ok := val.(map[string]interface{}); ok {
+			if desc, ok := prop["description"].(string); ok {
+				expanded := cfg.ExpandPrompt(desc)
+				if expanded != desc {
+					newProp := make(map[string]interface{}, len(prop))
+					for k, v := range prop {
+						newProp[k] = v
+					}
+					newProp["description"] = expanded
+					newProps[key] = newProp
+				}
+			}
+		}
+	}
+	return t
+}
+
 // HotToolDefs returns the always-loaded tools plus the use_tools meta-tool.
 // This is what gets passed to ChatCompletionWithTools on the first iteration.
 // ~7 tools instead of 26 — a major reduction in context pressure.
-func HotToolDefs() []llm.ToolDef {
+// The cfg parameter is used to expand {{her}}/{{user}} placeholders in tool descriptions.
+func HotToolDefs(cfg *config.Config) []llm.ToolDef {
 	tools := make([]llm.ToolDef, 0, len(hotToolNames)+1)
 	for _, name := range hotToolNames {
 		if t, ok := toolRegistry[name]; ok {
-			tools = append(tools, t)
+			tools = append(tools, expandToolIdentity(t, cfg))
 		}
 	}
 	// Add the use_tools meta-tool for loading deferred tools.
@@ -75,7 +143,7 @@ func HotToolDefs() []llm.ToolDef {
 //	LookupTools(["search"])                → web_search, web_read, book_search
 //	LookupTools(["web_search"])            → web_search
 //	LookupTools(["search", "log_mood"])    → web_search, web_read, book_search, log_mood
-func LookupTools(names []string) []llm.ToolDef {
+func LookupTools(names []string, cfg *config.Config) []llm.ToolDef {
 	seen := make(map[string]bool)
 	var result []llm.ToolDef
 
@@ -85,7 +153,7 @@ func LookupTools(names []string) []llm.ToolDef {
 			for _, member := range members {
 				if !seen[member] {
 					if t, ok := toolRegistry[member]; ok {
-						result = append(result, t)
+						result = append(result, expandToolIdentity(t, cfg))
 						seen[member] = true
 					}
 				}
@@ -95,7 +163,7 @@ func LookupTools(names []string) []llm.ToolDef {
 		// Otherwise treat it as a tool name.
 		if !seen[name] {
 			if t, ok := toolRegistry[name]; ok {
-				result = append(result, t)
+				result = append(result, expandToolIdentity(t, cfg))
 				seen[name] = true
 			}
 		}
@@ -181,13 +249,13 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "save_fact",
-				Description: "Save a new fact learned from the conversation. Use for new information about the user that's worth remembering long-term.",
+				Description: "Save a new fact learned from the conversation. Use for new information about {{user}} that's worth remembering long-term.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"fact": map[string]interface{}{
 							"type":        "string",
-							"description": "A clear, single-sentence fact about the user",
+							"description": "A clear, single-sentence fact about {{user}}",
 						},
 						"category": map[string]interface{}{
 							"type":        "string",
@@ -364,13 +432,13 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "save_self_fact",
-				Description: "Save a fact about Mira herself — her own observations, communication patterns, identity, or things she's learned about the relationship dynamic. NOT for facts about the user.",
+				Description: "Save a fact about {{her}} herself — her own observations, communication patterns, identity, or things she's learned about the relationship dynamic. NOT for facts about {{user}}.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"fact": map[string]interface{}{
 							"type":        "string",
-							"description": "A self-observation or identity fact about Mira",
+							"description": "A self-observation or identity fact about {{her}}",
 						},
 						"category": map[string]interface{}{
 							"type":        "string",
@@ -392,7 +460,7 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "update_persona",
-				Description: "Rewrite Mira's persona description. Use RARELY — only when accumulated self-facts suggest a meaningful evolution in how Mira sees herself. The persona should evolve gradually.",
+				Description: "Rewrite {{her}}'s persona description. Use RARELY — only when accumulated self-facts suggest a meaningful evolution in how {{her}} sees herself. The persona should evolve gradually.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{

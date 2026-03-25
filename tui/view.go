@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"her/config"
 )
 
 // View renders the entire TUI. Called after every Update().
@@ -412,7 +413,7 @@ func renderToolCallEvent(ev ToolCallEvent) string {
 		toolResultStyle.Render(result))
 }
 
-func renderReplyEvent(ev ReplyEvent) string {
+func renderReplyEvent(ev ReplyEvent, cfg *config.Config) string {
 	metrics := replyMetricsStyle.Render(
 		fmt.Sprintf("%d+%d=%d tokens | $%.6f | %dms",
 			ev.PromptTokens, ev.CompletionTokens, ev.TotalTokens,
@@ -422,7 +423,7 @@ func renderReplyEvent(ev ReplyEvent) string {
 	if len(text) > 100 {
 		text = text[:100] + "…"
 	}
-	reply := replyTextStyle.Render("mira: " + text)
+	reply := replyTextStyle.Render(strings.ToLower(cfg.Identity.Her) + ": " + text)
 
 	return metrics + "\n" + reply
 }

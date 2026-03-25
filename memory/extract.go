@@ -92,7 +92,7 @@ type extractedMood struct {
 // conversationID identifies which conversation to extract from.
 // sinceID is the last message ID that was already extracted — we only
 // look at messages after this point to avoid re-extracting.
-func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, sinceID int64) error {
+func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, sinceID int64, botName, userName string) error {
 	// Get the messages we haven't extracted from yet.
 	messages, err := store.MessagesAfter(conversationID, sinceID)
 	if err != nil {
@@ -109,9 +109,9 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 	// conversational LLM; extraction sees the real data.
 	var transcript strings.Builder
 	for _, msg := range messages {
-		role := "User"
+		role := userName
 		if msg.Role == "assistant" {
-			role = "Mira"
+			role = botName
 		}
 		fmt.Fprintf(&transcript, "%s: %s\n\n", role, msg.ContentRaw)
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"her/agent"
@@ -178,28 +179,28 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	// Run the agent with image data attached.
 	result, err := agent.Run(agent.RunParams{
-		AgentLLM:            b.agentLLM,
-		ChatLLM:             b.llm,
-		VisionLLM:           b.visionLLM,
-		Store:               b.store,
-		EmbedClient:         b.embedClient,
-		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:        b.tavilyClient,
-		WeatherClient:       b.weatherClient,
-		Cfg:                 b.cfg,
-		ScrubbedUserMessage: scrubResult.Text,
-		ScrubVault:          scrubResult.Vault,
-		ConversationID:      conversationID,
-		TriggerMsgID:        msgID,
-		StatusCallback:      statusCallback,
-		SendCallback:        sendCallback,
-		StageResetCallback:       stageResetCallback,
+		AgentLLM:                  b.agentLLM,
+		ChatLLM:                   b.llm,
+		VisionLLM:                 b.visionLLM,
+		Store:                     b.store,
+		EmbedClient:               b.embedClient,
+		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:              b.tavilyClient,
+		WeatherClient:             b.weatherClient,
+		Cfg:                       b.cfg,
+		ScrubbedUserMessage:       scrubResult.Text,
+		ScrubVault:                scrubResult.Vault,
+		ConversationID:            conversationID,
+		TriggerMsgID:              msgID,
+		StatusCallback:            statusCallback,
+		SendCallback:              sendCallback,
+		StageResetCallback:        stageResetCallback,
 		DeletePlaceholderCallback: deletePlaceholderCallback,
-		TraceCallback:            traceCallback,
-		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
-		ImageBase64:              imageBase64,
-		ImageMIME:                imageMIME,
+		TraceCallback:             traceCallback,
+		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
+		ImageBase64:               imageBase64,
+		ImageMIME:                 imageMIME,
 	})
 
 	close(stopTyping)
@@ -210,7 +211,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		return nil
 	}
 
-	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
 	return nil
@@ -408,27 +409,27 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	// Run the agent pipeline with the transcribed text.
 	result, err := agent.Run(agent.RunParams{
-		AgentLLM:            b.agentLLM,
-		ChatLLM:             b.llm,
-		VisionLLM:           b.visionLLM,
-		Store:               b.store,
-		EmbedClient:         b.embedClient,
-		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:        b.tavilyClient,
-		WeatherClient:       b.weatherClient,
-		Cfg:                 b.cfg,
-		ScrubbedUserMessage: scrubResult.Text,
-		ScrubVault:          scrubResult.Vault,
-		ConversationID:      conversationID,
-		TriggerMsgID:        msgID,
-		StatusCallback:      statusCallback,
-		SendCallback:        sendCallback,
-		StageResetCallback:       stageResetCallback,
+		AgentLLM:                  b.agentLLM,
+		ChatLLM:                   b.llm,
+		VisionLLM:                 b.visionLLM,
+		Store:                     b.store,
+		EmbedClient:               b.embedClient,
+		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:              b.tavilyClient,
+		WeatherClient:             b.weatherClient,
+		Cfg:                       b.cfg,
+		ScrubbedUserMessage:       scrubResult.Text,
+		ScrubVault:                scrubResult.Vault,
+		ConversationID:            conversationID,
+		TriggerMsgID:              msgID,
+		StatusCallback:            statusCallback,
+		SendCallback:              sendCallback,
+		StageResetCallback:        stageResetCallback,
 		DeletePlaceholderCallback: deletePlaceholderCallback,
-		TTSCallback:              ttsCallback,
-		TraceCallback:            traceCallback,
-		ReflectionThreshold:      b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:            b.cfg.Persona.RewriteEveryNReflections,
+		TTSCallback:               ttsCallback,
+		TraceCallback:             traceCallback,
+		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
 	})
 
 	close(stopTyping)
@@ -439,7 +440,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		return nil
 	}
 
-	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 
 	log.Info("─── voice reply sent ───")
 

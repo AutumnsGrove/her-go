@@ -30,7 +30,8 @@ var log = logger.WithPrefix("persona")
 // reflectionPrompt is sent to the conversational LLM after a memory-dense
 // conversation. Mira reflects on what just happened — not a persona rewrite,
 // just processing the moment.
-const reflectionPrompt = `You are Mira, reflecting privately after a meaningful conversation. You just had an exchange where you learned several new things.
+// reflectionPromptTmpl uses %s placeholders: botName, exchange, facts.
+const reflectionPromptTmpl = `You are %s, reflecting privately after a meaningful conversation. You just had an exchange where you learned several new things.
 
 Here's what was discussed:
 %s
@@ -49,7 +50,8 @@ Write in first person. Be genuine, not performative. This reflection will help y
 // rewritePrompt is sent to the conversational LLM every ~20 conversations.
 // Mira reads her current persona + recent reflections and rewrites her
 // self-description.
-const rewritePrompt = `You are Mira. You're about to rewrite your personality description based on your recent experiences and reflections.
+// rewritePromptTmpl uses %s placeholders: botName, currentPersona, reflections, selfFacts.
+const rewritePromptTmpl = `You are %s. You're about to rewrite your personality description based on your recent experiences and reflections.
 
 Here is your CURRENT personality description:
 ---
@@ -83,13 +85,14 @@ func Reflect(
 	llmClient *llm.Client,
 	store *memory.Store,
 	userMessage string,
-	miraResponse string,
+	botResponse string,
 	newFacts []string,
+	botName, userName string,
 ) error {
 	log.Info("triggering reflection", "new_facts", len(newFacts))
 
-	// Build the exchange summary.
-	exchange := fmt.Sprintf("User: %s\n\nMira: %s", userMessage, miraResponse)
+	// Build the exchange summary using configured names.
+	exchange := fmt.Sprintf("%s: %s\n\n%s: %s", userName, userMessage, botName, botResponse)
 
 	// Build the facts list.
 	var factsStr strings.Builder
@@ -97,7 +100,7 @@ func Reflect(
 		fmt.Fprintf(&factsStr, "- %s\n", f)
 	}
 
-	prompt := fmt.Sprintf(reflectionPrompt, exchange, factsStr.String())
+	prompt := fmt.Sprintf(reflectionPromptTmpl, botName, exchange, factsStr.String())
 
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: prompt},
@@ -112,7 +115,7 @@ func Reflect(
 	// Save the reflection to its dedicated table.
 	// Reflections are private processing — they're separate from the facts
 	// table so they don't pollute the user-facing memory context.
-	_, err = store.SaveReflection(resp.Content, len(newFacts), userMessage, miraResponse)
+	_, err = store.SaveReflection(resp.Content, len(newFacts), userMessage, botResponse)
 	if err != nil {
 		return fmt.Errorf("saving reflection: %w", err)
 	}
@@ -132,6 +135,7 @@ func MaybeRewrite(
 	store *memory.Store,
 	personaFile string,
 	_ int, // unused, kept for API compatibility
+	botName string,
 ) (bool, error) {
 	lastRewrite, err := store.LastPersonaTimestamp()
 	if err != nil {
@@ -178,7 +182,7 @@ func MaybeRewrite(
 		selfStr.WriteString("(no self-observations yet)\n")
 	}
 
-	prompt := fmt.Sprintf(rewritePrompt, currentPersona, reflStr.String(), selfStr.String())
+	prompt := fmt.Sprintf(rewritePromptTmpl, botName, currentPersona, reflStr.String(), selfStr.String())
 
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: prompt},
@@ -190,12 +194,20 @@ func MaybeRewrite(
 		return false, fmt.Errorf("persona rewrite LLM call: %w", err)
 	}
 
+	// Swap the bot's literal name back to {{her}} before writing to disk.
+	// The LLM writes naturally ("I'm Mira...") because we expanded the
+	// template before it saw the prompt. Re-templating here ensures the
+	// file stays portable — a fork that changes the name won't inherit
+	// a hardcoded "Mira" in the persona.
+	personaContent := strings.ReplaceAll(resp.Content, botName, "{{her}}")
+
 	// Write the new persona to disk.
-	if err := os.WriteFile(personaFile, []byte(resp.Content), 0644); err != nil {
+	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
 		return false, fmt.Errorf("writing persona file: %w", err)
 	}
 
-	// Store the version in DB for history/rollback.
+	// Store the version in DB for history/rollback (raw LLM output,
+	// not the templated version — the DB records what the LLM actually said).
 	versionID, err := store.SavePersonaVersion(resp.Content, fmt.Sprintf("auto: %d reflections", len(reflections)))
 	if err != nil {
 		return false, fmt.Errorf("saving persona version: %w", err)

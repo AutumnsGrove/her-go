@@ -20,7 +20,7 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/facts — list all remembered facts\n" +
 		"/forget <code>&lt;id&gt;</code> — forget a specific fact\n\n" +
 		"<b>Persona</b>\n" +
-		"/persona — view Mira's current personality\n" +
+		"/persona — view " + b.cfg.Identity.Her + "'s current personality\n" +
 		"/persona traits — personality trait scores\n" +
 		"/persona rewrite — manually trigger a persona rewrite\n" +
 		"/reflect — trigger a reflection\n" +
@@ -38,7 +38,7 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/restart — restart the bot process\n" +
 		"/help — this message\n\n" +
 		"<b>Features</b>\n" +
-		"Send a photo and Mira will describe what she sees.\n" +
+		"Send a photo and " + b.cfg.Identity.Her + " will describe what she sees.\n" +
 		"Just chat normally — she remembers your conversations."
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }

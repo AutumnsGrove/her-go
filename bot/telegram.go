@@ -5,6 +5,7 @@ package bot
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -351,7 +352,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return nil
 	}
 
-	log.Infof("  mira: %s", truncate(result.ReplyText, 100))
+	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
 	// Emit TurnEndEvent for the TUI

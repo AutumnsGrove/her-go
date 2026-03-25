@@ -18,7 +18,11 @@ func init() {
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
-	dest, err := plistPath()
+	botName, err := loadBotName()
+	if err != nil {
+		return err
+	}
+	dest, err := plistPath(botName)
 	if err != nil {
 		return err
 	}

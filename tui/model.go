@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"her/config"
 )
 
 // Section is one collapsible block in the TUI. Could be:
@@ -42,6 +43,7 @@ type Section struct {
 // events arrive. Never render directly; always update state and let
 // View() do the work.
 type Model struct {
+	cfg      *config.Config
 	sections []Section
 	cursor   int // which section the cursor is on
 	scroll   int // vertical scroll offset (in rendered lines)
@@ -65,8 +67,9 @@ type Model struct {
 // NewModel creates a TUI model connected to the event bus.
 // quitCh is signaled when the user presses q — cmd/run.go uses this
 // to trigger graceful shutdown of the bot and sidecars.
-func NewModel(eventCh <-chan Event, quitCh chan<- struct{}) Model {
+func NewModel(eventCh <-chan Event, quitCh chan<- struct{}, cfg *config.Config) Model {
 	return Model{
+		cfg:       cfg,
 		keys:      DefaultKeyMap(),
 		eventCh:   eventCh,
 		startTime: time.Now(),
@@ -265,7 +268,7 @@ func (m *Model) handleEvent(e Event) {
 		m.incrementTurnToolCount(ev.TurnID)
 
 	case ReplyEvent:
-		m.appendToTurnGroup(ev.TurnID, "reply", renderReplyEvent(ev))
+		m.appendToTurnGroup(ev.TurnID, "reply", renderReplyEvent(ev, m.cfg))
 		m.totalCost += ev.CostUSD
 
 	case TurnEndEvent:

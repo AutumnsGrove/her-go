@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"her/compact"
@@ -24,7 +25,7 @@ func (b *Bot) handleCompact(c tele.Context) error {
 	tokensBefore := compact.EstimateHistoryTokens("", recent)
 
 	// Force compaction by passing a very low threshold (0 = always compact).
-	summary, kept, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1)
+	summary, kept, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
 	if err != nil {
 		return c.Send(fmt.Sprintf("Compaction failed: %v", err))
 	}
@@ -85,7 +86,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 
 	// Check if running under launchd.
 	managedBy := "manual (go run)"
-	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged() {
+	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged(b.cfg.Identity.Her) {
 		managedBy = "launchd"
 	}
 
@@ -128,14 +129,14 @@ func (b *Bot) handleStatus(c tele.Context) error {
 func (b *Bot) handleRestart(c tele.Context) error {
 	log.Info("/restart: restart requested via Telegram")
 
-	if isLaunchdManaged() {
+	if isLaunchdManaged(b.cfg.Identity.Her) {
 		_ = c.Send("Restarting via launchd... be right back.")
 
 		// launchctl kickstart -k forces a restart of the service.
 		// The -k flag kills the existing instance first.
 		go func() {
 			time.Sleep(500 * time.Millisecond) // let the message send
-			cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
+			cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com."+strings.ToLower(b.cfg.Identity.Her)+".her-go")
 			if err := cmd.Run(); err != nil {
 				log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 				os.Exit(0) // launchd will restart us via KeepAlive
@@ -155,7 +156,7 @@ func (b *Bot) handleRestart(c tele.Context) error {
 
 // isLaunchdManaged checks if the bot is running as a launchd service
 // by looking for the service in launchctl.
-func isLaunchdManaged() bool {
-	cmd := exec.Command("launchctl", "print", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com.mira.her-go")
+func isLaunchdManaged(botName string) bool {
+	cmd := exec.Command("launchctl", "print", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com."+strings.ToLower(botName)+".her-go")
 	return cmd.Run() == nil
 }

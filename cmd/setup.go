@@ -11,29 +11,43 @@ import (
 	"text/template"
 
 	"github.com/spf13/cobra"
+	"her/config"
 )
 
-// serviceLabel is the launchd service identifier used across all
-// service management commands.
-const serviceLabel = "com.mira.her-go"
+// serviceLabel builds the launchd service identifier from the bot's
+// configured name. e.g. "Mira" → "com.mira.her-go", "Luna" → "com.luna.her-go".
+func serviceLabel(botName string) string {
+	return "com." + strings.ToLower(botName) + ".her-go"
+}
 
 // plistPath returns the full path to the plist in ~/Library/LaunchAgents.
-func plistPath() (string, error) {
+func plistPath(botName string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("could not determine home directory: %w", err)
 	}
-	return filepath.Join(home, "Library", "LaunchAgents", serviceLabel+".plist"), nil
+	return filepath.Join(home, "Library", "LaunchAgents", serviceLabel(botName)+".plist"), nil
+}
+
+// loadBotName loads config and returns just the bot's name.
+// Used by service management commands (start, stop) that need the
+// name for the launchd service label but don't need full config.
+func loadBotName() (string, error) {
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return "", fmt.Errorf("loading config: %w", err)
+	}
+	return cfg.Identity.Her, nil
 }
 
 // plistData holds the values injected into the plist template.
 type plistData struct {
-	Label        string
-	BinaryPath   string
-	WorkDir      string
-	StdoutPath   string
-	StderrPath   string
-	UserName     string
+	Label      string
+	BinaryPath string
+	WorkDir    string
+	StdoutPath string
+	StderrPath string
+	UserName   string
 }
 
 // plistTemplate is the launchd property list, generated dynamically
@@ -81,7 +95,7 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Build the binary, install dependencies, and configure the launchd service",
-	Long: `Does everything needed to install Mira as a launchd service:
+	Long: `Does everything needed to install her-go as a launchd service:
 
   1. Build the binary (go build)
   2. Install ML dependencies in background (parakeet-mlx, piper voice models, ffmpeg check)
@@ -243,6 +257,12 @@ func installDeps() <-chan depResult {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
+	// Load config to get the bot's name for the service label.
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	// Gather machine info.
 	hostname, _ := os.Hostname()
 	currentUser, err := user.Current()
@@ -254,7 +274,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not determine working directory: %w", err)
 	}
 
-	fmt.Printf("Setting up Mira on %s as %s\n", hostname, currentUser.Username)
+	fmt.Printf("Setting up %s on %s as %s\n", cfg.Identity.Her, hostname, currentUser.Username)
 	fmt.Printf("Working directory: %s\n\n", workDir)
 
 	// Kick off dependency installs in the background immediately.
@@ -277,7 +297,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println("[2/6] Generating plist...")
 	logsDir := filepath.Join(workDir, "logs")
 	data := plistData{
-		Label:      serviceLabel,
+		Label:      serviceLabel(cfg.Identity.Her),
 		BinaryPath: binaryPath,
 		WorkDir:    workDir,
 		StdoutPath: filepath.Join(logsDir, "stdout.log"),
@@ -290,7 +310,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to parse plist template: %w", err)
 	}
 
-	dest, err := plistPath()
+	dest, err := plistPath(cfg.Identity.Her)
 	if err != nil {
 		return err
 	}
@@ -351,7 +371,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Binary:   %s\n", binaryPath)
 	fmt.Printf("  Plist:    %s\n", dest)
 	fmt.Printf("  Logs:     %s\n", logsDir)
-	fmt.Printf("  Service:  %s\n", serviceLabel)
+	fmt.Printf("  Service:  %s\n", serviceLabel(cfg.Identity.Her))
 
 	for _, w := range warnings {
 		log.Warn(w)
