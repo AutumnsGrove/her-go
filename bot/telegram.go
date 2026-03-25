@@ -15,6 +15,7 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/ocr"
 	"her/scrub"
 	"her/search"
 	"her/tui"
@@ -60,6 +61,11 @@ type Bot struct {
 
 	// eventBus emits structured events for the TUI. Nil-safe.
 	eventBus *tui.Bus
+
+	// ocrEnabled is true if the macos-vision-ocr binary is available.
+	// When true, handlePhoto runs pre-flight OCR on every photo before
+	// the agent decides what to do. The OCR is local and fast (sub-200ms).
+	ocrEnabled bool
 }
 
 // New creates and configures a new Telegram bot.
@@ -96,6 +102,11 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		systemPrompt:  string(promptBytes),
 		startTime:     time.Now(),
 		eventBus:      eventBus,
+		ocrEnabled:    ocr.IsAvailable(&cfg.OCR),
+	}
+
+	if bot.ocrEnabled {
+		log.Info("OCR enabled", "engine", "apple-vision", "binary", cfg.OCR.VisionOCRPath)
 	}
 
 	// Register command handlers.

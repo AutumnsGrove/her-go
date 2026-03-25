@@ -41,6 +41,7 @@ var toolCategories = map[string][]string{
 	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
 	"context":    {"log_mood", "get_current_time", "set_location"},
+	"expenses":   {"scan_receipt", "query_expenses"},
 }
 
 // toolRegistry maps every tool name to its full definition.
@@ -679,6 +680,105 @@ func allToolDefs() []llm.ToolDef {
 				Parameters: map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
+				},
+			},
+		},
+
+		// --- Expense Tracking ---
+
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name: "scan_receipt",
+				Description: "Save a purchase/expense from a receipt photo or manual mention. " +
+					"Use when OCR text from a photo looks like a receipt (amounts, totals, store names), " +
+					"or when {{user}} mentions spending money in conversation. " +
+					"Extract the total amount, vendor name, category, and date from the OCR text. " +
+					"If the date isn't visible on the receipt, use today's date.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"amount": map[string]interface{}{
+							"type":        "number",
+							"description": "Total amount spent (e.g., 47.23). Just the number, no currency symbol.",
+						},
+						"vendor": map[string]interface{}{
+							"type":        "string",
+							"description": "Store or restaurant name as shown on the receipt (e.g., 'Trader Joe's', 'Shell Gas Station').",
+						},
+						"category": map[string]interface{}{
+							"type": "string",
+							"enum": []string{
+								"groceries", "dining", "coffee", "transport", "shopping",
+								"entertainment", "health", "utilities", "housing",
+								"subscriptions", "personal_care", "other",
+							},
+							"description": "Expense category. Pick the closest match from the list.",
+						},
+						"date": map[string]interface{}{
+							"type":        "string",
+							"description": "Purchase date in YYYY-MM-DD format. Use the date printed on the receipt if visible, otherwise use today's date.",
+						},
+						"currency": map[string]interface{}{
+							"type":        "string",
+							"description": "ISO 4217 currency code (default: USD). Only set if the receipt clearly shows a different currency.",
+						},
+						"note": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional brief note about the purchase (e.g., 'weekly grocery run', 'birthday dinner').",
+						},
+						"items": map[string]interface{}{
+							"type":        "array",
+							"description": "Individual line items from the receipt. Extract each item with its price. Include discounts as negative amounts.",
+							"items": map[string]interface{}{
+								"type": "object",
+								"properties": map[string]interface{}{
+									"description": map[string]interface{}{
+										"type":        "string",
+										"description": "Item name as shown on receipt (e.g., 'Bulmers Original Bottle').",
+									},
+									"quantity": map[string]interface{}{
+										"type":        "integer",
+										"description": "Number of this item (default 1).",
+									},
+									"unit_price": map[string]interface{}{
+										"type":        "number",
+										"description": "Price per unit.",
+									},
+									"total_price": map[string]interface{}{
+										"type":        "number",
+										"description": "Total price for this line (quantity * unit_price, or the line total shown on receipt).",
+									},
+								},
+								"required": []string{"description", "total_price"},
+							},
+						},
+					},
+					"required": []string{"amount", "vendor", "category", "date"},
+				},
+			},
+		},
+
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name: "query_expenses",
+				Description: "Look up {{user}}'s expense history. Use when they ask about spending, finances, " +
+					"budgets, or how much they've spent. Returns totals, category breakdowns, and recent transactions.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"period": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"week", "month", "year", "all"},
+							"description": "Time period to query. 'week' = this week, 'month' = this month, 'year' = this year, 'all' = everything.",
+						},
+						"category": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional category filter (e.g., 'groceries', 'dining'). Omit to see all categories.",
+						},
+					},
+					"required": []string{"period"},
 				},
 			},
 		},
