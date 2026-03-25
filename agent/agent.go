@@ -64,6 +64,17 @@ type TraceCallback func(text string) error
 // placeholder and the sent reply is left untouched.
 type StageResetCallback func() error
 
+// SendConfirmCallback sends a message with Yes/No inline keyboard buttons
+// and returns the Telegram message ID. The agent uses this for the
+// reply_confirm tool — it sends a confirmation prompt before executing
+// destructive actions (deleting expenses, removing facts, etc.).
+//
+// The returned message ID gets stored in the pending_confirmations table
+// so the callback handler can look it up when the user clicks a button.
+// Think of it as an async RPC: the agent fires the confirmation and moves
+// on, and the action executes later when the user responds.
+type SendConfirmCallback func(text string) (telegramMsgID int64, err error)
+
 // DeletePlaceholderCallback deletes the current Telegram placeholder
 // message. Called after the agent loop exits to clean up the orphan
 // placeholder left by the last stage reset — if the agent replied and
@@ -84,10 +95,11 @@ type toolContext struct {
 	// activeTools points to the tools slice in the agent loop. The
 	// use_tools handler appends deferred tools to it so they become
 	// available in subsequent iterations without restarting the loop.
-	activeTools   *[]llm.ToolDef
-	sendCallback  SendCallback
-	ttsCallback   TTSCallback
-	traceCallback TraceCallback
+	activeTools         *[]llm.ToolDef
+	sendCallback        SendCallback
+	ttsCallback         TTSCallback
+	traceCallback       TraceCallback
+	sendConfirmCallback SendConfirmCallback
 
 	// chatLLM is the conversational model (Deepseek). The reply tool
 	// uses this to generate the actual natural language response.
@@ -108,6 +120,14 @@ type toolContext struct {
 	// to decide if the photo is a receipt, calendar event, etc. — without
 	// needing a VLM call. Empty if no image or OCR is unavailable.
 	ocrText string
+
+	// expenseContext holds receipt scan results for injection into the
+	// chat model's system prompt. Populated by execScanReceipt so the
+	// chat model knows exactly what was scanned (vendor, amount, items)
+	// and doesn't hallucinate different values in its reply.
+	// Same pattern as searchContext but goes into the system prompt
+	// instead of the message context.
+	expenseContext string
 
 	// tavilyClient provides web search and URL extraction.
 	// Can be nil if Tavily is not configured — search tools will
@@ -240,6 +260,7 @@ type RunParams struct {
 	TraceCallback             TraceCallback             // nil if traces disabled
 	StageResetCallback        StageResetCallback        // nil-safe — sends new placeholder after reply
 	DeletePlaceholderCallback DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
+	SendConfirmCallback       SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
 	ReflectionThreshold       int
 	RewriteEveryN             int
 	ImageBase64               string   // base64-encoded image data (empty if no image)
@@ -391,6 +412,7 @@ func Run(params RunParams) (*RunResult, error) {
 		traceCallback:             params.TraceCallback,
 		stageResetCallback:        params.StageResetCallback,
 		deletePlaceholderCallback: params.DeletePlaceholderCallback,
+		sendConfirmCallback:       params.SendConfirmCallback,
 		chatLLM:                   params.ChatLLM,
 		visionLLM:                 params.VisionLLM,
 		tavilyClient:              params.TavilyClient,
@@ -846,12 +868,18 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execScanReceipt(tc.Function.Arguments, tctx)
 	case "query_expenses":
 		return execQueryExpenses(tc.Function.Arguments, tctx)
+	case "delete_expense":
+		return execDeleteExpense(tc.Function.Arguments, tctx)
+	case "update_expense":
+		return execUpdateExpense(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
 	case "get_current_time":
 		return execGetCurrentTime(tctx)
 	case "set_location":
 		return execSetLocation(tc.Function.Arguments, tctx)
+	case "reply_confirm":
+		return execReplyConfirm(tc.Function.Arguments, tctx)
 	case "use_tools":
 		return execUseTools(tc.Function.Arguments, tctx)
 	case "no_action":
@@ -1171,7 +1199,14 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 		parts = append(parts, moodCtx)
 	}
 
-	// Layer 5: Conversation summary — compacted older messages.
+	// Layer 5.5: Expense context — if a receipt was just scanned, inject
+	// the exact data so the chat model references real numbers and vendor
+	// names instead of hallucinating them.
+	if tctx.expenseContext != "" {
+		parts = append(parts, tctx.expenseContext)
+	}
+
+	// Layer 6: Conversation summary — compacted older messages.
 	// This gives the model awareness of what was discussed earlier
 	// without burning tokens on the full message history.
 	if tctx.conversationSummary != "" {
@@ -2099,6 +2134,20 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 		}
 		json.Unmarshal([]byte(argsJSON), &args)
 		return fmt.Sprintf("💰 <b>query_expenses:</b> %s\n    → %s", args.Period, escapeHTML(truncateLog(result, 80)))
+
+	case "delete_expense":
+		var args struct {
+			ID int64 `json:"id"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🗑 <b>delete_expense:</b> ID=%d", args.ID)
+
+	case "update_expense":
+		var args struct {
+			ID int64 `json:"id"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("✏️ <b>update_expense:</b> ID=%d\n    → %s", args.ID, escapeHTML(truncateLog(result, 60)))
 
 	case "recall_memories":
 		var args struct {

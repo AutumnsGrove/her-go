@@ -16,6 +16,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -80,6 +81,10 @@ func (b *Bot) registerCallbackHandlers() {
 
 	// Medication check-in buttons (Action: "med")
 	b.tb.Handle(&tele.InlineButton{Unique: "med"}, b.handleMedCallback)
+
+	// Agent confirmation buttons (Action: "confirm") — handles Yes/No
+	// for destructive actions triggered by the reply_confirm tool.
+	b.tb.Handle(&tele.InlineButton{Unique: "confirm"}, b.handleConfirmCallback)
 
 	// Pagination buttons (Action: "page") — handles ◀/▶ navigation
 	// for any command that produces output longer than 4096 chars.
@@ -268,4 +273,119 @@ func (b *Bot) snoozeMedCheckin(delay time.Duration) {
 
 	log.Info("snoozed medication check-in", "id", id,
 		"trigger_at", triggerAt.Format("3:04 PM"))
+}
+
+// --- Agent Confirmation Callback ---
+
+// handleConfirmCallback fires when the user clicks Yes or No on a
+// confirmation prompt sent by the reply_confirm agent tool. It looks up
+// the pending action by Telegram message ID, executes or cancels it,
+// and edits the message to show the result.
+//
+// This is the same pattern as handleMoodCallback — read the button's
+// data, take action, edit the message — but agent-driven instead of
+// scheduler-driven. The key difference is that we look up a stored
+// pending action instead of knowing what to do from the button value.
+func (b *Bot) handleConfirmCallback(c tele.Context) error {
+	data := strings.TrimSpace(c.Callback().Data)
+
+	// c.Callback().Message is the message that has the inline buttons.
+	// Its ID is what we used to key the pending_confirmations table.
+	msgID := int64(c.Callback().Message.ID)
+
+	// Look up the pending confirmation by Telegram message ID.
+	pending, err := b.store.GetPendingConfirmation(msgID)
+	if err != nil {
+		log.Error("looking up pending confirmation", "msg_id", msgID, "err", err)
+		return c.Respond(&tele.CallbackResponse{Text: "Something went wrong"})
+	}
+	if pending == nil {
+		// Already resolved (double-click) or expired (>1 hour old).
+		return c.Respond(&tele.CallbackResponse{Text: "This confirmation has expired"})
+	}
+
+	if data == "no" {
+		// User cancelled — mark as cancelled and update the message.
+		_ = b.store.ResolvePendingConfirmation(pending.ID, "cancelled")
+		_ = c.Respond(&tele.CallbackResponse{Text: "Cancelled"})
+		_ = c.Edit("❌ " + pending.Description + " — cancelled")
+		log.Info("confirmation cancelled", "id", pending.ID, "action", pending.ActionType)
+		return nil
+	}
+
+	// data == "yes" — execute the pending action.
+	result, err := b.executeConfirmedAction(pending)
+	if err != nil {
+		_ = b.store.ResolvePendingConfirmation(pending.ID, "error")
+		_ = c.Respond(&tele.CallbackResponse{Text: "Something went wrong"})
+		_ = c.Edit("⚠️ " + pending.Description + " — failed: " + err.Error())
+		log.Error("executing confirmed action", "id", pending.ID, "action", pending.ActionType, "err", err)
+		return nil
+	}
+
+	_ = b.store.ResolvePendingConfirmation(pending.ID, "confirmed")
+	_ = c.Respond(&tele.CallbackResponse{Text: "Done!"})
+	_ = c.Edit("✅ " + result)
+	log.Info("confirmation executed", "id", pending.ID, "action", pending.ActionType, "result", result)
+	return nil
+}
+
+// executeConfirmedAction runs the actual destructive action described
+// by a pending confirmation. Each action_type maps to a specific store
+// method. Adding new confirmable actions means adding a case here AND
+// in agent/confirm.go's validConfirmActions map.
+//
+// This runs directly against b.store — no agent loop or toolContext
+// needed. That's the beauty of storing the action in the DB: the
+// callback handler is self-contained.
+func (b *Bot) executeConfirmedAction(pending *memory.PendingConfirmation) (string, error) {
+	switch pending.ActionType {
+	case "delete_expense":
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(pending.ActionPayload, &payload); err != nil {
+			return "", fmt.Errorf("bad payload: %v", err)
+		}
+		if payload.ID <= 0 {
+			return "", fmt.Errorf("invalid expense ID: %d", payload.ID)
+		}
+		if err := b.store.DeleteExpense(payload.ID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Expense #%d deleted", payload.ID), nil
+
+	case "remove_fact":
+		var payload struct {
+			FactID int64 `json:"fact_id"`
+		}
+		if err := json.Unmarshal(pending.ActionPayload, &payload); err != nil {
+			return "", fmt.Errorf("bad payload: %v", err)
+		}
+		if payload.FactID <= 0 {
+			return "", fmt.Errorf("invalid fact ID: %d", payload.FactID)
+		}
+		if err := b.store.DeactivateFact(payload.FactID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Fact #%d removed", payload.FactID), nil
+
+	case "delete_schedule":
+		var payload struct {
+			TaskID int64 `json:"task_id"`
+		}
+		if err := json.Unmarshal(pending.ActionPayload, &payload); err != nil {
+			return "", fmt.Errorf("bad payload: %v", err)
+		}
+		if payload.TaskID <= 0 {
+			return "", fmt.Errorf("invalid schedule ID: %d", payload.TaskID)
+		}
+		if err := b.store.DeleteScheduledTask(payload.TaskID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Schedule #%d deleted", payload.TaskID), nil
+
+	default:
+		return "", fmt.Errorf("unknown action type: %s", pending.ActionType)
+	}
 }

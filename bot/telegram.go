@@ -290,6 +290,28 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return err
 	}
 
+	// sendConfirmCallback sends a message with Yes/No inline buttons and
+	// returns the Telegram message ID. The agent uses this for reply_confirm
+	// — the message ID keys the pending_confirmations table so the callback
+	// handler can look it up when the user clicks. Same closure pattern as
+	// the other callbacks — it captures `c` from the outer scope.
+	sendConfirmCallback := func(text string) (int64, error) {
+		markup := &tele.ReplyMarkup{}
+		btnYes := markup.Data("Yes", "confirm", "yes")
+		btnNo := markup.Data("No", "confirm", "no")
+		markup.Inline(markup.Row(btnYes, btnNo))
+
+		msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: markup,
+		})
+		if err != nil {
+			return 0, err
+		}
+		// msg.ID is an int in telebot — we cast to int64 for the DB.
+		return int64(msg.ID), nil
+	}
+
 	// stageResetCallback sends a fresh placeholder after a reply is sent.
 	// Because statusCallback closes over the `placeholder` variable,
 	// reassigning it here means statusCallback automatically edits the
@@ -348,6 +370,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		SendCallback:              sendCallback,
 		StageResetCallback:        stageResetCallback,
 		DeletePlaceholderCallback: deletePlaceholderCallback,
+		SendConfirmCallback:       sendConfirmCallback,
 		TTSCallback:               ttsCallback,
 		TraceCallback:             traceCallback,
 		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
