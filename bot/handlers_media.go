@@ -14,6 +14,7 @@ import (
 	"her/agent"
 	"her/ocr"
 	"her/scrub"
+	"her/tui"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -109,6 +110,17 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
+	}
+
+	// Emit TurnStartEvent for the TUI — same as handleMessage.
+	// Without this, photo turns get lumped into the previous turn's section.
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnStartEvent{
+			Time:           time.Now(),
+			TurnID:         msgID,
+			UserMessage:    truncate(userText, 100),
+			ConversationID: conversationID,
+		})
 	}
 
 	// Store the Telegram file ID so we can re-download the image later.
@@ -220,6 +232,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		ImageBase64:               imageBase64,
 		ImageMIME:                 imageMIME,
 		OCRText:                   ocrText,
+		EventBus:                  b.eventBus,
 	})
 
 	close(stopTyping)

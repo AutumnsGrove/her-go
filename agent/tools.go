@@ -694,7 +694,9 @@ func allToolDefs() []llm.ToolDef {
 					"Use when OCR text from a photo looks like a receipt (amounts, totals, store names), " +
 					"or when {{user}} mentions spending money in conversation. " +
 					"Extract the total amount, vendor name, category, and date from the OCR text. " +
-					"If the date isn't visible on the receipt, use today's date.",
+					"If the date isn't visible on the receipt, use today's date. " +
+					"IMPORTANT: Extract ALL line items from the receipt, including discounts (as negative amounts), " +
+					"overrides, and adjustments. Every line with a price should be an item.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -729,7 +731,7 @@ func allToolDefs() []llm.ToolDef {
 						},
 						"items": map[string]interface{}{
 							"type":        "array",
-							"description": "Individual line items from the receipt. Extract each item with its price. Include discounts as negative amounts.",
+							"description": "ALL individual line items from the receipt. Extract EVERY line that has a price — products, discounts, overrides, adjustments. Use negative total_price for discounts/refunds (e.g., -2.00 for a £2 discount).",
 							"items": map[string]interface{}{
 								"type": "object",
 								"properties": map[string]interface{}{
