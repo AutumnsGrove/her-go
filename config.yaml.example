@@ -43,7 +43,7 @@ embed:
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
   dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
-  max_semantic_distance: 0.55                                    # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Tag-based embeddings need ~0.55; raw text needs ~0.35.
+  max_semantic_distance: 0.45                                    # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter — Mira can use recall for anything not auto-injected.
 
 search:
   tavily_api_key: "${TAVILY_API_KEY}"
