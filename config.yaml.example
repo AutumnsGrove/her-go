@@ -90,6 +90,14 @@ scheduler:
   proactive_followups: false       # scan for follow-ups at 9am (conditional — only if needed)
   auto_journal: false              # auto-journal entry at 10pm
 
+ocr:
+  vision_ocr_path: "macos-vision-ocr"    # path to macos-vision-ocr binary (or name if on PATH)
+  confidence_threshold: 0.5               # below this → fallback to GLM-OCR (0.0-1.0)
+  fallback:
+    engine: "glm-ocr"                     # purpose-built OCR model (0.9B, MIT licensed)
+    base_url: "http://localhost:1234/v1"  # LM Studio endpoint (same instance as embeddings)
+    model: "glm-ocr"                      # model name in LM Studio
+
 voice:
   enabled: false                                                  # set true to accept voice memos
   stt:

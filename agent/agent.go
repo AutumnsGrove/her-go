@@ -103,6 +103,12 @@ type toolContext struct {
 	imageBase64 string
 	imageMIME   string
 
+	// ocrText holds pre-flight OCR text extracted from the photo (if any).
+	// Populated by handlePhoto before the agent runs. The agent reads this
+	// to decide if the photo is a receipt, calendar event, etc. — without
+	// needing a VLM call. Empty if no image or OCR is unavailable.
+	ocrText string
+
 	// tavilyClient provides web search and URL extraction.
 	// Can be nil if Tavily is not configured — search tools will
 	// return an error message instead of crashing.
@@ -238,6 +244,7 @@ type RunParams struct {
 	RewriteEveryN             int
 	ImageBase64               string   // base64-encoded image data (empty if no image)
 	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
+	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
 	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
 }
 
@@ -356,7 +363,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// Build the context message for the agent. We pass the current
 	// time and timezone so the agent can convert natural language times
 	// to ISO timestamps for create_reminder.
-	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.Cfg.Scheduler.Timezone, params.Cfg.Identity.Her, params.Cfg.Identity.User)
+	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.OCRText, params.Cfg.Scheduler.Timezone, params.Cfg.Identity.Her, params.Cfg.Identity.User)
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile, params.Cfg)
@@ -397,6 +404,7 @@ func Run(params RunParams) (*RunResult, error) {
 		relevantFacts:             relevantFacts,
 		imageBase64:               params.ImageBase64,
 		imageMIME:                 params.ImageMIME,
+		ocrText:                   params.OCRText,
 		activeTools:               &tools,
 		eventBus:                  params.EventBus,
 	}
@@ -714,7 +722,7 @@ func Run(params RunParams) (*RunResult, error) {
 // references like "it", "that book", "what you said earlier". This was the
 // cause of the wrong-search-term bug where the agent searched for AI realism
 // instead of The Martian's realism.
-func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, timezone string, botName, userName string) string {
+func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, ocrText string, timezone string, botName, userName string) string {
 	var b strings.Builder
 
 	// Current date/time — the agent needs this to convert natural
@@ -746,11 +754,22 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 	b.WriteString("## Current Message\n\n")
 	fmt.Fprintf(&b, "%s\n\n", userMessage)
 
-	// If the user sent a photo, tell the agent explicitly so it knows
-	// to call view_image before replying.
+	// If the user sent a photo, tell the agent about it. If OCR text
+	// was extracted (pre-flight), include it so the agent can decide
+	// whether it's a receipt, document, or something that needs the VLM.
 	if hasImage {
 		b.WriteString("## Attached Image\n\n")
-		b.WriteString("The user sent a photo. Call `view_image` to see what's in it before replying.\n\n")
+		if ocrText != "" {
+			b.WriteString("The user sent a photo. Pre-flight OCR extracted the following text:\n\n")
+			b.WriteString("```\n")
+			b.WriteString(ocrText)
+			b.WriteString("\n```\n\n")
+			b.WriteString("If this looks like a receipt (amounts, totals, store names), use `use_tools([\"expenses\"])` → `scan_receipt` to log the expense. ")
+			b.WriteString("If the OCR text is garbled or not useful, call `view_image` to see the photo with the VLM instead.\n\n")
+		} else {
+			b.WriteString("The user sent a photo. No OCR text was extracted (image may not contain text). ")
+			b.WriteString("Call `view_image` to see what's in it before replying.\n\n")
+		}
 	}
 
 	b.WriteString("## User Memories\n\n")
@@ -823,6 +842,10 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execRecallMemories(tc.Function.Arguments, tctx)
 	case "log_mood":
 		return execLogMood(tc.Function.Arguments, tctx)
+	case "scan_receipt":
+		return execScanReceipt(tc.Function.Arguments, tctx)
+	case "query_expenses":
+		return execQueryExpenses(tc.Function.Arguments, tctx)
 	case "think":
 		return execThink(tc.Function.Arguments, tctx)
 	case "get_current_time":
@@ -2060,6 +2083,22 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 
 	case "view_image":
 		return fmt.Sprintf("👁 <b>view_image:</b> → %s", escapeHTML(truncateLog(result, 80)))
+
+	case "scan_receipt":
+		var args struct {
+			Amount   float64 `json:"amount"`
+			Vendor   string  `json:"vendor"`
+			Category string  `json:"category"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("🧾 <b>scan_receipt:</b> $%.2f at %s (%s)", args.Amount, escapeHTML(args.Vendor), args.Category)
+
+	case "query_expenses":
+		var args struct {
+			Period string `json:"period"`
+		}
+		json.Unmarshal([]byte(argsJSON), &args)
+		return fmt.Sprintf("💰 <b>query_expenses:</b> %s\n    → %s", args.Period, escapeHTML(truncateLog(result, 80)))
 
 	case "recall_memories":
 		var args struct {

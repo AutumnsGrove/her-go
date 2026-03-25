@@ -36,6 +36,7 @@ type Config struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Voice     VoiceConfig     `yaml:"voice"`
 	Weather   WeatherConfig   `yaml:"weather"`
+	OCR       OCRConfig       `yaml:"ocr"`
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into
@@ -200,6 +201,29 @@ type WeatherConfig struct {
 	TempUnit      string  `yaml:"temp_unit"`       // "fahrenheit" (default) or "celsius"
 	WindSpeedUnit string  `yaml:"wind_speed_unit"` // "mph" (default) or "kmh"
 	CacheTTL      int     `yaml:"cache_ttl"`       // seconds between API calls (default: 3600 = 1 hour)
+}
+
+// OCRConfig controls the local OCR pipeline used for pre-flight text
+// extraction on photos. The primary engine is Apple Vision (via the
+// macos-vision-ocr CLI binary) — it runs on the Neural Engine, sub-200ms,
+// zero dependencies. If confidence is low or the binary isn't available,
+// falls back to GLM-OCR via LM Studio (a purpose-built OCR model).
+//
+// This runs on EVERY incoming photo as a "pre-flight" check before the
+// agent decides what to do. Since it's local, it's essentially free.
+type OCRConfig struct {
+	VisionOCRPath       string      `yaml:"vision_ocr_path"`      // path to macos-vision-ocr binary (or just the name if it's on PATH)
+	ConfidenceThreshold float64     `yaml:"confidence_threshold"` // below this average confidence → fall back to GLM-OCR (0.0-1.0)
+	Fallback            OCRFallback `yaml:"fallback"`
+}
+
+// OCRFallback configures the secondary OCR engine (GLM-OCR via LM Studio).
+// Used when Apple Vision returns low confidence or empty results — e.g.,
+// receipts with unusual fonts, heavy glare, or non-Latin scripts.
+type OCRFallback struct {
+	Engine  string `yaml:"engine"`   // "glm-ocr" (only option for now)
+	BaseURL string `yaml:"base_url"` // LM Studio endpoint (e.g., "http://localhost:1234/v1")
+	Model   string `yaml:"model"`    // model name in LM Studio (e.g., "glm-ocr")
 }
 
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.
