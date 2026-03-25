@@ -39,6 +39,29 @@ var validExpenseCategories = map[string]bool{
 // (same pattern as the envVarPattern in config.go).
 var datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
+// normalizeVendor cleans up vendor names from OCR output.
+// OCR often produces mixed casing like "cIDer ceLLar" because it reads
+// individual characters without understanding word boundaries or fonts.
+// We lowercase everything then title-case each word.
+func normalizeVendor(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	words := strings.Fields(strings.ToLower(raw))
+	for i, w := range words {
+		if len(w) > 0 {
+			// Capitalize first rune. In Go, strings are UTF-8 byte slices,
+			// so we use strings.ToUpper on just the first character and
+			// concatenate the rest. This handles ASCII fine — for full
+			// Unicode we'd need the x/text package, but vendor names are
+			// almost always ASCII.
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 // lineItem is the JSON structure for individual receipt items passed
 // by the agent. Parsed from the "items" array in scan_receipt args.
 type lineItem struct {
@@ -82,8 +105,9 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 		return "error: amount must be greater than 0"
 	}
 
-	// Vendor is required.
-	args.Vendor = strings.TrimSpace(args.Vendor)
+	// Vendor is required. Normalize casing since OCR often produces
+	// mixed case like "cIDer ceLLar" — we title-case it for readability.
+	args.Vendor = normalizeVendor(args.Vendor)
 	if args.Vendor == "" {
 		return "error: vendor name is required"
 	}
