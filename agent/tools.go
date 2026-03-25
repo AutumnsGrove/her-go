@@ -367,7 +367,7 @@ func allToolDefs() []llm.ToolDef {
 						},
 						"action_payload": map[string]interface{}{
 							"type":        "string",
-							"description": "JSON payload for the action. delete_expense: {\"id\": 42}. remove_fact: {\"fact_id\": 17}. delete_schedule: {\"task_id\": 5}.",
+							"description": "JSON payload for the action. delete_expense: {\"id\": 42} for one, or {\"ids\": [1,2,3]} for multiple. remove_fact: {\"fact_id\": 17}. delete_schedule: {\"task_id\": 5}.",
 						},
 					},
 					"required": []string{"message", "action_type", "action_payload"},
