@@ -212,7 +212,13 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 			}
 			log.Infof("Backfilling embeddings for %d facts...", len(unembedded))
 			for _, f := range unembedded {
-				vec, err := embedClient.Embed(f.Fact)
+				// Embed by tags when available (topic-based retrieval),
+				// fall back to fact text for un-tagged facts.
+				embedText := f.Tags
+				if embedText == "" {
+					embedText = f.Fact
+				}
+				vec, err := embedClient.Embed(embedText)
 				if err != nil {
 					log.Error("backfill: embedding failed", "fact_id", f.ID, "err", err)
 					continue

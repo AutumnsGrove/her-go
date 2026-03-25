@@ -355,12 +355,18 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// Emit TurnEndEvent for the TUI
+	// Emit TurnEndEvent for the TUI — now with actual metrics from the
+	// agent run. TotalCost includes both agent model calls (free) and
+	// chat model calls (paid). ToolCalls and FactsSaved come from the
+	// agent's accumulated counters.
 	if b.eventBus != nil {
 		b.eventBus.Emit(tui.TurnEndEvent{
-			Time:      time.Now(),
-			TurnID:    msgID,
-			ElapsedMs: time.Since(turnStart).Milliseconds(),
+			Time:       time.Now(),
+			TurnID:     msgID,
+			ElapsedMs:  time.Since(turnStart).Milliseconds(),
+			TotalCost:  result.TotalCost,
+			ToolCalls:  result.ToolCalls,
+			FactsSaved: result.FactsSaved,
 		})
 	}
 

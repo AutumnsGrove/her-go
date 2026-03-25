@@ -125,8 +125,9 @@ type ScrubConfig struct {
 type EmbedConfig struct {
 	BaseURL             string  `yaml:"base_url"`
 	Model               string  `yaml:"model"`
-	Dimension           int     `yaml:"dimension"`            // vector dimension (768 for nomic-embed-text-v1.5, 1536 for OpenAI, etc.)
-	SimilarityThreshold float64 `yaml:"similarity_threshold"` // above this = duplicate (0.0-1.0)
+	Dimension           int     `yaml:"dimension"`             // vector dimension (768 for nomic-embed-text-v1.5, 1536 for OpenAI, etc.)
+	SimilarityThreshold float64 `yaml:"similarity_threshold"`  // above this = duplicate (0.0-1.0)
+	MaxSemanticDistance float64 `yaml:"max_semantic_distance"` // facts farther than this are filtered from context (cosine distance, 0=identical)
 }
 
 // SearchConfig controls web search and book search integrations.
