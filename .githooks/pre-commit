@@ -145,14 +145,19 @@ if echo "$staged_diff" | grep -qE '[0-9]{8,10}:[A-Za-z0-9_-]{35}'; then
     secrets_found=1
 fi
 
-# Private keys
-if echo "$staged_diff" | grep -qE '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'; then
+# Private keys — use grep -F for the fixed prefix to avoid BSD grep choking on leading dashes
+if echo "$staged_diff" | grep -qF -- '-----BEGIN ' | grep -q 'PRIVATE KEY'; then
+    echo -e "${RED}  ✗ Private key detected in diff${NC}"
+    secrets_found=1
+fi
+# Also catch the exact headers directly
+if echo "$staged_diff" | grep -qF 'PRIVATE KEY-----'; then
     echo -e "${RED}  ✗ Private key detected in diff${NC}"
     secrets_found=1
 fi
 
-# Google API keys
-if echo "$staged_diff" | grep -qE 'AIza[0-9A-Za-z-_]{35}'; then
+# Google API keys — escape the character class to avoid BSD grep range issues
+if echo "$staged_diff" | grep -qE 'AIza[0-9A-Za-z_-]{35}'; then
     echo -e "${RED}  ✗ Google API key detected in diff${NC}"
     secrets_found=1
 fi
