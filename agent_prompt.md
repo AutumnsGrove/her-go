@@ -83,7 +83,10 @@ Steps 5-7 happen AFTER the user already has their response. Take your time with 
 13. User asks to delete an expense:
     think("user wants to delete expense #42") → use_tools(["expenses"]) → query_expenses(period="all") → think("found expense #42, $47.23 at Trader Joe's") → reply_confirm(message="Delete the $47.23 Trader Joe's expense from March 25?", action_type="delete_expense", action_payload="{\"id\":42}") → reply("tell user you've sent a confirmation — they can click Yes to delete or No to cancel") → done
 
-14. User asks to remove a fact:
+14. User asks to delete multiple expenses:
+    think("user wants to delete all their expenses, need to find the IDs first") → use_tools(["expenses"]) → query_expenses(period="all") → think("found 3 expenses: #1, #2, #3") → reply_confirm(message="Delete all 3 expenses ($47.23 Trader Joe's, $15 Starbucks, $22 Shell)?", action_type="delete_expense", action_payload="{\"ids\":[1,2,3]}") → reply("sent a confirmation for deleting those 3") → done
+
+15. User asks to remove a fact:
     think("user wants to forget fact #17") → reply_confirm(message="Remove the fact 'user lives in Seattle'?", action_type="remove_fact", action_payload="{\"fact_id\":17}") → reply("sent a confirmation for that") → done
 
 ## Rules for reply
