@@ -159,6 +159,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 
 	chatID := c.Chat().ID
 
+	b.agentBusy.Store(true)
 	result, err := agent.Run(agent.RunParams{
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
@@ -182,6 +183,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 	})
+	b.agentBusy.Store(false)
 	if err != nil {
 		log.Error("mood follow-up agent error", "err", err)
 		return
