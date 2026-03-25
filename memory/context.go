@@ -5,25 +5,46 @@ import (
 	"strings"
 )
 
+// InjectedFact records which fact was included in the chat model's prompt
+// and why. This is the observability data that lets you debug "why did she
+// mention pollen when I asked about code?"
+type InjectedFact struct {
+	ID         int64
+	Fact       string
+	Category   string
+	Subject    string
+	Importance int
+	Distance   float64 // cosine distance from query (0 = identical, only set for semantic)
+	Source     string  // "semantic" or "importance" — how this fact got selected
+}
+
 // BuildMemoryContext assembles a memory context string to inject into
 // the system prompt. It blends two retrieval strategies:
 //
 //  1. Semantic: top-K facts closest to the user's current message (via sqlite-vec KNN)
 //  2. Importance: high-importance facts that should always be present (name, identity, etc.)
 //
-// The blend ensures Mira always knows WHO she's talking to (importance) while also
+// The blend ensures the bot always knows WHO it's talking to (importance) while also
 // recalling context RELEVANT to the current conversation (semantic).
+//
+// Returns the formatted context string AND a list of which facts were injected
+// (with their scores and selection source) for observability.
 //
 // relevantFacts can be nil if embeddings aren't available — falls back to
 // importance-only retrieval (the pre-v0.4 behavior).
-func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userName string) (string, error) {
+// maxSemanticDist is the cosine distance cutoff — facts farther than this
+// from the query are filtered out even if they're the "nearest" neighbors.
+// Set to 0 to disable filtering (include all KNN results).
+func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userName string, maxSemanticDist float64) (string, []InjectedFact, error) {
 	var parts []string
+	var allInjected []InjectedFact
 
 	// --- User facts ---
-	userFacts, err := blendFacts(store, "user", maxFacts, relevantFacts)
+	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist)
 	if err != nil {
-		return "", fmt.Errorf("retrieving user facts: %w", err)
+		return "", nil, fmt.Errorf("retrieving user facts: %w", err)
 	}
+	allInjected = append(allInjected, userInjected...)
 	if len(userFacts) > 0 {
 		parts = append(parts, formatFactSection(
 			fmt.Sprintf("Things I Know About %s", userName),
@@ -33,10 +54,11 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	}
 
 	// --- Self facts ---
-	selfFacts, err := blendFacts(store, "self", maxFacts, relevantFacts)
+	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist)
 	if err != nil {
-		return "", fmt.Errorf("retrieving self facts: %w", err)
+		return "", nil, fmt.Errorf("retrieving self facts: %w", err)
 	}
+	allInjected = append(allInjected, selfInjected...)
 	if len(selfFacts) > 0 {
 		parts = append(parts, formatFactSection(
 			"Things I Know About Myself",
@@ -45,29 +67,46 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 		))
 	}
 
-	return strings.Join(parts, "\n\n"), nil
+	return strings.Join(parts, "\n\n"), allInjected, nil
 }
 
 // blendFacts merges semantic search results with importance-based results,
-// deduplicating by fact ID. The result set contains:
-//   - Semantically relevant facts for this subject (from the KNN results)
-//   - Top-importance facts for this subject (always-present context)
+// deduplicating by fact ID. Returns both the facts and observability data
+// about how each was selected.
 //
 // If relevantFacts is nil (no embeddings), falls back to importance-only.
-func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact) ([]Fact, error) {
+func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64) ([]Fact, []InjectedFact, error) {
 	seen := make(map[int64]bool)
 	var result []Fact
+	var injected []InjectedFact
 
 	// First pass: semantic results for this subject (most relevant first).
 	// These are the facts KNN says are closest to what the user just said.
+	// Filter by maxDist — with a small fact set, KNN returns "nearest"
+	// neighbors that are still completely irrelevant (dist 0.5+). Without
+	// this filter, therapy cancellations show up when you ask about code.
 	if relevantFacts != nil {
 		for _, f := range relevantFacts {
 			if f.Subject != subject {
 				continue
 			}
+			// Skip facts that are too far from the query
+			if maxDist > 0 && f.Distance > maxDist {
+				factPreview := f.Fact
+				if len(factPreview) > 50 {
+					factPreview = factPreview[:50] + "..."
+				}
+				log.Infof("  [fact filtered] #%d dist=%.3f > max=%.3f — %s", f.ID, f.Distance, maxDist, factPreview)
+				continue
+			}
 			if !seen[f.ID] {
 				seen[f.ID] = true
 				result = append(result, f)
+				injected = append(injected, InjectedFact{
+					ID: f.ID, Fact: f.Fact, Category: f.Category,
+					Subject: f.Subject, Importance: f.Importance,
+					Distance: f.Distance, Source: "semantic",
+				})
 			}
 		}
 	}
@@ -76,7 +115,7 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 	// Fill remaining slots with the highest-importance facts.
 	importantFacts, err := store.RecentFacts(subject, maxFacts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, f := range importantFacts {
 		if len(result) >= maxFacts {
@@ -85,10 +124,16 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 		if !seen[f.ID] {
 			seen[f.ID] = true
 			result = append(result, f)
+			injected = append(injected, InjectedFact{
+				ID: f.ID, Fact: f.Fact, Category: f.Category,
+				Subject: f.Subject, Importance: f.Importance,
+				Distance: -1, // not from semantic search
+				Source:   "importance",
+			})
 		}
 	}
 
-	return result, nil
+	return result, injected, nil
 }
 
 // formatFactSection builds a formatted memory section with a title,

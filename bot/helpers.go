@@ -168,7 +168,7 @@ func (b *Bot) buildSystemPrompt() string {
 	}
 
 	// Layer 4: Memory context — extracted facts about the user.
-	if memCtx, err := memory.BuildMemoryContext(b.store, b.cfg.Memory.MaxFactsInContext, nil, b.cfg.Identity.User); err == nil && memCtx != "" {
+	if memCtx, _, err := memory.BuildMemoryContext(b.store, b.cfg.Memory.MaxFactsInContext, nil, b.cfg.Identity.User, b.cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
 	}
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -269,7 +270,8 @@ func (m *Model) handleEvent(e Event) {
 
 	case ReplyEvent:
 		m.appendToTurnGroup(ev.TurnID, "reply", renderReplyEvent(ev, m.cfg))
-		m.totalCost += ev.CostUSD
+		// Note: cost is accumulated via TurnEndEvent.TotalCost (which
+		// includes both agent + chat model costs). Don't double-count here.
 
 	case TurnEndEvent:
 		m.handleTurnEndEvent(ev)
@@ -319,10 +321,12 @@ func (m *Model) handleStartupEvent(ev StartupEvent) {
 
 func (m *Model) handleTurnStartEvent(ev TurnStartEvent) {
 	id := fmt.Sprintf("turn-%d", ev.TurnID)
-	title := fmt.Sprintf("Turn #%d", m.messageCount+1)
 	m.messageCount++
 
-	sec := m.ensureSection(id, title, "turn")
+	sec := m.ensureSection(id, fmt.Sprintf("Turn #%d", m.messageCount), "turn")
+	// Always set the title — the section may have been lazily created by
+	// appendToTurnGroup with a placeholder title before this event arrived.
+	sec.Title = fmt.Sprintf("Turn #%d", m.messageCount)
 	sec.Timestamp = ev.Time
 	sec.TurnID = ev.TurnID
 	sec.UserMessage = ev.UserMessage
@@ -378,13 +382,13 @@ func (m *Model) findSection(id string) *Section {
 // Groups: "context", "tools", "reply", "persona"
 func (m *Model) appendToTurnGroup(turnID int64, group, line string) {
 	id := fmt.Sprintf("turn-%d", turnID)
-	sec := m.findSection(id)
-	if sec == nil && len(m.sections) > 0 {
-		sec = &m.sections[len(m.sections)-1]
-	}
-	if sec == nil {
-		return
-	}
+	// Use ensureSection instead of findSection so the turn gets lazily
+	// created if a typed event (ContextEvent, ToolCallEvent, etc.) arrives
+	// before TurnStartEvent has been processed. The old code fell back to
+	// the last section (often "startup"), silently routing events to the
+	// wrong place. The placeholder title gets overwritten when the
+	// TurnStartEvent arrives with the real turn number.
+	sec := m.ensureSection(id, "Turn", "turn")
 	switch group {
 	case "context":
 		sec.ContextLines = append(sec.ContextLines, line)
@@ -467,26 +471,31 @@ func (m *Model) sectionHeight(idx int) int {
 }
 
 // turnContentHeight counts lines for a turn's grouped content.
-// Each non-empty group renders as a bordered box: top border(1) + content lines + bottom border(1)
+// Each non-empty group renders as a bordered box: top border(1) + content lines + bottom border(1).
+// We count actual newlines in each element because some renderers (e.g. renderReplyEvent)
+// embed \n within a single slice element, producing more rendered lines than len(group) suggests.
 func (m *Model) turnContentHeight(sec *Section) int {
 	height := 0
 	for _, group := range [][]string{sec.ContextLines, sec.ToolLines, sec.ReplyLines, sec.PersonaLines} {
 		if len(group) > 0 {
-			// Border adds 2 lines (top + bottom). Content lines may wrap
-			// but we estimate 1 terminal line per content line.
-			height += len(group) + 2
+			// Count real content lines — each element may contain \n
+			contentLines := 0
+			for _, line := range group {
+				contentLines += 1 + strings.Count(line, "\n")
+			}
+			// Border adds 2 lines (top + bottom), padding(0,1) doesn't add height
+			height += contentLines + 2
 		}
 	}
 	return height
 }
 
 // countRenderedLines returns the total number of visible lines across all sections.
+// Uses the actual rendered body output rather than estimating — lipgloss border
+// rendering can produce more lines than a simple estimate predicts (wrapping,
+// multi-line elements, etc.), which causes scroll to max out too early.
 func (m *Model) countRenderedLines() int {
-	total := 0
-	for i := range m.sections {
-		total += m.sectionHeight(i)
-	}
-	return total
+	return len(m.renderBody())
 }
 
 // bodyHeight returns the available lines for the sections viewport.

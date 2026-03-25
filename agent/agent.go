@@ -180,6 +180,11 @@ type toolContext struct {
 	// Used to trigger reflection (Trigger B) when enough facts accumulate.
 	savedFacts []string
 
+	// replyCost accumulates cost from chat model calls (execReply).
+	// The agent model cost is tracked separately in the Run loop.
+	// Both feed into RunResult.TotalCost for the TUI.
+	replyCost float64
+
 	// eventBus emits rich typed events for the TUI. Nil-safe.
 	eventBus *tui.Bus
 }
@@ -236,10 +241,15 @@ type RunParams struct {
 	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
 }
 
-// RunResult holds the outcome of an agent run — primarily the reply
-// text that was sent to the user, so the bot can use it for logging.
+// RunResult holds the outcome of an agent run — the reply text plus
+// metrics that the bot needs for the TUI. Adding fields here is cheap
+// (it's just a struct return), and avoids the bot having to query the
+// DB or re-derive data the agent already has in memory.
 type RunResult struct {
-	ReplyText string
+	ReplyText  string
+	TotalCost  float64 // accumulated cost across all LLM calls (agent + chat)
+	ToolCalls  int     // number of tool calls the agent made
+	FactsSaved int     // number of facts saved/updated during this turn
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -415,6 +425,12 @@ func Run(params RunParams) (*RunResult, error) {
 	// calling tools. Used as fallback instruction if reply wasn't called.
 	var agentFinalText string
 
+	// --- Metrics accumulators ---
+	// Track cost and tool calls across the entire agent run so we can
+	// return them in RunResult for the TUI's TurnEndEvent.
+	var totalCost float64
+	var totalToolCalls int
+
 	// --- Trace builder ---
 	// Accumulates formatted trace lines as the agent executes. If tracing
 	// is enabled, the trace message gets sent/updated after each tool call
@@ -447,8 +463,9 @@ func Run(params RunParams) (*RunResult, error) {
 			break
 		}
 
-		// Log agent metrics.
+		// Log agent metrics and accumulate cost for RunResult.
 		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
+		totalCost += resp.CostUSD
 		log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
 		emit(tui.AgentIterEvent{
@@ -510,6 +527,7 @@ func Run(params RunParams) (*RunResult, error) {
 		// Execute each tool call, feed results back to the model,
 		// and build trace lines for observability.
 		for _, tc := range resp.ToolCalls {
+			totalToolCalls++
 			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
 			turnIndex++
 
@@ -587,7 +605,10 @@ func Run(params RunParams) (*RunResult, error) {
 	}
 
 	result := &RunResult{
-		ReplyText: tctx.replyText,
+		ReplyText:  tctx.replyText,
+		TotalCost:  totalCost + tctx.replyCost,
+		ToolCalls:  totalToolCalls,
+		FactsSaved: len(tctx.savedFacts),
 	}
 
 	// --- Persona Evolution Triggers ---
@@ -916,6 +937,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error generating response: %v", err)
 	}
 
+	tctx.replyCost += resp.CostUSD
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 	if tctx.eventBus != nil {
@@ -1083,8 +1105,35 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 
 	// Layer 4: Memory context — blend of semantically relevant facts
 	// (from KNN search) and high-importance facts (always-present).
-	if memCtx, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts, tctx.cfg.Identity.User); err == nil && memCtx != "" {
+	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts, tctx.cfg.Identity.User, tctx.cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
+		// Log which facts were injected and why — this is the observability
+		// that lets you debug "why did she mention X when I asked about Y?"
+		for _, f := range injectedFacts {
+			if f.Source == "semantic" {
+				log.Infof("  [fact→chat] #%d %s imp=%d dist=%.3f src=%s — %s",
+					f.ID, f.Subject, f.Importance, f.Distance, f.Source, truncateLog(f.Fact, 60))
+			} else {
+				log.Infof("  [fact→chat] #%d %s imp=%d src=%s — %s",
+					f.ID, f.Subject, f.Importance, f.Source, truncateLog(f.Fact, 60))
+			}
+		}
+		// Emit for TUI
+		if tctx.eventBus != nil {
+			for _, f := range injectedFacts {
+				args := fmt.Sprintf("#%d %s imp=%d", f.ID, f.Source, f.Importance)
+				if f.Source == "semantic" {
+					args = fmt.Sprintf("#%d %s imp=%d dist=%.2f", f.ID, f.Source, f.Importance, f.Distance)
+				}
+				tctx.eventBus.Emit(tui.ToolCallEvent{
+					Time:     time.Now(),
+					TurnID:   tctx.triggerMsgID,
+					ToolName: "fact→chat",
+					Args:     args,
+					Result:   truncateLog(f.Fact, 80),
+				})
+			}
+		}
 	}
 
 	// Layer 4: Weather context — current conditions so Mira can reference
@@ -1153,7 +1202,7 @@ func execSetLocation(argsJSON string, tctx *toolContext) string {
 	locationFact := fmt.Sprintf("%s is located in %s, %s, %s (%.4f, %.4f)",
 		tctx.cfg.Identity.User,
 		loc.Name, loc.Region, loc.Country, loc.Latitude, loc.Longitude)
-	_, _ = tctx.store.SaveFact(locationFact, "location", "user", tctx.triggerMsgID, 9, nil)
+	_, _ = tctx.store.SaveFact(locationFact, "location", "user", tctx.triggerMsgID, 9, nil, "location, geography, place, where user lives")
 
 	log.Info("set_location", "query", args.Query, "result", locationFact)
 
@@ -1652,6 +1701,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		Fact       string `json:"fact"`
 		Category   string `json:"category"`
 		Importance int    `json:"importance"`
+		Tags       string `json:"tags"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -1711,11 +1761,19 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
 	}
 
-	// Semantic duplicate check using embeddings.
+	// Embed by TAGS (not by fact text) so the vector space organizes by
+	// topic. "mental health, burnout, coping" lands far from "programming,
+	// go, backend" — which is what we want for retrieval. Fall back to
+	// fact text if the agent didn't provide tags.
+	embedText := args.Tags
+	if embedText == "" {
+		embedText = args.Fact
+	}
+
 	var newVec []float32
 	if tctx.embedClient != nil {
 		var err error
-		newVec, err = tctx.embedClient.Embed(args.Fact)
+		newVec, err = tctx.embedClient.Embed(embedText)
 		if err != nil {
 			log.Warn("embedding failed, skipping duplicate check", "err", err)
 		} else {
@@ -1727,7 +1785,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 	}
 
-	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec)
+	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, args.Tags)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}
@@ -1759,7 +1817,12 @@ func checkDuplicate(newVec []float32, subject string, tctx *toolContext) (isDupl
 
 		existVec := existing.Embedding
 		if len(existVec) == 0 {
-			existVec, err = tctx.embedClient.Embed(existing.Fact)
+			// Backfill: embed by tags when available
+			embedText := existing.Tags
+			if embedText == "" {
+				embedText = existing.Fact
+			}
+			existVec, err = tctx.embedClient.Embed(embedText)
 			if err != nil {
 				continue
 			}
@@ -1787,6 +1850,7 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		Fact       string `json:"fact"`
 		Category   string `json:"category"`
 		Importance int    `json:"importance"`
+		Tags       string `json:"tags"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -1827,12 +1891,17 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
 	}
 
-	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance); err != nil {
+	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
 
+	// Re-embed using tags (same as save_fact — embed by topic, not by text)
 	if tctx.embedClient != nil {
-		if newVec, err := tctx.embedClient.Embed(args.Fact); err == nil {
+		embedText := args.Tags
+		if embedText == "" {
+			embedText = args.Fact
+		}
+		if newVec, err := tctx.embedClient.Embed(embedText); err == nil {
 			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec)
 			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
 		}

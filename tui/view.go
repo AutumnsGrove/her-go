@@ -391,6 +391,16 @@ func renderToolCallEvent(ev ToolCallEvent) string {
 		icon = "👁"
 	case "done":
 		icon = "✅"
+	case "fact→chat":
+		// Special rendering for injected facts — show the ID/source/importance
+		// from Args alongside a truncated fact preview from Result.
+		icon = "📎"
+		meta := lipgloss.NewStyle().Foreground(colorCost).Render(ev.Args)
+		fact := ev.Result
+		if len(fact) > 60 {
+			fact = fact[:60] + "…"
+		}
+		return fmt.Sprintf("%s %s %s", icon, meta, toolResultStyle.Render(fact))
 	case "no_action":
 		icon = "⏭"
 	case "use_tools":

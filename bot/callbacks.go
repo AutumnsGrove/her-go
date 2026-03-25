@@ -5,14 +5,14 @@
 // and routes callback queries when users click buttons.
 //
 // The flow:
-//   1. Scheduler fires a task (e.g., mood_checkin)
-//   2. Task executor builds a KeyboardMessage with shared types
-//   3. Scheduler calls sendKeyboardFn (a closure wired in cmd/run.go)
-//   4. That closure calls SendKeyboardToChat here, which translates
-//      to telebot types and sends via the Telegram API
-//   5. User clicks a button → Telegram sends a callback query
-//   6. telebot routes it by the button's Unique field to the right handler
-//   7. Handler processes the action (save mood, log meds, etc.)
+//  1. Scheduler fires a task (e.g., mood_checkin)
+//  2. Task executor builds a KeyboardMessage with shared types
+//  3. Scheduler calls sendKeyboardFn (a closure wired in cmd/run.go)
+//  4. That closure calls SendKeyboardToChat here, which translates
+//     to telebot types and sends via the Telegram API
+//  5. User clicks a button → Telegram sends a callback query
+//  6. telebot routes it by the button's Unique field to the right handler
+//  7. Handler processes the action (save mood, log meds, etc.)
 package bot
 
 import (
@@ -35,9 +35,10 @@ import (
 // Telegram-free types into real telebot API calls.
 //
 // In telebot v4, inline keyboards use a builder pattern:
-//   markup := &tele.ReplyMarkup{}
-//   btn := markup.Data("display text", "unique_key", "data_value")
-//   markup.Inline(markup.Row(btn1, btn2, ...))
+//
+//	markup := &tele.ReplyMarkup{}
+//	btn := markup.Data("display text", "unique_key", "data_value")
+//	markup.Inline(markup.Row(btn1, btn2, ...))
 //
 // The "unique_key" is what routes callbacks to handlers (registered
 // via tb.Handle(&tele.InlineButton{Unique: "key"}, handler)).
@@ -201,6 +202,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 			0,   // no source message
 			8,   // high importance — health data
 			nil, // no embedding needed
+			"",  // no tags
 		)
 		if err != nil {
 			log.Error("saving med fact", "err", err)
@@ -212,7 +214,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 		_, err := b.store.SaveFact(
 			"User did not take their evening medication",
 			"health", "user",
-			0, 8, nil,
+			0, 8, nil, "",
 		)
 		if err != nil {
 			log.Error("saving med fact", "err", err)

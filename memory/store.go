@@ -300,7 +300,11 @@ func (s *Store) initTables() error {
 		// checks a task is subject to. Critical tasks (reminders, medication)
 		// always fire. Existing tasks get "normal" which is the safe default.
 		`ALTER TABLE scheduled_tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`,
-
+		// tags: comma-separated topic descriptors for semantic search.
+		// Facts are embedded by tags (not by fact text) so the vector space
+		// organizes by TOPIC rather than by surface-level word overlap.
+		// This prevents "User has burnout" from matching "tell me about code."
+		`ALTER TABLE facts ADD COLUMN tags TEXT`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -573,10 +577,11 @@ type Fact struct {
 	Timestamp       time.Time
 	Fact            string
 	Category        string
-	Subject         string    // "user" or "self"
+	Subject         string // "user" or "self"
 	SourceMessageID int64
 	Importance      int
 	Active          bool
+	Tags            string    // comma-separated topic descriptors for semantic search
 	Embedding       []float32 // cached embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
 }
@@ -629,7 +634,7 @@ func deserializeEmbedding(data []byte) []float32 {
 // into the vec_facts virtual table for KNN search.
 // subject is "user" or "self". If sourceMessageID is 0, it's stored as NULL.
 // embedding is optional — pass nil if not yet computed.
-func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32) (int64, error) {
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32, tags string) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -650,9 +655,9 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 	}
 
 	result, err := s.db.Exec(
-		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		fact, category, subject, srcID, importance, embBlob,
+		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding, tags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		fact, category, subject, srcID, importance, embBlob, tags,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving fact: %w", err)
@@ -719,7 +724,7 @@ func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32) error {
 // ordered by importance (descending) then recency (descending).
 func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
 		 FROM facts
 		 WHERE active = 1 AND COALESCE(subject, 'user') = ?
 		 ORDER BY importance DESC, timestamp DESC
@@ -736,7 +741,7 @@ func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 		var f Fact
 		var ts string
 		var embData []byte
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -812,15 +817,22 @@ func (s *Store) LastExtractionMessageID() (int64, error) {
 }
 
 // UpdateFact modifies an existing fact's text, category, or importance.
-func (s *Store) UpdateFact(factID int64, fact, category string, importance int) error {
+func (s *Store) UpdateFact(factID int64, fact, category string, importance int, tags string) error {
 	_, err := s.db.Exec(
-		`UPDATE facts SET fact = ?, category = ?, importance = ? WHERE id = ?`,
-		fact, category, importance, factID,
+		`UPDATE facts SET fact = ?, category = ?, importance = ?, tags = ? WHERE id = ?`,
+		fact, category, importance, tags, factID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating fact %d: %w", factID, err)
 	}
 	return nil
+}
+
+// UpdateFactTags sets the topic tags for a fact without changing anything else.
+// Used by `her retag` to backfill tags for existing facts.
+func (s *Store) UpdateFactTags(factID int64, tags string) error {
+	_, err := s.db.Exec(`UPDATE facts SET tags = ? WHERE id = ?`, tags, factID)
+	return err
 }
 
 // DeactivateFact soft-deletes a fact by setting active = 0 and removing
@@ -846,7 +858,7 @@ func (s *Store) DeactivateFact(factID int64) error {
 // what to update or consolidate. Includes cached embeddings.
 func (s *Store) AllActiveFacts() ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
 		 FROM facts WHERE active = 1
 		 ORDER BY subject ASC, importance DESC, timestamp DESC`,
 	)
@@ -860,7 +872,7 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 		var f Fact
 		var ts string
 		var embData []byte
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -897,7 +909,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 	// Requesting 2x is a reasonable buffer.
 	rows, err := s.db.Query(
 		`SELECT f.id, f.timestamp, f.fact, f.category, COALESCE(f.subject, 'user'),
-		        f.importance, v.distance
+		        f.importance, COALESCE(f.tags, ''), v.distance
 		 FROM vec_facts v
 		 JOIN facts f ON f.id = v.rowid
 		 WHERE v.embedding MATCH ?
@@ -915,7 +927,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 	for rows.Next() {
 		var f Fact
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Distance); err != nil {
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &f.Distance); err != nil {
 			return nil, fmt.Errorf("scanning semantic search result: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -935,7 +947,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 // and call UpdateFactEmbedding to populate both the BLOB and vec_facts index.
 func (s *Store) FactsWithoutEmbeddings() ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, '')
 		 FROM facts
 		 WHERE active = 1 AND (embedding IS NULL OR LENGTH(embedding) = 0)
 		 ORDER BY id ASC`,
@@ -949,7 +961,7 @@ func (s *Store) FactsWithoutEmbeddings() ([]Fact, error) {
 	for rows.Next() {
 		var f Fact
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance); err != nil {
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags); err != nil {
 			return nil, fmt.Errorf("scanning fact: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -1139,7 +1151,7 @@ func (s *Store) GetStats() (*Stats, error) {
 // Used by /forget to help the user find facts to deactivate.
 func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, embedding
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
 		 FROM facts
 		 WHERE active = 1 AND fact LIKE '%' || ? || '%'
 		 ORDER BY importance DESC
@@ -1156,7 +1168,7 @@ func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
 		var f Fact
 		var ts string
 		var embData []byte
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &embData); err != nil {
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -1321,19 +1333,19 @@ func (s *Store) SavePIIVaultEntry(messageID int64, token, originalValue, entityT
 // (which are clunkier to work with in application code).
 type ScheduledTask struct {
 	ID              int64
-	Name            *string          // human-readable label, nullable
-	ScheduleType    string           // "once", "recurring", "conditional"
-	CronExpr        *string          // cron expression for recurring tasks
-	TriggerAt       *time.Time       // for one-shot tasks: when to fire
-	TaskType        string           // "send_message", "run_prompt", etc.
-	Payload         json.RawMessage  // task-specific config as raw JSON
+	Name            *string         // human-readable label, nullable
+	ScheduleType    string          // "once", "recurring", "conditional"
+	CronExpr        *string         // cron expression for recurring tasks
+	TriggerAt       *time.Time      // for one-shot tasks: when to fire
+	TaskType        string          // "send_message", "run_prompt", etc.
+	Payload         json.RawMessage // task-specific config as raw JSON
 	Enabled         bool
 	LastRun         *time.Time
 	NextRun         *time.Time
 	RunCount        int
-	MaxRuns         *int             // nil = unlimited
-	Priority        string           // "normal", "high", "critical" — controls damping behavior
-	CreatedBy       string           // "user", "system", "agent"
+	MaxRuns         *int   // nil = unlimited
+	Priority        string // "normal", "high", "critical" — controls damping behavior
+	CreatedBy       string // "user", "system", "agent"
 	SourceMessageID *int64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
