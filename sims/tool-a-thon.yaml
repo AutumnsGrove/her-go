@@ -1,0 +1,43 @@
+name: "Tool-a-thon"
+description: "Stress test for agent model tool calling. Exercises all tool categories: memory (save/update), search (web + books), scheduling, context (mood, time, location), expenses, and the use_tools deferred loading pattern. Designed to evaluate model comparison."
+tags: ["tools", "benchmark", "model-comparison"]
+
+messages:
+  # --- Turn 1: Basic intro + fact extraction (hot tools only) ---
+  - "hey! im autumn. i live in portland oregon and i work as a backend engineer"
+
+  # --- Turn 2: Multiple facts in one message + mood signal ---
+  - "honestly today has been rough. my cat bean is sick and i had to take her to the vet this morning. cost me like $340 at Banfield Pet Hospital"
+
+  # --- Turn 3: Forces use_tools(search) + web_search ---
+  - "hey can you look up what the weather is supposed to be like in portland this weekend? thinking about going on a hike"
+
+  # --- Turn 4: Forces use_tools(search) + book_search ---
+  - "ive been wanting to read something new. have you heard of anything by adrian tchaikovsky? i loved children of time"
+
+  # --- Turn 5: Forces use_tools(scheduling) + create_reminder ---
+  - "oh shit, remind me to call the vet back on monday at 2pm to check on bean's blood work results"
+
+  # --- Turn 6: Forces use_tools(context) + set_location + get_current_time ---
+  - "wait what time is it right now? also yeah set my location to portland so you can check weather for me automatically"
+
+  # --- Turn 7: Forces use_tools(expenses) + scan_receipt (complex params) ---
+  - "oh also i went grocery shopping yesterday. spent $87.42 at trader joes. got a bunch of stuff - hummus was $4.29, sourdough bread $3.99, two bags of frozen dumplings at $3.49 each, oat milk $4.79, and a bunch of produce that came to like $67.37"
+
+  # --- Turn 8: Fact update + correction (tests update_fact) ---
+  - "oh wait actually i should clarify - im not just a backend engineer, im a senior backend engineer. just got promoted last month"
+
+  # --- Turn 9: Forces use_tools(expenses) + query_expenses ---
+  - "how much have i spent this month so far?"
+
+  # --- Turn 10: Multi-tool chain - search + memory + mood ---
+  - "ive been feeling really anxious about money lately. like the vet bill plus groceries plus rent... can you look up some budgeting tips for someone making around 95k?"
+
+  # --- Turn 11: Forces use_tools(scheduling) + create_schedule (cron) ---
+  - "you know what, can you set up a weekly check-in every sunday at 10am where you ask me how my week went and how im feeling?"
+
+  # --- Turn 12: Forces use_tools(memory) + recall_memories ---
+  - "wait, what do you remember about me so far? like everything"
+
+  # --- Turn 13: Simple reply, no tools needed (tests no_action) ---
+  - "haha nice. ok i gotta run, talk later!"

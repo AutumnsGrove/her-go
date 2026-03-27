@@ -38,6 +38,11 @@ var limitFlag int
 // on the agent model. A few seconds between turns fixes this.
 var delayFlag int
 
+// agentModelFlag overrides the agent model from config.yaml for this run.
+// Useful for comparing different models without editing the config file.
+// Example: --agent-model "deepseek/deepseek-v3.2"
+var agentModelFlag string
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -61,6 +66,7 @@ func init() {
 	simCmd.Flags().StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
 	simCmd.Flags().IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
 	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 20, "seconds to wait between turns (avoids rate limits on free-tier agent models)")
+	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., deepseek/deepseek-v3.2)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -221,6 +227,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// testing the sim harness itself.
 	if cfg.LLM.APIKey == "" {
 		log.Warn("LLM API key not set — agent calls will fail")
+	}
+
+	// --agent-model flag overrides the config value. This mutates cfg so
+	// both the run logic and report generator see the same model name.
+	if agentModelFlag != "" {
+		log.Info("Agent model overridden via --agent-model", "model", agentModelFlag)
+		cfg.Agent.Model = agentModelFlag
 	}
 
 	// ------------------------------------------------------------------
