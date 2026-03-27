@@ -376,6 +376,45 @@ skills can also be tested manually from the command line.
 | Env vars | Declared set | Declared set | None |
 | File system | refs/ + state.db | refs/ (read-only) | refs/ (read-only) |
 
+### Parallel Execution
+
+When Trinity calls multiple `run_skill` tools in the **same LLM iteration** (same
+response), the harness runs them concurrently via goroutines. Skills called in
+different iterations run sequentially.
+
+Same-iteration is the independence signal — no explicit flag needed. If the model
+emitted both calls in one response, it wasn't waiting for one result to inform the
+other.
+
+```
+Iteration 3: Trinity returns two tool calls:
+  run_skill("weather", {"location": "Portland"})
+  run_skill("transit", {"from": "home", "to": "downtown"})
+
+  → harness spawns both in goroutines
+  → collects results via WaitGroup
+  → returns both results to agent in iteration 4
+```
+
+### Skill Source Versioning
+
+Before the coding agent edits a skill's source file, the harness creates a timestamped
+snapshot:
+
+```
+skills/transit/
+├── main.go                             # current version
+├── main.go.2026-03-27T14-30-00.bak     # previous
+├── main.go.2026-03-25T09-15-00.bak     # older
+└── ...
+```
+
+**Cleanup policy:** keep the greater of 5 snapshots or 7 days of history. Whichever
+rule preserves more files wins. This covers both rapid-edit scenarios (many edits in
+one day → keep at least 5) and slow-edit scenarios (one edit per week → keep 7 days).
+
+Cleanup runs lazily — checked each time a new snapshot is created.
+
 ### Error Handling
 
 - Non-zero exit code → harness returns error message to agent
@@ -508,7 +547,17 @@ CREATE TABLE runs (
     duration_ms INTEGER NOT NULL,
     timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Embedding for semantic search over cached results
+CREATE TABLE run_embeddings (
+    run_id      INTEGER PRIMARY KEY REFERENCES runs(id),
+    embedding   BLOB NOT NULL        -- vector for KNN search
+);
 ```
+
+The harness embeds a concatenation of the input args and a summary of the result,
+then stores the vector alongside the run. This enables semantic search via
+`search_history` — the agent can find past results by intent, not just keywords.
 
 ### Reading Cached Results
 
@@ -521,7 +570,7 @@ search_history("web_search", "piper tts")
 
 The harness:
 1. Opens `skills/web_search/state.db`
-2. Searches `runs.args` and `runs.result` for the query (text search or embedding)
+2. Embeds the query and performs KNN search against embedded run results
 3. Returns matching results with freshness metadata
 
 ```json
@@ -571,11 +620,13 @@ an **asynchronous goroutine** that launches a coding agent as a non-interactive 
 
 **The agent loop is never blocked.** Mira continues chatting while the coding agent works.
 
-### Coding Agent Options
+### Coding Agent
 
-- **Claude Code** (non-interactive CLI mode)
-- **Crush** (Charm Bracelet's coding harness)
-- Configurable in `config.yaml`
+**Claude Code CLI** in non-interactive mode (`claude --non-interactive`).
+
+Selected for: strong Go capabilities, built-in MCP server support (context7, deepwiki),
+and familiarity with the toolchain. Configurable in `config.yaml` if we want to swap
+to an alternative (e.g., Crush) later.
 
 The coding agent gets:
 - Scoped file access (only the skill directory)
@@ -1003,37 +1054,51 @@ These were discussed and decided:
 - **Compilation?** → Dynamic, on-demand via coding agent. Startup check as fallback.
   Harness also checks freshness before each skill execution.
 
+### Also Resolved (Q&A Session)
+
+- **Multi-skill chaining?** → Yes. Trinity can call `find_skill` and `run_skill` multiple
+  times in the same agent loop. Enables combined responses (weather + transit in one reply).
+
+- **Parallel skill execution?** → Yes, when independent. If Trinity calls two `run_skill`
+  tools in the same LLM iteration (same response), the harness runs them concurrently via
+  goroutines. Different iterations are sequential. No explicit flag needed — same-iteration
+  is the independence signal.
+
+- **Skill versioning?** → Timestamped snapshots. Before each edit, the harness copies the
+  source file to `main.go.<timestamp>.bak`. Provides a full audit trail of runtime changes
+  independent of git (since 3rd/4th-party edits happen at runtime, not via commits).
+  Cleanup policy: keep the greater of 5 snapshots or 7 days of history.
+
+- **Skill deletion/cleanup?** → Autumn only. Mira can suggest deprecation but never removes
+  a skill directory. Safest approach — no accidental loss of vetted skills.
+
+- **search_history search method?** → Embedding + KNN. Sidecar DB contents are embedded for
+  semantic search. Better intent matching ("weather last week" finds the right cached result)
+  is worth the compute cost, especially given it avoids unnecessary external API calls.
+
+- **Skill hot-reload?** → Check on execution. Before running a skill, the harness checks if
+  the source changed since last compile. No background file watcher, no fsnotify dependency.
+  Simpler and sufficient for our use case.
+
+- **Coding agent selection?** → Claude Code CLI (`claude --non-interactive`). Strong Go
+  capabilities, MCP server support built in, already familiar tooling.
+
 ### Still Open
-
-- **Skill-to-skill composition at agent level:** Can Trinity chain multiple skills in one
-  turn? (e.g., `find_skill("weather")` → `run_skill("weather")` → `find_skill("transit")`
-  → `run_skill("transit")` → reply with combined results). Technically yes, but need to
-  ensure the agent prompt encourages this pattern without over-engineering.
-
-- **Parallel skill execution:** Should the harness support running multiple skills
-  concurrently when the agent requests them in the same turn? Or is sequential sufficient?
-
-- **Skill versioning:** When Mira edits a skill, should the harness keep the previous
-  version? Git handles this for 2nd-party skills, but 3rd/4th-party changes happen at
-  runtime. Could version in the sidecar DB or use filesystem snapshots.
-
-- **Skill deletion/cleanup:** What happens when a skill is no longer needed? Manual
-  delete by Autumn? Or can Mira suggest deprecation? What about orphaned sidecar DBs?
 
 - **4th-party skill creation details:** The full flow for Mira creating a brand new skill
   from scratch needs its own design session. How does she gather context (context7, deepwiki)?
   What templates does the coding agent use? How does she specify the permission requirements
   for a skill that doesn't exist yet?
 
-- **search_history embedding:** Should sidecar DB contents be embedded for semantic search,
-  or is text search sufficient? Embedding gives better intent matching but adds compute cost.
+- **Parallel execution error handling:** If two skills run in parallel and one fails, does
+  the harness still return the successful result? Or does it wait and return both? Likely
+  return both (success + error) and let Trinity decide.
 
-- **Skill hot-reload:** OpenClaw uses a file watcher with 250ms debounce. Do we want the
-  same, or is "reload on next execution" sufficient?
+- **Snapshot cleanup implementation:** Goroutine on a timer? Or lazy cleanup (check on each
+  new snapshot)? Lazy is simpler but could leave stale files if a skill isn't edited often.
 
-- **Coding agent selection:** Claude Code vs Crush vs something else. Needs evaluation
-  based on: non-interactive mode support, MCP server compatibility, Go code quality,
-  cost per invocation.
+- **Embedding storage for skill history:** Where do the sidecar content embeddings live?
+  In the sidecar `state.db` itself (keeps portability) or in a central index?
 
 ---
 
