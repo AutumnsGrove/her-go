@@ -20,11 +20,11 @@ llm:
     max_tokens: 4096
 
 agent:
-  model: "arcee-ai/trinity-large-preview:free"  # tool-calling model for agent orchestration
-  temperature: 0.1                               # low temp for precise tool decisions
+  model: "inception/mercury-2"                   # tool-calling model for agent orchestration (diffusion LLM, ZDR, fast)
+  temperature: 0.6                               # Mercury (diffusion LLM) needs higher temp than transformers — 0.1 causes degenerate outputs
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
-  fallback:                                      # optional — Trinity is free but can be flaky
+  fallback:                                      # optional — used when primary model is unavailable
     model: "anthropic/claude-haiku-4.5"
     temperature: 0.1
     max_tokens: 1024

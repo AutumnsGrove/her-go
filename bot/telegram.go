@@ -393,6 +393,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
 		EventBus:                  b.eventBus,
+		ConfigPath:                b.configPath,
 	})
 	b.agentBusy.Store(false)
 

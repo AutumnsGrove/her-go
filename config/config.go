@@ -351,6 +351,73 @@ func (c *Config) SetTrace(configPath string, enabled bool) error {
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
+// SetLocation updates the weather latitude and longitude in both the
+// in-memory config and the config.yaml file on disk. Like SetTrace,
+// it does a surgical line edit — finds the latitude: and longitude:
+// lines under the weather: section and updates them in place, or
+// inserts them after the weather: line if they don't exist yet.
+//
+// This is the persistence half of set_location — the weather client
+// is updated in memory by its own SetLocation method, and this call
+// makes sure the new coordinates survive a restart.
+func (c *Config) SetLocation(configPath string, lat, lon float64) error {
+	c.Weather.Latitude = lat
+	c.Weather.Longitude = lon
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	inWeather := false
+	latFound := false
+	lonFound := false
+	weatherLineIdx := -1 // index of the "weather:" line itself, for fallback insertion
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect top-level YAML sections (no leading whitespace).
+		if len(trimmed) > 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") {
+			if strings.HasPrefix(trimmed, "weather:") {
+				inWeather = true
+				weatherLineIdx = i
+			} else if inWeather {
+				// Left the weather section — stop scanning.
+				break
+			}
+		}
+
+		if inWeather {
+			if strings.Contains(trimmed, "latitude:") {
+				prefix := line[:strings.Index(line, "latitude:")]
+				lines[i] = fmt.Sprintf("%slatitude: %g", prefix, lat)
+				latFound = true
+			}
+			if strings.Contains(trimmed, "longitude:") {
+				prefix := line[:strings.Index(line, "longitude:")]
+				lines[i] = fmt.Sprintf("%slongitude: %g", prefix, lon)
+				lonFound = true
+			}
+		}
+	}
+
+	// If either line was missing, insert both after the weather: line.
+	// We insert in reverse order so indices stay valid.
+	indent := "  " // match weather section indentation
+	if !lonFound {
+		newLine := fmt.Sprintf("%slongitude: %g", indent, lon)
+		lines = append(lines[:weatherLineIdx+1], append([]string{newLine}, lines[weatherLineIdx+1:]...)...)
+	}
+	if !latFound {
+		newLine := fmt.Sprintf("%slatitude: %g", indent, lat)
+		lines = append(lines[:weatherLineIdx+1], append([]string{newLine}, lines[weatherLineIdx+1:]...)...)
+	}
+
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
 // expandEnvVars replaces all ${VAR_NAME} patterns with their environment
 // variable values. If a variable isn't set, the placeholder is replaced
 // with an empty string.
