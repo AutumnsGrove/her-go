@@ -17,6 +17,7 @@ import (
 	"her/persona"
 	"her/scrub"
 	"her/search"
+	"her/skills/loader"
 	"her/tui"
 	"her/weather"
 )
@@ -202,6 +203,10 @@ type toolContext struct {
 	// signaling the agent is finished with all actions for this turn.
 	doneCalled bool
 
+	// skillRegistry holds discovered skills for find_skill/run_skill.
+	// Nil if the skills system is not configured (no skills/ directory).
+	skillRegistry *loader.Registry
+
 	// replyText stores the final response text (after deanonymization).
 	// Used by the bot to know what was sent.
 	replyText string
@@ -267,11 +272,12 @@ type RunParams struct {
 	SendConfirmCallback       SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
 	ReflectionThreshold       int
 	RewriteEveryN             int
-	ImageBase64               string   // base64-encoded image data (empty if no image)
-	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
-	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
-	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
-	ConfigPath                string   // path to config.yaml — needed for persisting location changes via set_location
+	ImageBase64               string           // base64-encoded image data (empty if no image)
+	ImageMIME                 string           // MIME type of the image (e.g., "image/jpeg")
+	OCRText                   string           // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
+	EventBus                  *tui.Bus         // nil-safe — emits rich typed events for the TUI
+	ConfigPath                string           // path to config.yaml — needed for persisting location changes via set_location
+	SkillRegistry             *loader.Registry // nil-safe — skill discovery and execution
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -435,6 +441,7 @@ func Run(params RunParams) (*RunResult, error) {
 		activeTools:               &tools,
 		eventBus:                  params.EventBus,
 		configPath:                params.ConfigPath,
+		skillRegistry:             params.SkillRegistry,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -896,6 +903,10 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execSetLocation(tc.Function.Arguments, tctx)
 	case "reply_confirm":
 		return execReplyConfirm(tc.Function.Arguments, tctx)
+	case "find_skill":
+		return execFindSkill(tc.Function.Arguments, tctx)
+	case "run_skill":
+		return execRunSkill(tc.Function.Arguments, tctx)
 	case "use_tools":
 		return execUseTools(tc.Function.Arguments, tctx)
 	case "no_action":

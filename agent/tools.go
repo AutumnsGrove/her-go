@@ -32,6 +32,8 @@ var hotToolNames = []string{
 	"update_fact",   // update existing facts — frequent
 	"no_action",     // explicit skip — frequent
 	"reply_confirm", // confirmation before destructive actions — always available
+	"find_skill",    // KNN search over skill descriptions — skills discovery
+	"run_skill",     // execute a skill binary — skills execution
 }
 
 // toolCategories groups deferred tools by function. The agent can load
@@ -371,6 +373,50 @@ func allToolDefs() []llm.ToolDef {
 						},
 					},
 					"required": []string{"message", "action_type", "action_payload"},
+				},
+			},
+		},
+
+		// --- Skills (hot) ---
+		//
+		// find_skill and run_skill are always available. The agent uses
+		// find_skill to discover skills by intent (KNN semantic search),
+		// then run_skill to execute the matched skill in a sandbox.
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "find_skill",
+				Description: "Search for a skill by describing what you need. Returns matching skills ranked by relevance. Use this when you need a capability that isn't one of your built-in tools.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "Natural language description of what you need (e.g., 'get weather forecast', 'search the web', 'look up a book').",
+						},
+					},
+					"required": []string{"query"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "run_skill",
+				Description: "Execute a skill by name with the given arguments. Use find_skill first to discover available skills, then call this with the skill name and a JSON object of arguments matching the skill's parameter schema.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "Exact skill name (from find_skill results).",
+						},
+						"args": map[string]interface{}{
+							"type":        "object",
+							"description": "Arguments to pass to the skill, matching its parameter schema.",
+						},
+					},
+					"required": []string{"name"},
 				},
 			},
 		},
