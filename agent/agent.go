@@ -143,6 +143,10 @@ type toolContext struct {
 	// memory limits, etc.).
 	cfg *config.Config
 
+	// configPath is the path to config.yaml on disk. Used by set_location
+	// to persist lat/lon coordinates so they survive restarts.
+	configPath string
+
 	// scrubVault holds the PII token mappings from the current message.
 	// The reply tool uses this to deanonymize the LLM response before
 	// sending it to Telegram.
@@ -267,6 +271,7 @@ type RunParams struct {
 	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
 	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
 	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
+	ConfigPath                string   // path to config.yaml — needed for persisting location changes via set_location
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -429,6 +434,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ocrText:                   params.OCRText,
 		activeTools:               &tools,
 		eventBus:                  params.EventBus,
+		configPath:                params.ConfigPath,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -599,6 +605,16 @@ func Run(params RunParams) (*RunResult, error) {
 			log.Info("  finish_reason=stop after tool execution")
 			break
 		}
+	}
+
+	// --- Auto-done for diffusion models ---
+	// Diffusion LLMs (like Mercury 2) generate output in parallel and
+	// sometimes omit the done tool call even after completing all work.
+	// If reply was called and the loop ended naturally (not via done),
+	// treat it as a clean completion rather than an error.
+	if tctx.replyCount > 0 && !tctx.doneCalled {
+		log.Info("auto-done: reply was called but done was not — treating as complete")
+		tctx.doneCalled = true
 	}
 
 	// --- Fallback: ensure the user always gets a response ---
@@ -1232,8 +1248,9 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 //	reply(...)
 //
 // execSetLocation looks up a city name via Open-Meteo geocoding and
-// updates the weather client's coordinates. Also saves the location
-// as a fact so it persists across restarts.
+// updates the weather client's coordinates. Coordinates are persisted
+// to config.yaml via cfg.SetLocation so they survive restarts — no
+// separate fact is saved for the raw coordinates.
 func execSetLocation(argsJSON string, tctx *toolContext) string {
 	var args struct {
 		Query string `json:"query"`
@@ -1256,15 +1273,18 @@ func execSetLocation(argsJSON string, tctx *toolContext) string {
 		tctx.weatherClient.SetLocation(loc.Latitude, loc.Longitude)
 	}
 
-	// Save as a fact so the location persists across restarts.
-	locationFact := fmt.Sprintf("%s is located in %s, %s, %s (%.4f, %.4f)",
-		tctx.cfg.Identity.User,
-		loc.Name, loc.Region, loc.Country, loc.Latitude, loc.Longitude)
-	_, _ = tctx.store.SaveFact(locationFact, "location", "user", tctx.triggerMsgID, 9, nil, "location, geography, place, where user lives")
+	// Persist coordinates to config.yaml so they survive restarts.
+	// We log a warning on failure but don't return an error — the
+	// in-memory update already worked, so weather is live immediately.
+	if tctx.configPath != "" {
+		if err := tctx.cfg.SetLocation(tctx.configPath, loc.Latitude, loc.Longitude); err != nil {
+			log.Warn("set_location: failed to persist coordinates to config", "err", err)
+		}
+	}
 
-	log.Info("set_location", "query", args.Query, "result", locationFact)
+	log.Info("set_location", "query", args.Query, "lat", loc.Latitude, "lon", loc.Longitude)
 
-	return fmt.Sprintf("Location set to %s, %s, %s. Weather data will now reflect this location.",
+	return fmt.Sprintf("Location set to %s, %s, %s. Weather data will now reflect this location. Location saved to config.",
 		loc.Name, loc.Region, loc.Country)
 }
 

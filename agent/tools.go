@@ -695,7 +695,7 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "set_location",
-				Description: "Set the user's location by city/place name. Enables weather data in conversations.",
+				Description: "Set the user's location by city/place name. Enables weather data in conversations. Coordinates are saved to config automatically — do NOT save a separate location fact for coordinates. The user's natural-language location (city, state) is already captured in regular conversation facts.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
