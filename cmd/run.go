@@ -22,6 +22,7 @@ import (
 	"her/memory"
 	"her/scheduler"
 	"her/search"
+	"her/skills/loader"
 	"her/tui"
 	"her/voice"
 	"her/weather"
@@ -269,6 +270,20 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "tts", Status: "skipped"})
 	}
 
+	// --- Skills registry ---
+	// Discover and load skills from the skills/ directory.
+	// The registry is optional — if no skills exist or the directory
+	// is missing, everything still works (find_skill returns "no skills").
+	skillsDir := filepath.Join(filepath.Dir(cfgFile), "skills")
+	skillReg := loader.NewRegistry(skillsDir, embedClient)
+	if count, err := skillReg.Load(); err != nil {
+		log.Warn("failed to load skills", "err", err)
+	} else if count > 0 {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "skills", Status: fmt.Sprintf("%d loaded", count)})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "skills", Status: "none found"})
+	}
+
 	// --- Telegram bot ---
 
 	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)
@@ -277,6 +292,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Close()
 		return
 	}
+	tgBot.SetSkillRegistry(skillReg)
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 
 	// --- Scheduler ---
@@ -297,6 +313,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 				ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
 				RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
 				EventBus:            bus,
+				SkillRegistry:       skillReg,
 			})
 			if err != nil {
 				return "", err
