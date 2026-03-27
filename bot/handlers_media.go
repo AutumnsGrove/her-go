@@ -234,6 +234,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		ImageMIME:                 imageMIME,
 		OCRText:                   ocrText,
 		EventBus:                  b.eventBus,
+		SkillRegistry:             b.skillRegistry,
 	})
 	b.agentBusy.Store(false)
 
@@ -465,6 +466,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		TraceCallback:             traceCallback,
 		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
+		SkillRegistry:             b.skillRegistry,
 	})
 	b.agentBusy.Store(false)
 

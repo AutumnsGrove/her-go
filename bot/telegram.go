@@ -19,6 +19,7 @@ import (
 	"her/ocr"
 	"her/scrub"
 	"her/search"
+	"her/skills/loader"
 	"her/tui"
 	"her/voice"
 	"her/weather"
@@ -68,6 +69,11 @@ type Bot struct {
 	// the agent decides what to do. The OCR is local and fast (sub-200ms).
 	ocrEnabled bool
 
+	// skillRegistry holds discovered skills for find_skill/run_skill.
+	// Set via SetSkillRegistry after construction. Nil-safe — if not set,
+	// the agent's skill tools return "no skills available."
+	skillRegistry *loader.Registry
+
 	// agentBusy is an atomic flag the scheduler checks to avoid firing
 	// tasks while a conversation turn is in progress. Set before
 	// agent.Run(), cleared after. atomic.Bool is lock-free — no mutex
@@ -75,6 +81,13 @@ type Bot struct {
 	// like a thread-safe boolean in Python (except Python's GIL makes
 	// plain bools thread-safe already — Go doesn't have a GIL).
 	agentBusy atomic.Bool
+}
+
+// SetSkillRegistry configures the skill registry for find_skill/run_skill.
+// Call after New() and before Start(). This is a setter rather than a
+// constructor param to avoid making the already-long New() signature worse.
+func (b *Bot) SetSkillRegistry(reg *loader.Registry) {
+	b.skillRegistry = reg
 }
 
 // New creates and configures a new Telegram bot.
@@ -394,6 +407,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
 		EventBus:                  b.eventBus,
 		ConfigPath:                b.configPath,
+		SkillRegistry:             b.skillRegistry,
 	})
 	b.agentBusy.Store(false)
 
