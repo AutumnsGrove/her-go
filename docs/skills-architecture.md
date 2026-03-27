@@ -83,7 +83,7 @@ skills/
 │   ├── main.go               # source code (Go skill)
 │   ├── bin/                   # compiled binary output
 │   │   └── web_search
-│   ├── state.db              # sidecar SQLite (harness-managed, skill never touches)
+│   ├── web_search.db          # sidecar SQLite (harness-managed, skill never touches)
 │   └── refs/                  # reference files, examples, schemas
 │       └── output_example.json
 │
@@ -93,7 +93,7 @@ skills/
 │   ├── pyproject.toml         # pinned dependencies
 │   ├── uv.lock               # lockfile (never auto-updated)
 │   ├── .venv/                 # uv-managed virtualenv (skill-local)
-│   ├── state.db
+│   ├── recipe_scraper.db
 │   └── refs/
 │       └── schema.json
 │
@@ -326,7 +326,7 @@ When the agent calls `run_skill(name, args)`:
 6. **Capture output** (stdout = result, stderr = error log, exit code)
 7. **Post-process**:
    - Parse stdout as JSON (with markdown fallback)
-   - Auto-write inputs, outputs, and timestamp to sidecar `state.db`
+   - Auto-write inputs, outputs, and timestamp to sidecar `<skill_name>.db`
    - Return structured result to the agent
 
 ### Go Skill Execution
@@ -374,7 +374,7 @@ skills can also be tested manually from the command line.
 | Sidecar DB | Read/Write | Read-only | None |
 | Rate limiting | Standard | Standard | Aggressive |
 | Env vars | Declared set | Declared set | None |
-| File system | refs/ + state.db | refs/ (read-only) | refs/ (read-only) |
+| File system | refs/ + <skill_name>.db | refs/ (read-only) | refs/ (read-only) |
 
 ### Parallel Execution
 
@@ -528,17 +528,18 @@ Python requests/httpx respect the env vars). Hardening can be layered on later.
 
 ### Design
 
-Each skill has its own `state.db` — a SQLite database inside the skill directory.
-The harness manages all writes. Mira never touches these databases directly and
-does not need to know they exist.
+Each skill has its own `<skill_name>.db` — a SQLite database inside the skill directory,
+named after the skill (e.g., `skills/web_search/web_search.db`). This is the skill's
+full operational memory: execution history, cached results, and embeddings for semantic
+search. The harness manages all writes. Mira never touches these databases directly
+and does not need to know they exist.
 
 This is the same pattern as TTS: the pipeline runs invisibly in the background.
 
-### What Gets Stored
-
-After every skill execution, the harness writes:
+### Schema
 
 ```sql
+-- Execution history and cached results
 CREATE TABLE runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     args        TEXT NOT NULL,       -- JSON input args
@@ -548,16 +549,16 @@ CREATE TABLE runs (
     timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Embedding for semantic search over cached results
-CREATE TABLE run_embeddings (
+-- Embeddings for semantic search over cached results
+CREATE TABLE embeddings (
     run_id      INTEGER PRIMARY KEY REFERENCES runs(id),
-    embedding   BLOB NOT NULL        -- vector for KNN search
+    embedding   BLOB NOT NULL        -- vector for KNN search via sqlite-vec
 );
 ```
 
-The harness embeds a concatenation of the input args and a summary of the result,
-then stores the vector alongside the run. This enables semantic search via
-`search_history` — the agent can find past results by intent, not just keywords.
+Two tables, one DB. `runs` is the execution log, `embeddings` enables semantic
+search via `search_history`. The harness embeds a concatenation of the input args
+and a summary of the result after each run, storing the vector in `embeddings`.
 
 ### Reading Cached Results
 
@@ -569,7 +570,7 @@ search_history("web_search", "piper tts")
 ```
 
 The harness:
-1. Opens `skills/web_search/state.db`
+1. Opens `skills/web_search/web_search.db`
 2. Embeds the query and performs KNN search against embedded run results
 3. Returns matching results with freshness metadata
 
@@ -590,7 +591,7 @@ The agent decides whether to reuse the cached result or re-run the skill fresh.
 
 ### Access by Trust Level
 
-- **2nd party:** harness reads and writes to state.db
+- **2nd party:** harness reads and writes to <skill_name>.db
 - **3rd party:** harness reads only (no writes from modified skills)
 - **4th party:** no sidecar DB access at all
 
@@ -1097,8 +1098,9 @@ These were discussed and decided:
 - **Snapshot cleanup implementation:** Goroutine on a timer? Or lazy cleanup (check on each
   new snapshot)? Lazy is simpler but could leave stale files if a skill isn't edited often.
 
-- **Embedding storage for skill history:** Where do the sidecar content embeddings live?
-  In the sidecar `state.db` itself (keeps portability) or in a central index?
+- **Embedding storage for skill history:** ~~Where do the sidecar content embeddings live?~~
+  **Resolved:** In the skill's `<name>.db` alongside the `runs` table. Separate `embeddings`
+  table. Keeps skills fully portable (copy the directory, get everything).
 
 ---
 
