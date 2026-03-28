@@ -312,7 +312,19 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		return
 	}
 	tgBot.SetSkillRegistry(skillReg)
+	tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
+
+	// --- Skill failure events ---
+	// When a skill fails, emit an event so the agent can proactively respond.
+	loader.SetSkillFailedCallback(func(skillName, errMsg string) {
+		tgBot.AgentEventChannel() <- agent.AgentEvent{
+			Type:      agent.EventSkillFailed,
+			SkillName: skillName,
+			Error:     errMsg,
+			Timestamp: time.Now(),
+		}
+	})
 
 	// --- Scheduler ---
 
@@ -320,24 +332,16 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	if cfg.Telegram.OwnerChat != 0 {
 		ownerChat := cfg.Telegram.OwnerChat
 		sendFn := func(text string) error { return tgBot.SendToChat(ownerChat, text) }
-		agentFn := func(prompt string) (string, error) {
-			result, err := agent.Run(agent.RunParams{
-				AgentLLM: agentClient, ChatLLM: llmClient, VisionLLM: visionClient,
-				Store: store, EmbedClient: embedClient,
-				SimilarityThreshold: cfg.Embed.SimilarityThreshold,
-				TavilyClient:        tavilyClient, WeatherClient: weatherClient, Cfg: cfg,
-				ScrubbedUserMessage: prompt, ScrubVault: nil,
-				ConversationID: "scheduled", TriggerMsgID: 0,
-				StatusCallback:      func(text string) error { return tgBot.SendToChat(ownerChat, text) },
-				ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
-				RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
-				EventBus:            bus,
-				SkillRegistry:       skillReg,
-			})
-			if err != nil {
-				return "", err
+
+		// Scheduler emits agent events instead of calling agent.Run directly.
+		// The bot's event consumption loop handles the actual agent run.
+		agentEventFn := func(taskName, prompt string) {
+			tgBot.AgentEventChannel() <- agent.AgentEvent{
+				Type:      agent.EventSchedulerFired,
+				Prompt:    prompt,
+				TaskName:  taskName,
+				Timestamp: time.Now(),
 			}
-			return result.ReplyText, nil
 		}
 
 		var defaults []scheduler.DefaultTask
@@ -376,7 +380,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 			return tgBot.SendKeyboardToChat(ownerChat, msg)
 		}
 
-		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentFn, tgBot.IsAgentBusy, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
+		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentEventFn, tgBot.IsAgentBusy, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
 			QuietHoursStart: cfg.Scheduler.QuietHoursStart, QuietHoursEnd: cfg.Scheduler.QuietHoursEnd,
 			MaxProactivePerDay: cfg.Scheduler.MaxProactivePerDay, Defaults: defaults,
 		})

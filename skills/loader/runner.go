@@ -24,6 +24,18 @@ func SetSkillProxy(p *SkillProxy) {
 	skillProxy = p
 }
 
+// onSkillFailed is called when a skill execution fails. The bot sets
+// this during startup to emit SkillFailed events into the agent event
+// channel. Nil means no event emission (skill failures are still
+// returned to the caller, just not broadcast as events).
+var onSkillFailed func(skillName string, errorMsg string)
+
+// SetSkillFailedCallback stores the callback for skill failure events.
+// Called from cmd/run.go after creating the bot.
+func SetSkillFailedCallback(fn func(string, string)) {
+	onSkillFailed = fn
+}
+
 // sidecarEmbedClient is the embedding client used for sidecar DB writes.
 // Set during startup via SetEmbedClient. Nil means sidecar recording
 // is disabled (no embedding model configured).
@@ -145,19 +157,26 @@ func Run(skill *Skill, args map[string]any) (*RunResult, error) {
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			result.Error = fmt.Sprintf("skill timed out after %s", timeout)
-			return result, nil
-		}
-		// Non-zero exit code.
-		result.Error = fmt.Sprintf("skill exited with error: %s", err)
-		// Still try to parse stdout — the skill might have written an
-		// error JSON before exiting (via skillkit.Error).
-		if stdoutBuf.Len() > 0 {
-			if json.Valid(stdoutBuf.Bytes()) {
-				result.Output = json.RawMessage(bytes.TrimSpace(stdoutBuf.Bytes()))
-			} else {
-				result.RawOut = strings.TrimSpace(stdoutBuf.String())
+		} else {
+			// Non-zero exit code.
+			result.Error = fmt.Sprintf("skill exited with error: %s", err)
+			// Still try to parse stdout — the skill might have written an
+			// error JSON before exiting (via skillkit.Error).
+			if stdoutBuf.Len() > 0 {
+				if json.Valid(stdoutBuf.Bytes()) {
+					result.Output = json.RawMessage(bytes.TrimSpace(stdoutBuf.Bytes()))
+				} else {
+					result.RawOut = strings.TrimSpace(stdoutBuf.String())
+				}
 			}
 		}
+
+		// Emit a SkillFailed event so the agent can proactively respond
+		// (e.g., notify the user, suggest a fix, or retry).
+		if onSkillFailed != nil {
+			onSkillFailed(skill.Name, result.Error)
+		}
+
 		return result, nil
 	}
 

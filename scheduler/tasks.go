@@ -65,8 +65,8 @@ func (s *Scheduler) executeSendMessage(task memory.ScheduledTask) {
 // follow-ups, journal entries — they're all just prompts with different
 // instructions.
 func (s *Scheduler) executeRunPrompt(task memory.ScheduledTask) {
-	if s.agentFn == nil {
-		log.Error("run_prompt task but no agentFn configured — is the scheduler fully wired?",
+	if s.agentEventFn == nil {
+		log.Error("run_prompt task but no agentEventFn configured — is the scheduler fully wired?",
 			"id", task.ID)
 		return
 	}
@@ -89,21 +89,13 @@ func (s *Scheduler) executeRunPrompt(task memory.ScheduledTask) {
 		name = *task.Name
 	}
 
-	log.Info("running scheduled prompt", "id", task.ID, "name", name,
+	log.Info("emitting scheduled prompt event", "id", task.ID, "name", name,
 		"prompt_len", len(payload.Prompt))
 
-	// The agentFn runs the prompt through the full agent pipeline.
-	// The agent's reply tool delivers the message to the user via
-	// the StatusCallback (which for scheduled runs sends a new
-	// Telegram message rather than editing a placeholder).
-	replyText, err := s.agentFn(payload.Prompt)
-	if err != nil {
-		log.Error("agent pipeline error for run_prompt", "id", task.ID, "err", err)
-		return
-	}
-
-	log.Info("run_prompt completed", "id", task.ID, "name", name,
-		"reply_len", len(replyText))
+	// Fire-and-forget: emit an agent event. The bot's event consumer
+	// handles the actual agent.Run() call asynchronously. The old
+	// agentFn blocked here; now the scheduler continues immediately.
+	s.agentEventFn(name, payload.Prompt)
 }
 
 // executeMoodCheckin handles the "mood_checkin" task type.
