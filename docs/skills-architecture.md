@@ -3,7 +3,7 @@
 > Design document for the skills system in her-go. This document captures architectural decisions
 > made during planning and serves as the implementation blueprint.
 >
-> Status: **PLAN** — not yet implemented.
+> Status: **PARTIALLY IMPLEMENTED** — core system working (skillkit, loader, registry, agent tools, 3 skills migrated). Advanced infra (proxy, trust, sidecar DBs, coding agent, event bus) not yet started.
 
 ---
 
@@ -914,15 +914,15 @@ Current tools that interact with the outside world migrate to skills:
 
 | Current Tool | New Skill | Priority |
 |---|---|---|
-| `web_search` | `skills/web_search/` | High — proves the architecture |
-| `web_read` | `skills/web_read/` | High — commonly used |
-| `book_search` | `skills/book_search/` | Medium |
-| `view_image` | `skills/view_image/` | Medium |
+| `web_search` | `skills/web_search/` | ~~High~~ **DONE** |
+| `web_read` | `skills/web_read/` | ~~High~~ **DONE** |
+| `book_search` | `skills/book_search/` | ~~Medium~~ **DONE** |
+| `view_image` | stays as tool | N/A — needs vision LLM client + base64 image data from agent context |
 | `get_current_time` | stays as tool | N/A — internal state |
 | `set_location` | stays as tool | N/A — internal state |
 | `log_mood` | stays as tool | N/A — internal state |
 | Scheduling tools | stays as tools | N/A — tightly coupled to harness |
-| Weather (currently in reply pipeline) | `skills/weather/` | Medium |
+| Weather (currently in reply pipeline) | stays as tool | N/A — tightly coupled to config location + reply pipeline |
 
 ### What Stays as Tools
 
@@ -932,6 +932,8 @@ Everything internal to Mira's state:
 - `save_self_fact`, `update_persona` — self-knowledge
 - `recall_memories` — memory retrieval
 - `log_mood`, `get_current_time`, `set_location` — internal context
+- `view_image` — needs vision LLM client + base64 image data from agent context
+- Weather — tightly coupled to config location + injected in reply pipeline
 - `find_skill`, `run_skill`, `delegate_coding`, `search_history` — skills harness
 - Scheduling tools — tightly coupled to harness DB and delivery system
 
@@ -946,18 +948,19 @@ Everything internal to Mira's state:
 
 ### Implementation Order
 
-1. **Skillkit libraries** — Go and Python shared libs (foundation everything builds on)
-2. **Skill format and loader** — parse `skill.md`, build registry, embed descriptions
-3. **`find_skill` tool** — KNN search over skill embeddings
-4. **`run_skill` tool** — sandbox execution (without proxy initially)
-5. **Migrate `web_search`** — first real skill, proves the architecture end-to-end
-6. **Network proxy** — `elazarl/goproxy` goroutine with SSRF prevention
-7. **Trust model** — hash verification, permission enforcement by tier
-8. **Sidecar databases** — harness-managed persistence, `search_history` tool
-9. **`delegate_coding` tool** — async coding agent with event bus integration
-10. **Event bus** — generalized event-driven agent entry points
-11. **Migrate remaining tools** — `web_read`, `book_search`, `view_image`, `weather`
-12. **Skill creation flow** — 4th-party skills via coding agent delegation
+1. ~~**Skillkit libraries** — Go and Python shared libs~~ **DONE** (2026-03-27, `skills/skillkit/go/` + `skills/skillkit/python/`)
+2. ~~**Skill format and loader** — parse `skill.md`, build registry, embed descriptions~~ **DONE** (`skills/loader/`)
+3. ~~**`find_skill` tool** — KNN search over skill embeddings~~ **DONE** (`agent/skills.go`)
+4. ~~**`run_skill` tool** — sandbox execution (without proxy initially)~~ **DONE** (`skills/loader/runner.go`)
+5. ~~**Migrate `web_search`** — first real skill, proves the architecture end-to-end~~ **DONE** (`skills/web_search/`)
+6. ~~**Migrate `web_read` and `book_search`**~~ **DONE** (`skills/web_read/`, `skills/book_search/`)
+7. ~~**Startup wiring** — registry init, Bot integration, all RunParams callsites~~ **DONE** (`cmd/run.go`, `cmd/sim.go`, `bot/telegram.go`)
+8. **Network proxy** — `elazarl/goproxy` goroutine with SSRF prevention
+9. **Trust model** — hash verification, permission enforcement by tier
+10. **Sidecar databases** — harness-managed persistence, `search_history` tool
+11. **`delegate_coding` tool** — async coding agent with event bus integration
+12. **Event bus** — generalized event-driven agent entry points
+13. **Skill creation flow** — 4th-party skills via coding agent delegation
 
 ## 13. Security Considerations
 
