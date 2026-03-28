@@ -37,16 +37,18 @@ var log = logger.WithPrefix("scheduler")
 // HOW the message gets sent, just that it does.
 type SendFunc func(text string) error
 
-// AgentFunc is a callback the bot provides for running a prompt through
-// the full agent pipeline. The scheduler calls this for "run_prompt"
-// tasks — the prompt goes in, the agent does its thing (search, memory,
-// tool calls, etc.), and Mira's reply comes out.
+// AgentEventFunc is a fire-and-forget callback for triggering agent runs.
+// The scheduler calls this for "run_prompt" tasks — it emits an event
+// with the task name and prompt text, and the bot's event consumer
+// handles the actual agent.Run() call.
+//
+// This replaced the old synchronous AgentFunc. The key difference: the
+// scheduler no longer blocks waiting for the agent to finish. The agent
+// run happens asynchronously in the bot's event consumption goroutine.
 //
 // Same dependency inversion pattern as SendFunc: the scheduler depends
-// on a function signature, not the agent package. This keeps the import
-// graph clean (scheduler never imports agent, agent can import scheduler
-// for cron utilities).
-type AgentFunc func(prompt string) (string, error)
+// on a function signature, not the agent or bot packages.
+type AgentEventFunc func(taskName string, prompt string)
 
 // BusyFunc returns true when the agent is currently processing a turn.
 // The scheduler uses this to avoid firing tasks while a conversation is
@@ -86,7 +88,7 @@ type Scheduler struct {
 	store          *memory.Store
 	sendFn         SendFunc         // sends plain text messages
 	sendKeyboardFn SendKeyboardFunc // sends messages with inline keyboards — nil if not wired
-	agentFn        AgentFunc        // runs prompts through the agent pipeline — nil if not wired
+	agentEventFn   AgentEventFunc   // emits agent events for run_prompt tasks — nil if not wired
 	busyFn         BusyFunc         // returns true when the agent is mid-turn — nil = never busy
 	location       *time.Location   // timezone for cron evaluation
 	opts           *SchedulerOpts   // damping configuration
@@ -100,9 +102,9 @@ type Scheduler struct {
 // If empty or invalid, falls back to UTC. The timezone matters because
 // when someone says "remind me at 3pm," we need to know WHICH 3pm.
 //
-// agentFn can be nil if the agent pipeline isn't available (e.g., during
+// agentEventFn can be nil if the agent pipeline isn't available (e.g., during
 // testing). Tasks that need it (run_prompt) will log an error and skip.
-func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, agentFn AgentFunc, busyFn BusyFunc, timezone string, opts SchedulerOpts) *Scheduler {
+func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, agentEventFn AgentEventFunc, busyFn BusyFunc, timezone string, opts SchedulerOpts) *Scheduler {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		log.Warn("invalid timezone, falling back to UTC", "timezone", timezone, "err", err)
@@ -113,7 +115,7 @@ func New(store *memory.Store, sendFn SendFunc, sendKeyboardFn SendKeyboardFunc, 
 		store:          store,
 		sendFn:         sendFn,
 		sendKeyboardFn: sendKeyboardFn,
-		agentFn:        agentFn,
+		agentEventFn:   agentEventFn,
 		busyFn:         busyFn,
 		location:       loc,
 		opts:           &opts,

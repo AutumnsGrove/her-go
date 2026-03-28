@@ -81,6 +81,21 @@ type Bot struct {
 	// like a thread-safe boolean in Python (except Python's GIL makes
 	// plain bools thread-safe already — Go doesn't have a GIL).
 	agentBusy atomic.Bool
+
+	// agentEvents is the channel for system events that trigger agent
+	// runs without a user message. The scheduler, skill runner, and
+	// (future) coding agent all emit into this channel. The bot's
+	// consumeAgentEvents goroutine reads from it and calls agent.Run.
+	//
+	// This is Go's CSP (Communicating Sequential Processes) pattern —
+	// goroutines communicate by sending messages on channels, not by
+	// sharing memory. Like Python's asyncio.Queue, but built into the
+	// language.
+	agentEvents chan agent.AgentEvent
+
+	// ownerChat is the Telegram chat ID for the bot owner. Used by
+	// handleAgentEvent to send replies from event-triggered agent runs.
+	ownerChat int64
 }
 
 // SetSkillRegistry configures the skill registry for find_skill/run_skill.
@@ -88,6 +103,20 @@ type Bot struct {
 // constructor param to avoid making the already-long New() signature worse.
 func (b *Bot) SetSkillRegistry(reg *loader.Registry) {
 	b.skillRegistry = reg
+}
+
+// SetOwnerChat sets the chat ID for event-triggered agent replies.
+// The owner chat is where scheduled tasks, skill failure notifications,
+// and other non-user-initiated messages get sent.
+func (b *Bot) SetOwnerChat(chatID int64) {
+	b.ownerChat = chatID
+}
+
+// AgentEventChannel returns a write-only channel for emitting agent events.
+// The scheduler and skill runner use this to trigger agent runs without
+// a user message. cmd/run.go passes this to their callbacks.
+func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
+	return b.agentEvents
 }
 
 // New creates and configures a new Telegram bot.
@@ -125,6 +154,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		startTime:     time.Now(),
 		eventBus:      eventBus,
 		ocrEnabled:    ocr.IsAvailable(&cfg.OCR),
+		agentEvents:   make(chan agent.AgentEvent, 16),
 	}
 
 	if bot.ocrEnabled {
@@ -182,6 +212,13 @@ func (b *Bot) Start() {
 	if err := b.tb.RemoveWebhook(true); err != nil {
 		log.Warn("failed to clear pending updates", "err", err)
 	}
+
+	// Start the agent event consumer before the Telegram poller.
+	// This goroutine handles scheduled tasks, skill failures, and
+	// (future) coding agent completions — anything that triggers an
+	// agent run without a user message.
+	go b.consumeAgentEvents()
+
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
 }
@@ -189,6 +226,7 @@ func (b *Bot) Start() {
 // Stop gracefully shuts down the bot.
 func (b *Bot) Stop() {
 	b.tb.Stop()
+	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }
 
 // IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).
@@ -219,6 +257,106 @@ func (b *Bot) SendToChat(chatID int64, text string) error {
 		&tele.SendOptions{ParseMode: tele.ModeHTML},
 	)
 	return err
+}
+
+// consumeAgentEvents reads from the agent event channel and handles each
+// event by triggering an agent run. This runs in its own goroutine,
+// started in Start().
+//
+// The loop exits when the channel is closed (during Stop). Events are
+// processed sequentially — if the agent is busy, the event is skipped
+// with a log warning rather than queued (the buffer handles short bursts).
+func (b *Bot) consumeAgentEvents() {
+	for evt := range b.agentEvents {
+		b.handleAgentEvent(evt)
+	}
+}
+
+// handleAgentEvent triggers an agent run in response to a system event.
+// This is the generalized version of the scheduler's old agentFn callback.
+//
+// Unlike handleMessage (which has a Telegram context, placeholder message,
+// and PII scrubbing), this builds a minimal RunParams with just the
+// essentials. The agent's reply gets sent as a new Telegram message to
+// the owner chat.
+func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
+	if b.ownerChat == 0 {
+		log.Warn("agent event received but no owner chat configured", "type", evt.Type)
+		return
+	}
+
+	// Don't start a new agent run if one is already in progress.
+	if b.agentBusy.Load() {
+		log.Info("agent busy, skipping event", "type", evt.Type)
+		return
+	}
+
+	// Build the prompt and conversation ID based on event type.
+	var prompt, conversationID string
+
+	switch evt.Type {
+	case agent.EventSchedulerFired:
+		prompt = evt.Prompt
+		conversationID = "scheduled"
+		log.Info("handling scheduled event", "task", evt.TaskName)
+
+	case agent.EventSkillFailed:
+		prompt = fmt.Sprintf("[system] Skill %q failed: %s. "+
+			"Decide whether to notify the user, retry, or take corrective action.",
+			evt.SkillName, evt.Error)
+		conversationID = "skill-event"
+		log.Info("handling skill failure event", "skill", evt.SkillName)
+
+	case agent.EventCodingComplete:
+		// Stub — will be implemented with delegate_coding.
+		log.Info("coding complete event received (not yet implemented)",
+			"skill", evt.SkillName)
+		return
+
+	default:
+		log.Warn("unknown agent event type", "type", evt.Type)
+		return
+	}
+
+	// Build a sendFn that sends new messages to the owner chat.
+	// Event-triggered runs don't have a placeholder to edit — they
+	// just send new messages directly.
+	ownerChat := b.ownerChat
+	sendFn := func(text string) error {
+		return b.SendToChat(ownerChat, text)
+	}
+
+	b.agentBusy.Store(true)
+	result, err := agent.Run(agent.RunParams{
+		AgentLLM:            b.agentLLM,
+		ChatLLM:             b.llm,
+		VisionLLM:           b.visionLLM,
+		Store:               b.store,
+		EmbedClient:         b.embedClient,
+		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		TavilyClient:        b.tavilyClient,
+		WeatherClient:       b.weatherClient,
+		Cfg:                 b.cfg,
+		ScrubbedUserMessage: prompt,
+		ConversationID:      conversationID,
+		TriggerMsgID:        0, // no trigger message for events
+		StatusCallback:      sendFn,
+		SendCallback:        sendFn,
+		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
+		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
+		EventBus:            b.eventBus,
+		ConfigPath:          b.configPath,
+		SkillRegistry:       b.skillRegistry,
+	})
+	b.agentBusy.Store(false)
+
+	if err != nil {
+		log.Error("agent error from event", "type", evt.Type, "err", err)
+		return
+	}
+
+	log.Info("event-triggered agent run complete",
+		"type", evt.Type, "reply_len", len(result.ReplyText))
 }
 
 // handleMessage is the core pipeline. In the new agent-first architecture:
