@@ -81,7 +81,7 @@ func (e LogEvent) EventSource() string  { return e.Source }
 // (DB, LLM clients, sidecars, Telegram) emits one when it starts/finishes.
 type StartupEvent struct {
 	Time   time.Time
-	Phase  string // "db", "llm", "agent", "vision", "embed", "stt", "tts", "telegram", "scheduler"
+	Phase  string // "db", "llm", "agent", "vision", "embed", "stt", "tts", "skills", "proxy", "telegram", "scheduler"
 	Status string // "starting", "ready", "skipped", "failed"
 	Detail string // e.g. "model=deepseek-v3.2", "path=her.db"
 }

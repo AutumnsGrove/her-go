@@ -284,6 +284,18 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "skills", Status: "none found"})
 	}
 
+	// --- Skill network proxy ---
+	// Start the SSRF-preventing proxy for untrusted skills. Listens on a
+	// random localhost port. 3rd/4th party skills get HTTP_PROXY env vars
+	// pointing here; 2nd party skills connect directly.
+	skillProxy, proxyErr := loader.NewSkillProxy()
+	if proxyErr != nil {
+		log.Warn("skill proxy failed to start — untrusted skills will have direct network access", "err", proxyErr)
+	} else {
+		loader.SetSkillProxy(skillProxy)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "proxy", Status: "ready", Detail: fmt.Sprintf("port=%d", skillProxy.Port())})
+	}
+
 	// --- Telegram bot ---
 
 	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)
@@ -392,6 +404,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// --- Cleanup ---
 	if sched != nil {
 		sched.Stop()
+	}
+	if skillProxy != nil {
+		skillProxy.Close()
 	}
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)

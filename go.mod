@@ -6,8 +6,10 @@ require (
 	charm.land/bubbles/v2 v2.0.0
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
+	code.dny.dev/ssrf v0.2.0
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/charmbracelet/log v1.0.0
+	github.com/elazarl/goproxy v1.8.3
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
@@ -39,6 +41,8 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
+	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 )
