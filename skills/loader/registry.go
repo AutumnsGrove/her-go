@@ -98,6 +98,9 @@ func (r *Registry) Load() (int, error) {
 			continue
 		}
 
+		// Resolve trust tier from source hash verification.
+		skill.TrustLevel = ResolveTrust(skill)
+
 		r.skills[skill.Name] = skill
 
 		// Embed the description for KNN search.

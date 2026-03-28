@@ -3,6 +3,7 @@ name: book_search
 description: "Search for book information using the Open Library API — titles, authors, publication dates, subjects, and cover images"
 version: "1.0.0"
 language: go
+hash: "sha256:cabfd05653753583564202a9c5e29a50d456d2fe1ef29af8de3b5ca0973da909"
 author: autumn
 params:
   - name: query

@@ -3,6 +3,7 @@ name: web_read
 description: "Read and extract clean text content from a specific URL using the Tavily Extract API"
 version: "1.0.0"
 language: go
+hash: "sha256:01ca0bb74cc11a4d0598ccaae01f77ab16589f9a5b8764fff2e3d552c50a5e88"
 author: autumn
 params:
   - name: url

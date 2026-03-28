@@ -49,8 +49,9 @@ type Skill struct {
 	Requires Requirements `yaml:"requires"`
 
 	// --- Populated by the loader, not from YAML ---
-	Instructions string `yaml:"-"` // markdown body (below the frontmatter)
-	Dir          string `yaml:"-"` // absolute path to the skill directory
+	Instructions string     `yaml:"-"` // markdown body (below the frontmatter)
+	Dir          string     `yaml:"-"` // absolute path to the skill directory
+	TrustLevel   TrustLevel `yaml:"-"` // resolved by ResolveTrust at load time
 }
 
 // Param describes a single parameter the skill accepts.
