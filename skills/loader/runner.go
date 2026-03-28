@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+// skillProxy is the shared proxy instance, set during startup via
+// SetSkillProxy. When non-nil, untrusted skills (3rd/4th party) get
+// HTTP_PROXY env vars pointing here, and their domain allowlist is
+// enforced. Nil means no proxy — all skills get direct access.
+var skillProxy *SkillProxy
+
+// SetSkillProxy stores the proxy instance for the runner to use.
+// Called from cmd/run.go after starting the SkillProxy.
+func SetSkillProxy(p *SkillProxy) {
+	skillProxy = p
+}
+
 // RunResult holds the output of a skill execution.
 type RunResult struct {
 	Output   json.RawMessage `json:"output,omitempty"`  // parsed JSON stdout
@@ -85,6 +97,15 @@ func Run(skill *Skill, args map[string]any) (*RunResult, error) {
 	// (plus PATH and HOME for basics). This is a minimal sandbox — the full
 	// sandbox (proxy, fs restrictions) comes later.
 	cmd.Env = buildSkillEnv(skill)
+
+	// Set the proxy's domain allowlist for untrusted skills. The proxy will
+	// only allow requests to domains the skill declared in permissions.domains.
+	// Clear it after execution so the proxy doesn't leak restrictions to the
+	// next skill run.
+	if skillProxy != nil && !skill.TrustLevel.AllowDirectNetwork() {
+		skillProxy.SetAllowedDomains(skill.Permissions.Domains)
+		defer skillProxy.ClearAllowedDomains()
+	}
 
 	start := time.Now()
 	err = cmd.Run()
@@ -218,21 +239,25 @@ func buildSkillEnv(skill *Skill) []string {
 		}
 	}
 
-	// TODO(proxy): When the network proxy is built, set HTTP_PROXY and
-	// HTTPS_PROXY for 3rd and 4th party skills. The proxy enforces domain
-	// allowlists from skill.Permissions.Domains.
+	// Route untrusted skills through the network proxy. The proxy blocks
+	// SSRF attacks (private IPs) and logs all requests. 2nd-party skills
+	// (AllowDirectNetwork=true) skip this and connect directly.
 	//
-	// if !skill.TrustLevel.AllowDirectNetwork() {
-	//     proxyURL := fmt.Sprintf("http://127.0.0.1:%d", proxyPort)
-	//     env = append(env,
-	//         "HTTP_PROXY="+proxyURL,
-	//         "HTTPS_PROXY="+proxyURL,
-	//         "http_proxy="+proxyURL,
-	//         "https_proxy="+proxyURL,
-	//         "NO_PROXY=",
-	//         "no_proxy=",
-	//     )
-	// }
+	// Both uppercase and lowercase variants are set because different HTTP
+	// libraries check different casings: Go's net/http uses uppercase,
+	// Python's urllib uses lowercase, curl checks both.
+	// NO_PROXY is explicitly emptied to prevent bypass.
+	if skillProxy != nil && !skill.TrustLevel.AllowDirectNetwork() {
+		proxyURL := skillProxy.URL()
+		env = append(env,
+			"HTTP_PROXY="+proxyURL,
+			"HTTPS_PROXY="+proxyURL,
+			"http_proxy="+proxyURL,
+			"https_proxy="+proxyURL,
+			"NO_PROXY=",
+			"no_proxy=",
+		)
+	}
 
 	return env
 }
