@@ -3,7 +3,7 @@
 > Design document for the skills system in her-go. This document captures architectural decisions
 > made during planning and serves as the implementation blueprint.
 >
-> Status: **PARTIALLY IMPLEMENTED** — core system working (skillkit, loader, registry, agent tools, 3 skills migrated). Advanced infra (proxy, trust, sidecar DBs, coding agent, event bus) not yet started.
+> Status: **MOSTLY IMPLEMENTED** — core system, trust tiers, network proxy, sidecar DBs, event bus all working. Built-in search tools removed (skills handle them now). Remaining: DB proxy for skill-to-database access, delegate_coding, skill creation flow.
 
 ---
 
@@ -955,12 +955,14 @@ Everything internal to Mira's state:
 5. ~~**Migrate `web_search`** — first real skill, proves the architecture end-to-end~~ **DONE** (`skills/web_search/`)
 6. ~~**Migrate `web_read` and `book_search`**~~ **DONE** (`skills/web_read/`, `skills/book_search/`)
 7. ~~**Startup wiring** — registry init, Bot integration, all RunParams callsites~~ **DONE** (`cmd/run.go`, `cmd/sim.go`, `bot/telegram.go`)
-8. **Network proxy** — `elazarl/goproxy` goroutine with SSRF prevention
-9. **Trust model** — hash verification, permission enforcement by tier
-10. **Sidecar databases** — harness-managed persistence, `search_history` tool
-11. **`delegate_coding` tool** — async coding agent with event bus integration
-12. **Event bus** — generalized event-driven agent entry points
-13. **Skill creation flow** — 4th-party skills via coding agent delegation
+8. ~~**Trust model** — hash verification, `her trust` CLI, per-tier enforcement~~ **DONE** (2026-03-28, `skills/loader/trust.go`, `cmd/trust.go`)
+9. ~~**Network proxy** — `elazarl/goproxy` with SSRF prevention + domain allowlists~~ **DONE** (2026-03-28, `skills/loader/proxy.go`)
+10. ~~**Sidecar databases** — per-skill execution history, `search_history` tool~~ **DONE** (2026-03-28, `skills/loader/sidecar.go`)
+11. ~~**Event bus** — unified agent trigger system, scheduler migrated~~ **DONE** (2026-03-28, `agent/event.go`, `bot/telegram.go`)
+12. ~~**Remove built-in search tools** — dead code cleanup~~ **DONE** (2026-03-28)
+13. **Database proxy** — controlled skill-to-database access for DB-dependent tools (expenses, schedules, mood, memory)
+14. **`delegate_coding` tool** — async coding agent with event bus integration
+15. **Skill creation flow** — 4th-party skills via coding agent delegation
 
 ## 13. Security Considerations
 
@@ -1034,7 +1036,115 @@ No single layer is a complete security boundary. The design stacks:
 6. Audit logging (what it actually did)
 7. Manual review gate (promotion requires Autumn)
 
-## 14. Open Questions
+## 14. Database Proxy (Planned)
+
+### Problem
+
+Most built-in tools (expenses, schedules, mood, memory) need database access. They can't
+be migrated to standalone skills because skills run as separate processes with no way to
+reach her.db. The network proxy solves outbound HTTP sandboxing — the database proxy
+solves inbound data access.
+
+Without this, the only tools that can become skills are ones that call external APIs
+(web search, book search). Everything that touches the database stays as a built-in tool.
+
+### Design Concept
+
+A lightweight HTTP API that the harness runs alongside the network proxy. Skills call it
+via localhost to read/write specific database tables. Like the network proxy, skills don't
+know it's a proxy — they use `skillkit.DBClient()` which reads `DB_PROXY_URL` from the
+environment.
+
+```
+Skill process                    Harness (her binary)
+─────────────                    ────────────────────
+skillkit.DBClient()  ──HTTP──►   DB proxy (localhost:PORT)
+                                     │
+                                     ▼
+                                 her.db (SQLite)
+```
+
+### Trust-Tier Access Control
+
+The DB proxy enforces access based on trust tier, similar to the network proxy:
+
+| Tier | Access |
+|---|---|
+| 2nd-party | Read/write to declared tables |
+| 3rd-party | Read-only to declared tables |
+| 4th-party | No DB access |
+
+Skills declare which tables they need in `skill.md`:
+
+```yaml
+permissions:
+  db:
+    - expenses:rw       # read-write to expenses table
+    - scheduled_tasks:r  # read-only to scheduled_tasks
+```
+
+### API Surface
+
+RESTful, minimal:
+
+```
+GET  /db/{table}?filter=...     Read rows (with optional filter)
+POST /db/{table}                Insert row
+PUT  /db/{table}/{id}           Update row
+DELETE /db/{table}/{id}         Delete row (soft or hard)
+```
+
+The proxy validates every request against the skill's declared permissions before
+touching the database. Unauthorized table access returns 403.
+
+### SSRF Implications
+
+The DB proxy listens on localhost, which the SSRF dialer would normally block. The
+harness needs to either:
+- Run the DB proxy on a port that's explicitly allowed (separate from the network proxy)
+- Set `DB_PROXY_URL` as a separate env var that the skill uses directly (not through
+  HTTP_PROXY)
+
+Since skills use `skillkit.DBClient()` (not raw HTTP), the DB proxy URL is distinct
+from the network proxy URL. No conflict.
+
+### What This Unlocks
+
+With a DB proxy, these tools become migration candidates:
+
+| Tool | DB Tables | Migration Complexity |
+|---|---|---|
+| scan_receipt | expenses, expense_items | Medium |
+| query_expenses | expenses | Low (read-only) |
+| delete_expense | expenses | Low |
+| update_expense | expenses | Low |
+| log_mood | mood_entries | Low |
+| create_reminder | scheduled_tasks | Medium |
+| create_schedule | scheduled_tasks | Medium |
+| list_schedules | scheduled_tasks | Low (read-only) |
+| update_schedule | scheduled_tasks | Low |
+| delete_schedule | scheduled_tasks | Low |
+
+Memory tools (save_fact, recall_memories, remove_fact) are more complex because they
+need the embedding client for vector search. These may stay as built-in tools or require
+a richer API surface.
+
+### Implementation Order
+
+1. DB proxy server (HTTP listener, SQLite access, permission checking)
+2. Skillkit DB client (Go + Python)
+3. Migrate one simple tool (e.g., query_expenses) as proof-of-concept
+4. Migrate remaining DB-dependent tools
+
+### Not Yet Decided
+
+- **Query language**: Should filters use SQL WHERE clauses, a simplified DSL, or
+  structured JSON queries? SQL is powerful but risks injection. JSON is safe but limited.
+- **Pagination**: Large result sets need pagination. Cursor-based or offset-based?
+- **Transactions**: Should skills be able to do multi-step writes atomically?
+- **Schema exposure**: Should the proxy expose table schemas so skills can self-discover?
+
+## 15. Open Questions
 
 ### Resolved During Planning
 
