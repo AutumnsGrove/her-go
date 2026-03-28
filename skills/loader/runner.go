@@ -38,7 +38,9 @@ const defaultTimeout = 30 * time.Second
 // In Python this would be subprocess.run() with stdin=PIPE and timeout.
 // Go's os/exec is similar but we need to manually wire up stdin/stdout.
 func Run(skill *Skill, args map[string]any) (*RunResult, error) {
-	timeout := parseTimeout(skill.Permissions.Timeout)
+	// EffectiveTimeout respects the trust tier — 2nd-party gets the full
+	// declared timeout (up to 30s), while 3rd/4th party get capped shorter.
+	timeout := EffectiveTimeout(skill)
 
 	// Build the command based on language.
 	var cmd *exec.Cmd
@@ -192,21 +194,45 @@ func parseTimeout(s string) time.Duration {
 }
 
 // buildSkillEnv creates a minimal environment for the skill process.
-// Only declared env vars are passed through, plus PATH and HOME for basics.
+// What a skill gets depends on its trust tier:
 //
-// This is a simple sandbox measure — the skill doesn't inherit the full
-// environment. In a full sandbox (future), the proxy would also be set here.
+//   - 2nd-party: PATH + HOME + all declared env vars. Direct network.
+//   - 3rd-party: PATH + HOME + declared env vars. Proxied network (when built).
+//   - 4th-party: PATH + HOME only. No declared env vars. Proxied network.
+//
+// This follows the principle of least privilege — untrusted skills can't
+// access API keys or secrets that might be in the parent environment.
 func buildSkillEnv(skill *Skill) []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 	}
 
-	for _, key := range skill.Permissions.Env {
-		if val := os.Getenv(key); val != "" {
-			env = append(env, key+"="+val)
+	// 4th-party skills get no declared env vars — they haven't been
+	// reviewed and could exfiltrate secrets via network requests.
+	if skill.TrustLevel != TrustFourthParty {
+		for _, key := range skill.Permissions.Env {
+			if val := os.Getenv(key); val != "" {
+				env = append(env, key+"="+val)
+			}
 		}
 	}
+
+	// TODO(proxy): When the network proxy is built, set HTTP_PROXY and
+	// HTTPS_PROXY for 3rd and 4th party skills. The proxy enforces domain
+	// allowlists from skill.Permissions.Domains.
+	//
+	// if !skill.TrustLevel.AllowDirectNetwork() {
+	//     proxyURL := fmt.Sprintf("http://127.0.0.1:%d", proxyPort)
+	//     env = append(env,
+	//         "HTTP_PROXY="+proxyURL,
+	//         "HTTPS_PROXY="+proxyURL,
+	//         "http_proxy="+proxyURL,
+	//         "https_proxy="+proxyURL,
+	//         "NO_PROXY=",
+	//         "no_proxy=",
+	//     )
+	// }
 
 	return env
 }

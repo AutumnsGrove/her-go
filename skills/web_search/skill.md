@@ -3,6 +3,7 @@ name: web_search
 description: "Search the web for current information, recent events, and factual answers using the Tavily API"
 version: "1.0.0"
 language: go
+hash: "sha256:f6e288d1a1b78a60a734e78fc7e2c4297a1dbc4395c7c0bf765b9bd87c7be8e4"
 author: autumn
 params:
   - name: query
