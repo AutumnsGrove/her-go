@@ -22,6 +22,10 @@ her
 # Go
 vendor/
 
+# Python
+__pycache__/
+*.pyc
+
 # Voice memos (audio files from Telegram)
 voice_memos/
 voice_cache/
