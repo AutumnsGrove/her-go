@@ -855,12 +855,6 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 	switch tc.Function.Name {
 	case "reply":
 		return execReply(tc.Function.Arguments, tctx)
-	case "web_search":
-		return execWebSearch(tc.Function.Arguments, tctx)
-	case "web_read":
-		return execWebRead(tc.Function.Arguments, tctx)
-	case "book_search":
-		return execBookSearch(tc.Function.Arguments, tctx)
 	case "save_fact":
 		return execSaveFact(tc.Function.Arguments, "user", tctx)
 	case "save_self_fact":
@@ -1597,121 +1591,12 @@ func execLogMood(argsJSON string, tctx *toolContext) string {
 	return fmt.Sprintf("mood logged ID=%d: %d/5 (%s) — %s", id, args.Rating, label, args.Note)
 }
 
-// --- Search tool execution ---
-
-// execWebSearch calls Tavily to search the web and returns formatted results.
-// It also updates the Telegram message with a status indicator.
-func execWebSearch(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if tctx.tavilyClient == nil {
-		return "web search is not configured (no Tavily API key)"
-	}
-
-	// Show a status update in Telegram.
-	if tctx.statusCallback != nil {
-		_ = tctx.statusCallback(fmt.Sprintf("\U0001F50D searching for: %s...", args.Query))
-	}
-
-	resp, err := tctx.tavilyClient.Search(args.Query, 5)
-	if err != nil {
-		log.Error("web_search failed", "err", err)
-		return fmt.Sprintf("search failed: %v", err)
-	}
-
-	formatted := search.FormatSearchResults(resp)
-
-	// Accumulate in search context so the reply tool can use it.
-	if tctx.searchContext != "" {
-		tctx.searchContext += "\n\n"
-	}
-	tctx.searchContext += fmt.Sprintf("## Web Search: %s\n\n%s", args.Query, formatted)
-
-	// Save to DB for observability.
-	tctx.store.SaveSearch(tctx.triggerMsgID, "web", args.Query, formatted, len(resp.Results))
-
-	log.Infof("  web_search: %d results for %q", len(resp.Results), args.Query)
-	return formatted
-}
-
-// execWebRead calls Tavily extract to read a specific URL.
-func execWebRead(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if tctx.tavilyClient == nil {
-		return "web read is not configured (no Tavily API key)"
-	}
-
-	// Show a status update in Telegram.
-	if tctx.statusCallback != nil {
-		_ = tctx.statusCallback(fmt.Sprintf("\U0001F4D6 reading: %s...", args.URL))
-	}
-
-	resp, err := tctx.tavilyClient.Extract([]string{args.URL})
-	if err != nil {
-		log.Error("web_read failed", "err", err)
-		return fmt.Sprintf("failed to read URL: %v", err)
-	}
-
-	formatted := search.FormatExtractResults(resp)
-
-	// Accumulate in search context.
-	if tctx.searchContext != "" {
-		tctx.searchContext += "\n\n"
-	}
-	tctx.searchContext += fmt.Sprintf("## Content from %s\n\n%s", args.URL, formatted)
-
-	// Save to DB for observability.
-	tctx.store.SaveSearch(tctx.triggerMsgID, "web_read", args.URL, formatted, len(resp.Results))
-
-	log.Infof("  web_read: extracted from %s", args.URL)
-	return formatted
-}
-
-// execBookSearch queries Open Library for book information.
-func execBookSearch(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// Show a status update in Telegram.
-	if tctx.statusCallback != nil {
-		_ = tctx.statusCallback(fmt.Sprintf("\U0001F4DA looking up: %s...", args.Query))
-	}
-
-	books, err := search.SearchBooks(args.Query, 3)
-	if err != nil {
-		log.Error("book_search failed", "err", err)
-		return fmt.Sprintf("book search failed: %v", err)
-	}
-
-	formatted := search.FormatBookResults(books)
-
-	// Accumulate in search context.
-	if tctx.searchContext != "" {
-		tctx.searchContext += "\n\n"
-	}
-	tctx.searchContext += fmt.Sprintf("## Book Search: %s\n\n%s", args.Query, formatted)
-
-	// Save to DB for observability.
-	tctx.store.SaveSearch(tctx.triggerMsgID, "book", args.Query, formatted, len(books))
-
-	log.Infof("  book_search: %d results for %q", len(books), args.Query)
-	return formatted
-}
+// --- Search tool execution (migrated to skills) ---
+//
+// web_search, web_read, and book_search have been migrated to standalone
+// skills in skills/web_search/, skills/web_read/, and skills/book_search/.
+// The agent discovers them via find_skill and runs them via run_skill.
+// The built-in implementations below have been removed.
 
 // --- Memory tool execution (unchanged from before) ---
 
@@ -2127,27 +2012,6 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 			return fmt.Sprintf("🚫 <b>save_self_fact:</b> <i>%s</i>", escapeHTML(truncateLog(result, 120)))
 		}
 		return fmt.Sprintf("🪞 <b>save_self_fact:</b> %s\n    category=%s, importance=%d", escapeHTML(args.Fact), args.Category, args.Importance)
-
-	case "web_search":
-		var args struct {
-			Query string `json:"query"`
-		}
-		json.Unmarshal([]byte(argsJSON), &args)
-		return fmt.Sprintf("🔍 <b>web_search:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
-
-	case "web_read":
-		var args struct {
-			URL string `json:"url"`
-		}
-		json.Unmarshal([]byte(argsJSON), &args)
-		return fmt.Sprintf("🌐 <b>web_read:</b> %s\n    → %s", escapeHTML(truncateLog(args.URL, 60)), escapeHTML(truncateLog(result, 80)))
-
-	case "book_search":
-		var args struct {
-			Query string `json:"query"`
-		}
-		json.Unmarshal([]byte(argsJSON), &args)
-		return fmt.Sprintf("📚 <b>book_search:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
 
 	case "view_image":
 		return fmt.Sprintf("👁 <b>view_image:</b> → %s", escapeHTML(truncateLog(result, 80)))

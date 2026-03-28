@@ -39,7 +39,8 @@ var hotToolNames = []string{
 // toolCategories groups deferred tools by function. The agent can load
 // entire categories at once: use_tools(["search"]) loads all three search tools.
 var toolCategories = map[string][]string{
-	"search":     {"web_search", "web_read", "book_search"},
+	// "search" tools (web_search, web_read, book_search) have been migrated
+	// to standalone skills. The agent uses find_skill/run_skill instead.
 	"vision":     {"view_image"},
 	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
@@ -449,58 +450,9 @@ func allToolDefs() []llm.ToolDef {
 			},
 		},
 
-		// --- Search (category: "search") ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "web_search",
-				Description: "Search the web for current information. Use when the user asks about something you don't know, current events, factual questions, or anything that benefits from real-time data.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "A concise, specific search query",
-						},
-					},
-					"required": []string{"query"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "web_read",
-				Description: "Read a specific URL to get its content. Use when the user shares a link or you need details from a specific web page.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"url": map[string]interface{}{
-							"type":        "string",
-							"description": "The URL to read and extract content from",
-						},
-					},
-					"required": []string{"url"},
-				},
-			},
-		},
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "book_search",
-				Description: "Search for book information using Open Library. Use when discussing books, looking for recommendations, or when the user mentions a book title or author.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"query": map[string]interface{}{
-							"type":        "string",
-							"description": "Book title, author, or search terms",
-						},
-					},
-					"required": []string{"query"},
-				},
-			},
-		},
+		// Search tools (web_search, web_read, book_search) have been migrated
+		// to standalone skills. The agent uses find_skill/run_skill to
+		// discover and execute them.
 
 		// --- Vision (category: "vision") ---
 		{
