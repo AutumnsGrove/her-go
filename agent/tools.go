@@ -45,6 +45,7 @@ var toolCategories = map[string][]string{
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
 	"context":    {"log_mood", "get_current_time", "set_location"},
 	"expenses":   {"scan_receipt", "query_expenses", "delete_expense", "update_expense"},
+	"skills":     {"search_history"},
 }
 
 // toolRegistry maps every tool name to its full definition.
@@ -424,6 +425,29 @@ func allToolDefs() []llm.ToolDef {
 		// =====================================================================
 		// DEFERRED TOOLS — loaded on demand via use_tools
 		// =====================================================================
+
+		// --- Skills (category: "skills") ---
+		{
+			Type: "function",
+			Function: llm.ToolFunctionDef{
+				Name:        "search_history",
+				Description: "Search a skill's execution history for cached results. Returns past runs ranked by relevance, with freshness metadata. Use before re-running a skill to check if you already have a recent answer.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"skill_name": map[string]interface{}{
+							"type":        "string",
+							"description": "Exact skill name to search history for.",
+						},
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "What to search for in past results (natural language).",
+						},
+					},
+					"required": []string{"skill_name", "query"},
+				},
+			},
+		},
 
 		// --- Search (category: "search") ---
 		{

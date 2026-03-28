@@ -296,6 +296,13 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "proxy", Status: "ready", Detail: fmt.Sprintf("port=%d", skillProxy.Port())})
 	}
 
+	// Pass the embed client to the skill runner for sidecar DB writes.
+	// Skills record their execution history with embedded results for
+	// semantic search via search_history.
+	if embedClient != nil {
+		loader.SetEmbedClient(embedClient)
+	}
+
 	// --- Telegram bot ---
 
 	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)

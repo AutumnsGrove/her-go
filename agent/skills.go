@@ -137,3 +137,79 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 
 	return "skill completed with no output"
 }
+
+// execSearchHistory handles the search_history tool call. It searches a
+// skill's sidecar database for past execution results that match the
+// query, using KNN semantic search.
+//
+// This lets the agent check "did I already search for this?" before
+// re-running a skill. Past results include freshness metadata so the
+// agent can judge whether to reuse a cached result or run fresh.
+func execSearchHistory(argsJSON string, tctx *toolContext) string {
+	if tctx.skillRegistry == nil {
+		return "no skills available — skill registry not initialized"
+	}
+	if tctx.embedClient == nil {
+		return "search_history unavailable — embedding client not configured"
+	}
+
+	var args struct {
+		SkillName string `json:"skill_name"`
+		Query     string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return fmt.Sprintf("error parsing search_history args: %s", err)
+	}
+	if args.SkillName == "" || args.Query == "" {
+		return "error: both skill_name and query are required"
+	}
+
+	// Look up the skill.
+	skill := tctx.skillRegistry.Get(args.SkillName)
+	if skill == nil {
+		return fmt.Sprintf("unknown skill %q", args.SkillName)
+	}
+
+	// 4th-party skills have no sidecar access.
+	if skill.TrustLevel == loader.TrustFourthParty {
+		return "no history available for this skill (4th-party, unvetted)"
+	}
+
+	// Embed the query.
+	queryVec, err := tctx.embedClient.Embed(args.Query)
+	if err != nil {
+		return fmt.Sprintf("error embedding query: %s", err)
+	}
+
+	// Open the sidecar DB and search.
+	sdb, err := loader.OpenSidecar(skill, tctx.embedClient.Dimension)
+	if err != nil {
+		return fmt.Sprintf("no execution history for %s", args.SkillName)
+	}
+	defer sdb.Close()
+
+	results, err := sdb.SearchHistory(queryVec, 5)
+	if err != nil {
+		return fmt.Sprintf("error searching history: %s", err)
+	}
+
+	if len(results) == 0 {
+		return fmt.Sprintf("no past executions found for %s matching %q", args.SkillName, args.Query)
+	}
+
+	// Format results for the agent.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d cached result(s) for %s:\n\n", len(results), args.SkillName))
+
+	for i, r := range results {
+		status := "OK"
+		if r.ExitCode != 0 {
+			status = "ERROR"
+		}
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s (took %s)\n", i+1, status, r.Age, r.Duration))
+		sb.WriteString(fmt.Sprintf("   args: %s\n", r.Args))
+		sb.WriteString(fmt.Sprintf("   result: %s\n\n", r.Result))
+	}
+
+	return sb.String()
+}

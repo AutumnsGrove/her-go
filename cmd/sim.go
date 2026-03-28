@@ -362,6 +362,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 	} else if count > 0 {
 		log.Info("skills loaded", "count", count)
 	}
+	if embedClient != nil {
+		loader.SetEmbedClient(embedClient)
+	}
 
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file

@@ -907,6 +907,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execFindSkill(tc.Function.Arguments, tctx)
 	case "run_skill":
 		return execRunSkill(tc.Function.Arguments, tctx)
+	case "search_history":
+		return execSearchHistory(tc.Function.Arguments, tctx)
 	case "use_tools":
 		return execUseTools(tc.Function.Arguments, tctx)
 	case "no_action":

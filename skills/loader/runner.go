@@ -24,6 +24,29 @@ func SetSkillProxy(p *SkillProxy) {
 	skillProxy = p
 }
 
+// sidecarEmbedClient is the embedding client used for sidecar DB writes.
+// Set during startup via SetEmbedClient. Nil means sidecar recording
+// is disabled (no embedding model configured).
+var sidecarEmbedClient embedder
+
+// embedder is an interface for embedding text. This lets us use the real
+// embed.Client in production and mock it in tests.
+//
+// Go interfaces are satisfied implicitly — any type that has an Embed
+// method with this signature automatically implements embedder. No
+// "implements" keyword needed. This is like Python's duck typing, but
+// checked at compile time.
+type embedder interface {
+	Embed(text string) ([]float32, error)
+	GetDimension() int
+}
+
+// SetEmbedClient stores the embedding client for sidecar DB writes.
+// Called from cmd/run.go after creating the embed client.
+func SetEmbedClient(c embedder) {
+	sidecarEmbedClient = c
+}
+
 // RunResult holds the output of a skill execution.
 type RunResult struct {
 	Output   json.RawMessage `json:"output,omitempty"`  // parsed JSON stdout
@@ -152,6 +175,14 @@ func Run(skill *Skill, args map[string]any) (*RunResult, error) {
 		result.RawOut = string(out)
 	}
 
+	// Record execution in sidecar DB for 2nd-party skills (async).
+	// Runs in a goroutine so it doesn't slow down the agent's response.
+	// Sidecar failure is logged but never propagates — the skill result
+	// is already captured and will be returned to the agent regardless.
+	if sidecarEmbedClient != nil && skill.TrustLevel == TrustSecondParty {
+		go recordSidecar(skill, args, result)
+	}
+
 	return result, nil
 }
 
@@ -260,4 +291,52 @@ func buildSkillEnv(skill *Skill) []string {
 	}
 
 	return env
+}
+
+// recordSidecar saves a skill execution to its sidecar database.
+// Runs asynchronously (called via goroutine) — errors are logged but
+// never propagated. The skill result is already captured by the time
+// this runs, so sidecar failures don't affect the agent.
+//
+// The flow:
+//  1. Build a summary text from args + result (for embedding)
+//  2. Embed the summary via the embedding client
+//  3. Open the sidecar DB
+//  4. Record the run + embedding
+//  5. Close the DB
+func recordSidecar(skill *Skill, args map[string]any, result *RunResult) {
+	// Build a summary to embed. Concatenate the args and a truncated
+	// version of the result — this captures what was asked and what
+	// came back, so KNN search works for both.
+	argsJSON, _ := json.Marshal(args)
+	resultPreview := ""
+	if result.Output != nil {
+		resultPreview = string(result.Output)
+	} else if result.RawOut != "" {
+		resultPreview = result.RawOut
+	}
+	if len(resultPreview) > 300 {
+		resultPreview = resultPreview[:300]
+	}
+	summary := string(argsJSON) + " " + resultPreview
+
+	// Embed the summary.
+	embedding, err := sidecarEmbedClient.Embed(summary)
+	if err != nil {
+		log.Warn("sidecar: embedding failed", "skill", skill.Name, "error", err)
+		return
+	}
+
+	// Open the sidecar DB.
+	sdb, err := OpenSidecar(skill, sidecarEmbedClient.GetDimension())
+	if err != nil {
+		log.Warn("sidecar: open failed", "skill", skill.Name, "error", err)
+		return
+	}
+	defer sdb.Close()
+
+	// Record the run.
+	if err := sdb.RecordRun(args, result, embedding); err != nil {
+		log.Warn("sidecar: record failed", "skill", skill.Name, "error", err)
+	}
 }
