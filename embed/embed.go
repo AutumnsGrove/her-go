@@ -26,7 +26,9 @@ const DefaultDimension = 768
 // It's similar in shape to llm.Client — base URL + model name.
 //
 // In Python you might use the openai library directly:
-//   client.embeddings.create(model="...", input="hello")
+//
+//	client.embeddings.create(model="...", input="hello")
+//
 // In Go, we make the HTTP call ourselves — it's just a POST with JSON.
 type Client struct {
 	baseURL    string
@@ -69,6 +71,12 @@ type embeddingResponse struct {
 	Data []struct {
 		Embedding []float64 `json:"embedding"`
 	} `json:"data"`
+}
+
+// GetDimension returns the vector dimension this client produces.
+// Used by the sidecar DB to create correctly-sized vec0 virtual tables.
+func (c *Client) GetDimension() int {
+	return c.Dimension
 }
 
 // Embed returns the embedding vector for a single text string as float32.

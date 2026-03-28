@@ -45,6 +45,12 @@ logs/stderr.log
 logs/stdout.log
 her.log
 
+# Skill sidecar databases (execution history)
+skills/**/*.db
+skills/**/*.db-journal
+skills/**/*.db-wal
+skills/**/*.db-shm
+
 # Simulation results (personal data from test runs)
 sims/sim.db
 sims/sim.db-journal
