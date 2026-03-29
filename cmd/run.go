@@ -296,6 +296,18 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "proxy", Status: "ready", Detail: fmt.Sprintf("port=%d", skillProxy.Port())})
 	}
 
+	// --- Skill database proxy ---
+	// Start the DB proxy for skills that need database access. Listens on a
+	// random localhost port. Skills get DB_PROXY_URL env vars pointing here.
+	// The proxy enforces table-level access control based on trust tier.
+	dbProxy, dbProxyErr := loader.NewDBProxy(cfg.Memory.DBPath)
+	if dbProxyErr != nil {
+		log.Warn("db proxy failed to start — skills will not have database access", "err", dbProxyErr)
+	} else {
+		loader.SetDBProxy(dbProxy)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dbproxy", Status: "ready", Detail: fmt.Sprintf("port=%d", dbProxy.Port())})
+	}
+
 	// Pass the embed client to the skill runner for sidecar DB writes.
 	// Skills record their execution history with embedded results for
 	// semantic search via search_history.
@@ -418,6 +430,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	}
 	if skillProxy != nil {
 		skillProxy.Close()
+	}
+	if dbProxy != nil {
+		dbProxy.Close()
 	}
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)

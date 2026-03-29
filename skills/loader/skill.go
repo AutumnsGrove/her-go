@@ -72,11 +72,13 @@ type Param struct {
 // enforces these — a skill that tries to access something not listed
 // here gets blocked.
 type Permissions struct {
-	Network bool     `yaml:"network"`
-	Domains []string `yaml:"domains"` // allowlisted domains (proxy-enforced)
-	FS      []string `yaml:"fs"`      // allowed filesystem paths (relative to skill dir)
-	Env     []string `yaml:"env"`     // env vars the skill needs
-	Timeout string   `yaml:"timeout"` // max execution time (e.g., "30s")
+	Network    bool     `yaml:"network"`
+	Domains    []string `yaml:"domains"`     // allowlisted domains (proxy-enforced)
+	FS         []string `yaml:"fs"`          // allowed filesystem paths (relative to skill dir)
+	Env        []string `yaml:"env"`         // env vars the skill needs
+	Timeout    string   `yaml:"timeout"`     // max execution time (e.g., "30s")
+	DB         []string `yaml:"db"`          // her.db table access: "expenses:rw", "mood_entries:r"
+	DBSnapshot []string `yaml:"db_snapshot"` // 4th-party: read-only copies of her.db tables
 }
 
 // Requirements are checked at startup. If any requirement isn't met,
@@ -166,6 +168,13 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 // skill's requirements. Returns true if all requirements are met,
 // or a description of what's missing.
 //
+// HasDBAccess returns true if the skill declared any database permissions
+// (either direct her.db access or snapshot access). Used by the runner to
+// decide whether to set DB_PROXY_URL in the skill's environment.
+func (s *Skill) HasDBAccess() bool {
+	return len(s.Permissions.DB) > 0 || len(s.Permissions.DBSnapshot) > 0
+}
+
 // This is checked at startup for each skill. Failed requirements mean
 // the skill is completely invisible to the agent — not "disabled",
 // just absent. The agent can't be confused by skills it can't use.
