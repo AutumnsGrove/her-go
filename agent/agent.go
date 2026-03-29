@@ -879,8 +879,8 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 		return execDeleteSchedule(tc.Function.Arguments, tctx)
 	case "recall_memories":
 		return execRecallMemories(tc.Function.Arguments, tctx)
-	case "log_mood":
-		return execLogMood(tc.Function.Arguments, tctx)
+	// log_mood has been migrated to a standalone skill (skills/log_mood/).
+	// The agent discovers it via find_skill and runs it via run_skill.
 	case "scan_receipt":
 		return execScanReceipt(tc.Function.Arguments, tctx)
 	case "query_expenses":
@@ -1571,25 +1571,8 @@ func buildMoodContext(store *memory.Store) string {
 // execLogMood saves a mood entry from the agent when the user expresses
 // how they're feeling. This is the "manual" source — the agent explicitly
 // decided to log mood based on what the user said.
-func execLogMood(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		Rating int    `json:"rating"`
-		Note   string `json:"note"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	id, err := tctx.store.SaveMoodEntry(args.Rating, args.Note, "", "manual", tctx.conversationID)
-	if err != nil {
-		return fmt.Sprintf("error saving mood: %v", err)
-	}
-
-	labels := map[int]string{1: "bad", 2: "rough", 3: "meh", 4: "good", 5: "great"}
-	label := labels[args.Rating]
-	log.Infof("  mood logged: %d/5 (%s) — %s", args.Rating, label, args.Note)
-	return fmt.Sprintf("mood logged ID=%d: %d/5 (%s) — %s", id, args.Rating, label, args.Note)
-}
+// execLogMood has been migrated to a standalone skill (skills/log_mood/).
+// The skill inserts into mood_entries via the DB proxy.
 
 // --- Search tool execution (migrated to skills) ---
 //
@@ -2053,13 +2036,7 @@ func formatTraceLine(toolName, argsJSON, result string) string {
 		json.Unmarshal([]byte(argsJSON), &args)
 		return fmt.Sprintf("🔎 <b>recall_memories:</b> \"%s\"\n    → %s", escapeHTML(args.Query), escapeHTML(truncateLog(result, 80)))
 
-	case "log_mood":
-		var args struct {
-			Rating int    `json:"rating"`
-			Note   string `json:"note"`
-		}
-		json.Unmarshal([]byte(argsJSON), &args)
-		return fmt.Sprintf("😊 <b>log_mood:</b> %d/5 — %s", args.Rating, escapeHTML(args.Note))
+	// log_mood: migrated to skill, traced via run_skill case below
 
 	case "create_reminder":
 		var args struct {

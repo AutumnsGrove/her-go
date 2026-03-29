@@ -44,7 +44,7 @@ var toolCategories = map[string][]string{
 	"vision":     {"view_image"},
 	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
-	"context":    {"log_mood", "get_current_time", "set_location"},
+	"context":    {"get_current_time", "set_location"},
 	"expenses":   {"scan_receipt", "query_expenses", "delete_expense", "update_expense"},
 	"skills":     {"search_history"},
 }
@@ -690,29 +690,8 @@ func allToolDefs() []llm.ToolDef {
 		},
 
 		// --- Context (category: "context") ---
-		{
-			Type: "function",
-			Function: llm.ToolFunctionDef{
-				Name:        "log_mood",
-				Description: "Log the user's current emotional state when they express how they're feeling.",
-				Parameters: map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"rating": map[string]interface{}{
-							"type":        "integer",
-							"minimum":     1,
-							"maximum":     5,
-							"description": "Mood rating: 1=bad, 2=rough, 3=meh/neutral, 4=good, 5=great",
-						},
-						"note": map[string]interface{}{
-							"type":        "string",
-							"description": "Brief context for the rating",
-						},
-					},
-					"required": []string{"rating", "note"},
-				},
-			},
-		},
+		// log_mood has been migrated to a standalone skill in skills/log_mood/.
+		// The agent discovers it via find_skill and runs it via run_skill.
 		{
 			Type: "function",
 			Function: llm.ToolFunctionDef{
