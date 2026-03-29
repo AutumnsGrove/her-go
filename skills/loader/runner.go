@@ -24,6 +24,17 @@ func SetSkillProxy(p *SkillProxy) {
 	skillProxy = p
 }
 
+// dbProxy is the shared DB proxy instance, set during startup via
+// SetDBProxy. When non-nil, skills with db permissions get DB_PROXY_URL
+// env vars pointing here, and their table access is enforced.
+var dbProxy *DBProxy
+
+// SetDBProxy stores the DB proxy instance for the runner to use.
+// Called from cmd/run.go after starting the DBProxy.
+func SetDBProxy(p *DBProxy) {
+	dbProxy = p
+}
+
 // onSkillFailed is called when a skill execution fails. The bot sets
 // this during startup to emit SkillFailed events into the agent event
 // channel. Nil means no event emission (skill failures are still
@@ -140,6 +151,13 @@ func Run(skill *Skill, args map[string]any) (*RunResult, error) {
 	if skillProxy != nil && !skill.TrustLevel.AllowDirectNetwork() {
 		skillProxy.SetAllowedDomains(skill.Permissions.Domains)
 		defer skillProxy.ClearAllowedDomains()
+	}
+
+	// Set the DB proxy's table permissions for skills that declared db access.
+	// Same pattern as the network proxy — set before execution, clear after.
+	if dbProxy != nil && skill.HasDBAccess() {
+		dbProxy.SetPermissions(skill)
+		defer dbProxy.ClearPermissions()
 	}
 
 	start := time.Now()
@@ -307,6 +325,14 @@ func buildSkillEnv(skill *Skill) []string {
 			"NO_PROXY=",
 			"no_proxy=",
 		)
+	}
+
+	// Give skills with db permissions the DB proxy URL. The skill's
+	// skillkit.DB() client reads this to connect to the proxy.
+	// This is separate from HTTP_PROXY — the DB proxy listens on its own
+	// port and the skill connects to it directly (not through the network proxy).
+	if dbProxy != nil && skill.HasDBAccess() {
+		env = append(env, "DB_PROXY_URL="+dbProxy.URL())
 	}
 
 	return env

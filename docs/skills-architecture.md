@@ -1036,7 +1036,7 @@ No single layer is a complete security boundary. The design stacks:
 6. Audit logging (what it actually did)
 7. Manual review gate (promotion requires Autumn)
 
-## 14. Database Proxy (Planned)
+## 14. Database Proxy
 
 ### Problem
 
@@ -1048,11 +1048,15 @@ solves inbound data access.
 Without this, the only tools that can become skills are ones that call external APIs
 (web search, book search). Everything that touches the database stays as a built-in tool.
 
-### Design Concept
+Additionally, 4th-party (AI-generated) skills need *some* form of persistence to be
+useful. A skill that can't store data is barely a skill — without storage, features like
+"track my job applications" would have to abuse the fact memory system.
+
+### Design
 
 A lightweight HTTP API that the harness runs alongside the network proxy. Skills call it
-via localhost to read/write specific database tables. Like the network proxy, skills don't
-know it's a proxy — they use `skillkit.DBClient()` which reads `DB_PROXY_URL` from the
+via localhost to read/write database tables. Like the network proxy, skills don't know
+it's a proxy — they use `skillkit.DBClient()` which reads `DB_PROXY_URL` from the
 environment.
 
 ```
@@ -1060,57 +1064,212 @@ Skill process                    Harness (her binary)
 ─────────────                    ────────────────────
 skillkit.DBClient()  ──HTTP──►   DB proxy (localhost:PORT)
                                      │
-                                     ▼
-                                 her.db (SQLite)
+                                     ├──► her.db (2nd/3rd-party, authorized tables)
+                                     ├──► <skill>.db sidecar (any tier, skill's own storage)
+                                     └──► snapshot tables (4th-party, read-only copies)
 ```
+
+### Two-Track Storage Model
+
+Skills have two distinct storage needs, handled differently:
+
+**Track A — Sidecar DB (own storage).** Every skill (any trust tier) gets its own
+`<name>.db` sidecar database. The skill controls its own schema — it can CREATE TABLE,
+ALTER TABLE, store whatever it needs. The job tracker skill creates its own tables for
+applications, statuses, interview dates. It never touches her.db.
+
+**Track B — her.db access (shared data).** When a skill needs to read or write data in
+the main database (expenses, schedules, mood), it goes through the proxy with strict
+access control. 4th-party skills get read-only snapshots instead of live access.
 
 ### Trust-Tier Access Control
 
-The DB proxy enforces access based on trust tier, similar to the network proxy:
-
-| Tier | Access |
-|---|---|
-| 2nd-party | Read/write to declared tables |
-| 3rd-party | Read-only to declared tables |
-| 4th-party | No DB access |
+| Tier | her.db access | Own sidecar DB | her.db snapshots |
+|---|---|---|---|
+| 1st-party (built-in) | Direct (no proxy) | N/A | N/A |
+| 2nd-party | Read/write declared tables | Full control + DDL | N/A (has real access) |
+| 3rd-party | Read-only declared tables | Full control + DDL | N/A (has real access) |
+| 4th-party | No direct access | Full control + DDL (audited) | Read-only copy per run |
 
 Skills declare which tables they need in `skill.md`:
 
 ```yaml
 permissions:
   db:
-    - expenses:rw       # read-write to expenses table
-    - scheduled_tasks:r  # read-only to scheduled_tasks
+    - expenses:rw           # read-write to expenses table (her.db)
+    - scheduled_tasks:r     # read-only to scheduled_tasks (her.db)
+  db_snapshot:
+    - expenses:r            # 4th-party: get a read-only copy of expenses per run
 ```
+
+### Snapshot Mechanism (4th-Party her.db Access)
+
+When a 4th-party skill declares `db_snapshot` permissions, the harness copies the
+declared tables into the skill's sidecar DB before each execution. The skill reads
+from its sidecar — it never connects to her.db.
+
+```
+1. Skill declares: permissions.db_snapshot: [expenses:r]
+2. Before execution, harness copies expenses rows → skill's sidecar DB
+3. Skill reads from the copy freely (it looks like a normal table)
+4. On completion, snapshot tables are dropped from sidecar
+```
+
+Fresh snapshot on every run. If the skill runs `DROP TABLE expenses`, it only drops
+the copy in its own sidecar. No impact on her.db.
+
+**Promotion path:** When a 4th-party skill is promoted to 3rd-party, it graduates from
+snapshots to live read-only proxy access. Promotion to 2nd-party adds write access.
+
+### Enforcement: SQLite Authorizer + SQL Parser
+
+Two layers of defense for her.db access:
+
+**Layer 1 — SQLite's native authorizer.** The proxy uses `sqlite3_set_authorizer`
+(exposed as `RegisterAuthorizer` in `mattn/go-sqlite3`) on the her.db connection. This
+callback fires at query prepare time — before a single row is touched — and enforces
+table-level and column-level access control.
+
+```go
+conn.RegisterAuthorizer(func(op int, arg1, arg2, arg3 string) int {
+    switch op {
+    case sqlite3.SQLITE_READ:
+        if !skill.CanRead(arg1) { return sqlite3.SQLITE_DENY }
+    case sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE:
+        if !skill.CanWrite(arg1) { return sqlite3.SQLITE_DENY }
+    case sqlite3.SQLITE_PRAGMA, sqlite3.SQLITE_ATTACH:
+        return sqlite3.SQLITE_DENY
+    }
+    return sqlite3.SQLITE_OK
+})
+```
+
+The authorizer catches everything the parser might miss — CTEs, views, triggers,
+`ATTACH DATABASE` — because it validates the resolved execution plan, not query text.
+
+**Layer 2 — SQL WHERE clause parsing.** Skills send WHERE clauses as query filters.
+The proxy parses them with `xwb1989/sqlparser` (standalone Vitess parser port) and
+rejects dangerous patterns (subqueries, JOINs to unauthorized tables, function calls
+like `load_extension()`) before they reach SQLite.
+
+Together: the parser catches obvious abuse early, the authorizer is the safety net that
+catches everything else.
 
 ### API Surface
 
 RESTful, minimal:
 
 ```
-GET  /db/{table}?filter=...     Read rows (with optional filter)
-POST /db/{table}                Insert row
-PUT  /db/{table}/{id}           Update row
-DELETE /db/{table}/{id}         Delete row (soft or hard)
+# Data operations (DML)
+GET    /db/{table}?where=...&limit=20&offset=0   Read rows
+POST   /db/{table}                                Insert row
+PUT    /db/{table}/{id}                           Update row
+DELETE /db/{table}/{id}                           Delete row
+
+# Schema operations (DDL, sidecar only)
+POST   /db/_ddl                                   Execute DDL statement
+GET    /db/_schema                                List tables and columns
+GET    /db/_schema/{table}                        Get table schema
+
+# Snapshot (4th-party only, harness-initiated)
+POST   /db/_snapshot                              Trigger snapshot copy (internal)
 ```
 
 The proxy validates every request against the skill's declared permissions before
-touching the database. Unauthorized table access returns 403.
+touching the database. Unauthorized access returns 403.
+
+### Query Language: Validated SQL WHERE Clauses
+
+Skills send SQL WHERE clauses directly as query filters:
+
+```
+GET /db/expenses?where=amount > 50 AND category = 'food'&limit=20&offset=0
+```
+
+The proxy:
+1. Parses the WHERE clause into an AST (via xwb1989/sqlparser)
+2. Validates: only references allowed columns, no subqueries, no function calls
+3. Parameterizes values to prevent injection
+4. Executes via the authorizer-protected connection
+
+SQL was chosen over structured JSON filters because everything is SQLite at the end of
+the day — adding a translation layer between JSON and SQL adds complexity without adding
+safety (the authorizer handles safety).
+
+### Pagination: Offset-Based
+
+Simple offset/limit pagination:
+
+```
+GET /db/expenses?limit=20&offset=0     # Page 1
+GET /db/expenses?limit=20&offset=20    # Page 2
+```
+
+Offset-based is sufficient. Skills aren't paginating through large datasets in real-time
+— they do small, targeted queries. Default limit: 100 rows. Maximum limit: 1000.
+
+### Transactions
+
+Skills can do multi-step writes atomically via transaction endpoints:
+
+```
+POST /db/_tx/begin    → { "tx_id": "abc123" }
+POST /db/expenses     (header: X-Transaction: abc123)
+POST /db/expense_items (header: X-Transaction: abc123)
+POST /db/_tx/commit   (header: X-Transaction: abc123)
+```
+
+If any step fails or the skill crashes, the transaction is rolled back. Transactions
+auto-expire after 30 seconds to prevent dangling locks.
+
+Available to 2nd-party skills only. 3rd-party (read-only) and 4th-party (sidecar-only)
+don't need transactions.
+
+### Schema Control: Skills Own Their Sidecar Schema
+
+Skills have full DDL control over their own sidecar databases. They can CREATE TABLE,
+ALTER TABLE, add indexes, restructure data. The harness provides an empty DB file; the
+skill decides its own table structure.
+
+Every DDL statement is logged:
+
+```
+POST /db/_ddl { "sql": "CREATE TABLE applications (id INTEGER PRIMARY KEY, ...)" }
+→ Logged: [2026-03-28 14:32:01] skill=job_tracker ddl="CREATE TABLE applications (...)"
+→ Event bus fires: "db.ddl" event
+```
+
+This enables the coding agent to evolve skill schemas over time (add columns, create
+indexes, restructure data) without requiring manual skill.md edits.
+
+### DDL Audit System
+
+DDL operations in sidecar databases are monitored via the event bus:
+
+```
+DDL in sidecar → audit_log table → event bus "db.ddl" → audit skill → agent decides
+```
+
+An audit skill (1st or 2nd-party) reads the DDL audit log and uses agent judgment to
+decide the appropriate response:
+
+- **Normal operation:** New skill creates its first table → expected, log silently
+- **Worth noting:** Stable skill alters its schema → log + mention in next conversation
+- **Suspicious:** Skill drops all its tables → notify Autumn immediately
+- **Dangerous:** Repeated destructive DDL → quarantine the skill
+
+The agent-as-sysadmin pattern avoids hardcoded notification rules. Mira knows *why* a
+skill was created and can judge whether a schema change makes sense in context.
 
 ### SSRF Implications
 
-The DB proxy listens on localhost, which the SSRF dialer would normally block. The
-harness needs to either:
-- Run the DB proxy on a port that's explicitly allowed (separate from the network proxy)
-- Set `DB_PROXY_URL` as a separate env var that the skill uses directly (not through
-  HTTP_PROXY)
-
-Since skills use `skillkit.DBClient()` (not raw HTTP), the DB proxy URL is distinct
-from the network proxy URL. No conflict.
+The DB proxy listens on localhost, which the SSRF dialer would normally block. Skills
+use `skillkit.DBClient()` which reads `DB_PROXY_URL` — a separate env var from
+`HTTP_PROXY`. The DB proxy URL is distinct from the network proxy URL. No conflict.
 
 ### What This Unlocks
 
-With a DB proxy, these tools become migration candidates:
+With the DB proxy, these tools become migration candidates:
 
 | Tool | DB Tables | Migration Complexity |
 |---|---|---|
@@ -1125,24 +1284,37 @@ With a DB proxy, these tools become migration candidates:
 | update_schedule | scheduled_tasks | Low |
 | delete_schedule | scheduled_tasks | Low |
 
+Additionally, 4th-party AI-generated skills can now persist their own data (sidecar)
+and optionally read existing data (snapshots). Skills like job trackers, habit trackers,
+or custom dashboards become viable without any access to her.db.
+
 Memory tools (save_fact, recall_memories, remove_fact) are more complex because they
 need the embedding client for vector search. These may stay as built-in tools or require
 a richer API surface.
 
 ### Implementation Order
 
-1. DB proxy server (HTTP listener, SQLite access, permission checking)
-2. Skillkit DB client (Go + Python)
-3. Migrate one simple tool (e.g., query_expenses) as proof-of-concept
-4. Migrate remaining DB-dependent tools
+1. DB proxy server (HTTP listener, SQLite authorizer, permission checking)
+2. SQL WHERE clause parser + validator (xwb1989/sqlparser)
+3. Sidecar DB provisioning + DDL audit logging
+4. Snapshot mechanism (table copy into sidecar)
+5. Skillkit DB client (Go + Python)
+6. Audit skill for DDL monitoring
+7. Migrate one simple tool (e.g., query_expenses) as proof-of-concept
+8. Migrate remaining DB-dependent tools
 
-### Not Yet Decided
+### Key Dependencies
 
-- **Query language**: Should filters use SQL WHERE clauses, a simplified DSL, or
-  structured JSON queries? SQL is powerful but risks injection. JSON is safe but limited.
-- **Pagination**: Large result sets need pagination. Cursor-based or offset-based?
-- **Transactions**: Should skills be able to do multi-step writes atomically?
-- **Schema exposure**: Should the proxy expose table schemas so skills can self-discover?
+- `mattn/go-sqlite3` — SQLite driver with authorizer support (CGo required)
+- `xwb1989/sqlparser` — Standalone SQL parser (Vitess port, no heavy dependencies)
+- `b4fun/sqlite-rest` — Reference architecture (not a direct dependency)
+
+### Design References
+
+- SQLite authorizer: `sqlite3_set_authorizer` fires at prepare time, not execution time,
+  catching all table access including through views, CTEs, and triggers
+- b4fun/sqlite-rest: Go REST-over-SQLite with JWT auth and table allowlists
+- rqlite: Separates `/db/execute` (writes) from `/db/query` (reads) — pattern worth copying
 
 ## 15. Open Questions
 
@@ -1197,6 +1369,37 @@ These were discussed and decided:
 - **Coding agent selection?** → Claude Code CLI (`claude --non-interactive`). Strong Go
   capabilities, MCP server support built in, already familiar tooling.
 
+### Also Resolved (DB Proxy Design Session)
+
+- **DB query language?** → Validated SQL WHERE clauses. Skills send raw WHERE clauses,
+  parsed by xwb1989/sqlparser to reject dangerous patterns, then executed via SQLite
+  authorizer-protected connections. SQL chosen over JSON filters because everything is
+  SQLite — a translation layer adds complexity without adding safety.
+
+- **Pagination?** → Offset-based (`?limit=20&offset=0`). Simple and sufficient — skills
+  aren't paginating through massive datasets in real-time. Default limit 100, max 1000.
+
+- **Transactions?** → Yes, for 2nd-party skills. Begin/commit/rollback via transaction
+  endpoints with auto-expire after 30 seconds. 3rd-party (read-only) and 4th-party
+  (sidecar-only) don't need them.
+
+- **Schema exposure?** → Yes. Skills can query their own sidecar schema via
+  `GET /db/_schema`. For her.db, 2nd/3rd-party skills see schemas of their declared
+  tables only. Schema changes in sidecars are logged to the DDL audit system.
+
+- **4th-party DB access?** → Two-track model. All skills get their own sidecar DB with
+  full DDL control. 4th-party skills can also request read-only snapshots of specific
+  her.db tables (copied into their sidecar before each run). No direct her.db access.
+
+- **DDL monitoring?** → Agent-as-sysadmin pattern. DDL is logged to an audit table,
+  fires a "db.ddl" event on the event bus, picked up by an audit skill. The agent
+  decides whether to log silently, notify Autumn, revert, or quarantine — using context
+  about why the skill exists to judge whether the change makes sense.
+
+- **SQLite enforcement?** → `sqlite3_set_authorizer` via mattn/go-sqlite3. Fires at
+  prepare time (not execution), catches all table access including through views, CTEs,
+  and triggers. Defense-in-depth behind the SQL parser.
+
 ### Still Open
 
 - **4th-party skill creation details:** The full flow for Mira creating a brand new skill
@@ -1230,3 +1433,8 @@ These were discussed and decided:
 - [safedialer](https://github.com/mccutchen/safedialer)
 - [Go and Proxy Servers (Eli Bendersky)](https://eli.thegreenplace.net/2022/go-and-proxy-servers-part-2-https-proxies/)
 - [YouTube: Skills and Code Sandboxes](https://youtu.be/IjiaCOt7bP8) — inspiration for this architecture
+- [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) — Go SQLite driver with authorizer callback support
+- [sqlite3_set_authorizer](https://sqlite.org/c3ref/set_authorizer.html) — SQLite's native query-level access control
+- [xwb1989/sqlparser](https://github.com/xwb1989/sqlparser) — Standalone Go SQL parser (Vitess port)
+- [b4fun/sqlite-rest](https://github.com/b4fun/sqlite-rest) — REST-over-SQLite reference implementation
+- [ngrok/sqlmw](https://github.com/ngrok/sqlmw) — SQL middleware interceptors for Go (reference)
