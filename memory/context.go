@@ -3,6 +3,8 @@ package memory
 import (
 	"fmt"
 	"strings"
+
+	"her/embed"
 )
 
 // InjectedFact records which fact was included in the chat model's prompt
@@ -16,6 +18,96 @@ type InjectedFact struct {
 	Importance int
 	Distance   float64 // cosine distance from query (0 = identical, only set for semantic)
 	Source     string  // "semantic" or "importance" — how this fact got selected
+}
+
+// conversationRedundancyThreshold controls how similar a fact must be to
+// a recent message before it's considered redundant. This is cosine
+// SIMILARITY (not distance) — 1.0 = identical, 0.0 = unrelated.
+// 0.60 is intentionally lower than the fact-vs-fact dedup threshold
+// (0.85) because we're comparing structured facts against freeform
+// conversation text, which naturally score lower on cosine similarity
+// even when they convey the same information.
+const conversationRedundancyThreshold = 0.60
+
+// FilterRedundantFacts removes facts whose content is already present in
+// the recent conversation history. This prevents "context echo" — where
+// a fact and a recent message both say the same thing, causing the chat
+// model to fixate on that content and regurgitate it even when the
+// current turn is about something different.
+//
+// How it works: each recent message is embedded, and each candidate
+// fact's text is compared (via cosine similarity) against every message
+// embedding. If a fact is too similar to any message, it's dropped.
+//
+// embedClient may be nil — if so, no filtering is performed.
+// recentMessages is the same slice used to build the conversation
+// history in the chat prompt.
+func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *embed.Client) []Fact {
+	if embedClient == nil || len(recentMessages) == 0 || len(facts) == 0 {
+		return facts
+	}
+
+	// Embed each recent message. We use the scrubbed content (same as
+	// what the chat model sees) so the comparison is apples-to-apples.
+	var msgVecs [][]float32
+	for _, msg := range recentMessages {
+		content := msg.ContentScrubbed
+		if content == "" {
+			content = msg.ContentRaw
+		}
+		// Skip very short messages — greetings and "ok" don't carry
+		// enough signal to meaningfully match against facts.
+		if len(content) < 20 {
+			continue
+		}
+		vec, err := embedClient.Embed(content)
+		if err != nil {
+			continue
+		}
+		msgVecs = append(msgVecs, vec)
+	}
+
+	if len(msgVecs) == 0 {
+		return facts
+	}
+
+	var filtered []Fact
+	for _, f := range facts {
+		// Embed the fact text (not tags) — we want to catch semantic
+		// overlap between what the fact says and what the conversation
+		// already contains.
+		factVec, err := embedClient.Embed(f.Fact)
+		if err != nil {
+			// Can't check — keep the fact to be safe.
+			filtered = append(filtered, f)
+			continue
+		}
+
+		redundant := false
+		var bestSim float64
+		for _, msgVec := range msgVecs {
+			sim := embed.CosineSimilarity(factVec, msgVec)
+			if sim > bestSim {
+				bestSim = sim
+			}
+			if sim >= conversationRedundancyThreshold {
+				redundant = true
+				break
+			}
+		}
+
+		if redundant {
+			factPreview := f.Fact
+			if len(factPreview) > 60 {
+				factPreview = factPreview[:60] + "..."
+			}
+			log.Infof("  [fact filtered: conversation redundancy] #%d sim=%.3f — %s", f.ID, bestSim, factPreview)
+		} else {
+			filtered = append(filtered, f)
+		}
+	}
+
+	return filtered
 }
 
 // BuildMemoryContext assembles a memory context string to inject into
