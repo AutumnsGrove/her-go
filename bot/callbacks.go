@@ -308,12 +308,24 @@ func (b *Bot) handleConfirmCallback(c tele.Context) error {
 		return c.Respond(&tele.CallbackResponse{Text: "This confirmation has expired"})
 	}
 
+	// Get the conversation ID so we can record the outcome in history.
+	// Without this, the agent has no idea the user responded to the
+	// confirmation — it sees "I sent you a confirmation" in its own
+	// reply but never sees the resolution, leading to confused follow-ups
+	// like "did you see the confirmation I sent?"
+	chatID := c.Callback().Message.Chat.ID
+	convID := b.getConversationID(chatID)
+
 	if data == "no" {
 		// User cancelled — mark as cancelled and update the message.
 		_ = b.store.ResolvePendingConfirmation(pending.ID, "cancelled")
 		_ = c.Respond(&tele.CallbackResponse{Text: "Cancelled"})
 		_ = c.Edit("❌ " + pending.Description + " — cancelled")
 		log.Info("confirmation cancelled", "id", pending.ID, "action", pending.ActionType)
+
+		// Record in conversation history so the agent knows.
+		note := fmt.Sprintf("[User cancelled: %s]", pending.Description)
+		b.store.SaveMessage("user", note, note, convID)
 		return nil
 	}
 
@@ -331,6 +343,13 @@ func (b *Bot) handleConfirmCallback(c tele.Context) error {
 	_ = c.Respond(&tele.CallbackResponse{Text: "Done!"})
 	_ = c.Edit("✅ " + result)
 	log.Info("confirmation executed", "id", pending.ID, "action", pending.ActionType, "result", result)
+
+	// Record the confirmed action in conversation history so the agent
+	// knows the user already responded. Without this, the next turn's
+	// context has no record of the resolution — the agent sees its own
+	// "I sent you a confirmation" but not the user's click.
+	note := fmt.Sprintf("[User confirmed: %s]", result)
+	b.store.SaveMessage("user", note, note, convID)
 	return nil
 }
 
