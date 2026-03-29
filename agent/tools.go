@@ -255,24 +255,24 @@ func allToolDefs() []llm.ToolDef {
 			Type: "function",
 			Function: llm.ToolFunctionDef{
 				Name:        "save_fact",
-				Description: "Save a new fact learned from the conversation. Use for new information about {{user}} that's worth remembering long-term.",
+				Description: "Save a new fact learned from the conversation. Only for information worth remembering WEEKS later. Ask: 'Would this matter in a month?' If not, skip it.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"fact": map[string]interface{}{
 							"type":        "string",
-							"description": "A clear, single-sentence fact about {{user}}",
+							"description": "A clear, single-sentence fact about {{user}}. Must pass the 'next month' test: would knowing this improve a conversation 30 days from now?",
 						},
 						"category": map[string]interface{}{
 							"type":        "string",
-							"enum":        []string{"identity", "relationship", "health", "work", "mood", "goal", "event", "preference", "context", "other"},
-							"description": "Category of the fact. Use 'context' for day-to-day activities that change frequently (e.g., what the user is working on today). Context facts get auto-timestamped and should be updated rather than duplicated.",
+							"enum":        []string{"identity", "relationship", "health", "work", "goal", "event", "preference", "other"},
+							"description": "Category of the fact. Do NOT save transient moods or daily context as facts.",
 						},
 						"importance": map[string]interface{}{
 							"type":        "integer",
 							"minimum":     1,
 							"maximum":     10,
-							"description": "How important this is to remember (1=trivial, 10=life-changing)",
+							"description": "How important this is to remember (1=trivial, 10=life-changing). Used for retrieval ranking, not filtering.",
 						},
 						"tags": map[string]interface{}{
 							"type":        "string",
