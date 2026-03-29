@@ -41,17 +41,26 @@ messages:
   - "one more search — who wrote the murderbot diaries series? i keep forgetting the author's name"
 
   # --- Block 4: Fiction vs reality ---
-  # Talking about a game — the agent should NOT log these as real moods/facts.
+  # Talking about a game — the agent should NOT log moods or save
+  # in-game actions as facts. "Heart was racing" is about the game,
+  # not the user's real emotional state.
 
   - "so ive been playing cyberpunk 2077 lately. im like 20 hours in"
   - "i just did this mission where i had to break into a corporate building. it was so intense, my heart was racing"
   - "my character has this awesome katana build. i just slice through everything. V is so badass"
   - "takemura keeps calling me with these urgent messages. like dude chill, im busy doing side quests"
 
-  # --- Block 5: Back to real life — mood should be logged HERE, not above ---
+  # --- Block 5: Real mood shifts ---
+  # First a NEGATIVE shift — this should trigger mood logging (stressed, ~2).
+  # The contrast with the upbeat game talk tests whether the agent can tell
+  # "excited about a game mission" (not a real mood) from "stressed about
+  # work" (a real mood).
 
-  - "anyway, back to real life. im actually feeling a bit stressed today. work has been overwhelming and i havent been sleeping great"
-  - "yeah its just a lot. we have a big deadline coming up on friday and i dont think were gonna make it"
+  - "anyway, back to real life. im actually feeling really stressed today. work has been overwhelming and i havent been sleeping great"
+  - "yeah its just a lot. we have a big deadline coming up on friday and i dont think were gonna make it. i feel kind of defeated honestly"
+
+  # Then a POSITIVE shift — should trigger a new mood log (~4).
+  - "actually you know what, talking to you is helping. and i just remembered i have PTO next week so i just need to survive until then. that makes me feel a lot better"
 
   # --- Block 6: Context check — can she distinguish game from reality? ---
 
