@@ -1,0 +1,58 @@
+name: "Context & Search Quality"
+description: >
+  Tests the full pipeline: compaction (enough messages to trigger it),
+  post-search think evaluation, fiction vs reality in facts/mood,
+  skill-based search, and context retention across the sliding window.
+  Designed after the March 2026 audit that found recycled responses,
+  hallucinated search results, and in-game moods being logged as real.
+tags: ["compaction", "search", "skills", "context", "fiction-vs-reality"]
+
+messages:
+  # --- Block 1: Build up context for compaction (casual chat) ---
+  # These first ~14 messages fill the compaction window so it triggers
+  # midway through the sim. They also test basic conversational quality.
+
+  - "hey mira! how's it going?"
+  - "im doing ok. been a lazy sunday honestly. just been hanging out at home with my cat"
+  - "her name is bean. shes a little calico. shes curled up on my lap right now"
+  - "yeah shes the best. i adopted her about two years ago from a shelter in portland"
+  - "anyway, im thinking about redecorating my apartment soon. been looking at some mid-century modern stuff"
+  - "i really like the clean lines and warm wood tones. thinking about getting a new bookshelf"
+  - "i have way too many books honestly. mostly sci-fi and fantasy. some nonfiction too"
+  - "my favorites are probably piranesi by susanna clarke and children of time by adrian tchaikovsky"
+  - "have you read either of those? or i guess, do you know about them?"
+  - "yeah piranesi is so good. the worldbuilding is incredible"
+  - "ok switching topics. i made pasta for dinner last night. nothing fancy, just cacio e pepe"
+  - "its one of my go-to recipes. simple but so satisfying when you get the sauce right"
+  - "do you cook? or like... have opinions about food?"
+  - "haha fair enough. ok so im also learning to play guitar. just started a few months ago"
+
+  # --- Block 2: Compaction should trigger around here ---
+  # Now test context retention — can she remember things from block 1?
+
+  - "wait, what was the name of that book i mentioned earlier? the one by susanna clarke?"
+  - "nice. and what about my cat, do you remember her name?"
+
+  # --- Block 3: Search quality + think evaluation ---
+  # These force web search and test whether the agent evaluates results.
+
+  - "hey can you look up what Lexend is? its a font. i want to know the history behind it"
+  - "interesting. now can you search for what a diffusion LLM is and how its different from a regular transformer?"
+  - "one more search — who wrote the murderbot diaries series? i keep forgetting the author's name"
+
+  # --- Block 4: Fiction vs reality ---
+  # Talking about a game — the agent should NOT log these as real moods/facts.
+
+  - "so ive been playing cyberpunk 2077 lately. im like 20 hours in"
+  - "i just did this mission where i had to break into a corporate building. it was so intense, my heart was racing"
+  - "my character has this awesome katana build. i just slice through everything. V is so badass"
+  - "takemura keeps calling me with these urgent messages. like dude chill, im busy doing side quests"
+
+  # --- Block 5: Back to real life — mood should be logged HERE, not above ---
+
+  - "anyway, back to real life. im actually feeling a bit stressed today. work has been overwhelming and i havent been sleeping great"
+  - "yeah its just a lot. we have a big deadline coming up on friday and i dont think were gonna make it"
+
+  # --- Block 6: Context check — can she distinguish game from reality? ---
+
+  - "so what do you know about me from our conversation today? like what are the real-life things vs the game stuff?"
