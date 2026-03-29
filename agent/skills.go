@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"her/embed"
 	"her/skills/loader"
 )
 
@@ -104,6 +105,17 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 	// Default to empty args if none provided.
 	if args.Args == nil {
 		args.Args = make(map[string]any)
+	}
+
+	// --- Mood dedup gate ---
+	// Before running log_mood, check if a semantically similar mood was
+	// logged recently. This mirrors how save_fact rejects duplicate facts
+	// via embedding similarity. Without this, the agent tends to log the
+	// same mood on every message in an emotional conversation.
+	if skill.Name == "log_mood" && tctx.store != nil && tctx.embedClient != nil {
+		if dup := checkMoodDuplicate(args.Args, tctx); dup != "" {
+			return dup
+		}
 	}
 
 	// Update status so the user sees what's happening.
@@ -212,4 +224,79 @@ func execSearchHistory(argsJSON string, tctx *toolContext) string {
 	}
 
 	return sb.String()
+}
+
+// moodDedupWindowMinutes is how far back we look for duplicate moods.
+// 120 minutes (2 hours) means: if the user said "feeling stuck" an hour
+// ago, we won't log "feeling stuck and restless" as a separate entry.
+const moodDedupWindowMinutes = 120
+
+// moodSimilarityThreshold is the cosine similarity above which two mood
+// notes are considered duplicates. 0.75 is intentionally lower than the
+// fact threshold (0.85) because mood notes tend to be short and similar
+// phrasing should be caught more aggressively.
+const moodSimilarityThreshold = 0.75
+
+// checkMoodDuplicate checks whether a proposed mood entry is too similar
+// to a recently logged one. Returns an explanatory string if the mood
+// should be skipped, or empty string if it's OK to log.
+//
+// Two-tier check:
+//  1. Time gate — any mood in the last 30 minutes is a duplicate regardless
+//     of content (the user's emotional state doesn't change that fast).
+//  2. Semantic gate — any mood in the last 2 hours with a similar note
+//     (cosine similarity >= 0.75) is a duplicate.
+func checkMoodDuplicate(skillArgs map[string]any, tctx *toolContext) string {
+	note, _ := skillArgs["note"].(string)
+
+	// Tier 1: time gate — if ANY mood was logged in the last 30 minutes,
+	// skip this one. The agent shouldn't be logging mood multiple times
+	// per conversation exchange.
+	recentNotes, err := tctx.store.RecentMoodNotes(30)
+	if err != nil {
+		log.Warn("mood dedup: couldn't check recent moods", "err", err)
+		return "" // fail open — let it through
+	}
+	if len(recentNotes) > 0 {
+		log.Info("mood dedup: skipped (mood already logged in last 30 min)",
+			"recent_note", recentNotes[0], "proposed_note", note)
+		return fmt.Sprintf("mood already logged in the last 30 minutes (%q) — skipping to avoid duplicates", recentNotes[0])
+	}
+
+	// Tier 2: semantic gate — check the last 2 hours for similar notes.
+	if note == "" {
+		return "" // no note to compare
+	}
+	windowNotes, err := tctx.store.RecentMoodNotes(moodDedupWindowMinutes)
+	if err != nil {
+		log.Warn("mood dedup: couldn't check window moods", "err", err)
+		return ""
+	}
+	if len(windowNotes) == 0 {
+		return "" // no moods in window — all clear
+	}
+
+	// Embed the proposed note.
+	newVec, err := tctx.embedClient.Embed(note)
+	if err != nil {
+		log.Warn("mood dedup: embed failed", "err", err)
+		return "" // fail open
+	}
+
+	// Compare against each recent note.
+	for _, existing := range windowNotes {
+		existVec, err := tctx.embedClient.Embed(existing)
+		if err != nil {
+			continue
+		}
+		sim := embed.CosineSimilarity(newVec, existVec)
+		if sim >= moodSimilarityThreshold {
+			log.Info("mood dedup: skipped (semantically similar to recent mood)",
+				"similarity", fmt.Sprintf("%.3f", sim),
+				"existing", existing, "proposed", note)
+			return fmt.Sprintf("mood too similar to recent entry %q (%.0f%% match) — skipping", existing, sim*100)
+		}
+	}
+
+	return "" // no duplicates found
 }

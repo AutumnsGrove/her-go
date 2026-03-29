@@ -1698,6 +1698,35 @@ type MoodEntry struct {
 	ConversationID string
 }
 
+// RecentMoodNotes returns the notes from mood entries logged in the last
+// `minutes` minutes. Used by the agent to check for semantic duplicates
+// before logging a new mood — similar to how save_fact checks existing
+// facts before inserting.
+func (s *Store) RecentMoodNotes(minutes int) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT COALESCE(note, '') FROM mood_entries
+		 WHERE timestamp > datetime('now', ? || ' minutes')
+		 ORDER BY timestamp DESC`,
+		fmt.Sprintf("-%d", minutes),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying recent mood notes: %w", err)
+	}
+	defer rows.Close()
+
+	var notes []string
+	for rows.Next() {
+		var note string
+		if err := rows.Scan(&note); err != nil {
+			return nil, fmt.Errorf("scanning mood note: %w", err)
+		}
+		if note != "" {
+			notes = append(notes, note)
+		}
+	}
+	return notes, nil
+}
+
 // SaveMoodEntry logs a mood data point. Source indicates where it came from:
 // "inferred" = LLM guessed from conversation, "manual" = agent tool,
 // "checkin" = proactive inline keyboard (v0.6).
