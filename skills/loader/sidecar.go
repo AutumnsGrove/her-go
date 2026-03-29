@@ -48,15 +48,13 @@ type HistoryResult struct {
 // skill's source code and skill.md. This makes skills fully portable:
 // copy the directory, get everything including execution history.
 //
-// Returns an error if the skill is 4th-party (no sidecar access for
-// unvetted skills — they haven't been reviewed and could be malicious).
+// All trust tiers get sidecar access. 4th-party skills use sidecars for
+// their own storage and for snapshot tables (read-only copies of her.db
+// data). DDL operations on 4th-party sidecars are audited via the event bus.
 //
 // embedDim is the vector dimension for the KNN index (e.g., 768 for
 // nomic-embed-text-v1.5). Pass 0 to skip creating the vector table.
 func OpenSidecar(skill *Skill, embedDim int) (*SidecarDB, error) {
-	if skill.TrustLevel == TrustFourthParty {
-		return nil, fmt.Errorf("sidecar access denied for 4th-party skill %q", skill.Name)
-	}
 
 	// Register sqlite-vec extension. This is idempotent — safe to call
 	// even though memory.NewStore() already called it. Under the hood

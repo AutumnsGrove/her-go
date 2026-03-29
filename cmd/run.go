@@ -300,7 +300,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// Start the DB proxy for skills that need database access. Listens on a
 	// random localhost port. Skills get DB_PROXY_URL env vars pointing here.
 	// The proxy enforces table-level access control based on trust tier.
-	dbProxy, dbProxyErr := loader.NewDBProxy(cfg.Memory.DBPath)
+	dbProxy, dbProxyErr := loader.NewDBProxy(cfg.Memory.DBPath, bus)
 	if dbProxyErr != nil {
 		log.Warn("db proxy failed to start — skills will not have database access", "err", dbProxyErr)
 	} else {

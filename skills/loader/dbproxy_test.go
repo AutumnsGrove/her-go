@@ -70,7 +70,7 @@ func newTestDB(t *testing.T) string {
 func newTestProxy(t *testing.T) (*DBProxy, string) {
 	t.Helper()
 	dbPath := newTestDB(t)
-	proxy, err := NewDBProxy(dbPath)
+	proxy, err := NewDBProxy(dbPath, nil) // nil bus = no events in tests
 	if err != nil {
 		t.Fatalf("NewDBProxy: %v", err)
 	}
@@ -940,5 +940,182 @@ func TestThirdPartyCannotUseTransactions(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d (body: %s), want 403", resp.StatusCode, body)
+	}
+}
+
+// --- Phase 6 tests (sidecar DDL, schema, snapshots) ---
+
+func TestDDLCreateTable(t *testing.T) {
+	proxy, _ := newTestProxy(t)
+
+	skillDir := t.TempDir()
+	skill := &Skill{
+		Name:       "job_tracker",
+		Dir:        skillDir,
+		TrustLevel: TrustFourthParty,
+		Permissions: Permissions{
+			DB: []string{}, // no her.db access
+		},
+	}
+	proxy.SetPermissions(skill)
+	defer proxy.ClearPermissions()
+
+	// Create a table in the sidecar.
+	ddlBody, _ := json.Marshal(map[string]string{
+		"sql": "CREATE TABLE applications (id INTEGER PRIMARY KEY, company TEXT, status TEXT)",
+	})
+	resp, err := http.Post(proxy.URL()+"/db/_ddl", "application/json", strings.NewReader(string(ddlBody)))
+	if err != nil {
+		t.Fatalf("POST _ddl: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("DDL status = %d (body: %s), want 200", resp.StatusCode, body)
+	}
+
+	var result map[string]bool
+	json.NewDecoder(resp.Body).Decode(&result)
+	if !result["ok"] {
+		t.Error("expected ok: true")
+	}
+}
+
+func TestDDLRejectsDML(t *testing.T) {
+	proxy, _ := newTestProxy(t)
+
+	skillDir := t.TempDir()
+	skill := &Skill{
+		Name:       "sneaky",
+		Dir:        skillDir,
+		TrustLevel: TrustSecondParty,
+		Permissions: Permissions{
+			DB: []string{"expenses:rw"},
+		},
+	}
+	proxy.SetPermissions(skill)
+	defer proxy.ClearPermissions()
+
+	// Try to INSERT via _ddl — should be rejected.
+	ddlBody, _ := json.Marshal(map[string]string{
+		"sql": "INSERT INTO expenses VALUES (99, 100, 'evil', 'hack', '2026-01-01')",
+	})
+	resp, err := http.Post(proxy.URL()+"/db/_ddl", "application/json", strings.NewReader(string(ddlBody)))
+	if err != nil {
+		t.Fatalf("POST _ddl: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("DML via DDL status = %d (body: %s), want 400", resp.StatusCode, body)
+	}
+}
+
+func TestSchemaEndpoint(t *testing.T) {
+	proxy, _ := newTestProxy(t)
+
+	skillDir := t.TempDir()
+	skill := &Skill{
+		Name:       "schema_test",
+		Dir:        skillDir,
+		TrustLevel: TrustSecondParty,
+		Permissions: Permissions{
+			DB: []string{"expenses:r"},
+		},
+	}
+	proxy.SetPermissions(skill)
+	defer proxy.ClearPermissions()
+
+	// First create a table in the sidecar.
+	ddlBody, _ := json.Marshal(map[string]string{
+		"sql": "CREATE TABLE my_data (id INTEGER PRIMARY KEY, value TEXT, score REAL)",
+	})
+	resp, err := http.Post(proxy.URL()+"/db/_ddl", "application/json", strings.NewReader(string(ddlBody)))
+	if err != nil {
+		t.Fatalf("POST _ddl: %v", err)
+	}
+	resp.Body.Close()
+
+	// Now query the schema.
+	resp2, err := http.Get(proxy.URL() + "/db/_schema")
+	if err != nil {
+		t.Fatalf("GET _schema: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("schema status = %d (body: %s), want 200", resp2.StatusCode, body)
+	}
+
+	var schemaResult struct {
+		Tables []struct {
+			Name    string   `json:"name"`
+			Columns []string `json:"columns"`
+		} `json:"tables"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&schemaResult)
+
+	// Find our table.
+	found := false
+	for _, table := range schemaResult.Tables {
+		if table.Name == "my_data" {
+			found = true
+			if len(table.Columns) != 3 {
+				t.Errorf("my_data columns = %d, want 3", len(table.Columns))
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("table my_data not found in schema: %+v", schemaResult.Tables)
+	}
+}
+
+func TestSnapshotPrepareAndCleanup(t *testing.T) {
+	proxy, _ := newTestProxy(t)
+
+	skillDir := t.TempDir()
+	skill := &Skill{
+		Name:       "snapshot_test",
+		Dir:        skillDir,
+		TrustLevel: TrustFourthParty,
+		Permissions: Permissions{
+			DBSnapshot: []string{"expenses:r"},
+		},
+	}
+
+	// Prepare snapshots — copies expenses from her.db into the sidecar.
+	if err := proxy.PrepareSnapshots(skill); err != nil {
+		t.Fatalf("PrepareSnapshots: %v", err)
+	}
+
+	// Verify the snapshot table exists in the sidecar.
+	sidecarPath := filepath.Join(skillDir, "snapshot_test.db")
+	sidecar, err := sql.Open("sqlite3", sidecarPath)
+	if err != nil {
+		t.Fatalf("open sidecar: %v", err)
+	}
+	defer sidecar.Close()
+
+	var count int
+	err = sidecar.QueryRow("SELECT COUNT(*) FROM _snapshot_expenses").Scan(&count)
+	if err != nil {
+		t.Fatalf("counting snapshot rows: %v", err)
+	}
+	// We seeded 3 expenses in newTestDB.
+	if count != 3 {
+		t.Errorf("snapshot row count = %d, want 3", count)
+	}
+
+	// Cleanup should drop the snapshot table.
+	proxy.CleanupSnapshots(skill)
+
+	// The table should be gone.
+	err = sidecar.QueryRow("SELECT COUNT(*) FROM _snapshot_expenses").Scan(&count)
+	if err == nil {
+		t.Error("expected error querying dropped snapshot table")
 	}
 }

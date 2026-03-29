@@ -10,12 +10,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
+
+	"her/tui"
 	"github.com/xwb1989/sqlparser"
 )
 
@@ -35,6 +38,7 @@ type DBProxy struct {
 	listener net.Listener
 	port     int
 	dbPath   string // path to her.db
+	bus      eventBus // event bus for DDL audit events (nil = no events)
 
 	// readDB is a read-only connection to her.db with an authorizer callback.
 	// Every query goes through the authorizer, which checks the current
@@ -84,6 +88,15 @@ type dbPermissions struct {
 	skillDir    string // for locating the skill's sidecar DB
 }
 
+// eventBus is an interface for emitting events. This lets us use the real
+// tui.Bus in production and nil/mock in tests. Same pattern as the embedder
+// interface in runner.go.
+//
+// The parameter type matches tui.Event (which has EventTime + EventSource).
+type eventBus interface {
+	Emit(e tui.Event)
+}
+
 // dbProxyDriverCounter is used to generate unique driver names. Each DBProxy
 // instance needs its own registered driver because sql.Register is global
 // and driver names must be unique. In tests, multiple proxies may exist.
@@ -101,9 +114,10 @@ var dbProxyDriverMu sync.Mutex
 // control based on the current skill's permissions.
 //
 // The caller must call Close() during shutdown.
-func NewDBProxy(dbPath string) (*DBProxy, error) {
+func NewDBProxy(dbPath string, bus eventBus) (*DBProxy, error) {
 	p := &DBProxy{
 		dbPath: dbPath,
+		bus:    bus,
 	}
 
 	// --- Register a custom SQLite driver with an authorizer ---
@@ -373,11 +387,21 @@ func (p *DBProxy) handleDB(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		// GET /db/_schema lists tables in the skill's sidecar DB.
+		if table == "_schema" {
+			p.handleSchema(w, r, perms)
+			return
+		}
 		p.handleRead(w, r, perms, table)
 	case http.MethodPost:
 		// POST to /db/_tx/* handles transactions.
 		if strings.HasPrefix(table, "_tx") {
 			p.handleTransaction(w, r, perms, path)
+			return
+		}
+		// POST to /db/_ddl executes DDL on the skill's sidecar DB.
+		if table == "_ddl" {
+			p.handleDDL(w, r, perms)
 			return
 		}
 		p.handleInsert(w, r, perms, table)
@@ -786,6 +810,237 @@ func (p *DBProxy) handleTransaction(w http.ResponseWriter, r *http.Request, perm
 
 	default:
 		jsonError(w, fmt.Sprintf("unknown transaction action: %q", action), http.StatusBadRequest)
+	}
+}
+
+// handleDDL handles POST /db/_ddl — executes DDL on the skill's sidecar DB.
+//
+// Request body: {"sql": "CREATE TABLE applications (id INTEGER PRIMARY KEY, ...)"}
+// Response: {"ok": true}
+//
+// DDL is only allowed on the skill's own sidecar database, never on her.db.
+// Every DDL statement is logged and emits a DDLEvent on the event bus for
+// the audit system.
+func (p *DBProxy) handleDDL(w http.ResponseWriter, r *http.Request, perms *dbPermissions) {
+	// Parse the request.
+	var req struct {
+		SQL string `json:"sql"`
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		jsonError(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		jsonError(w, fmt.Sprintf("invalid JSON: %s", err), http.StatusBadRequest)
+		return
+	}
+	if req.SQL == "" {
+		jsonError(w, "missing 'sql' field", http.StatusBadRequest)
+		return
+	}
+
+	// Quick sanity check: reject obviously non-DDL statements.
+	// This isn't a security boundary — the sidecar is the skill's own DB.
+	// It's a usability guard to prevent confusion.
+	upper := strings.ToUpper(strings.TrimSpace(req.SQL))
+	isDDL := strings.HasPrefix(upper, "CREATE ") ||
+		strings.HasPrefix(upper, "ALTER ") ||
+		strings.HasPrefix(upper, "DROP ")
+	if !isDDL {
+		jsonError(w, "only CREATE, ALTER, and DROP statements are allowed via _ddl", http.StatusBadRequest)
+		return
+	}
+
+	// Open the skill's sidecar DB.
+	sidecarDB, err := p.openSidecarDB(perms)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("opening sidecar: %s", err), http.StatusInternalServerError)
+		return
+	}
+	defer sidecarDB.Close()
+
+	// Execute the DDL.
+	if _, err := sidecarDB.ExecContext(r.Context(), req.SQL); err != nil {
+		jsonError(w, fmt.Sprintf("DDL failed: %s", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Log and emit audit event.
+	log.Info("sidecar DDL executed", "skill", perms.skillName, "sql", req.SQL)
+	if p.bus != nil {
+		p.bus.Emit(tui.DDLEvent{
+			Time:      time.Now(),
+			SkillName: perms.skillName,
+			Statement: req.SQL,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+// handleSchema handles GET /db/_schema — lists tables in the skill's sidecar DB.
+//
+// Response: {"tables": [{"name": "applications", "columns": ["id", "company", "status"]}]}
+func (p *DBProxy) handleSchema(w http.ResponseWriter, r *http.Request, perms *dbPermissions) {
+	sidecarDB, err := p.openSidecarDB(perms)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("opening sidecar: %s", err), http.StatusInternalServerError)
+		return
+	}
+	defer sidecarDB.Close()
+
+	// Query SQLite's internal schema table for user-created tables.
+	// sqlite_master contains all tables, indexes, views, and triggers.
+	// We filter to type='table' and exclude internal tables (sqlite_*).
+	rows, err := sidecarDB.QueryContext(r.Context(),
+		`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("querying schema: %s", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type tableInfo struct {
+		Name    string   `json:"name"`
+		Columns []string `json:"columns"`
+	}
+
+	var tables []tableInfo
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			jsonError(w, fmt.Sprintf("scanning table name: %s", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Get column names for this table using PRAGMA table_info.
+		colRows, err := sidecarDB.QueryContext(r.Context(),
+			fmt.Sprintf("PRAGMA table_info(%s)", name))
+		if err != nil {
+			jsonError(w, fmt.Sprintf("querying columns for %s: %s", name, err), http.StatusInternalServerError)
+			return
+		}
+
+		var columns []string
+		for colRows.Next() {
+			// PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+			var cid int
+			var colName, colType string
+			var notnull int
+			var dfltValue *string
+			var pk int
+			if err := colRows.Scan(&cid, &colName, &colType, &notnull, &dfltValue, &pk); err != nil {
+				colRows.Close()
+				jsonError(w, fmt.Sprintf("scanning column: %s", err), http.StatusInternalServerError)
+				return
+			}
+			columns = append(columns, colName)
+		}
+		colRows.Close()
+
+		tables = append(tables, tableInfo{Name: name, Columns: columns})
+	}
+
+	if tables == nil {
+		tables = []tableInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"tables": tables})
+}
+
+// openSidecarDB opens (or creates) the skill's sidecar database file.
+// The sidecar lives at <skill.Dir>/<skill.Name>.db.
+//
+// Unlike the harness-managed sidecar (sidecar.go), this gives the skill
+// full DDL control — it can create its own tables, alter schemas, etc.
+// The harness's runs/vec_runs tables are also present if the harness
+// previously recorded execution history.
+func (p *DBProxy) openSidecarDB(perms *dbPermissions) (*sql.DB, error) {
+	dbPath := filepath.Join(perms.skillDir, perms.skillName+".db")
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=on")
+	if err != nil {
+		return nil, fmt.Errorf("opening sidecar db: %w", err)
+	}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("pinging sidecar db: %w", err)
+	}
+	return db, nil
+}
+
+// PrepareSnapshots copies declared her.db tables into the skill's sidecar
+// database. Called by the runner before executing a 4th-party skill that
+// declared db_snapshot permissions.
+//
+// The snapshot is a full copy of rows — the skill reads from its sidecar
+// as if the table were its own. After execution, CleanupSnapshots drops
+// the copied tables.
+//
+// Uses ATTACH DATABASE to copy between databases in a single SQLite
+// connection. This is efficient — SQLite handles the copy internally,
+// no row-by-row marshaling.
+func (p *DBProxy) PrepareSnapshots(skill *Skill) error {
+	if len(skill.Permissions.DBSnapshot) == 0 {
+		return nil
+	}
+
+	sidecarPath := filepath.Join(skill.Dir, skill.Name+".db")
+
+	// Open the sidecar and attach her.db to it.
+	db, err := sql.Open("sqlite3", sidecarPath+"?_journal_mode=WAL")
+	if err != nil {
+		return fmt.Errorf("opening sidecar for snapshot: %w", err)
+	}
+	defer db.Close()
+
+	// ATTACH the main her.db so we can copy tables across.
+	if _, err := db.Exec(fmt.Sprintf(`ATTACH DATABASE '%s' AS herdb`, p.dbPath)); err != nil {
+		return fmt.Errorf("attaching her.db: %w", err)
+	}
+	defer db.Exec("DETACH DATABASE herdb")
+
+	// Copy each declared snapshot table.
+	for _, entry := range skill.Permissions.DBSnapshot {
+		table, _ := parseDBPermission(entry) // ignore mode, snapshots are always read-only
+		// CREATE TABLE AS SELECT copies both schema and data.
+		// The _snapshot_ prefix avoids conflicts with the skill's own tables.
+		snapshotName := "_snapshot_" + table
+		_, err := db.Exec(fmt.Sprintf(
+			"CREATE TABLE IF NOT EXISTS %s AS SELECT * FROM herdb.%s",
+			snapshotName, table))
+		if err != nil {
+			return fmt.Errorf("copying snapshot of %s: %w", table, err)
+		}
+		log.Debug("snapshot created", "skill", skill.Name, "table", table, "as", snapshotName)
+	}
+
+	return nil
+}
+
+// CleanupSnapshots removes snapshot tables from the skill's sidecar.
+// Called after the skill finishes executing (via defer in the runner).
+func (p *DBProxy) CleanupSnapshots(skill *Skill) {
+	if len(skill.Permissions.DBSnapshot) == 0 {
+		return
+	}
+
+	sidecarPath := filepath.Join(skill.Dir, skill.Name+".db")
+	db, err := sql.Open("sqlite3", sidecarPath+"?_journal_mode=WAL")
+	if err != nil {
+		log.Warn("failed to open sidecar for snapshot cleanup", "skill", skill.Name, "err", err)
+		return
+	}
+	defer db.Close()
+
+	for _, entry := range skill.Permissions.DBSnapshot {
+		table, _ := parseDBPermission(entry)
+		snapshotName := "_snapshot_" + table
+		if _, err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", snapshotName)); err != nil {
+			log.Warn("failed to drop snapshot table", "skill", skill.Name, "table", snapshotName, "err", err)
+		}
 	}
 }
 
