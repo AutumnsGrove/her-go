@@ -960,9 +960,15 @@ Everything internal to Mira's state:
 10. ~~**Sidecar databases** — per-skill execution history, `search_history` tool~~ **DONE** (2026-03-28, `skills/loader/sidecar.go`)
 11. ~~**Event bus** — unified agent trigger system, scheduler migrated~~ **DONE** (2026-03-28, `agent/event.go`, `bot/telegram.go`)
 12. ~~**Remove built-in search tools** — dead code cleanup~~ **DONE** (2026-03-28)
-13. **Database proxy** — controlled skill-to-database access for DB-dependent tools (expenses, schedules, mood, memory)
-14. **`delegate_coding` tool** — async coding agent with event bus integration
-15. **Skill creation flow** — 4th-party skills via coding agent delegation
+13. ~~**Database proxy** — localhost HTTP proxy with SQLite authorizer, SQL parser, full CRUD, transactions~~ **DONE** (2026-03-29, `skills/loader/dbproxy.go`)
+14. ~~**Skillkit DB client** — `skillkit.DB()` with Query/Insert/Update/Delete~~ **DONE** (2026-03-29, `skills/skillkit/go/db.go`)
+15. ~~**Sidecar DDL + schema introspection** — skill-managed schemas, DDLEvent audit~~ **DONE** (2026-03-29, `POST /db/_ddl`, `GET /db/_schema`)
+16. ~~**Snapshot mechanism** — ATTACH DATABASE copies her.db tables for 4th-party~~ **DONE** (2026-03-29)
+17. ~~**Migrate `log_mood`** — first DB-dependent tool migration, proof of DB proxy~~ **DONE** (2026-03-29, `skills/log_mood/`)
+18. **Migrate remaining DB tools** — expenses (4 tools), schedules (5 tools), mood done
+19. **`delegate_coding` tool** — async coding agent with event bus integration
+20. **Skill creation flow** — 4th-party skills via coding agent delegation
+21. **Audit skill** — consumes DDLEvents, agent-as-sysadmin monitoring pattern
 
 ## 13. Security Considerations
 
@@ -1277,7 +1283,7 @@ With the DB proxy, these tools become migration candidates:
 | query_expenses | expenses | Low (read-only) |
 | delete_expense | expenses | Low |
 | update_expense | expenses | Low |
-| log_mood | mood_entries | Low |
+| ~~log_mood~~ | ~~mood_entries~~ | ~~Low~~ **DONE** |
 | create_reminder | scheduled_tasks | Medium |
 | create_schedule | scheduled_tasks | Medium |
 | list_schedules | scheduled_tasks | Low (read-only) |
@@ -1294,13 +1300,13 @@ a richer API surface.
 
 ### Implementation Order
 
-1. DB proxy server (HTTP listener, SQLite authorizer, permission checking)
-2. SQL WHERE clause parser + validator (xwb1989/sqlparser)
-3. Sidecar DB provisioning + DDL audit logging
-4. Snapshot mechanism (table copy into sidecar)
-5. Skillkit DB client (Go + Python)
+1. ~~DB proxy server (HTTP listener, SQLite authorizer, permission checking)~~ **DONE**
+2. ~~SQL WHERE clause parser + validator (xwb1989/sqlparser)~~ **DONE**
+3. ~~Sidecar DB provisioning + DDL audit logging~~ **DONE**
+4. ~~Snapshot mechanism (table copy into sidecar)~~ **DONE**
+5. ~~Skillkit DB client (Go)~~ **DONE** (Python client not yet needed)
 6. Audit skill for DDL monitoring
-7. Migrate one simple tool (e.g., query_expenses) as proof-of-concept
+7. ~~Migrate one simple tool (log_mood) as proof-of-concept~~ **DONE**
 8. Migrate remaining DB-dependent tools
 
 ### Key Dependencies
