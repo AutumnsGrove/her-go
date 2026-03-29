@@ -32,6 +32,9 @@ voice_cache/
 *.ogg
 *.wav
 
+# Claude Code (session state, not shared config)
+.claude/worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

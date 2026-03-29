@@ -1,0 +1,74 @@
+{
+	"spinnerVerbs": {
+		"mode": "append",
+		"verbs": [
+			"Thinking",
+			"Remembering",
+			"Dreaming",
+			"Listening",
+			"Feeling",
+			"Reflecting",
+			"Humming",
+			"Wondering",
+			"Holding space",
+			"Being present",
+			"Taking a breath",
+			"Finding the words",
+			"Sitting with it"
+		]
+	},
+	"companyAnnouncements": [
+		"Hey. I'm here.",
+		"Take your time. There's no rush.",
+		"Building something that matters takes patience.",
+		"Go is just Python with better posture."
+	],
+	"permissions": {
+		"allow": [
+			"Bash(go build:*)",
+			"Bash(go test:*)",
+			"Bash(go run:*)",
+			"Bash(go vet:*)",
+			"Bash(go mod:*)",
+			"Bash(go get:*)",
+			"Bash(go fmt:*)",
+			"Bash(gofmt:*)",
+
+			"Bash(git status:*)",
+			"Bash(git status)",
+			"Bash(git diff:*)",
+			"Bash(git diff)",
+			"Bash(git log:*)",
+			"Bash(git branch:*)",
+			"Bash(git stash:*)",
+			"Bash(git checkout:*)",
+			"Bash(git merge:*)",
+			"Bash(git add:*)",
+			"Bash(git commit:*)",
+
+			"Bash(gh issue:*)",
+			"Bash(gh pr:*)",
+			"Bash(gh repo:*)",
+			"Bash(gh label:*)",
+
+			"Bash(uv run:*)",
+			"Bash(uv sync:*)",
+			"Bash(uv pip:*)",
+			"Bash(uv cache:*)",
+
+			"Bash(ls:*)",
+			"Bash(tree:*)",
+			"Bash(mkdir:*)",
+			"Bash(pwd)",
+			"Bash(sha256sum:*)",
+			"Bash(wc:*)",
+			"Bash(tail:*)",
+			"Bash(head:*)",
+
+			"mcp__context7__resolve-library-id",
+			"mcp__context7__query-docs",
+
+			"Skill(filing-cabinet)"
+		]
+	}
+}
