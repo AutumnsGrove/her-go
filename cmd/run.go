@@ -60,6 +60,12 @@ func runBot(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		log.Fatal("Failed to load config", "err", err)
 	}
+
+	// Export config secrets as process-level env vars so skills can find
+	// them via os.Getenv(). These die with the process — never touch the
+	// parent shell, no cleanup needed.
+	cfg.ExportEnv()
+
 	if cfg.Telegram.Token == "" {
 		log.Fatal("Telegram token is required — set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}

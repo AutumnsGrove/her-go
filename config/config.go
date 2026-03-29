@@ -418,6 +418,37 @@ func (c *Config) SetLocation(configPath string, lat, lon float64) error {
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
+// ExportEnv sets process-level environment variables from config values
+// so that skill subprocesses can find them via os.Getenv(). This bridges
+// the gap between secrets stored in config.yaml and skills that check
+// for env vars in their requirements.
+//
+// These vars only exist in the current process and its children — they
+// never touch the parent shell. When the process exits (quit, signal,
+// crash), they vanish automatically. No cleanup needed.
+//
+// Only sets a var if the config value is non-empty AND the env var isn't
+// already set — we don't want to overwrite explicit env var exports.
+func (c *Config) ExportEnv() {
+	// Map of env var name → config value. Add new entries here
+	// as skills declare new env requirements in their skill.md.
+	exports := map[string]string{
+		"TAVILY_API_KEY":    c.Search.TavilyAPIKey,
+		"OPENROUTER_API_KEY": c.LLM.APIKey,
+		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
+	}
+
+	for key, val := range exports {
+		if val == "" {
+			continue // not configured — skip
+		}
+		if os.Getenv(key) != "" {
+			continue // already set in shell — don't override
+		}
+		os.Setenv(key, val)
+	}
+}
+
 // expandEnvVars replaces all ${VAR_NAME} patterns with their environment
 // variable values. If a variable isn't set, the placeholder is replaced
 // with an empty string.
