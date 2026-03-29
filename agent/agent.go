@@ -1179,7 +1179,23 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 
 	// Layer 4: Memory context — blend of semantically relevant facts
 	// (from KNN search) and high-importance facts (always-present).
-	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, tctx.relevantFacts, tctx.cfg.Identity.User, tctx.cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
+	//
+	// Before injecting, filter out facts that are already represented
+	// in the recent conversation history. This prevents "context echo"
+	// where the model sees the same information in both the facts section
+	// AND the message history, causing it to fixate and regurgitate.
+	filteredFacts := tctx.relevantFacts
+	if tctx.embedClient != nil {
+		recentMsgs, err := tctx.store.RecentMessages(tctx.conversationID, tctx.cfg.Memory.RecentMessages)
+		if err == nil && len(recentMsgs) > 0 {
+			before := len(filteredFacts)
+			filteredFacts = memory.FilterRedundantFacts(filteredFacts, recentMsgs, tctx.embedClient)
+			if dropped := before - len(filteredFacts); dropped > 0 {
+				log.Infof("  conversation dedup: %d/%d facts filtered as redundant with history", dropped, before)
+			}
+		}
+	}
+	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, filteredFacts, tctx.cfg.Identity.User, tctx.cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
 		// Log which facts were injected and why — this is the observability
 		// that lets you debug "why did she mention X when I asked about Y?"
@@ -1655,6 +1671,13 @@ var styleBlocklist = []string{
 // persona evolution system, not in individual facts.
 const maxFactLength = 200
 
+// sameDayContextThreshold is a tighter duplicate threshold for "context"
+// category facts. Multiple snapshots of the same day ("at Bolivar feeling
+// low", "at Bolivar doing grounding exercise") are situational duplicates
+// that the normal tag-based threshold misses. 0.70 catches these while
+// still allowing genuinely different contexts on the same day.
+const sameDayContextThreshold = 0.70
+
 func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	var args struct {
 		Fact       string `json:"fact"`
@@ -1736,10 +1759,33 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		if err != nil {
 			log.Warn("embedding failed, skipping duplicate check", "err", err)
 		} else {
-			if duplicate, existingID, existingFact, sim := checkDuplicate(newVec, subject, tctx); duplicate {
-				log.Info("blocked duplicate fact", "similarity_pct", sim*100, "existing_id", existingID, "fact", args.Fact)
-				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q). Use update_fact to refine it instead.",
-					sim*100, existingID, existingFact)
+			// Also embed the raw fact text for a second similarity check.
+			// Tags catch topical duplicates ("coffee shop, mood" vs
+			// "coffee shop, vibe") but miss situational duplicates where
+			// the same event is described with different tag angles.
+			var textVec []float32
+			if args.Tags != "" {
+				// Only need a separate text embedding when tags differ
+				// from the fact text (otherwise newVec already IS the
+				// text embedding).
+				textVec, err = tctx.embedClient.Embed(args.Fact)
+				if err != nil {
+					log.Warn("text embedding failed, using tag-only dedup", "err", err)
+				}
+			}
+
+			// Same-day context facts use a tighter threshold because
+			// multiple snapshots of the same situation (location, mood,
+			// activity) within a single day are almost always duplicates.
+			threshold := tctx.similarityThreshold
+			if args.Category == "context" {
+				threshold = sameDayContextThreshold
+			}
+
+			if duplicate, existingID, existingFact, sim, source := checkDuplicate(newVec, textVec, subject, threshold, tctx); duplicate {
+				log.Info("blocked duplicate fact", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "fact", args.Fact)
+				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q) [matched on %s]. Use update_fact to refine it instead.",
+					sim*100, existingID, existingFact, source)
 			}
 		}
 	}
@@ -1758,49 +1804,79 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
 
-func checkDuplicate(newVec []float32, subject string, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64) {
+// checkDuplicate compares a new fact against all existing facts using two
+// embedding strategies: tag-based (topical) and text-based (semantic).
+// If either similarity exceeds the threshold, the fact is a duplicate.
+//
+// newTagVec is the embedding of the fact's tags (or fact text if no tags).
+// newTextVec is the embedding of the raw fact text (may be nil if tags
+// were empty, since newTagVec already IS the text embedding in that case).
+//
+// The returned "source" string indicates which check caught the duplicate
+// ("tags" or "text") for logging/debugging.
+func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold float64, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64, source string) {
 	existingFacts, err := tctx.store.AllActiveFacts()
 	if err != nil {
 		log.Warn("couldn't load facts for duplicate check", "err", err)
-		return false, 0, "", 0
+		return false, 0, "", 0, ""
 	}
 
 	var bestSim float64
 	var bestID int64
 	var bestFact string
+	var bestSource string
 
 	for _, existing := range existingFacts {
 		if existing.Subject != subject {
 			continue
 		}
 
-		existVec := existing.Embedding
-		if len(existVec) == 0 {
-			// Backfill: embed by tags when available
+		// --- Tag-based similarity (topical dedup) ---
+		existTagVec := existing.Embedding
+		if len(existTagVec) == 0 {
 			embedText := existing.Tags
 			if embedText == "" {
 				embedText = existing.Fact
 			}
-			existVec, err = tctx.embedClient.Embed(embedText)
+			existTagVec, err = tctx.embedClient.Embed(embedText)
 			if err != nil {
 				continue
 			}
-			_ = tctx.store.UpdateFactEmbedding(existing.ID, existVec)
+			_ = tctx.store.UpdateFactEmbedding(existing.ID, existTagVec)
 			log.Debug("backfilled embedding for fact", "fact_id", existing.ID)
 		}
 
-		sim := embed.CosineSimilarity(newVec, existVec)
-		if sim > bestSim {
-			bestSim = sim
+		tagSim := embed.CosineSimilarity(newTagVec, existTagVec)
+		if tagSim > bestSim {
+			bestSim = tagSim
 			bestID = existing.ID
 			bestFact = existing.Fact
+			bestSource = "tags"
+		}
+
+		// --- Text-based similarity (semantic dedup) ---
+		// Catches situational duplicates where tags differ but the facts
+		// describe the same thing (e.g. "at Bolivar feeling low" vs
+		// "at Bolivar doing grounding exercise, feeling stuck").
+		if len(newTextVec) > 0 {
+			existTextVec, err := tctx.embedClient.Embed(existing.Fact)
+			if err != nil {
+				continue
+			}
+			textSim := embed.CosineSimilarity(newTextVec, existTextVec)
+			if textSim > bestSim {
+				bestSim = textSim
+				bestID = existing.ID
+				bestFact = existing.Fact
+				bestSource = "text"
+			}
 		}
 	}
 
-	if bestSim >= tctx.similarityThreshold {
-		return true, bestID, bestFact, bestSim
+	if bestSim >= threshold {
+		return true, bestID, bestFact, bestSim, bestSource
 	}
-	return false, 0, "", 0
+	return false, 0, "", 0, ""
 }
 
 func execUpdateFact(argsJSON string, tctx *toolContext) string {
