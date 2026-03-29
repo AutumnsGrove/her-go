@@ -313,6 +313,20 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 			"skill", evt.SkillName)
 		return
 
+	case agent.EventDDLDetected:
+		// A skill modified its sidecar database schema. The agent acts as
+		// a sysadmin — it has context about why the skill exists and can
+		// judge whether the schema change makes sense.
+		prompt = fmt.Sprintf("[system] Skill %q modified its database schema:\n\n```sql\n%s\n```\n\n"+
+			"This is a 4th-party (AI-generated) skill. Review this DDL change and decide:\n"+
+			"- If this looks normal for what the skill does, just acknowledge it briefly.\n"+
+			"- If this looks suspicious or destructive (DROP TABLE, etc.), notify the user.\n"+
+			"- If the skill is repeatedly making destructive changes, recommend quarantining it.\n"+
+			"Keep your response concise — this is a background system event, not a conversation.",
+			evt.SkillName, evt.DDLStatement)
+		conversationID = "ddl-audit"
+		log.Info("handling DDL audit event", "skill", evt.SkillName, "statement", evt.DDLStatement)
+
 	default:
 		log.Warn("unknown agent event type", "type", evt.Type)
 		return

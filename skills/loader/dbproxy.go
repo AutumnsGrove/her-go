@@ -40,6 +40,12 @@ type DBProxy struct {
 	dbPath   string // path to her.db
 	bus      eventBus // event bus for DDL audit events (nil = no events)
 
+	// onDDL is called when a skill executes DDL on its sidecar database.
+	// The bot sets this to emit DDLDetected events into the agent event
+	// channel, triggering an agent run that decides how to respond.
+	// Nil means no agent notification (DDL is still logged via the bus).
+	onDDL func(skillName, statement string)
+
 	// readDB is a read-only connection to her.db with an authorizer callback.
 	// Every query goes through the authorizer, which checks the current
 	// skill's permissions before allowing table access.
@@ -206,6 +212,12 @@ func (p *DBProxy) Port() int {
 // This gets set as DB_PROXY_URL in the skill's environment.
 func (p *DBProxy) URL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d", p.port)
+}
+
+// SetDDLCallback stores the callback for DDL audit events.
+// Called from cmd/run.go after creating the bot and agent event channel.
+func (p *DBProxy) SetDDLCallback(fn func(skillName, statement string)) {
+	p.onDDL = fn
 }
 
 // SetPermissions configures access control for the currently running skill.
@@ -866,7 +878,7 @@ func (p *DBProxy) handleDDL(w http.ResponseWriter, r *http.Request, perms *dbPer
 		return
 	}
 
-	// Log and emit audit event.
+	// Log and emit audit event on the TUI bus (for display/logging).
 	log.Info("sidecar DDL executed", "skill", perms.skillName, "sql", req.SQL)
 	if p.bus != nil {
 		p.bus.Emit(tui.DDLEvent{
@@ -874,6 +886,14 @@ func (p *DBProxy) handleDDL(w http.ResponseWriter, r *http.Request, perms *dbPer
 			SkillName: perms.skillName,
 			Statement: req.SQL,
 		})
+	}
+
+	// Notify the agent via the DDL callback (for automated monitoring).
+	// The agent decides how to respond: log silently, notify Autumn,
+	// revert, or quarantine. Only fires for 4th-party skills — 2nd/3rd
+	// party DDL is trusted (written or reviewed by Autumn).
+	if p.onDDL != nil && perms.trustLevel == TrustFourthParty {
+		p.onDDL(perms.skillName, req.SQL)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

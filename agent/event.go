@@ -27,6 +27,13 @@ const (
 	// the delegate_coding tool.
 	// Will use: SkillName, Result, Success.
 	EventCodingComplete
+
+	// EventDDLDetected fires when a skill modifies its sidecar database
+	// schema (CREATE TABLE, ALTER TABLE, DROP TABLE). The agent decides
+	// the appropriate response: log silently, mention to Autumn, or
+	// quarantine the skill.
+	// Uses: SkillName, DDLStatement.
+	EventDDLDetected
 )
 
 // String implements fmt.Stringer for readable logging.
@@ -38,6 +45,8 @@ func (t AgentEventType) String() string {
 		return "skill-failed"
 	case EventCodingComplete:
 		return "coding-complete"
+	case EventDDLDetected:
+		return "ddl-detected"
 	default:
 		return "unknown"
 	}
@@ -60,8 +69,11 @@ type AgentEvent struct {
 	TaskName string // task name for logging ("morning briefing", etc.)
 
 	// --- EventSkillFailed fields ---
-	SkillName string // which skill failed
+	SkillName string // which skill failed or modified its schema
 	Error     string // error description
+
+	// --- EventDDLDetected fields ---
+	DDLStatement string // the DDL statement that was executed (CREATE TABLE, etc.)
 
 	// --- Common ---
 	Timestamp time.Time

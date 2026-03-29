@@ -338,6 +338,20 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		}
 	})
 
+	// --- DDL audit events ---
+	// When a 4th-party skill modifies its sidecar schema, the agent reviews
+	// the change and decides whether to notify, log, or quarantine.
+	if dbProxy != nil {
+		dbProxy.SetDDLCallback(func(skillName, statement string) {
+			tgBot.AgentEventChannel() <- agent.AgentEvent{
+				Type:         agent.EventDDLDetected,
+				SkillName:    skillName,
+				DDLStatement: statement,
+				Timestamp:    time.Now(),
+			}
+		})
+	}
+
 	// --- Scheduler ---
 
 	var sched *scheduler.Scheduler
