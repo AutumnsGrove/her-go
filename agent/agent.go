@@ -1752,7 +1752,12 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		embedText = args.Fact
 	}
 
+	// Hoist textVec here so it's in scope for both the dedup check and SaveFact.
+	// When args.Tags == "", embedText == args.Fact, meaning newVec IS the text
+	// embedding — no separate embed needed. When tags are present, we embed the
+	// raw fact text separately for the text-based dedup pass.
 	var newVec []float32
+	var textVec []float32
 	if tctx.embedClient != nil {
 		var err error
 		newVec, err = tctx.embedClient.Embed(embedText)
@@ -1763,7 +1768,6 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 			// Tags catch topical duplicates ("coffee shop, mood" vs
 			// "coffee shop, vibe") but miss situational duplicates where
 			// the same event is described with different tag angles.
-			var textVec []float32
 			if args.Tags != "" {
 				// Only need a separate text embedding when tags differ
 				// from the fact text (otherwise newVec already IS the
@@ -1790,7 +1794,9 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 	}
 
-	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, args.Tags)
+	// textVec is nil when tags were empty — SaveFact stores NULL in that case,
+	// which is correct because newVec already encodes the text embedding.
+	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}
@@ -1842,8 +1848,10 @@ func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold f
 			if err != nil {
 				continue
 			}
-			_ = tctx.store.UpdateFactEmbedding(existing.ID, existTagVec)
-			log.Debug("backfilled embedding for fact", "fact_id", existing.ID)
+			// Backfill: persist the computed tag embedding (and preserve the
+			// existing text embedding so we don't wipe it with nil).
+			_ = tctx.store.UpdateFactEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
+			log.Debug("backfilled tag embedding for fact", "fact_id", existing.ID)
 		}
 
 		tagSim := embed.CosineSimilarity(newTagVec, existTagVec)
@@ -1859,9 +1867,17 @@ func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold f
 		// describe the same thing (e.g. "at Bolivar feeling low" vs
 		// "at Bolivar doing grounding exercise, feeling stuck").
 		if len(newTextVec) > 0 {
-			existTextVec, err := tctx.embedClient.Embed(existing.Fact)
-			if err != nil {
-				continue
+			// Use the cached text embedding to avoid an embedding call per
+			// existing fact on every save. Fall back to computing on-the-fly
+			// and backfilling if the cache is empty (e.g. older facts).
+			existTextVec := existing.EmbeddingText
+			if len(existTextVec) == 0 {
+				existTextVec, err = tctx.embedClient.Embed(existing.Fact)
+				if err != nil {
+					continue
+				}
+				_ = tctx.store.UpdateFactEmbedding(existing.ID, existing.Embedding, existTextVec)
+				log.Debug("backfilled text embedding for fact", "fact_id", existing.ID)
 			}
 			textSim := embed.CosineSimilarity(newTextVec, existTextVec)
 			if textSim > bestSim {
@@ -1930,14 +1946,21 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
 
-	// Re-embed using tags (same as save_fact — embed by topic, not by text)
+	// Re-embed using tags (same as save_fact — embed by topic, not by text).
+	// Also re-embed the raw fact text so the cached text embedding stays fresh.
 	if tctx.embedClient != nil {
 		embedText := args.Tags
 		if embedText == "" {
 			embedText = args.Fact
 		}
 		if newVec, err := tctx.embedClient.Embed(embedText); err == nil {
-			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec)
+			// Recompute text embedding. When tags are empty, newVec already
+			// encodes the text, so we pass nil to avoid a redundant embed call.
+			var newTextVec []float32
+			if args.Tags != "" {
+				newTextVec, _ = tctx.embedClient.Embed(args.Fact)
+			}
+			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec, newTextVec)
 			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
 		}
 	}

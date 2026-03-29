@@ -73,14 +73,20 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 
 	var filtered []Fact
 	for _, f := range facts {
-		// Embed the fact text (not tags) — we want to catch semantic
-		// overlap between what the fact says and what the conversation
-		// already contains.
-		factVec, err := embedClient.Embed(f.Fact)
-		if err != nil {
-			// Can't check — keep the fact to be safe.
-			filtered = append(filtered, f)
-			continue
+		// Use the cached text embedding when available (populated by SaveFact
+		// and UpdateFactEmbedding). Fall back to computing on-the-fly for
+		// older facts that predate the embedding_text column.
+		// We compare fact TEXT (not tags) against messages — we want semantic
+		// overlap between what the fact *says* and what the conversation contains.
+		factVec := f.EmbeddingText
+		if len(factVec) == 0 {
+			var err error
+			factVec, err = embedClient.Embed(f.Fact)
+			if err != nil {
+				// Can't check — keep the fact to be safe.
+				filtered = append(filtered, f)
+				continue
+			}
 		}
 
 		redundant := false

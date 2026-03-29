@@ -364,6 +364,13 @@ func (s *Store) initTables() error {
 		// organizes by TOPIC rather than by surface-level word overlap.
 		// This prevents "User has burnout" from matching "tell me about code."
 		`ALTER TABLE facts ADD COLUMN tags TEXT`,
+		// embedding_text: cached text-based embedding vector (float32 BLOB).
+		// Unlike the tag embedding (used for KNN/vec_facts), this is the
+		// embedding of the raw fact text. It's used by checkDuplicate and
+		// FilterRedundantFacts to catch situational duplicates that share
+		// meaning but use different tag angles. Caching it avoids repeated
+		// on-the-fly embedding calls during dedup checks.
+		`ALTER TABLE facts ADD COLUMN embedding_text BLOB`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
@@ -647,7 +654,8 @@ type Fact struct {
 	Importance      int
 	Active          bool
 	Tags            string    // comma-separated topic descriptors for semantic search
-	Embedding       []float32 // cached embedding vector (nil if not yet computed)
+	Embedding       []float32 // cached tag embedding vector (nil if not yet computed)
+	EmbeddingText   []float32 // cached text embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
 }
 
@@ -698,8 +706,10 @@ func deserializeEmbedding(data []byte) []float32 {
 // SaveFact inserts an extracted fact into the database and its embedding
 // into the vec_facts virtual table for KNN search.
 // subject is "user" or "self". If sourceMessageID is 0, it's stored as NULL.
-// embedding is optional — pass nil if not yet computed.
-func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32, tags string) (int64, error) {
+// embedding is the tag-based vector (used for KNN search via vec_facts).
+// embeddingText is the raw-text vector (used for dedup and redundancy filtering).
+// Both are optional — pass nil if not yet computed.
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -708,7 +718,7 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 		subject = "user"
 	}
 
-	// Serialize the embedding to bytes for the BLOB column on the facts table.
+	// Serialize the tag embedding to bytes for the BLOB column on the facts table.
 	// This is the "source of truth" copy — vec_facts is the searchable index.
 	var embBlob interface{}
 	if len(embedding) > 0 {
@@ -719,10 +729,21 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 		embBlob = b
 	}
 
+	// Serialize the text embedding separately. This is only stored on the facts
+	// table (not vec_facts) — it's used for dedup checks, not KNN search.
+	var embTextBlob interface{}
+	if len(embeddingText) > 0 {
+		b, err := serializeEmbedding(embeddingText)
+		if err != nil {
+			return 0, fmt.Errorf("serializing text embedding: %w", err)
+		}
+		embTextBlob = b
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding, tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		fact, category, subject, srcID, importance, embBlob, tags,
+		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding, embedding_text, tags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		fact, category, subject, srcID, importance, embBlob, embTextBlob, tags,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving fact: %w", err)
@@ -752,19 +773,33 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 	return id, nil
 }
 
-// UpdateFactEmbedding sets the cached embedding for a fact and updates
-// the vec_facts index. Used for backfilling facts that were saved before
-// embeddings were enabled, or when a fact's text is updated.
-func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32) error {
+// UpdateFactEmbedding sets the cached embeddings for a fact and updates
+// the vec_facts index. embedding is the tag-based vector for KNN search.
+// embeddingText is the raw-text vector for dedup checks; pass nil to leave
+// it unchanged (the SQL still writes NULL, so pass existing.EmbeddingText
+// when you don't want to clear it).
+func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32, embeddingText []float32) error {
 	vecBytes, err := serializeEmbedding(embedding)
 	if err != nil {
 		return fmt.Errorf("serializing embedding for fact %d: %w", factID, err)
 	}
 
-	// Update the BLOB on the facts table.
+	// Serialize the text embedding; nil produces a nil byte slice which
+	// SQLite stores as NULL — that's intentional for facts without a
+	// text embedding yet.
+	var textVecBytes interface{}
+	if len(embeddingText) > 0 {
+		b, err := serializeEmbedding(embeddingText)
+		if err != nil {
+			return fmt.Errorf("serializing text embedding for fact %d: %w", factID, err)
+		}
+		textVecBytes = b
+	}
+
+	// Update both BLOB columns on the facts table in one round-trip.
 	if _, err := s.db.Exec(
-		`UPDATE facts SET embedding = ? WHERE id = ?`,
-		vecBytes, factID,
+		`UPDATE facts SET embedding = ?, embedding_text = ? WHERE id = ?`,
+		vecBytes, textVecBytes, factID,
 	); err != nil {
 		return fmt.Errorf("updating embedding for fact %d: %w", factID, err)
 	}
@@ -789,7 +824,7 @@ func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32) error {
 // ordered by importance (descending) then recency (descending).
 func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM facts
 		 WHERE active = 1 AND COALESCE(subject, 'user') = ?
 		 ORDER BY importance DESC, timestamp DESC
@@ -806,12 +841,14 @@ func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 		var f Fact
 		var ts string
 		var embData []byte
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData); err != nil {
+		var embTextData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
 		f.Embedding = deserializeEmbedding(embData)
+		f.EmbeddingText = deserializeEmbedding(embTextData)
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -923,7 +960,7 @@ func (s *Store) DeactivateFact(factID int64) error {
 // what to update or consolidate. Includes cached embeddings.
 func (s *Store) AllActiveFacts() ([]Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
+		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM facts WHERE active = 1
 		 ORDER BY subject ASC, importance DESC, timestamp DESC`,
 	)
@@ -937,12 +974,14 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 		var f Fact
 		var ts string
 		var embData []byte
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData); err != nil {
+		var embTextData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning fact row: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
 		f.Embedding = deserializeEmbedding(embData)
+		f.EmbeddingText = deserializeEmbedding(embTextData)
 		facts = append(facts, f)
 	}
 	return facts, nil
@@ -974,7 +1013,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 	// Requesting 2x is a reasonable buffer.
 	rows, err := s.db.Query(
 		`SELECT f.id, f.timestamp, f.fact, f.category, COALESCE(f.subject, 'user'),
-		        f.importance, COALESCE(f.tags, ''), v.distance
+		        f.importance, COALESCE(f.tags, ''), f.embedding_text, v.distance
 		 FROM vec_facts v
 		 JOIN facts f ON f.id = v.rowid
 		 WHERE v.embedding MATCH ?
@@ -992,11 +1031,13 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 	for rows.Next() {
 		var f Fact
 		var ts string
-		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &f.Distance); err != nil {
+		var embTextData []byte
+		if err := rows.Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance, &f.Tags, &embTextData, &f.Distance); err != nil {
 			return nil, fmt.Errorf("scanning semantic search result: %w", err)
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
+		f.EmbeddingText = deserializeEmbedding(embTextData)
 		facts = append(facts, f)
 
 		// Stop once we have enough active results.
