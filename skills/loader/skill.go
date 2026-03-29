@@ -128,7 +128,17 @@ func ParseSkillFile(path string) (*Skill, error) {
 	}
 
 	skill.Instructions = strings.TrimSpace(body)
-	skill.Dir = filepath.Dir(path)
+
+	// Always store Dir as an absolute path. skill.Dir is used to build
+	// binary paths for exec.CommandContext, which resolves relative to the
+	// parent process CWD — not cmd.Dir. If cfgFile is relative (e.g.,
+	// "config.yaml"), the derived path would be relative too, and fork/exec
+	// would fail if the process CWD ever differs from expectations.
+	absDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("resolving absolute path for %s: %w", path, err)
+	}
+	skill.Dir = absDir
 
 	if skill.Name == "" {
 		return nil, fmt.Errorf("skill at %s has no name", path)
