@@ -202,3 +202,15 @@ type SidecarEvent struct {
 
 func (e SidecarEvent) EventTime() time.Time { return e.Time }
 func (e SidecarEvent) EventSource() string  { return e.Sidecar }
+
+// DDLEvent is emitted when a skill modifies its sidecar database schema.
+// The audit skill (if installed) consumes these to decide whether to
+// notify Autumn, log silently, or quarantine the skill.
+type DDLEvent struct {
+	Time      time.Time
+	SkillName string
+	Statement string // the DDL statement that was executed
+}
+
+func (e DDLEvent) EventTime() time.Time { return e.Time }
+func (e DDLEvent) EventSource() string  { return "dbproxy" }

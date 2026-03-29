@@ -158,6 +158,16 @@ func Run(skill *Skill, args map[string]any) (*RunResult, error) {
 	if dbProxy != nil && skill.HasDBAccess() {
 		dbProxy.SetPermissions(skill)
 		defer dbProxy.ClearPermissions()
+
+		// For 4th-party skills with db_snapshot permissions, copy declared
+		// her.db tables into the sidecar before execution. The skill reads
+		// from these copies, never from her.db directly.
+		if skill.TrustLevel == TrustFourthParty && len(skill.Permissions.DBSnapshot) > 0 {
+			if err := dbProxy.PrepareSnapshots(skill); err != nil {
+				return &RunResult{Error: fmt.Sprintf("snapshot failed: %s", err)}, nil
+			}
+			defer dbProxy.CleanupSnapshots(skill)
+		}
 	}
 
 	start := time.Now()

@@ -156,7 +156,9 @@ func TestSidecarMultipleRuns(t *testing.T) {
 	}
 }
 
-func TestSidecarFourthPartyBlocked(t *testing.T) {
+func TestSidecarFourthPartyCanOpen(t *testing.T) {
+	// 4th-party skills now get sidecar access for their own storage
+	// and for snapshot tables. DDL is audited via the event bus.
 	skill := &Skill{
 		Name:       "untrusted_skill",
 		Language:   "go",
@@ -164,10 +166,11 @@ func TestSidecarFourthPartyBlocked(t *testing.T) {
 		TrustLevel: TrustFourthParty,
 	}
 
-	_, err := OpenSidecar(skill, testEmbedDim)
-	if err == nil {
-		t.Fatal("expected error for 4th-party skill, got nil")
+	sidecar, err := OpenSidecar(skill, testEmbedDim)
+	if err != nil {
+		t.Fatalf("expected 4th-party to open sidecar, got error: %v", err)
 	}
+	defer sidecar.Close()
 }
 
 func TestSidecarThirdPartyCanOpen(t *testing.T) {
