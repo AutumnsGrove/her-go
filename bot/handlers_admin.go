@@ -25,12 +25,12 @@ func (b *Bot) handleCompact(c tele.Context) error {
 	tokensBefore := compact.EstimateHistoryTokens("", recent)
 
 	// Force compaction by passing a very low threshold (0 = always compact).
-	summary, kept, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
+	cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
 	if err != nil {
 		return c.Send(fmt.Sprintf("Compaction failed: %v", err))
 	}
 
-	tokensAfter := compact.EstimateHistoryTokens(summary, kept)
+	tokensAfter := compact.EstimateHistoryTokens(cr.Summary, cr.KeptMessages)
 	saved := tokensBefore - tokensAfter
 
 	msg := fmt.Sprintf(
@@ -38,9 +38,9 @@ func (b *Bot) handleCompact(c tele.Context) error {
 			"Messages: %d \u2192 %d kept\n"+
 			"Tokens: ~%d \u2192 ~%d (saved ~%d)\n\n"+
 			"<i>Summary:</i>\n%s",
-		len(recent), len(kept),
+		len(recent), len(cr.KeptMessages),
 		tokensBefore, tokensAfter, saved,
-		summary,
+		cr.Summary,
 	)
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }

@@ -281,6 +281,12 @@ func (m *Model) handleEvent(e Event) {
 
 	case SidecarEvent:
 		m.handleSidecarEvent(ev)
+
+	case CompactEvent:
+		saved := ev.TokensBefore - ev.TokensAfter
+		m.appendToTurnGroup(0, "compact",
+			fmt.Sprintf("📦 compacted %d msgs (%d→%d tokens, saved %d)",
+				ev.Summarized, ev.TokensBefore, ev.TokensAfter, saved))
 	}
 }
 
