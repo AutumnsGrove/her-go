@@ -66,7 +66,7 @@ Example:
 func init() {
 	simCmd.Flags().StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
 	simCmd.Flags().IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
-	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 20, "seconds to wait between turns (avoids rate limits on free-tier agent models)")
+	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
 	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., deepseek/deepseek-v3.2)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
