@@ -62,6 +62,14 @@ func (b *Bot) handleStats(c tele.Context) error {
 		return c.Send("couldn't load stats right now, sorry!")
 	}
 
+	var cmdSection string
+	if stats.TotalCommands > 0 {
+		cmdSection = fmt.Sprintf("\n\n<b>Commands:</b> %d total\n", stats.TotalCommands)
+		for _, cc := range stats.CommandCounts {
+			cmdSection += fmt.Sprintf("  %s: %d\n", cc.Command, cc.Count)
+		}
+	}
+
 	msg := fmt.Sprintf(
 		"<b>\U0001F4CA Stats</b>\n\n"+
 			"<b>Messages:</b> %d total (%d you, %d me)\n"+
@@ -71,7 +79,7 @@ func (b *Bot) handleStats(c tele.Context) error {
 			"  Chat: %s ($%.4f)\n"+
 			"  Agent: %s ($%.4f)\n"+
 			"<b>Total cost:</b> $%.4f\n"+
-			"<b>Avg latency:</b> %dms",
+			"<b>Avg latency:</b> %dms%s",
 		stats.TotalMessages, stats.UserMessages, stats.MiraMessages,
 		stats.ConversationDays,
 		stats.TotalFacts, stats.UserFacts, stats.SelfFacts,
@@ -80,6 +88,7 @@ func (b *Bot) handleStats(c tele.Context) error {
 		formatTokens(stats.AgentTokens), stats.AgentCostUSD,
 		stats.TotalCostUSD,
 		stats.AvgLatencyMs,
+		cmdSection,
 	)
 
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})

@@ -1230,6 +1230,12 @@ func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
 }
 
 // Stats holds aggregate usage statistics for the /stats command.
+// CommandCount holds usage info for a single slash command.
+type CommandCount struct {
+	Command string
+	Count   int
+}
+
 type Stats struct {
 	TotalMessages    int
 	UserMessages     int
@@ -1245,6 +1251,8 @@ type Stats struct {
 	AgentCostUSD     float64
 	AvgLatencyMs     int
 	ConversationDays int // how many distinct days have messages
+	TotalCommands    int
+	CommandCounts    []CommandCount // per-command breakdown, sorted by count desc
 }
 
 // GetStats computes aggregate usage statistics across all data.
@@ -1274,6 +1282,21 @@ func (s *Store) GetStats() (*Stats, error) {
 
 	// Distinct days with messages (gives a sense of how many days active).
 	s.db.QueryRow(`SELECT COUNT(DISTINCT DATE(timestamp)) FROM messages`).Scan(&st.ConversationDays)
+
+	// Command usage from the command_log table.
+	s.db.QueryRow(`SELECT COUNT(*) FROM command_log`).Scan(&st.TotalCommands)
+	rows, err := s.db.Query(
+		`SELECT command, COUNT(*) as cnt FROM command_log
+		 GROUP BY command ORDER BY cnt DESC`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cc CommandCount
+			if rows.Scan(&cc.Command, &cc.Count) == nil {
+				st.CommandCounts = append(st.CommandCounts, cc)
+			}
+		}
+	}
 
 	return st, nil
 }
