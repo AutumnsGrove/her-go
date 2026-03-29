@@ -1301,6 +1301,87 @@ func (s *Store) GetStats() (*Stats, error) {
 	return st, nil
 }
 
+// ModelUsage holds per-model cost and token totals for the usage command.
+type ModelUsage struct {
+	Model            string
+	Calls            int
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CostUSD          float64
+}
+
+// PeriodUsage holds cost totals for a time period (today, 7d, 30d, all-time).
+type PeriodUsage struct {
+	Label    string
+	Calls    int
+	Tokens   int
+	CostUSD  float64
+}
+
+// UsageReport bundles everything the `her usage` command needs.
+type UsageReport struct {
+	Periods  []PeriodUsage
+	ByModel  []ModelUsage
+}
+
+// GetUsageReport builds a complete cost/token breakdown.
+// Queries the metrics table with different time windows and a per-model
+// GROUP BY. Each query is small and fast — SQLite handles this easily
+// at our scale.
+func (s *Store) GetUsageReport() (*UsageReport, error) {
+	r := &UsageReport{}
+
+	// Time-windowed totals: today, last 7 days, last 30 days, all-time.
+	// DATE('now') gives today in UTC — same timezone SQLite uses for
+	// DEFAULT CURRENT_TIMESTAMP, so the windows are consistent.
+	periods := []struct {
+		label string
+		where string // SQL WHERE clause fragment
+	}{
+		{"Today", "timestamp >= DATE('now')"},
+		{"Last 7 days", "timestamp >= DATE('now', '-7 days')"},
+		{"Last 30 days", "timestamp >= DATE('now', '-30 days')"},
+		{"All time", "1=1"},
+	}
+
+	for _, p := range periods {
+		var pu PeriodUsage
+		pu.Label = p.label
+		err := s.db.QueryRow(
+			fmt.Sprintf(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0)
+			 FROM metrics WHERE %s`, p.where),
+		).Scan(&pu.Calls, &pu.Tokens, &pu.CostUSD)
+		if err != nil {
+			return nil, fmt.Errorf("querying period %s: %w", p.label, err)
+		}
+		r.Periods = append(r.Periods, pu)
+	}
+
+	// Per-model breakdown, sorted by total cost descending.
+	rows, err := s.db.Query(
+		`SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens), 0),
+		        COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0),
+		        COALESCE(SUM(cost_usd), 0)
+		 FROM metrics
+		 GROUP BY model
+		 ORDER BY SUM(cost_usd) DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("querying model usage: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m ModelUsage
+		if err := rows.Scan(&m.Model, &m.Calls, &m.PromptTokens, &m.CompletionTokens, &m.TotalTokens, &m.CostUSD); err != nil {
+			return nil, fmt.Errorf("scanning model row: %w", err)
+		}
+		r.ByModel = append(r.ByModel, m)
+	}
+
+	return r, nil
+}
+
 // FindFactsByKeyword searches active facts for a keyword match.
 // Used by /forget to help the user find facts to deactivate.
 func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
