@@ -720,6 +720,34 @@ func Run(params RunParams) (*RunResult, error) {
 			})
 		}
 
+		// --- Post-search think nudge ---
+		// Diffusion LLMs (Mercury) skip the think step after receiving
+		// search results, going straight to reply without evaluating.
+		// This causes bad answers — e.g. trusting a wrong search summary
+		// without checking the actual results. Autoregressive models
+		// (Trinity) naturally paused to think ~70% of the time.
+		//
+		// If this batch contained search results and the model didn't
+		// include a think call, inject a prompt telling it to evaluate
+		// before proceeding.
+		hasSearchResult := false
+		hasThinkCall := false
+		for _, tc := range resp.ToolCalls {
+			if tc.Function.Name == "run_skill" || tc.Function.Name == "web_search" || tc.Function.Name == "book_search" {
+				hasSearchResult = true
+			}
+			if tc.Function.Name == "think" {
+				hasThinkCall = true
+			}
+		}
+		if hasSearchResult && !hasThinkCall && !tctx.doneCalled {
+			log.Info("  injecting post-search think nudge")
+			messages = append(messages, llm.ChatMessage{
+				Role:    "user",
+				Content: "You just received search results. Before calling reply, call think to evaluate: are the results relevant? Do they actually answer the question? Is the AI-generated summary accurate compared to the source snippets? Only then call reply with the correct information.",
+			})
+		}
+
 		// Exit when the agent explicitly signals it's done.
 		// (The "done" trace line is already added by formatTraceLine above.)
 		if tctx.doneCalled {
