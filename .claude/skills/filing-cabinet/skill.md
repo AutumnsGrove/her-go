@@ -111,7 +111,28 @@ For audit mode, show a before/after table:
 
 ### 6. CREATE — Deposit into GitHub
 
-For each approved issue:
+**Batch mode (preferred for 2+ issues):**
+
+Write all approved issues to a temporary JSON file, then run the batch script — one command, one approval:
+
+```bash
+# Write issues to a temp file (array of objects with title, body, labels)
+cat > /tmp/filing-cabinet-batch.json << 'JSONEOF'
+[
+  {"title": "Fix the thing", "body": "## What\n\nDetails here", "labels": ["bug"]},
+  {"title": "Add the feature", "body": "## What\n\nDetails here", "labels": ["feature", "later"]}
+]
+JSONEOF
+
+# Preview first (optional)
+.claude/skills/filing-cabinet/scripts/batch-issues.sh /tmp/filing-cabinet-batch.json --dry-run
+
+# Create all issues in one shot
+.claude/skills/filing-cabinet/scripts/batch-issues.sh /tmp/filing-cabinet-batch.json
+```
+
+**Single issue mode (for 1 issue or audit edits):**
+
 ```bash
 gh issue create --repo AutumnsGrove/her-go --title "Title here" --body "Body here" --label "label"
 ```
