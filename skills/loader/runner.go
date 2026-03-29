@@ -266,7 +266,11 @@ func ensureGoBinary(skill *Skill) (string, error) {
 	}
 
 	// go build -o bin/<name> main.go
-	cmd := exec.Command("go", "build", "-o", binPath, mainGo)
+	// Use paths relative to skill.Dir since cmd.Dir is set there.
+	// Using the full path (e.g., "skills/web_search/main.go") would get
+	// resolved relative to cmd.Dir, doubling the prefix and causing Go
+	// to interpret it as a package import path instead of a file.
+	cmd := exec.Command("go", "build", "-o", filepath.Join("bin", skill.Name), "main.go")
 	cmd.Dir = skill.Dir
 
 	var stderr bytes.Buffer

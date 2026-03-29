@@ -37,10 +37,10 @@ var hotToolNames = []string{
 }
 
 // toolCategories groups deferred tools by function. The agent can load
-// entire categories at once: use_tools(["search"]) loads all three search tools.
+// entire categories at once: use_tools(["vision"]) loads view_image.
+// Note: search, mood logging, and book search have been migrated to skills.
+// The agent discovers them via find_skill and runs them via run_skill.
 var toolCategories = map[string][]string{
-	// "search" tools (web_search, web_read, book_search) have been migrated
-	// to standalone skills. The agent uses find_skill/run_skill instead.
 	"vision":     {"view_image"},
 	"memory":     {"remove_fact", "save_self_fact", "update_persona", "recall_memories"},
 	"scheduling": {"create_reminder", "create_schedule", "list_schedules", "update_schedule", "delete_schedule"},
@@ -146,9 +146,9 @@ func HotToolDefs(cfg *config.Config) []llm.ToolDef {
 //
 // Examples:
 //
-//	LookupTools(["search"])                → web_search, web_read, book_search
-//	LookupTools(["web_search"])            → web_search
-//	LookupTools(["search", "log_mood"])    → web_search, web_read, book_search, log_mood
+//	LookupTools(["vision"])                → view_image
+//	LookupTools(["memory"])                → remove_fact, save_self_fact, update_persona, recall_memories
+//	LookupTools(["vision", "scheduling"])  → view_image, create_reminder, ...
 func LookupTools(names []string, cfg *config.Config) []llm.ToolDef {
 	seen := make(map[string]bool)
 	var result []llm.ToolDef
@@ -183,14 +183,14 @@ func useToolsDef() llm.ToolDef {
 		Type: "function",
 		Function: llm.ToolFunctionDef{
 			Name:        "use_tools",
-			Description: "Load additional tools you need for this turn. Call BEFORE using a deferred tool. Pass category names or individual tool names. Loaded tools stay available for the rest of this turn.\n\nCategories: search (web_search, web_read, book_search) | vision (view_image) | memory (remove_fact, save_self_fact, update_persona, recall_memories) | scheduling (create_reminder, create_schedule, list_schedules, update_schedule, delete_schedule) | context (log_mood, get_current_time, set_location) | expenses (scan_receipt, query_expenses, delete_expense, update_expense)",
+			Description: "Load additional tools you need for this turn. Call BEFORE using a deferred tool. Pass category names or individual tool names. Loaded tools stay available for the rest of this turn.\n\nCategories: vision (view_image) | memory (remove_fact, save_self_fact, update_persona, recall_memories) | scheduling (create_reminder, create_schedule, list_schedules, update_schedule, delete_schedule) | context (get_current_time, set_location) | expenses (scan_receipt, query_expenses, delete_expense, update_expense) | skills (search_history)\n\nFor search, mood logging, and other migrated capabilities: use find_skill to discover skills, then run_skill to execute them.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"tools": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Tool names or category names to load. E.g., [\"search\"], [\"vision\", \"scheduling\"], [\"web_search\", \"log_mood\"]",
+						"description": "Tool names or category names to load. E.g., [\"vision\", \"scheduling\"], [\"memory\", \"expenses\"]",
 					},
 				},
 				"required": []string{"tools"},

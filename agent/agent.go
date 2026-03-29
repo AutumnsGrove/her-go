@@ -1345,12 +1345,12 @@ func execUseTools(argsJSON string, tctx *toolContext) string {
 	}
 
 	if len(args.Tools) == 0 {
-		return "no tools requested. Available categories: search, vision, memory, scheduling, context"
+		return "no tools requested. Available categories: vision, memory, scheduling, context, expenses, skills. For search/web/books/mood, use find_skill instead."
 	}
 
 	newTools := LookupTools(args.Tools, tctx.cfg)
 	if len(newTools) == 0 {
-		return "no matching tools found. Available categories: search, vision, memory, scheduling, context"
+		return "no matching tools found. Available categories: vision, memory, scheduling, context, expenses, skills. For search/web/books/mood, use find_skill to discover skills, then run_skill to execute them."
 	}
 
 	// Deduplicate — don't add tools already in the active set.
