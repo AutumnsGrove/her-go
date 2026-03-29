@@ -265,12 +265,11 @@ func ensureGoBinary(skill *Skill) (string, error) {
 		return "", fmt.Errorf("creating bin dir: %w", err)
 	}
 
-	// go build -o bin/<name> main.go
-	// Use paths relative to skill.Dir since cmd.Dir is set there.
-	// Using the full path (e.g., "skills/web_search/main.go") would get
-	// resolved relative to cmd.Dir, doubling the prefix and causing Go
-	// to interpret it as a package import path instead of a file.
-	cmd := exec.Command("go", "build", "-o", filepath.Join("bin", skill.Name), "main.go")
+	// go build -o <abs>/bin/<name> <abs>/main.go
+	// skill.Dir is always absolute (set by ParseSkillFile), so binPath
+	// and mainGo are absolute too. This avoids any CWD-relative path
+	// ambiguity — the binary ends up exactly where we expect it.
+	cmd := exec.Command("go", "build", "-o", binPath, mainGo)
 	cmd.Dir = skill.Dir
 
 	var stderr bytes.Buffer

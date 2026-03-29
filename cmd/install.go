@@ -15,11 +15,10 @@ var installSource bool
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Rebuild and install the her binary from source",
-	Long: `Rebuilds the her binary from the current source directory and installs
-it to your GOPATH/bin. Use this after pulling new code to update the
-binary without manually running go commands.
+	Long: `Rebuilds the her binary from source and drops it in the project directory.
+Use this after pulling new code to update the binary.
 
-  her install --source    rebuild from source and install`,
+  her install --source    rebuild from source`,
 	RunE: runInstall,
 }
 
@@ -46,11 +45,18 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not in the her source directory (no go.mod found in %s)", wd)
 	}
 
-	fmt.Println("Building and installing from source...")
+	// Build the binary name from the module name (the Go convention
+	// for go install). We build locally with go build instead of
+	// go install so the binary lands in the project directory — not
+	// buried in GOPATH/bin where it's easy to forget about.
+	binName := "her"
+	binPath := filepath.Join(wd, binName)
+
+	fmt.Printf("Building %s from source...\n", binName)
 	start := time.Now()
 
-	// go install . builds the binary and puts it in GOPATH/bin.
-	buildCmd := exec.Command("go", "install", ".")
+	// go build -o ./her . — drops the binary right here in the project.
+	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
 	buildCmd.Dir = wd
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
@@ -60,6 +66,6 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	elapsed := time.Since(start).Round(time.Millisecond)
-	fmt.Printf("Installed in %s. Run 'her run' to start.\n", elapsed)
+	fmt.Printf("Installed %s in %s. Run './her run' to start.\n", binPath, elapsed)
 	return nil
 }
