@@ -69,7 +69,7 @@ Preserve:
 - The general arc of the conversation
 
 Don't preserve:
-- Exact wording (paraphrase is fine)
+- Exact wording — ALWAYS paraphrase in your own words, never copy phrases, metaphors, or specific advice verbatim
 - Greetings and small talk unless they established something important
 - Repetitive back-and-forth that can be summarized in one line
 - Information already captured in the facts/memories system
@@ -99,7 +99,7 @@ func MaybeCompact(
 	botName, userName string,
 ) (summary string, keptMessages []memory.Message, err error) {
 	if maxHistoryTokens <= 0 {
-		maxHistoryTokens = 8000 // default
+		maxHistoryTokens = 3000 // default — triggers compaction at 75% (2250 tokens)
 	}
 
 	// Load existing summary for this conversation.

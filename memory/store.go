@@ -321,6 +321,18 @@ func (s *Store) initTables() error {
 			user_message TEXT,
 			mira_response TEXT
 		)`,
+
+		// Command log — tracks every slash command the user runs.
+		// Useful for understanding usage patterns (how often /clear
+		// is used, whether /compact is needed manually, etc.).
+		`CREATE TABLE IF NOT EXISTS command_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			command TEXT NOT NULL,
+			chat_id INTEGER,
+			conversation_id TEXT,
+			args TEXT
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -579,6 +591,19 @@ func (s *Store) SaveSearch(messageID int64, searchType, query, results string, r
 		return fmt.Errorf("saving search: %w", err)
 	}
 	return nil
+}
+
+// LogCommand records a slash command the user ran. This goes into the
+// command_log table for usage analytics — how often /clear is used, etc.
+func (s *Store) LogCommand(command string, chatID int64, conversationID, args string) {
+	_, err := s.db.Exec(
+		`INSERT INTO command_log (command, chat_id, conversation_id, args)
+		 VALUES (?, ?, ?, ?)`,
+		command, chatID, conversationID, args,
+	)
+	if err != nil {
+		log.Error("saving command log", "err", err)
+	}
 }
 
 // UpdateMessageScrubbed updates the scrubbed content for a message.
