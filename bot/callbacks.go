@@ -209,7 +209,8 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 			"health", "user",
 			0,   // no source message
 			8,   // high importance — health data
-			nil, // no embedding needed
+			nil, // no tag embedding needed
+			nil, // no text embedding needed
 			"",  // no tags
 		)
 		if err != nil {
@@ -222,7 +223,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 		_, err := b.store.SaveFact(
 			"User did not take their evening medication",
 			"health", "user",
-			0, 8, nil, "",
+			0, 8, nil, nil, "",
 		)
 		if err != nil {
 			log.Error("saving med fact", "err", err)

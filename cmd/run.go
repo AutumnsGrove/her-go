@@ -230,7 +230,10 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 					log.Error("backfill: embedding failed", "fact_id", f.ID, "err", err)
 					continue
 				}
-				if err := store.UpdateFactEmbedding(f.ID, vec); err != nil {
+				// Pass nil for embeddingText — this backfill only targets the tag
+				// embedding (vec_facts). Text embeddings are populated on-demand
+				// by checkDuplicate and FilterRedundantFacts.
+				if err := store.UpdateFactEmbedding(f.ID, vec, nil); err != nil {
 					log.Error("backfill: update failed", "fact_id", f.ID, "err", err)
 					continue
 				}

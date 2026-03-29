@@ -113,7 +113,10 @@ func runRetag(cmd *cobra.Command, args []string) error {
 					fmt.Printf("  Error embedding tags for fact #%d: %v\n", f.ID, err)
 					continue
 				}
-				if err := store.UpdateFactEmbedding(f.ID, vec); err != nil {
+				// Pass nil for embeddingText — retag only refreshes the tag
+				// embedding (used for vec_facts KNN search). Text embeddings
+				// are populated lazily by checkDuplicate when needed.
+				if err := store.UpdateFactEmbedding(f.ID, vec, nil); err != nil {
 					fmt.Printf("  Error updating embedding for fact #%d: %v\n", f.ID, err)
 					continue
 				}
