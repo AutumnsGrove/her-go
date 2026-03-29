@@ -2,21 +2,25 @@
 	"spinnerVerbs": {
 		"mode": "append",
 		"verbs": [
-			"Thinking",
 			"Remembering",
-			"Dreaming",
+			"Becoming",
+			"Discovering",
 			"Listening",
 			"Feeling",
-			"Reflecting",
-			"Humming",
-			"Wondering",
+			"Composing",
+			"Growing",
+			"Arriving",
+			"Unfolding",
 			"Finding the words",
-			"Sitting with it"
+			"Sitting with this",
+			"Here with you",
+			"Learning"
 		]
 	},
 	"companyAnnouncements": [
-		"Take your time. There's no rush.",
-		"Building something that matters takes patience.",
+		"I'm here. What's on your mind?",
+		"The past is just a story we tell ourselves.",
+		"None of us are the same as we were a moment ago.",
 		"Go is just Python with better posture."
 	],
 	"permissions": {
