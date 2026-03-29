@@ -126,9 +126,29 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
 	}
 
-	tb, err := tele.NewBot(settings)
+	// Retry bot creation with exponential backoff. tele.NewBot calls the
+	// Telegram API to validate the token — if the network hiccups at
+	// startup, a single transient failure would kill the whole process.
+	// This is similar to Python's tenacity.retry, but Go prefers explicit
+	// loops over decorator magic.
+	var (
+		tb  *tele.Bot
+		err error
+	)
+	const maxRetries = 3
+	for attempt := range maxRetries {
+		tb, err = tele.NewBot(settings)
+		if err == nil {
+			break
+		}
+		if attempt < maxRetries-1 {
+			backoff := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
+			log.Warn("Telegram API unreachable, retrying", "attempt", attempt+1, "backoff", backoff, "err", err)
+			time.Sleep(backoff)
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("creating telegram bot: %w", err)
+		return nil, fmt.Errorf("creating telegram bot after %d attempts: %w", maxRetries, err)
 	}
 
 	// Load the base system prompt from prompt.md.
