@@ -224,6 +224,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	// Export config secrets as process-level env vars so skills can
+	// find them. Without this, skills like web_search fail because
+	// TAVILY_API_KEY isn't in the environment. run.go does this too.
+	cfg.ExportEnv()
+
 	// Warn but don't fatal on missing API key — the user might just be
 	// testing the sim harness itself.
 	if cfg.LLM.APIKey == "" {
