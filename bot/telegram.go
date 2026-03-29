@@ -181,22 +181,35 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		log.Info("OCR enabled", "engine", "apple-vision", "binary", cfg.OCR.VisionOCRPath)
 	}
 
-	// Register command handlers.
-	tb.Handle("/help", bot.handleHelp)
-	tb.Handle("/clear", bot.handleClear)
-	tb.Handle("/stats", bot.handleStats)
-	tb.Handle("/forget", bot.handleForget)
-	tb.Handle("/facts", bot.handleFacts)
-	tb.Handle("/reflect", bot.handleReflect)
-	tb.Handle("/persona", bot.handlePersona)
-	tb.Handle("/compact", bot.handleCompact)
-	tb.Handle("/status", bot.handleStatus)
-	tb.Handle("/restart", bot.handleRestart)
-	tb.Handle("/remind", bot.handleRemind)
-	tb.Handle("/schedule", bot.handleSchedule)
-	tb.Handle("/traces", bot.handleTraces)
-	tb.Handle("/mood", bot.handleMood)
-	tb.Handle("/reflections", bot.handleReflections)
+	// cmd wraps a handler to log the command to the command_log table.
+	// This gives us usage analytics (how often /clear is used, etc.)
+	// without touching any of the individual handler functions.
+	cmd := func(command string, handler func(tele.Context) error) func(tele.Context) error {
+		return func(c tele.Context) error {
+			chatID := c.Message().Chat.ID
+			convID := bot.getConversationID(chatID)
+			args := strings.TrimSpace(strings.TrimPrefix(c.Message().Text, command))
+			bot.store.LogCommand(command, chatID, convID, args)
+			return handler(c)
+		}
+	}
+
+	// Register command handlers — each wrapped with cmd() for logging.
+	tb.Handle("/help", cmd("/help", bot.handleHelp))
+	tb.Handle("/clear", cmd("/clear", bot.handleClear))
+	tb.Handle("/stats", cmd("/stats", bot.handleStats))
+	tb.Handle("/forget", cmd("/forget", bot.handleForget))
+	tb.Handle("/facts", cmd("/facts", bot.handleFacts))
+	tb.Handle("/reflect", cmd("/reflect", bot.handleReflect))
+	tb.Handle("/persona", cmd("/persona", bot.handlePersona))
+	tb.Handle("/compact", cmd("/compact", bot.handleCompact))
+	tb.Handle("/status", cmd("/status", bot.handleStatus))
+	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
+	tb.Handle("/remind", cmd("/remind", bot.handleRemind))
+	tb.Handle("/schedule", cmd("/schedule", bot.handleSchedule))
+	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
+	tb.Handle("/mood", cmd("/mood", bot.handleMood))
+	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)

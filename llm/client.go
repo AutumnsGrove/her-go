@@ -154,6 +154,7 @@ type ChatResponse struct {
 	TotalTokens      int
 	CostUSD          float64 // actual cost from OpenRouter (0 if not provided)
 	Model            string  // the model that actually responded (may differ from requested)
+	UsedFallback     bool    // true if the primary model failed and the fallback model was used
 }
 
 // chatRequest is the JSON body we send to the API.
@@ -262,7 +263,11 @@ func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef, toolCho
 			"fallback", c.fallbackModel,
 			"err", err,
 		)
-		return c.doRequest(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, tc)
+		resp, err = c.doRequest(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, tc)
+		if err == nil {
+			resp.UsedFallback = true
+		}
+		return resp, err
 	}
 
 	return resp, err

@@ -220,6 +220,12 @@ type toolContext struct {
 	// Both feed into RunResult.TotalCost for the TUI.
 	replyCost float64
 
+	// replyUsedFallback is set by execReply when the chat model falls
+	// back to the fallback model (e.g. Haiku). The trace formatter uses
+	// this to show which model actually generated the reply.
+	replyUsedFallback bool
+	replyModel        string
+
 	// eventBus emits rich typed events for the TUI. Nil-safe.
 	eventBus *tui.Bus
 }
@@ -328,41 +334,55 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// Load recent conversation history so the agent can resolve
-	// references like "it", "that book", "what we talked about", etc.
-	// We exclude the current message (TriggerMsgID) from history because
-	// it's already shown separately under "Current Message" in the agent
-	// context. Without this filter, the agent sees the message twice and
-	// thinks the user is "repeating" themselves.
-	recentMsgs, err := params.Store.RecentMessages(params.ConversationID, params.Cfg.Memory.RecentMessages)
+	// --- Compaction ---
+	// Load a wider window (40 messages) so MaybeCompact can actually
+	// see enough history to trigger. Previously we fed it only the
+	// recent_messages window (10), which was always under the token
+	// threshold — so compaction never fired and older messages just
+	// vanished from context with no summary.
+	const compactionWindow = 40
+	compactionMsgs, err := params.Store.RecentMessages(params.ConversationID, compactionWindow)
 	if err != nil {
-		log.Error("loading history", "err", err)
+		log.Error("loading compaction history", "err", err)
 	}
-	// Strip the current message from history to avoid duplication.
-	if params.TriggerMsgID > 0 && len(recentMsgs) > 0 {
-		filtered := make([]memory.Message, 0, len(recentMsgs))
-		for _, msg := range recentMsgs {
+	// Strip the current message to avoid duplication (it's shown
+	// separately under "Current Message" in the agent context).
+	if params.TriggerMsgID > 0 && len(compactionMsgs) > 0 {
+		filtered := make([]memory.Message, 0, len(compactionMsgs))
+		for _, msg := range compactionMsgs {
 			if msg.ID != params.TriggerMsgID {
 				filtered = append(filtered, msg)
 			}
 		}
-		recentMsgs = filtered
+		compactionMsgs = filtered
 	}
 
-	// Run compaction if the conversation history is getting long.
-	// This summarizes older messages into a running summary, keeping
-	// recent messages in full fidelity. The summary gets injected
-	// into the prompt by buildChatSystemPrompt.
+	// Run compaction on the wider window. MaybeCompact summarizes
+	// older messages and returns only the messages that should stay
+	// in full fidelity. The summary gets injected into the system
+	// prompt by buildChatSystemPrompt.
 	var conversationSummary string
-	if len(recentMsgs) > 0 {
-		conversationSummary, recentMsgs, err = compact.MaybeCompact(
+	var keptMessages []memory.Message
+	if len(compactionMsgs) > 0 {
+		conversationSummary, keptMessages, err = compact.MaybeCompact(
 			params.ChatLLM, params.Store, params.ConversationID,
-			recentMsgs, params.Cfg.Memory.MaxHistoryTokens,
+			compactionMsgs, params.Cfg.Memory.MaxHistoryTokens,
 			params.Cfg.Identity.Her, params.Cfg.Identity.User,
 		)
 		if err != nil {
 			log.Error("compaction error", "err", err)
+			keptMessages = compactionMsgs
 		}
+	} else {
+		keptMessages = compactionMsgs
+	}
+
+	// Trim to the configured sliding window for the agent context.
+	// The agent only needs the last N messages for resolving references
+	// like "it", "that book", etc. — the summary covers older context.
+	recentMsgs := keptMessages
+	if len(recentMsgs) > params.Cfg.Memory.RecentMessages {
+		recentMsgs = recentMsgs[len(recentMsgs)-params.Cfg.Memory.RecentMessages:]
 	}
 
 	// Semantic search — find facts most relevant to what the user just said.
@@ -516,6 +536,12 @@ func Run(params RunParams) (*RunResult, error) {
 		totalCost += resp.CostUSD
 		log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
 			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
+
+		// Surface model fallback in traces so it's visible in Telegram.
+		if tracing && resp.UsedFallback {
+			traceLines = append(traceLines, fmt.Sprintf("⚡ <i>agent fallback: %s</i>", resp.Model))
+			sendTrace()
+		}
 		emit(tui.AgentIterEvent{
 			Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i,
 			PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
@@ -568,8 +594,24 @@ func Run(params RunParams) (*RunResult, error) {
 					log.Infof("  nudge: %d prompt + %d completion | $%.6f | finish=%s",
 						resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
 
+					// Surface model fallback on the nudge call too.
+					if tracing && resp.UsedFallback {
+						traceLines = append(traceLines, fmt.Sprintf("⚡ <i>nudge fallback: %s</i>", resp.Model))
+						sendTrace()
+					}
+
 					// Check if the nudge worked.
 					hasToolCalls = len(resp.ToolCalls) > 0
+					if tracing {
+						if hasToolCalls {
+							traceLines = append(traceLines, "✅ <i>nudge succeeded</i>")
+						} else {
+							traceLines = append(traceLines,
+								fmt.Sprintf("❌ <i>nudge failed — model returned text: %s</i>",
+									escapeHTML(truncateLog(resp.Content, 120))))
+						}
+						sendTrace()
+					}
 					if !hasToolCalls {
 						log.Warn("  nudge failed — model still returned text, falling back")
 						agentFinalText = resp.Content
@@ -635,7 +677,18 @@ func Run(params RunParams) (*RunResult, error) {
 
 			// Build the trace line for this tool call.
 			if tracing {
-				traceLines = append(traceLines, formatTraceLine(tc.Function.Name, tc.Function.Arguments, result))
+				line := formatTraceLine(tc.Function.Name, tc.Function.Arguments, result)
+				// If the chat model fell back during a reply, annotate the trace
+				// so it's obvious which model generated the user-facing response.
+				if tc.Function.Name == "reply" && tctx.replyUsedFallback {
+					var rArgs struct {
+						Instruction string `json:"instruction"`
+					}
+					json.Unmarshal([]byte(tc.Function.Arguments), &rArgs)
+					line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
+						tctx.replyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
+				}
+				traceLines = append(traceLines, line)
 				sendTrace()
 			}
 
@@ -679,6 +732,10 @@ func Run(params RunParams) (*RunResult, error) {
 	// We use replyCount (not replyCalled) because replyCalled gets reset
 	// after each stage reset — but replyCount tracks lifetime replies.
 	if tctx.replyCount == 0 {
+		if tracing {
+			traceLines = append(traceLines, "⚠️ <i>agent never called reply — using fallback</i>")
+			sendTrace()
+		}
 		if agentFinalText != "" {
 			log.Warn("reply was never called, using agent text as instruction")
 			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
@@ -689,7 +746,7 @@ func Run(params RunParams) (*RunResult, error) {
 			}
 		} else {
 			log.Warn("reply was never called, generating generic fallback")
-			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally and conversationally."}`, tctx)
+			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
 			if tctx.replyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
@@ -972,6 +1029,11 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 // prompt (prompt.md + persona + memory + search context + history) and
 // calls the chatLLM to generate the actual response the user sees.
 func execReply(argsJSON string, tctx *toolContext) string {
+	// Reset fallback tracking from any previous reply call in this turn.
+	// Without this, a fallback on reply #1 would incorrectly flag reply #2.
+	tctx.replyUsedFallback = false
+	tctx.replyModel = ""
+
 	var args struct {
 		Instruction string `json:"instruction"`
 		Context     string `json:"context"`
@@ -1062,6 +1124,8 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	}
 
 	tctx.replyCost += resp.CostUSD
+	tctx.replyUsedFallback = resp.UsedFallback
+	tctx.replyModel = resp.Model
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 	if tctx.eventBus != nil {
@@ -1298,8 +1362,10 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	// Layer 6: Conversation summary — compacted older messages.
 	// This gives the model awareness of what was discussed earlier
 	// without burning tokens on the full message history.
+	// The header reminds the model not to echo summary content verbatim,
+	// which caused a bug where old advice/phrases were recycled word-for-word.
 	if tctx.conversationSummary != "" {
-		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation\n\n%s", tctx.conversationSummary))
+		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation (summary — do not repeat phrases or advice from this section)\n\n%s", tctx.conversationSummary))
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
