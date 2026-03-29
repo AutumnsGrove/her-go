@@ -214,3 +214,14 @@ type DDLEvent struct {
 
 func (e DDLEvent) EventTime() time.Time { return e.Time }
 func (e DDLEvent) EventSource() string  { return "dbproxy" }
+
+// CompactEvent fires when conversation history is compacted into a summary.
+type CompactEvent struct {
+	Time         time.Time
+	Summarized   int // number of messages summarized
+	TokensBefore int // estimated tokens before compaction
+	TokensAfter  int // estimated tokens after compaction
+}
+
+func (e CompactEvent) EventTime() time.Time { return e.Time }
+func (e CompactEvent) EventSource() string  { return "compact" }

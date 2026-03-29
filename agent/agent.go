@@ -364,14 +364,32 @@ func Run(params RunParams) (*RunResult, error) {
 	var conversationSummary string
 	var keptMessages []memory.Message
 	if len(compactionMsgs) > 0 {
-		conversationSummary, keptMessages, err = compact.MaybeCompact(
+		cr, compactErr := compact.MaybeCompact(
 			params.ChatLLM, params.Store, params.ConversationID,
 			compactionMsgs, params.Cfg.Memory.MaxHistoryTokens,
 			params.Cfg.Identity.Her, params.Cfg.Identity.User,
 		)
-		if err != nil {
-			log.Error("compaction error", "err", err)
+		if compactErr != nil {
+			log.Error("compaction error", "err", compactErr)
 			keptMessages = compactionMsgs
+		} else {
+			conversationSummary = cr.Summary
+			keptMessages = cr.KeptMessages
+
+			// Surface compaction in traces and TUI so it's not invisible.
+			if cr.DidCompact {
+				if params.TraceCallback != nil {
+					params.TraceCallback(fmt.Sprintf(
+						"📦 <i>compacted %d messages (%d→%d tokens)</i>",
+						cr.Summarized, cr.TokensBefore, cr.TokensAfter))
+				}
+				emit(tui.CompactEvent{
+					Time:         time.Now(),
+					Summarized:   cr.Summarized,
+					TokensBefore: cr.TokensBefore,
+					TokensAfter:  cr.TokensAfter,
+				})
+			}
 		}
 	} else {
 		keptMessages = compactionMsgs

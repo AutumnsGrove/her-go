@@ -78,10 +78,20 @@ Write the summary as a brief narrative, like you're catching up a friend who mis
 
 If there's an existing summary of even earlier conversation, incorporate it naturally into your new summary. Don't just append, weave it together.`
 
+// CompactResult holds the output of MaybeCompact so callers can tell
+// whether compaction actually ran (vs. just returning existing state).
+type CompactResult struct {
+	Summary      string           // running summary (may be empty if no history)
+	KeptMessages []memory.Message // messages that should stay in full fidelity
+	DidCompact   bool             // true if new summarization was performed this call
+	Summarized   int              // number of messages that were summarized (0 if no compaction)
+	TokensBefore int              // estimated tokens before compaction
+	TokensAfter  int              // estimated tokens after compaction
+}
+
 // MaybeCompact checks if the conversation history needs compaction
-// and performs it if so. Returns the summary to use (may be empty
-// if no summary exists or was needed) and the messages that should
-// remain in the context window.
+// and performs it if so. Returns a CompactResult with the summary,
+// kept messages, and whether compaction actually ran.
 //
 // The algorithm:
 //  1. Load existing summary + recent messages
@@ -97,7 +107,7 @@ func MaybeCompact(
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
 	botName, userName string,
-) (summary string, keptMessages []memory.Message, err error) {
+) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
 		maxHistoryTokens = 3000 // default — triggers compaction at 75% (2250 tokens)
 	}
@@ -105,7 +115,7 @@ func MaybeCompact(
 	// Load existing summary for this conversation.
 	existingSummary, _, err := store.LatestSummary(conversationID)
 	if err != nil {
-		return "", recentMessages, fmt.Errorf("loading summary: %w", err)
+		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
 	// Estimate current token usage.
@@ -115,7 +125,10 @@ func MaybeCompact(
 	threshold := int(float64(maxHistoryTokens) * 0.75)
 	if currentTokens < threshold {
 		// Under budget, no compaction needed.
-		return existingSummary, recentMessages, nil
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
 	}
 
 	log.Infof("  history at %d tokens (threshold: %d), compacting...", currentTokens, threshold)
@@ -130,7 +143,10 @@ func MaybeCompact(
 	}
 	if splitPoint <= 0 {
 		// Not enough messages to compact.
-		return existingSummary, recentMessages, nil
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
 	}
 
 	toSummarize := recentMessages[:splitPoint]
@@ -164,7 +180,10 @@ func MaybeCompact(
 		// If summarization fails, just return everything unsummarized.
 		// Better to have a fat context than lose data.
 		log.Warn("summarization failed, skipping compaction", "err", err)
-		return existingSummary, recentMessages, nil
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
 	}
 
 	newSummary := resp.Content
@@ -175,7 +194,10 @@ func MaybeCompact(
 	_, err = store.SaveSummary(conversationID, newSummary, startID, endID)
 	if err != nil {
 		log.Error("failed to save summary", "err", err)
-		return existingSummary, recentMessages, nil
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
 	}
 
 	newTokens := EstimateHistoryTokens(newSummary, toKeep)
@@ -186,7 +208,14 @@ func MaybeCompact(
 	// Log metrics for the summarization call.
 	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
 
-	return newSummary, toKeep, nil
+	return &CompactResult{
+		Summary:      newSummary,
+		KeptMessages: toKeep,
+		DidCompact:   true,
+		Summarized:   len(toSummarize),
+		TokensBefore: currentTokens,
+		TokensAfter:  newTokens,
+	}, nil
 }
 
 func truncate(s string, maxLen int) string {
