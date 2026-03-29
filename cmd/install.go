@@ -68,21 +68,23 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	elapsed := time.Since(start).Round(time.Millisecond)
 	fmt.Printf("Built %s in %s\n", binPath, elapsed)
 
-	// Also copy to $GOPATH/bin so `her` works from anywhere in PATH.
-	// Without this, `her run` would still use a stale binary from
-	// a previous `go install` while the fresh one sits in the project dir.
+	// Also build to $GOPATH/bin so `her` works from anywhere in PATH.
+	// We build a second time instead of copying because macOS quarantines
+	// copied binaries (com.apple.provenance xattr), causing SIGKILL on
+	// execution. A fresh `go build` to the target path avoids this.
 	gopath := os.Getenv("GOPATH")
 	if gopath == "" {
 		gopath = filepath.Join(os.Getenv("HOME"), "go")
 	}
 	gopathBin := filepath.Join(gopath, "bin", binName)
-	src, err := os.ReadFile(binPath)
-	if err != nil {
-		fmt.Printf("Warning: couldn't read %s for PATH copy: %v\n", binPath, err)
-	} else if err := os.WriteFile(gopathBin, src, 0755); err != nil {
-		fmt.Printf("Warning: couldn't copy to %s: %v\n", gopathBin, err)
+	pathCmd := exec.Command("go", "build", "-o", gopathBin, ".")
+	pathCmd.Dir = wd
+	pathCmd.Stdout = os.Stdout
+	pathCmd.Stderr = os.Stderr
+	if err := pathCmd.Run(); err != nil {
+		fmt.Printf("Warning: couldn't build to %s: %v\n", gopathBin, err)
 	} else {
-		fmt.Printf("Copied to %s\n", gopathBin)
+		fmt.Printf("Installed to %s\n", gopathBin)
 	}
 
 	fmt.Println("Ready. Run 'her run' to start.")
