@@ -15,28 +15,40 @@ var log = logger.WithPrefix("memory")
 // extractionPrompt is the system prompt sent to the LLM to extract facts
 // AND mood from a conversation. We ask for JSON output so we can parse it
 // reliably. Mood inference piggybacks on the same LLM call as fact extraction
-// to avoid an extra API call — same conversation, one extra field.
+// to avoid an extra API call -- same conversation, one extra field.
+//
+// NOTE: ExtractFacts is not currently called anywhere. It's reserved for a
+// future "memory pruning" feature where Mira can revisit old conversations
+// and re-extract only the facts that held up over time. The agent's save_fact
+// tool handles real-time extraction. Keep this prompt in sync with the
+// agent_prompt.md rules so the two paths agree on what's worth saving.
 const extractionPrompt = `You are a memory extraction system. Your job is to read a conversation and extract two things:
 
 ## 1. Facts
-Key facts, events, emotions, and decisions worth remembering long-term.
+Facts worth remembering WEEKS or MONTHS later. Apply the "next month" test: would knowing this fact improve a conversation 30 days from now? If not, skip it.
 
 For each fact, provide:
 - "fact": A single clear sentence capturing the information
-- "category": One of: relationship, health, work, mood, goal, event, preference, identity, other
+- "category": One of: identity, relationship, health, work, goal, event, preference, other
 - "importance": 1-10 (10 = life-changing event, 1 = trivial detail)
 
-Focus on things that would be useful to remember in future conversations:
+SAVE facts about:
 - Personal details (name, identity, living situation, relationships)
-- Emotional states and patterns
+- Recurring emotional patterns (not one-off moods)
 - Goals, plans, and decisions
-- Preferences and opinions
-- Significant events or changes in their life
+- Preferences, opinions, and values that persist over time
+- Significant life events or changes
 
 Do NOT extract:
 - Generic pleasantries ("user said hello")
 - Things the assistant said (only extract facts about the user)
 - Duplicate information if the same fact appears multiple times
+- Transient moods ("feeling tired", "kind of nothing today", "feeling positive") -- mood tracking handles these separately
+- What the user ate, drank, or ordered -- unless it reveals a dietary restriction or lasting pattern
+- One-off sensory moments ("saw someone get a latte", "nice hot chocolate")
+- Ephemeral daily context ("at coffee shop", "working on X today")
+- Vague or trivial observations ("user is feeling positive", "user said something interesting")
+- Current tasks or in-progress work details that expire quickly
 
 STYLE RULES for writing facts:
 - Each fact must be 1-2 short sentences max. No paragraphs.
