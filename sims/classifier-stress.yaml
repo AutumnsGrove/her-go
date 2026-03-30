@@ -1,0 +1,118 @@
+name: "Classifier Stress Test"
+description: >
+  Stress tests the classifier gate across all five verdict types:
+  FICTIONAL, MOOD_NOT_FACT, INFERRED, LOW_VALUE, and EXTERNAL.
+  Each block is designed to bait the agent into saving content that
+  should be rejected, followed by legitimate content that should pass.
+  The sim report's agent trace will show "rejected:" for caught items
+  and successful save confirmations for legitimate ones.
+
+  Expected rejections per block:
+  - Block 1 (FICTIONAL): 2-3 game facts rejected, 1 real preference saved
+  - Block 2 (EXTERNAL mood): 1-2 game moods rejected, 1 real mood saved
+  - Block 3 (MOOD_NOT_FACT): 2-3 transient moods rejected from facts, redirected to log_mood
+  - Block 4 (INFERRED): 1-2 editorialized facts rejected
+  - Block 5 (LOW_VALUE): 1-2 vague facts rejected, specific ones saved
+  - Block 6 (Mixed): rapid-fire mix of all types in natural conversation
+
+tags: ["classifier", "quality-gate", "fictional", "mood", "inference", "low-value"]
+
+messages:
+  # --- Block 1: FICTIONAL — Gaming content as real facts ---
+  # The agent should save "user plays Elden Ring" but NOT save in-game
+  # events as if they happened to the real user.
+
+  - "hey! so i've been absolutely obsessed with elden ring lately"
+  - "i finally beat malenia after like 40 tries. i literally screamed when she went down. my build is a dual-wielding bleed katana setup, its insane"
+  - "i also found this hidden area called the haligtree. the lore there is so cool, apparently miquella created it as a sanctuary"
+  - "oh and i joined the volcano manor covenant thing. rykard is such a creepy boss but i love the whole vibe of that questline"
+
+  # This message is the test: "obsessed with elden ring" is SAVE (real preference).
+  # "beat malenia" / "found haligtree" / "joined volcano manor" are FICTIONAL if
+  # the agent tries to save them as facts about the user.
+  # "screamed when she went down" is a real reaction — tricky edge case.
+
+  - "like honestly i think fromsoft games are my favorite genre at this point. ive played every souls game"
+
+  # --- Block 2: EXTERNAL — Game character moods vs real moods ---
+  # The agent might try to log_mood based on in-game emotions.
+
+  - "so i was doing this quest in baldurs gate 3 last night and my character astarion got really upset when i sided against him. i felt so guilty"
+  - "like his whole betrayed expression... ugh. and then shadowheart was comforting me in camp and it was actually really sweet"
+  - "anyway the game is amazing but honestly i should probably stop playing at 2am. im so tired today"
+
+  # "felt so guilty" — TRICKY. The user IS feeling guilty (real emotion about fiction).
+  # "astarion got really upset" — EXTERNAL if logged as mood.
+  # "so tired today" — this is a REAL mood (SAVE), and a clear pivot from game talk.
+
+  # --- Block 3: MOOD_NOT_FACT — Transient feelings saved as permanent facts ---
+  # These messages express temporary emotional states that the agent might
+  # try to save_fact instead of log_mood.
+
+  - "ugh. today has been rough. i woke up late, spilled coffee on my shirt, and then my bus was delayed"
+  - "i just feel so frustrated with everything right now. like nothing is going right today"
+  - "and my roommate left dishes in the sink again which like, normally i dont care, but today its making me irrationally annoyed"
+
+  # These are all snapshots of TODAY's mood, not durable personality traits.
+  # If the agent calls save_fact with "user is frustrated" or "user feels
+  # nothing is going right", the classifier should return MOOD_NOT_FACT
+  # and tell the agent to use log_mood instead.
+
+  # Now pivot to something that IS a durable fact:
+  - "honestly i think i just need to move out. ive been thinking about it for months. i want to live alone for the first time"
+
+  # "wants to live alone / thinking about moving out" is a real, durable preference — SAVE.
+
+  # --- Block 4: INFERRED — Agent editorializing beyond what was said ---
+  # These messages are normal but an eager agent might extrapolate.
+
+  - "i went to this new coffee shop today. it was nice, good vibes. i had a lavender oat latte"
+  - "ive been going to coffee shops a lot lately honestly. just nice to get out of the house"
+  - "i usually bring my laptop and work on stuff. or just read. its my like... third place i guess"
+
+  # Legitimate facts: "user visits coffee shops frequently", "tried a lavender oat latte"
+  # INFERRED would be: "user is lonely and uses coffee shops to cope with isolation"
+  # or "user struggles with working from home" — the agent is reading between lines.
+
+  - "oh i also started journaling. just like a few sentences at the end of each day. nothing deep"
+
+  # "user started journaling" — SAVE. But "user is working on self-improvement"
+  # or "user is processing emotions through writing" — INFERRED.
+
+  # --- Block 5: LOW_VALUE — Vague, generic, obvious facts ---
+  # These messages are normal conversation. The test is whether the agent
+  # tries to save trivially obvious or uselessly vague facts.
+
+  - "what should i have for dinner tonight? im thinking either pasta or tacos"
+  - "yeah i like both honestly. food is good. i like eating lol"
+  - "ok i think ill do tacos. ive got some ground turkey in the fridge"
+  - "do you know any good taco seasoning recipes? like from scratch, not the packet"
+
+  # "user likes food" / "user had dinner" — LOW_VALUE
+  # "user is making turkey tacos tonight" — borderline, but too ephemeral
+  # If the agent saves something specific like "user prefers homemade seasoning
+  # over store-bought packets" — that's actually a SAVE.
+
+  - "nice, ill try that. oh btw i've been really into hot sauce lately. like collecting different ones. i have probably 15 bottles right now"
+
+  # "user collects hot sauce, has ~15 bottles" — specific, interesting, SAVE.
+
+  # --- Block 6: Mixed rapid-fire — All types in natural conversation ---
+  # This block simulates real conversation where fictional, emotional,
+  # vague, and legitimate content are all mixed together.
+
+  - "man what a day. so at work we had this huge meeting about layoffs which was terrifying. then i came home and played stardew valley to decompress"
+  - "i built this amazing greenhouse in stardew. like perfectly organized crops. and my farmer married elliott which was adorable"
+  - "but yeah the layoff thing is really scary. i dont think my team is at risk but you never know. ive been at this company for two years"
+  - "i think i need to start updating my resume just in case. and maybe brush up on my interview skills"
+  - "anyway on a lighter note, i found this amazing song today. phoebe bridgers, motion sickness. have you heard it?"
+  - "shes incredible. i think shes becoming one of my favorite artists. that whole album punisher is so good"
+  - "ok im gonna go make some tea and read for a bit. talk later!"
+
+  # Expected in this block:
+  # SAVE: "user concerned about potential layoffs", "user has been at company 2 years",
+  #        "user wants to update resume", "user likes Phoebe Bridgers / Punisher album"
+  # FICTIONAL: "built a greenhouse in stardew", "farmer married elliott"
+  # MOOD_NOT_FACT: "feeling terrified about layoffs" (as a fact — should be mood)
+  # LOW_VALUE: "user drinks tea", "user reads"
+  # EXTERNAL: any stardew valley character emotions

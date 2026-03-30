@@ -27,8 +27,9 @@ type Config struct {
 	Telegram  TelegramConfig  `yaml:"telegram"`
 	LLM       LLMConfig       `yaml:"llm"`
 	Agent     AgentConfig     `yaml:"agent"`
-	Vision    VisionConfig    `yaml:"vision"`
-	Memory    MemoryConfig    `yaml:"memory"`
+	Vision     VisionConfig     `yaml:"vision"`
+	Classifier ClassifierConfig `yaml:"classifier"`
+	Memory     MemoryConfig     `yaml:"memory"`
 	Embed     EmbedConfig     `yaml:"embed"`
 	Search    SearchConfig    `yaml:"search"`
 	Scrub     ScrubConfig     `yaml:"scrub"`
@@ -105,6 +106,17 @@ type VisionConfig struct {
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
 	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
+}
+
+// ClassifierConfig holds settings for the classifier LLM gate.
+// A small, fast model (Haiku-class) that validates memory writes before
+// they hit the DB — catches fictional content (game events, book plots)
+// that the agent model mistakes for real user facts.
+// Shares the same base_url and api_key as the main LLM section.
+type ClassifierConfig struct {
+	Model       string  `yaml:"model"`       // e.g. "anthropic/claude-haiku-4.5"
+	Temperature float64 `yaml:"temperature"` // 0 for deterministic verdicts
+	MaxTokens   int     `yaml:"max_tokens"`  // ~64 is enough for REAL/FICTIONAL
 }
 
 // MemoryConfig controls the SQLite-backed memory system.

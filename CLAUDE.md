@@ -10,9 +10,10 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** agent_prompt.md (agent orchestration rules, hot-reloadable)
-- **Agent model:** Trinity (arcee-ai/trinity-large-preview:free) via OpenRouter
+- **Agent model:** Mercury 2 (inception/mercury-2) via OpenRouter
 - **Chat model:** Deepseek V3.2 via OpenRouter
 - **Vision model:** Gemini 3 Flash via OpenRouter
+- **Classifier model:** Claude Haiku 4.5 via OpenRouter (validates memory writes)
 - **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
 
 ## Running
@@ -31,10 +32,10 @@ go build -o her && ./her run
 ## Key Design Decisions
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
-- **Agent architecture:** Two-tier system. A tool-calling agent (Trinity) orchestrates memory, search, and planning. A separate chat model (Deepseek) generates the actual response. The user only sees the chat model's output.
+- **Agent architecture:** Two-tier system. A tool-calling agent (Mercury 2) orchestrates memory, search, and planning. A separate chat model (Deepseek) generates the actual response. The user only sees the chat model's output.
 - **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Live-updates as the agent works.
 - **Persona evolution:** Bot rewrites its own persona.md every ~3 reflections. Reflections triggered by memory-dense conversations. Changes are gradual (damped).
-- **Memory quality:** Facts capped at 200 chars with style gates that reject AI writing tics (em dashes, "not just X it's Y" patterns). Prevents LLM-generated facts from poisoning the persona over time.
+- **Memory quality:** Multi-layer quality system. Style gates reject AI writing tics. A classifier LLM (Haiku-class) validates every memory write before it hits the DB — catches fictional content (game events saved as real facts), low-value facts, inferred-not-stated information, and transient moods incorrectly stored as permanent facts. Fail-open design: if the classifier is down, writes proceed.
 - **Everything in SQLite:** Messages, facts, metrics, persona versions, traits, PII vault. One file, fully portable.
 - **Model agnostic:** OpenRouter API (OpenAI-compatible). Swap models by changing config.
 

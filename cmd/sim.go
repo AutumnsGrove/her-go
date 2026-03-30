@@ -349,6 +349,18 @@ func runSim(cmd *cobra.Command, args []string) error {
 		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
 	}
 
+	// --- Classifier client (optional) ---
+	// Enable the classifier in sims so we can test rejection behavior.
+	var classifierClient *llm.Client
+	if cfg.Classifier.Model != "" {
+		classifierMaxTokens := cfg.Classifier.MaxTokens
+		if classifierMaxTokens == 0 {
+			classifierMaxTokens = 64
+		}
+		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
+		log.Info("classifier enabled for sim", "model", cfg.Classifier.Model)
+	}
+
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
@@ -369,6 +381,19 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 	if embedClient != nil {
 		loader.SetEmbedClient(embedClient)
+	}
+
+	// Start DB proxy so skills with database permissions (like log_mood)
+	// can write to the sim's temp DB. Same as cmd/run.go but pointing at
+	// tmpDBPath instead of cfg.Memory.DBPath — skills write to the
+	// clean-room DB, not the real her.db.
+	dbProxy, dbProxyErr := loader.NewDBProxy(tmpDBPath, nil)
+	if dbProxyErr != nil {
+		log.Warn("db proxy failed to start — skills will not have database access", "err", dbProxyErr)
+	} else {
+		loader.SetDBProxy(dbProxy)
+		defer dbProxy.Close()
+		log.Info("db proxy started for sim", "port", dbProxy.Port())
 	}
 
 	// ------------------------------------------------------------------
@@ -437,6 +462,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			AgentLLM:            agentClient,
 			ChatLLM:             chatClient,
 			VisionLLM:           nil, // no image support in sim
+			ClassifierLLM:       classifierClient, // nil if not configured, active if classifier section in config
 			Store:               store,
 			EmbedClient:         embedClient,
 			SimilarityThreshold: cfg.Embed.SimilarityThreshold,

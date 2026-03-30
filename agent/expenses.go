@@ -137,6 +137,17 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 	}
 	args.Currency = strings.ToUpper(strings.TrimSpace(args.Currency))
 
+	// --- Classifier gate ---
+	// Check if this is a real purchase or an in-game/fictional transaction.
+	if tctx.classifierLLM != nil {
+		receiptSummary := fmt.Sprintf("%s %.2f at %s (%s)", args.Currency, args.Amount, args.Vendor, args.Category)
+		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
+		verdict := classifyMemoryWrite(tctx.classifierLLM, "receipt", receiptSummary, snippet)
+		if !verdict.Allowed {
+			return rejectionMessage(verdict)
+		}
+	}
+
 	// --- Save to database ---
 
 	if tctx.store == nil {
