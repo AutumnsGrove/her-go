@@ -109,7 +109,7 @@ func MaybeCompact(
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
-		maxHistoryTokens = 3000 // default — triggers compaction at 75% (2250 tokens)
+		maxHistoryTokens = 1400 // default — triggers compaction at 75% (~1050 tokens)
 	}
 
 	// Load existing summary for this conversation.
