@@ -1209,119 +1209,10 @@ func buildChatSystemPrompt(tctx *tools.Context) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-// --- Reasoning tool ---
+// ---------------------------------------------------------------------------
+// System prompt context builders
+// ---------------------------------------------------------------------------
 
-// execThink is the agent's "pause and think" tool. It does nothing
-// except log the thought and return a confirmation — but it gives the agent a
-// structured place to reason before deciding what to do next.
-//
-// This is a common pattern in agentic systems. Without it, the model
-// often skips reasoning and jumps straight to tool calls. With it,
-// you get traces like:
-//
-//	think("search results are about AI, not The Martian — need to refine")
-//	web_search("The Martian Andy Weir scientific accuracy")
-//	think("these results are much better, user will want to know about...")
-//	reply(...)
-//
-// execSetLocation looks up a city name via Open-Meteo geocoding and
-// updates the weather client's coordinates. Coordinates are persisted
-// to config.yaml via cfg.SetLocation so they survive restarts — no
-// separate fact is saved for the raw coordinates.
-func execSetLocation(argsJSON string, tctx *tools.Context) string {
-	var args struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-	if args.Query == "" {
-		return "error: query is required (e.g., 'Portland Oregon')"
-	}
-
-	// Look up coordinates from the city name.
-	loc, err := weather.GeocodeLookup(args.Query)
-	if err != nil {
-		return fmt.Sprintf("error: couldn't find location for %q: %v", args.Query, err)
-	}
-
-	// Update the weather client so future weather fetches use the new location.
-	if tctx.WeatherClient != nil {
-		tctx.WeatherClient.SetLocation(loc.Latitude, loc.Longitude)
-	}
-
-	// Persist coordinates to config.yaml so they survive restarts.
-	// We log a warning on failure but don't return an error — the
-	// in-memory update already worked, so weather is live immediately.
-	if tctx.ConfigPath != "" {
-		if err := tctx.Cfg.SetLocation(tctx.ConfigPath, loc.Latitude, loc.Longitude); err != nil {
-			log.Warn("set_location: failed to persist coordinates to config", "err", err)
-		}
-	}
-
-	log.Info("set_location", "query", args.Query, "lat", loc.Latitude, "lon", loc.Longitude)
-
-	return fmt.Sprintf("Location set to %s, %s, %s. Weather data will now reflect this location. Location saved to config.",
-		loc.Name, loc.Region, loc.Country)
-}
-
-
-
-// execRecallMemories searches stored facts by semantic similarity.
-// The agent calls this when it needs to actively look something up
-// in memory — "do you remember when I told you about..." style queries.
-func execRecallMemories(argsJSON string, tctx *tools.Context) string {
-	var args struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if tctx.EmbedClient == nil {
-		return "memory search is not available (embedding client not configured)"
-	}
-	if tctx.Store.EmbedDimension == 0 {
-		return "memory search is not available (vector index not configured)"
-	}
-
-	if args.Limit <= 0 || args.Limit > 10 {
-		args.Limit = 5
-	}
-
-	// Embed the query and search.
-	queryVec, err := tctx.EmbedClient.Embed(args.Query)
-	if err != nil {
-		return fmt.Sprintf("error embedding query: %v", err)
-	}
-
-	facts, err := tctx.Store.SemanticSearch(queryVec, args.Limit)
-	if err != nil {
-		return fmt.Sprintf("error searching memories: %v", err)
-	}
-
-	if len(facts) == 0 {
-		return "no matching memories found"
-	}
-
-	// Format results for the agent. Include distance so it can judge relevance.
-	// Cosine distance: 0 = identical, 1 = orthogonal, 2 = opposite.
-	var b strings.Builder
-	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(facts))
-	for _, f := range facts {
-		similarity := 1 - f.Distance // convert distance to similarity for readability
-		fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d, similarity=%.0f%%] %s\n",
-			f.ID, f.Category, f.Importance, similarity*100, f.Fact)
-	}
-
-	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
-	return b.String()
-}
-
-// buildTimeContext returns the current date/time for the system prompt.
-// Always included — this is how Mira knows if it's morning or midnight,
-// weekday or weekend, etc. Without this, time-aware responses are impossible.
 func buildTimeContext(timezone string) string {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -1333,35 +1224,25 @@ func buildTimeContext(timezone string) string {
 
 // buildWeatherContext returns a short weather summary for the system prompt.
 // Returns "" if weather is not configured or unavailable.
-//
-// This is "passive context" — Mira doesn't announce the weather unprompted,
-// but she can weave it into conversation when relevant ("stay dry today",
-// "nice day to work outside", etc.).
 func buildWeatherContext(client *weather.Client) string {
 	if client == nil {
 		return ""
 	}
-
 	summary := client.FormatContext()
 	if summary == "" {
 		return ""
 	}
-
 	return "# Current Weather\n" + summary
 }
 
-// buildMoodContext formats recent mood data for the system prompt.
-// Returns an empty string if no mood data exists.
 // buildTraitContext formats the current personality trait scores as a
-// soft guidance section for the system prompt. These nudge the chatLLM
-// toward the right tone without being explicit instructions.
+// soft guidance section for the system prompt.
 func buildTraitContext(store *memory.Store) string {
 	traits, err := store.GetCurrentTraits()
 	if err != nil || len(traits) == 0 {
 		return ""
 	}
 
-	// Map trait descriptions for natural language guidance.
 	descriptions := map[string]func(string) string{
 		"warmth": func(v string) string {
 			f, _ := strconv.ParseFloat(v, 64)
@@ -1416,6 +1297,7 @@ func buildTraitContext(store *memory.Store) string {
 	return b.String()
 }
 
+// buildMoodContext formats recent mood data for the system prompt.
 func buildMoodContext(store *memory.Store) string {
 	entries, err := store.RecentMoodEntries(5)
 	if err != nil || len(entries) == 0 {
@@ -1441,7 +1323,6 @@ func buildMoodContext(store *memory.Store) string {
 		}
 	}
 
-	// Add trend summary if we have enough data.
 	avg, count, err := store.MoodTrend(10)
 	if err == nil && count >= 3 {
 		var trend string
@@ -1461,431 +1342,9 @@ func buildMoodContext(store *memory.Store) string {
 	return b.String()
 }
 
-// execLogMood saves a mood entry from the agent when the user expresses
-// how they're feeling. This is the "manual" source — the agent explicitly
-// decided to log mood based on what the user said.
-// execLogMood has been migrated to a standalone skill (skills/log_mood/).
-// The skill inserts into mood_entries via the DB proxy.
-
-// --- Search tool execution (migrated to skills) ---
-//
-// web_search, web_read, and book_search have been migrated to standalone
-// skills in skills/web_search/, skills/web_read/, and skills/book_search/.
-// The agent discovers them via find_skill and runs them via run_skill.
-// The built-in implementations below have been removed.
-
-// --- Memory tool execution (unchanged from before) ---
-
-// selfFactBlocklist contains phrases that indicate the agent is just
-// restating its system prompt capabilities rather than saving a genuine
-// learned observation. These get rejected before hitting the database.
-var selfFactBlocklist = []string{
-	"i can recall",
-	"i am able to",
-	"i have the ability",
-	"my role is",
-	"i am an ai",
-	// Note: "i am <name>" and "my name is <name>" are checked dynamically
-	// using cfg.Identity.Her — see isSelfFactBlocked().
-	"i should be",
-	"i try to be",
-	"i am designed to",
-	"i was created to",
-	"my purpose is",
-	"i am here to",
-	"i can remember",
-	"i can help",
-}
-
-// styleBlocklist catches AI writing tics that poison the voice over time.
-// Facts with these patterns get rejected so they don't leak into the
-// system prompt and infect the conversational model's tone.
-var styleBlocklist = []string{
-	// Em dashes — the #1 offender
-	"\u2014", // —
-	"\u2013", // –
-
-	// "Not just X, it's Y" and variants
-	"not just",
-	"it's not just",
-	"not merely",
-
-	// Grandiose/hollow language
-	"significant moment",
-	"significant trust",
-	"deeply personal",
-	"genuinely incredible",
-	"a testament to",
-	"speaks volumes",
-
-	// Corporate AI speak
-	"actively investing",
-	"building a bridge",
-	"creating a richer",
-	"meta-level",
-	"hold space",
-	"holding space",
-
-	// Hollow filler
-	"it's worth noting",
-	"it's important to",
-	"fundamentally",
-	"remarkably",
-	"transformative",
-	"delve",
-	"foster",
-	"leverage",
-	"tapestry",
-	"realm",
-	"landscape",
-	"embark",
-	"harness",
-	"utilize",
-}
-
-// maxFactLength is the hard limit on fact text length. Facts are supposed
-// to be 1-2 sentences. Multi-paragraph reflections belong in the
-// persona evolution system, not in individual facts.
-const maxFactLength = 200
-
-// sameDayContextThreshold is a tighter duplicate threshold for "context"
-// category facts. Multiple snapshots of the same day ("at Bolivar feeling
-// low", "at Bolivar doing grounding exercise") are situational duplicates
-// that the normal tag-based threshold misses. 0.70 catches these while
-// still allowing genuinely different contexts on the same day.
-const sameDayContextThreshold = 0.70
-
-func execSaveFact(argsJSON string, subject string, tctx *tools.Context) string {
-	var args struct {
-		Fact       string `json:"fact"`
-		Category   string `json:"category"`
-		Importance int    `json:"importance"`
-		Tags       string `json:"tags"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if args.Importance < 1 {
-		args.Importance = 1
-	}
-	if args.Importance > 10 {
-		args.Importance = 10
-	}
-
-	// Quality gate for self-facts: block system-prompt restatements.
-	if subject == "self" {
-		lower := strings.ToLower(args.Fact)
-		for _, blocked := range selfFactBlocklist {
-			if strings.Contains(lower, blocked) {
-				log.Warn("blocked self-fact (matches blocklist)", "blocklist_entry", blocked, "fact", args.Fact)
-				return fmt.Sprintf("rejected: this is a system capability, not a learned observation. Self-facts should only capture things learned through interaction.")
-			}
-		}
-		// Dynamic name check — "i am <name>" and "my name is <name>"
-		// are identity restatements from the system prompt, not learned facts.
-		nameLower := strings.ToLower(tctx.Cfg.Identity.Her)
-		if strings.Contains(lower, "i am "+nameLower) || strings.Contains(lower, "my name is "+nameLower) {
-			log.Warn("blocked self-fact (identity restatement)", "fact", args.Fact)
-			return "rejected: this is an identity restatement from the system prompt, not a learned observation."
-		}
-	}
-
-	// Style gate for ALL facts: reject AI writing tics.
-	// Facts get injected into the system prompt, so sloppy style here
-	// poisons the conversational model's tone over time. This is the
-	// immune system against the AI-slop feedback loop.
-	lower := strings.ToLower(args.Fact)
-	for _, blocked := range styleBlocklist {
-		if strings.Contains(lower, blocked) {
-			log.Warn("blocked fact (style)", "pattern", blocked, "fact", args.Fact)
-			return fmt.Sprintf("rejected: rewrite this fact in plain, concise language. Avoid em dashes, 'not just X it's Y', and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
-		}
-	}
-
-	// Length gate: facts should be 1-2 sentences, not paragraphs.
-	if len(args.Fact) > maxFactLength {
-		log.Warn("blocked fact (too long)", "len", len(args.Fact), "fact", args.Fact[:100])
-		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
-	}
-
-	// Embed by TAGS (not by fact text) so the vector space organizes by
-	// topic. "mental health, burnout, coping" lands far from "programming,
-	// go, backend" — which is what we want for retrieval. Fall back to
-	// fact text if the agent didn't provide tags.
-	embedText := args.Tags
-	if embedText == "" {
-		embedText = args.Fact
-	}
-
-	// Hoist textVec here so it's in scope for both the dedup check and SaveFact.
-	// When args.Tags == "", embedText == args.Fact, meaning newVec IS the text
-	// embedding — no separate embed needed. When tags are present, we embed the
-	// raw fact text separately for the text-based dedup pass.
-	var newVec []float32
-	var textVec []float32
-	if tctx.EmbedClient != nil {
-		var err error
-		newVec, err = tctx.EmbedClient.Embed(embedText)
-		if err != nil {
-			log.Warn("embedding failed, skipping duplicate check", "err", err)
-		} else {
-			// Also embed the raw fact text for a second similarity check.
-			// Tags catch topical duplicates ("coffee shop, mood" vs
-			// "coffee shop, vibe") but miss situational duplicates where
-			// the same event is described with different tag angles.
-			if args.Tags != "" {
-				// Only need a separate text embedding when tags differ
-				// from the fact text (otherwise newVec already IS the
-				// text embedding).
-				textVec, err = tctx.EmbedClient.Embed(args.Fact)
-				if err != nil {
-					log.Warn("text embedding failed, using tag-only dedup", "err", err)
-				}
-			}
-
-			// Same-day context facts use a tighter threshold because
-			// multiple snapshots of the same situation (location, mood,
-			// activity) within a single day are almost always duplicates.
-			threshold := tctx.SimilarityThreshold
-			if args.Category == "context" {
-				threshold = sameDayContextThreshold
-			}
-
-			if duplicate, existingID, existingFact, sim, source := checkDuplicate(newVec, textVec, subject, threshold, tctx); duplicate {
-				log.Info("blocked duplicate fact", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "fact", args.Fact)
-				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q) [matched on %s]. Use update_fact to refine it instead.",
-					sim*100, existingID, existingFact, source)
-			}
-		}
-	}
-
-	// --- Classifier gate ---
-	// Ask the classifier to evaluate this fact for quality: is it real,
-	// useful, actually stated by the user, and not a transient mood?
-	// Runs AFTER style/length/dedup gates — no point classifying something
-	// that would be rejected anyway. Fail-open if classifier is nil or errors.
-	if tctx.ClassifierLLM != nil {
-		writeType := "fact"
-		if subject == "self" {
-			writeType = "self_fact"
-		}
-		snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
-		verdict := classifyMemoryWrite(tctx.ClassifierLLM, writeType, args.Fact, snippet)
-		if !verdict.Allowed {
-			return rejectionMessage(verdict)
-		}
-	}
-
-	// textVec is nil when tags were empty — SaveFact stores NULL in that case,
-	// which is correct because newVec already encodes the text embedding.
-	id, err := tctx.Store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
-	if err != nil {
-		return fmt.Sprintf("error saving fact: %v", err)
-	}
-	label := "user fact"
-	if subject == "self" {
-		label = "self fact"
-	}
-
-	tctx.SavedFacts = append(tctx.SavedFacts, args.Fact)
-
-	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
-}
-
-// checkDuplicate compares a new fact against all existing facts using two
-// embedding strategies: tag-based (topical) and text-based (semantic).
-// If either similarity exceeds the threshold, the fact is a duplicate.
-//
-// newTagVec is the embedding of the fact's tags (or fact text if no tags).
-// newTextVec is the embedding of the raw fact text (may be nil if tags
-// were empty, since newTagVec already IS the text embedding in that case).
-//
-// The returned "source" string indicates which check caught the duplicate
-// ("tags" or "text") for logging/debugging.
-func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold float64, tctx *tools.Context) (isDuplicate bool, existingID int64, existingFact string, similarity float64, source string) {
-	existingFacts, err := tctx.Store.AllActiveFacts()
-	if err != nil {
-		log.Warn("couldn't load facts for duplicate check", "err", err)
-		return false, 0, "", 0, ""
-	}
-
-	var bestSim float64
-	var bestID int64
-	var bestFact string
-	var bestSource string
-
-	for _, existing := range existingFacts {
-		if existing.Subject != subject {
-			continue
-		}
-
-		// --- Tag-based similarity (topical dedup) ---
-		existTagVec := existing.Embedding
-		if len(existTagVec) == 0 {
-			embedText := existing.Tags
-			if embedText == "" {
-				embedText = existing.Fact
-			}
-			existTagVec, err = tctx.EmbedClient.Embed(embedText)
-			if err != nil {
-				continue
-			}
-			// Backfill: persist the computed tag embedding (and preserve the
-			// existing text embedding so we don't wipe it with nil).
-			_ = tctx.Store.UpdateFactEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
-			log.Debug("backfilled tag embedding for fact", "fact_id", existing.ID)
-		}
-
-		tagSim := embed.CosineSimilarity(newTagVec, existTagVec)
-		if tagSim > bestSim {
-			bestSim = tagSim
-			bestID = existing.ID
-			bestFact = existing.Fact
-			bestSource = "tags"
-		}
-
-		// --- Text-based similarity (semantic dedup) ---
-		// Catches situational duplicates where tags differ but the facts
-		// describe the same thing (e.g. "at Bolivar feeling low" vs
-		// "at Bolivar doing grounding exercise, feeling stuck").
-		if len(newTextVec) > 0 {
-			// Use the cached text embedding to avoid an embedding call per
-			// existing fact on every save. Fall back to computing on-the-fly
-			// and backfilling if the cache is empty (e.g. older facts).
-			existTextVec := existing.EmbeddingText
-			if len(existTextVec) == 0 {
-				existTextVec, err = tctx.EmbedClient.Embed(existing.Fact)
-				if err != nil {
-					continue
-				}
-				_ = tctx.Store.UpdateFactEmbedding(existing.ID, existing.Embedding, existTextVec)
-				log.Debug("backfilled text embedding for fact", "fact_id", existing.ID)
-			}
-			textSim := embed.CosineSimilarity(newTextVec, existTextVec)
-			if textSim > bestSim {
-				bestSim = textSim
-				bestID = existing.ID
-				bestFact = existing.Fact
-				bestSource = "text"
-			}
-		}
-	}
-
-	if bestSim >= threshold {
-		return true, bestID, bestFact, bestSim, bestSource
-	}
-	return false, 0, "", 0, ""
-}
-
-func execUpdateFact(argsJSON string, tctx *tools.Context) string {
-	var args struct {
-		FactID     int64  `json:"fact_id"`
-		Fact       string `json:"fact"`
-		Category   string `json:"category"`
-		Importance int    `json:"importance"`
-		Tags       string `json:"tags"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if args.Importance < 1 {
-		args.Importance = 1
-	}
-	if args.Importance > 10 {
-		args.Importance = 10
-	}
-
-	// Same style and length gates as save_fact — updates shouldn't
-	// sneak in AI-slop or paragraphs either.
-	lower := strings.ToLower(args.Fact)
-	for _, blocked := range styleBlocklist {
-		if strings.Contains(lower, blocked) {
-			log.Warn("blocked fact update (style)", "pattern", blocked, "fact", args.Fact)
-			return fmt.Sprintf("rejected: rewrite in plain, concise language. Blocked pattern: %q", blocked)
-		}
-	}
-	if len(args.Fact) > maxFactLength {
-		log.Warn("blocked fact update (too long)", "len", len(args.Fact))
-		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
-	}
-
-	// --- Classifier gate ---
-	if tctx.ClassifierLLM != nil {
-		snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
-		verdict := classifyMemoryWrite(tctx.ClassifierLLM, "fact", args.Fact, snippet)
-		if !verdict.Allowed {
-			return rejectionMessage(verdict)
-		}
-	}
-
-	if err := tctx.Store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {
-		return fmt.Sprintf("error updating fact: %v", err)
-	}
-
-	// Re-embed using tags (same as save_fact — embed by topic, not by text).
-	// Also re-embed the raw fact text so the cached text embedding stays fresh.
-	if tctx.EmbedClient != nil {
-		embedText := args.Tags
-		if embedText == "" {
-			embedText = args.Fact
-		}
-		if newVec, err := tctx.EmbedClient.Embed(embedText); err == nil {
-			// Recompute text embedding. When tags are empty, newVec already
-			// encodes the text, so we pass nil to avoid a redundant embed call.
-			var newTextVec []float32
-			if args.Tags != "" {
-				newTextVec, _ = tctx.EmbedClient.Embed(args.Fact)
-			}
-			_ = tctx.Store.UpdateFactEmbedding(args.FactID, newVec, newTextVec)
-			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
-		}
-	}
-
-	return fmt.Sprintf("updated fact ID=%d: %s", args.FactID, args.Fact)
-}
-
-func execRemoveFact(argsJSON string, tctx *tools.Context) string {
-	var args struct {
-		FactID int64  `json:"fact_id"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if err := tctx.Store.DeactivateFact(args.FactID); err != nil {
-		return fmt.Sprintf("error removing fact: %v", err)
-	}
-	return fmt.Sprintf("removed fact ID=%d (reason: %s)", args.FactID, args.Reason)
-}
-
-func execUpdatePersona(argsJSON string, tctx *tools.Context) string {
-	var args struct {
-		Content string `json:"content"`
-		Reason  string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// Swap the bot's literal name back to {{her}} before writing to disk,
-	// keeping the persona file as a portable template.
-	personaContent := strings.ReplaceAll(args.Content, tctx.Cfg.Identity.Her, "{{her}}")
-
-	if err := os.WriteFile(tctx.PersonaFile, []byte(personaContent), 0644); err != nil {
-		return fmt.Sprintf("error writing persona file: %v", err)
-	}
-
-	// Store the raw LLM output (with literal name) in the DB for history.
-	id, err := tctx.Store.SavePersonaVersion(args.Content, "agent: "+args.Reason)
-	if err != nil {
-		return fmt.Sprintf("persona file updated but failed to save version: %v", err)
-	}
-
-	return fmt.Sprintf("persona updated (version ID=%d, reason: %s)", id, args.Reason)
-}
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
 
 // truncateLog shortens a string for log output, adding "..." if it was cut.
 // mustJSON marshals a string to a JSON string literal (with quotes and
