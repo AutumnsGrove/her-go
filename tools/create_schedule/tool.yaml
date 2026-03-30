@@ -45,3 +45,6 @@ parameters:
     - cron_expr
     - task_type
     - payload
+trace:
+  emoji: "📅"
+  format: "\"{{.name | escape}}\" ({{.cron_expr}})"

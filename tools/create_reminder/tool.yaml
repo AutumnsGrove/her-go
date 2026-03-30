@@ -22,3 +22,6 @@ parameters:
   required:
     - message
     - trigger_at
+trace:
+  emoji: "⏰"
+  format: "\"{{.message | escape}}\" at {{.natural_time | escape}}"

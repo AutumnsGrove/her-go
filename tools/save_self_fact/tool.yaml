@@ -36,3 +36,10 @@ parameters:
     - category
     - importance
     - tags
+trace:
+  emoji: "🪞"
+  format: "{{.fact | escape}}\n    category={{.category}}, importance={{.importance}}"
+  on_reject:
+    prefix: "rejected:"
+    emoji: "🚫"
+    format: "<i>{{.Result | truncate 120 | escape}}</i>"

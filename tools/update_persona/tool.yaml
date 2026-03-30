@@ -19,3 +19,6 @@ parameters:
   required:
     - content
     - reason
+trace:
+  emoji: "✨"
+  format: "{{.reason | escape}}"

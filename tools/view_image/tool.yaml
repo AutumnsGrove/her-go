@@ -14,3 +14,6 @@ parameters:
         photo', 'what food is this', 'read any text in this image'.
   required:
     - prompt
+trace:
+  emoji: "👁"
+  format: "→ {{.Result | truncate 80 | escape}}"

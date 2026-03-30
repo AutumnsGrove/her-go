@@ -19,3 +19,6 @@ parameters:
       description: "Max results to return (default 5, max 10)"
   required:
     - query
+trace:
+  emoji: "🔎"
+  format: "\"{{.query | escape}}\"\n    → {{.Result | truncate 80 | escape}}"

@@ -25,3 +25,6 @@ parameters:
         see all categories.
   required:
     - period
+trace:
+  emoji: "💰"
+  format: "{{.period}}\n    → {{.Result | truncate 80 | escape}}"

@@ -12,3 +12,6 @@ parameters:
       description: "The expense ID to delete (shown in query_expenses results)."
   required:
     - id
+trace:
+  emoji: "🗑"
+  format: "ID={{.id}}"
