@@ -1,0 +1,60 @@
+name: "Compaction Stress Test"
+description: >
+  Tests the conversation compaction system by generating enough
+  conversation history to exceed the token budget (default 3000 tokens,
+  triggers at 75% = 2250). Early turns establish facts and topics,
+  middle turns burn tokens with chatty exchanges, and late turns
+  reference earlier topics to verify the compaction summary preserved
+  important context. Look for [trace] compaction events in the output.
+
+  Expected behavior:
+  - Compaction should fire around turn 15-20 (depending on reply length)
+  - Post-compaction turns should still reference early facts correctly
+  - The summary in sim_summaries should capture key topics
+
+tags: ["compaction", "context-window", "stress-test"]
+
+messages:
+  # --- Phase 1: Establish facts (turns 1-5) ---
+  # These facts should survive compaction in the summary.
+
+  - "hey! im maya. i live in chicago and i work as a UX designer at a fintech startup"
+  - "i have two cats, pickle and olive. pickle is a ginger tabby and olive is all black"
+  - "ive been learning pottery on weekends. im taking classes at this studio called mud and fire in wicker park"
+  - "oh and my birthday is august 14th. im a leo if you care about that kind of thing haha"
+  - "my best friend is called dee. shes a nurse and we go hiking together like every other weekend"
+
+  # --- Phase 2: Burn tokens with chatty conversation (turns 6-15) ---
+  # These are deliberately wordy to push toward the token threshold.
+  # Content is still natural — just chattier than usual.
+
+  - "so today was kind of a weird day at work. we had this massive product review meeting where the VP basically tore apart our new dashboard design. like she was nice about it but she had like fifteen specific things she wanted changed and honestly some of them contradicted each other"
+  - "the worst part was she kept saying things like 'users won't understand this' but we literally did user testing last week and people loved the flow. like i have the data right there in our figma annotations. but she didnt even look at the research deck we sent"
+  - "sorry for venting haha. anyway after the meeting i went to get lunch at this new thai place near the office. got pad see ew with tofu and it was actually really good. the noodles were perfectly chewy. might become a regular spot"
+  - "then this afternoon i had a one-on-one with my manager and she was actually really supportive. she said the VP does this with every team and to not take it personally. she also mentioned i might be up for a lead role on the next project which would be huge"
+  - "came home and pickle was sleeping in my pottery supplies again. he knocked over a bag of clay and got it all over his fur. had to give him a bath which he absolutely hated. olive just watched from the windowsill looking very judgy about the whole situation"
+  - "then i worked on my pottery piece for a bit. im making this set of mugs for dees birthday present. theyre these like rustic looking mugs with a speckled blue glaze. ive finished three of four so far. the glaze is called 'ocean mist' and it looks amazing when it comes out of the kiln"
+  - "after that dee called and we talked for like an hour about this hiking trail she found. its called starved rock state park and its about ninety minutes from chicago. apparently theres these really cool canyon formations and waterfalls. were planning to go next saturday"
+  - "i also started watching this show called severance. have you heard of it? its about people who get a surgical procedure that separates their work memories from their personal memories. its SO good and creepy. im on episode three"
+  - "oh and i finally ordered that standing desk ive been eyeing. its a flexispot one. my back has been killing me from sitting all day. should arrive by thursday. im way too excited about a desk but whatever"
+  - "honestly today was one of those days where a lot happened but it all kind of balanced out. the work stuff was stressful but the pottery and the dee call and the thai food made it okay. thats a pretty good ratio"
+
+  # --- Phase 3: More conversation to guarantee compaction (turns 16-20) ---
+  # By now we should definitely be over the token budget.
+
+  - "so remember that hike with dee i mentioned? we went to starved rock today and it was incredible. the waterfalls were frozen because its still pretty cold and it looked absolutely magical. we did like eight miles total"
+  - "my legs are so sore now though. we took the hardest trail obviously because dee is competitive about everything. but the views from the top were worth it. took so many photos"
+  - "pickle and olive were so clingy when i got home. i think they could smell the outdoors on me and got confused. olive kept sniffing my boots for like ten minutes straight"
+  - "oh also i finished the fourth mug for dee! the whole set turned out great. the glaze is even prettier than i expected. i think shes gonna love them. her birthday is in two weeks"
+  - "work has been better this week. the VP actually came back and said she liked our revised designs. turns out she just needed time to sit with it. classic"
+
+  # --- Phase 4: Reference early topics (turns 21-25) ---
+  # These should test whether the compaction summary preserved
+  # the facts from phase 1. If context was lost, the bot will
+  # either not remember or get details wrong.
+
+  - "hey so quick question. whats my cats names again? just wanna make sure you remember haha"
+  - "nice. and where do i take pottery classes?"
+  - "what was the name of that hiking spot we talked about?"
+  - "and remind me, what do i do for work?"
+  - "perfect. ok gotta go, pickle is yelling at me for dinner. talk later!"
