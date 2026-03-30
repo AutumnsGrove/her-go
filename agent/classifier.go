@@ -14,7 +14,7 @@ import (
 // usefulness, inference vs stated, and proper categorization.
 type ClassifyVerdict struct {
 	Allowed bool   // true = write should proceed to DB
-	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", "MOOD_NOT_FACT", "INFERRED", "EXTERNAL"
+	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", "MOOD_NOT_FACT", "INFERRED", "EXTERNAL", "HAS_TIMESTAMP"
 	Reason  string // human-readable explanation from the classifier
 }
 
@@ -138,6 +138,9 @@ func parseClassifierResponse(response string) ClassifyVerdict {
 	if strings.HasPrefix(upper, "INFERRED") {
 		return ClassifyVerdict{Allowed: false, Type: "INFERRED", Reason: extractReason(line)}
 	}
+	if strings.HasPrefix(upper, "HAS_TIMESTAMP") {
+		return ClassifyVerdict{Allowed: false, Type: "HAS_TIMESTAMP", Reason: extractReason(line)}
+	}
 
 	// Unparseable response → fail-open.
 	log.Warn("classifier returned unparseable response, allowing write", "response", response)
@@ -200,6 +203,13 @@ func rejectionMessage(verdict ClassifyVerdict) string {
 		}
 		return fmt.Sprintf("rejected: %s. Only log the real user's emotional state.", detail)
 
+	case "HAS_TIMESTAMP":
+		detail := "the fact contains a date or time reference"
+		if verdict.Reason != "" {
+			detail = verdict.Reason
+		}
+		return fmt.Sprintf("rejected: %s. Timestamps are automatically attached to every fact — do NOT include dates, times, or relative time words (today, yesterday, last week) in the fact text. Rewrite the fact without the temporal reference.", detail)
+
 	default:
 		return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
 	}
@@ -246,10 +256,19 @@ Check in this order:
    - "User is interested in technology" (too broad to be useful)
    Note: specificity is what matters. "User enjoys short, surreal books like Piranesi" is SAVE — that's actionable.
 
-5. SAVE — The fact is real, specific, useful, and actually stated or clearly implied by the user.
+5. HAS_TIMESTAMP — Does the fact contain a specific date, time, or relative time reference? Timestamps are automatically attached to every fact by the system. The agent must NOT embed dates into the fact text.
+   Examples of HAS_TIMESTAMP:
+   - "User visited Zaxby's on March 29" (contains specific date)
+   - "As of 2026-03-29, user prefers..." (contains ISO date)
+   - "User started therapy last Tuesday" (relative time reference)
+   - "User went to a coffee shop today" (relative time — "today")
+   - "Yesterday user mentioned feeling better" (relative time — "yesterday")
+   Note: recurring schedules and durations are NOT timestamps. "User has therapy on Thursdays" is SAVE — that's a pattern. "User has been learning Go for 3 months" is SAVE — that's a duration, not a date.
+
+6. SAVE — The fact is real, specific, useful, and actually stated or clearly implied by the user.
 
 Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable"`
+Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable", "HAS_TIMESTAMP — contains specific date"`
 
 const classifierMoodSystem = `You are a quality gate for a personal chatbot's mood tracker. A mood entry has been proposed. Evaluate it:
 

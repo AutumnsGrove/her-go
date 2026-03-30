@@ -159,6 +159,8 @@ SAVE when the user reveals:
 - Goals, plans, or decisions
 - Recurring emotional patterns (not one-off moods)
 
+TIMESTAMPS: Every fact is automatically stamped with its creation date. Do NOT include dates, times, or relative time references in fact text ("on March 29", "today", "yesterday", "last Tuesday"). Just write the timeless fact — the system handles when.
+
 DO NOT SAVE:
 - Transient moods or feelings ("I'm tired", "feeling good today", "kind of nothing") — mood tracking handles these
 - What the user ate, drank, or ordered — unless it reveals a dietary restriction or pattern

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"her/embed"
@@ -250,8 +251,15 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 	return result, injected, nil
 }
 
+// legacyDatePrefix matches the [YYYY-MM-DD] prefix that was previously
+// baked into "context" category fact text. Now that all facts get their
+// timestamp rendered from the DB, we strip these to avoid double-stamping.
+var legacyDatePrefix = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2}\]\s*`)
+
 // formatFactSection builds a formatted memory section with a title,
-// description, and facts grouped by category.
+// description, and facts grouped by category. Each fact is prefixed
+// with its creation date from the DB so the chat model has temporal
+// context — e.g., "[Mar 29] User prefers Lexend font".
 func formatFactSection(title, description string, facts []Fact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n%s\n\n", title, description)
@@ -274,7 +282,13 @@ func formatFactSection(title, description string, facts []Fact) string {
 		displayCat := strings.ToUpper(cat[:1]) + cat[1:]
 		fmt.Fprintf(&b, "**%s:**\n", displayCat)
 		for _, f := range groups[cat] {
-			fmt.Fprintf(&b, "- %s\n", f.Fact)
+			// Strip any legacy [YYYY-MM-DD] prefix from old context facts
+			// so we don't double-stamp them.
+			factText := legacyDatePrefix.ReplaceAllString(f.Fact, "")
+			// Render the DB timestamp as a compact date prefix.
+			// "Jan 02" format: abbreviated month + zero-padded day.
+			stamp := f.Timestamp.Format("Jan 02")
+			fmt.Fprintf(&b, "- [%s] %s\n", stamp, factText)
 		}
 		b.WriteString("\n")
 	}
