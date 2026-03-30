@@ -21,3 +21,6 @@ parameters:
         to include in the prompt.
   required:
     - instruction
+trace:
+  emoji: "📝"
+  format: "<i>{{.instruction | truncate 200 | escape}}</i>"

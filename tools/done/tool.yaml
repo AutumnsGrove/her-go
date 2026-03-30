@@ -7,3 +7,5 @@ hot: true
 parameters:
   type: object
   properties: {}
+trace:
+  emoji: "✅"

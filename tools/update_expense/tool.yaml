@@ -44,3 +44,6 @@ parameters:
       description: "Updated note (omit to keep current)."
   required:
     - id
+trace:
+  emoji: "✏️"
+  format: "ID={{.id}}\n    → {{.Result | truncate 60 | escape}}"

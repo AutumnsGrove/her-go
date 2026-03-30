@@ -14,3 +14,6 @@ parameters:
       description: "City and state/country name (e.g., 'Portland Oregon', 'Tokyo')"
   required:
     - query
+trace:
+  emoji: "📍"
+  format: "{{.query | escape}}"

@@ -85,3 +85,6 @@ parameters:
     - vendor
     - category
     - date
+trace:
+  emoji: "🧾"
+  format: "{{.vendor | escape}} ({{.category}})"

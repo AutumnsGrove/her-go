@@ -17,3 +17,6 @@ parameters:
   required:
     - fact_id
     - reason
+trace:
+  emoji: "🗑"
+  format: "#{{.fact_id}} — {{.reason | escape}}"

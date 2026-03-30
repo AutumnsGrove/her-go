@@ -6,3 +6,6 @@ category: context
 parameters:
   type: object
   properties: {}
+trace:
+  emoji: "🕐"
+  format: "→ {{.Result | truncate 60 | escape}}"

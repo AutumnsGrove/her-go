@@ -16,3 +16,6 @@ parameters:
         best next step?
   required:
     - thought
+trace:
+  emoji: "🧠"
+  format: "<i>{{.thought | escape}}</i>"

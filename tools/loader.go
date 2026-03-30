@@ -34,6 +34,7 @@ type toolManifest struct {
 	Hot         bool           `yaml:"hot"`
 	Category    string         `yaml:"category,omitempty"`
 	Parameters  parametersDef  `yaml:"parameters"`
+	Trace       *traceSpec     `yaml:"trace,omitempty"`
 }
 
 // parametersDef represents the JSON Schema "parameters" block.
@@ -150,6 +151,11 @@ func init() {
 			)
 		}
 
+		// Compile trace spec if present.
+		if manifest.Trace != nil {
+			traceRegistry[manifest.Name] = compileTraceSpec(manifest.Name, *manifest.Trace)
+		}
+
 		log.Debug("loaded tool from YAML", "tool", manifest.Name,
 			"hot", manifest.Hot, "category", manifest.Category)
 	}
@@ -159,6 +165,13 @@ func init() {
 	for cat := range categories {
 		sort.Strings(categories[cat])
 	}
+
+	// Register trace spec for use_tools — it has no YAML file since its
+	// definition is dynamically generated, but it still needs a trace format.
+	traceRegistry["use_tools"] = compileTraceSpec("use_tools", traceSpec{
+		Emoji:  "🔧",
+		Format: "{{.Result | truncate 100 | escape}}",
+	})
 
 	log.Infof("loaded %d tool definitions from YAML (%d hot, %d categories)",
 		len(toolDefs), len(hotTools), len(categories))
