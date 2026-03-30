@@ -164,6 +164,7 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
 		VisionLLM:           b.visionLLM,
+		ClassifierLLM:       b.classifierLLM,
 		Store:               b.store,
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,

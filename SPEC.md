@@ -37,9 +37,10 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
        │                │  │ 1. Log + scrub                                         │
        │                │  │ 2. Agent orchestration                                 │
        │                │  │ 3. Tool calls (search, memory, links, daily tools)     │
-       │                │  │ 4. Mini Shutter (URL fetch + content distillation)      │
-       │                │  │ 5. Reply generation                                    │
-       │                │  │ 6. Persona evolution                                   │
+       │                │  │ 4. Classifier gate (validates memory writes)           │
+       │                │  │ 5. Mini Shutter (URL fetch + content distillation)      │
+       │                │  │ 6. Reply generation                                    │
+       │                │  │ 7. Persona evolution                                   │
        │                │  └────┬─────┘                                             │
        │                │       │                                                   │
        │                │       ▼                                                   │
@@ -75,9 +76,10 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 6. System prompt (`prompt.md`) + memory context + scrubbed message → assembled into LLM request
 7. Bot sends "typing..." indicator to Telegram
 8. Request sent to OpenRouter (hard identifiers removed, contact info tokenized, names/context intact)
-9. Response received, logged to SQLite (both raw response + token counts + cost)
-10. Response sent back to user on Telegram
-11. Periodically: fact extraction runs against raw messages to build long-term memory
+9. Memory writes (save_fact, log_mood, scan_receipt) pass through classifier gate — a small LLM (Haiku) that rejects fictional, low-value, inferred, or misrouted content
+10. Response received, logged to SQLite (both raw response + token counts + cost)
+11. Response sent back to user on Telegram
+12. Periodically: fact extraction runs against raw messages to build long-term memory
 
 **Data retention:** Every stage is preserved. The `messages` table stores both `content_raw` (what you actually said) and `content_scrubbed` (what the LLM saw). Nothing is ever deleted — scrubbing creates a parallel sanitized copy, it does not replace the original. The `pii_vault` table maintains session-scoped mappings for Tier 2 tokens so responses can be deanonymized before display.
 
@@ -323,6 +325,7 @@ CREATE TABLE metrics (
 - This extraction call also goes through the same tiered scrubbing pipeline (the stored fact in the DB is the raw version with full fidelity)
 - **Max fact length:** 200 characters. Facts exceeding this are rejected at insertion — they indicate the model returned a paragraph rather than a single-sentence fact.
 - **Style gates:** A blocklist of AI writing tics ("it's worth noting", "certainly", "I should mention", etc.) rejects facts that read like LLM hedging rather than real information. Facts must describe the user's life, not the model's reasoning.
+- **Classifier gate:** A small LLM (Haiku-class, temperature 0) validates every memory write (save_fact, update_fact, log_mood, scan_receipt) before the DB write. Returns one of: SAVE (proceed), FICTIONAL (in-game/book/show content), LOW_VALUE (too vague), MOOD_NOT_FACT (transient mood that should use log_mood skill), INFERRED (agent editorializing beyond what user stated), EXTERNAL (mood about a fictional character). Fail-open on errors. Rejection messages are actionable — e.g., MOOD_NOT_FACT tells the agent to use log_mood instead. See `agent/classifier.go`.
 - **"context" category:** Ephemeral day-to-day facts (current mood, what the user is working on today, recent events) are stored with `category='context'`. These are auto-injected with a timestamp (`[as of 2026-03-24]`) so the LLM knows how fresh they are, and are prioritized for replacement when the context window is tight.
 
 ### 5. Prompt System (Layered)

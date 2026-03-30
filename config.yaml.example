@@ -38,6 +38,11 @@ vision:
     temperature: 0.3
     max_tokens: 512
 
+classifier:
+  model: "anthropic/claude-haiku-4.5"  # small, fast model that validates memory writes against fiction
+  temperature: 0                        # deterministic — consistent REAL/FICTIONAL verdicts
+  max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
+
 embed:
   base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model

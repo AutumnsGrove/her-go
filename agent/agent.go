@@ -111,6 +111,12 @@ type toolContext struct {
 	// Nil if vision is not configured.
 	visionLLM *llm.Client
 
+	// classifierLLM is the classifier model (Haiku-class). Validates
+	// memory writes (facts, moods, receipts) to catch fictional content
+	// before it hits the DB. Nil if classifier is not configured —
+	// writes pass through unchanged.
+	classifierLLM *llm.Client
+
 	// imageBase64 and imageMIME hold the current photo data (if any).
 	// Populated by the bot when the user sends a photo on Telegram.
 	imageBase64 string
@@ -259,6 +265,7 @@ type RunParams struct {
 	AgentLLM                  *llm.Client
 	ChatLLM                   *llm.Client
 	VisionLLM                 *llm.Client // vision language model — nil if not configured
+	ClassifierLLM             *llm.Client // classifier for memory writes — nil if not configured
 	Store                     *memory.Store
 	EmbedClient               *embed.Client
 	SimilarityThreshold       float64
@@ -464,6 +471,7 @@ func Run(params RunParams) (*RunResult, error) {
 		sendConfirmCallback:       params.SendConfirmCallback,
 		chatLLM:                   params.ChatLLM,
 		visionLLM:                 params.VisionLLM,
+		classifierLLM:             params.ClassifierLLM,
 		tavilyClient:              params.TavilyClient,
 		weatherClient:             params.WeatherClient,
 		cfg:                       params.Cfg,
@@ -1956,6 +1964,23 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 	}
 
+	// --- Classifier gate ---
+	// Ask the classifier to evaluate this fact for quality: is it real,
+	// useful, actually stated by the user, and not a transient mood?
+	// Runs AFTER style/length/dedup gates — no point classifying something
+	// that would be rejected anyway. Fail-open if classifier is nil or errors.
+	if tctx.classifierLLM != nil {
+		writeType := "fact"
+		if subject == "self" {
+			writeType = "self_fact"
+		}
+		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
+		verdict := classifyMemoryWrite(tctx.classifierLLM, writeType, args.Fact, snippet)
+		if !verdict.Allowed {
+			return rejectionMessage(verdict)
+		}
+	}
+
 	// textVec is nil when tags were empty — SaveFact stores NULL in that case,
 	// which is correct because newVec already encodes the text embedding.
 	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
@@ -2102,6 +2127,15 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 		}
 		stamp := time.Now().In(loc).Format("2006-01-02")
 		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
+	}
+
+	// --- Classifier gate ---
+	if tctx.classifierLLM != nil {
+		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
+		verdict := classifyMemoryWrite(tctx.classifierLLM, "fact", args.Fact, snippet)
+		if !verdict.Allowed {
+			return rejectionMessage(verdict)
+		}
 	}
 
 	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {

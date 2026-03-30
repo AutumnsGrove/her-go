@@ -196,6 +196,22 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "vision", Status: "skipped"})
 	}
 
+	// --- Classifier client (optional) ---
+	// Small, fast model that validates memory writes before they hit the DB.
+	// Catches fictional content (game events, etc.) that the agent model
+	// mistakes for real user facts.
+	var classifierClient *llm.Client
+	if cfg.Classifier.Model != "" {
+		classifierMaxTokens := cfg.Classifier.MaxTokens
+		if classifierMaxTokens == 0 {
+			classifierMaxTokens = 64
+		}
+		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "ready", Detail: cfg.Classifier.Model})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "skipped"})
+	}
+
 	// --- Embedding client ---
 
 	var embedClient *embed.Client
@@ -326,7 +342,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, classifierClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()

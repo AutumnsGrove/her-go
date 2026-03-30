@@ -118,6 +118,21 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 		}
 	}
 
+	// --- Classifier gate for mood ---
+	// Check if the mood is about the real user or a fictional character.
+	// Runs after dedup (no point classifying a duplicate) and before
+	// execution (we can't intercept the DB write inside the skill).
+	if skill.Name == "log_mood" && tctx.classifierLLM != nil {
+		moodNote, _ := args.Args["note"].(string)
+		if moodNote != "" {
+			snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
+			verdict := classifyMemoryWrite(tctx.classifierLLM, "mood", moodNote, snippet)
+			if !verdict.Allowed {
+				return rejectionMessage(verdict)
+			}
+		}
+	}
+
 	// Update status so the user sees what's happening.
 	if tctx.statusCallback != nil {
 		tctx.statusCallback(fmt.Sprintf("running %s...", skill.Name))

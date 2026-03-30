@@ -38,8 +38,9 @@ type Bot struct {
 	tb            *tele.Bot
 	llm           *llm.Client          // conversational model (Deepseek)
 	agentLLM      *llm.Client          // tool-calling orchestrator
-	visionLLM     *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	embedClient   *embed.Client        // local embedding model for similarity
+	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
+	embedClient    *embed.Client        // local embedding model for similarity
 	tavilyClient  *search.TavilyClient // web search and URL extraction
 	weatherClient *weather.Client      // Open-Meteo weather — nil if not configured
 	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
@@ -120,7 +121,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -161,8 +162,9 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		tb:            tb,
 		llm:           llmClient,
 		agentLLM:      agentLLM,
-		visionLLM:     visionLLM,
-		embedClient:   embedClient,
+		visionLLM:      visionLLM,
+		classifierLLM:  classifierLLM,
+		embedClient:    embedClient,
 		tavilyClient:  tavilyClient,
 		weatherClient: weatherClient,
 		voiceClient:   voiceClient,
@@ -378,6 +380,7 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 		AgentLLM:            b.agentLLM,
 		ChatLLM:             b.llm,
 		VisionLLM:           b.visionLLM,
+		ClassifierLLM:       b.classifierLLM,
 		Store:               b.store,
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
@@ -571,6 +574,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		AgentLLM:                  b.agentLLM,
 		ChatLLM:                   b.llm,
 		VisionLLM:                 b.visionLLM,
+		ClassifierLLM:             b.classifierLLM,
 		Store:                     b.store,
 		EmbedClient:               b.embedClient,
 		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
