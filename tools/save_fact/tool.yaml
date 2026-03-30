@@ -1,0 +1,48 @@
+name: save_fact
+description: >-
+  Save a new fact learned from the conversation. Only for information worth
+  remembering WEEKS later. Ask: 'Would this matter in a month?' If not,
+  skip it.
+hot: true
+parameters:
+  type: object
+  properties:
+    fact:
+      type: string
+      description: >-
+        A clear, single-sentence fact about {{user}}. Must pass the 'next
+        month' test: would knowing this improve a conversation 30 days from
+        now?
+    category:
+      type: string
+      description: >-
+        Category of the fact. Do NOT save transient moods or daily context
+        as facts.
+      enum:
+        - identity
+        - relationship
+        - health
+        - work
+        - goal
+        - event
+        - preference
+        - other
+    importance:
+      type: integer
+      description: >-
+        How important this is to remember (1=trivial, 10=life-changing).
+        Used for retrieval ranking, not filtering.
+      minimum: 1
+      maximum: 10
+    tags:
+      type: string
+      description: >-
+        Comma-separated topic tags for semantic search — describes WHAT this
+        fact is about so it surfaces in the right conversations. Example:
+        'mental health, burnout, coping, energy' or 'programming, go,
+        backend, projects'. Be specific to the fact's topic.
+  required:
+    - fact
+    - category
+    - importance
+    - tags

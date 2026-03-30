@@ -1,0 +1,9 @@
+name: no_action
+description: >-
+  Explicitly skip memory management. Use when the exchange doesn't
+  reveal new information worth saving. You still MUST call reply
+  and done.
+hot: true
+parameters:
+  type: object
+  properties: {}

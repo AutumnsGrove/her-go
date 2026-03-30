@@ -7,6 +7,7 @@ import (
 
 	"her/memory"
 	"her/scheduler"
+	"her/tools"
 )
 
 // execCreateReminder handles the create_reminder agent tool.
@@ -17,7 +18,7 @@ import (
 // LLM does the parsing (it's surprisingly good at it) and gives us
 // a clean timestamp. We just need to make sure it's valid and in
 // the future.
-func execCreateReminder(argsJSON string, tctx *toolContext) string {
+func execCreateReminder(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Message     string `json:"message"`
 		TriggerAt   string `json:"trigger_at"`
@@ -55,7 +56,7 @@ func execCreateReminder(argsJSON string, tctx *toolContext) string {
 	// A bare "2026-03-22T15:00:00" should mean 3pm in the USER's timezone,
 	// not UTC.
 	if triggerAt.Location() == time.UTC && args.TriggerAt[len(args.TriggerAt)-1] != 'Z' {
-		loc, locErr := time.LoadLocation(tctx.cfg.Scheduler.Timezone)
+		loc, locErr := time.LoadLocation(tctx.Cfg.Scheduler.Timezone)
 		if locErr == nil {
 			triggerAt = time.Date(
 				triggerAt.Year(), triggerAt.Month(), triggerAt.Day(),
@@ -92,10 +93,10 @@ func execCreateReminder(argsJSON string, tctx *toolContext) string {
 		MaxRuns:         &maxRuns,
 		Priority:        "critical", // user-requested reminders always fire, bypassing all damping
 		CreatedBy:       "agent",
-		SourceMessageID: &tctx.triggerMsgID,
+		SourceMessageID: &tctx.TriggerMsgID,
 	}
 
-	id, err := tctx.store.CreateScheduledTask(task)
+	id, err := tctx.Store.CreateScheduledTask(task)
 	if err != nil {
 		return fmt.Sprintf("error creating reminder: %v", err)
 	}
@@ -112,7 +113,7 @@ func execCreateReminder(argsJSON string, tctx *toolContext) string {
 // This is the recurring counterpart to create_reminder. Where create_reminder
 // makes a one-shot task, this creates something that fires on a schedule
 // (e.g., "every day at 8am").
-func execCreateSchedule(argsJSON string, tctx *toolContext) string {
+func execCreateSchedule(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Name        string          `json:"name"`
 		CronExpr    string          `json:"cron_expr"`
@@ -154,7 +155,7 @@ func execCreateSchedule(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Compute the initial next_run from the cron expression.
-	loc, _ := time.LoadLocation(tctx.cfg.Scheduler.Timezone)
+	loc, _ := time.LoadLocation(tctx.Cfg.Scheduler.Timezone)
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -176,7 +177,7 @@ func execCreateSchedule(argsJSON string, tctx *toolContext) string {
 		CreatedBy:    "agent",
 	}
 
-	id, err := tctx.store.CreateScheduledTask(task)
+	id, err := tctx.Store.CreateScheduledTask(task)
 	if err != nil {
 		return fmt.Sprintf("error creating schedule: %v", err)
 	}
@@ -197,8 +198,8 @@ func execCreateSchedule(argsJSON string, tctx *toolContext) string {
 
 // execListSchedules handles the list_schedules agent tool.
 // Returns a formatted list of all active scheduled tasks.
-func execListSchedules(argsJSON string, tctx *toolContext) string {
-	tasks, err := tctx.store.ListActiveTasks()
+func execListSchedules(argsJSON string, tctx *tools.Context) string {
+	tasks, err := tctx.Store.ListActiveTasks()
 	if err != nil {
 		return fmt.Sprintf("error listing schedules: %v", err)
 	}
@@ -207,7 +208,7 @@ func execListSchedules(argsJSON string, tctx *toolContext) string {
 		return "No active scheduled tasks."
 	}
 
-	loc, _ := time.LoadLocation(tctx.cfg.Scheduler.Timezone)
+	loc, _ := time.LoadLocation(tctx.Cfg.Scheduler.Timezone)
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -240,7 +241,7 @@ func execListSchedules(argsJSON string, tctx *toolContext) string {
 
 // execUpdateSchedule handles the update_schedule agent tool.
 // Pauses or resumes an existing scheduled task.
-func execUpdateSchedule(argsJSON string, tctx *toolContext) string {
+func execUpdateSchedule(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		TaskID  int64 `json:"task_id"`
 		Enabled bool  `json:"enabled"`
@@ -253,7 +254,7 @@ func execUpdateSchedule(argsJSON string, tctx *toolContext) string {
 		return "error: task_id is required"
 	}
 
-	if err := tctx.store.UpdateScheduledTaskEnabled(args.TaskID, args.Enabled); err != nil {
+	if err := tctx.Store.UpdateScheduledTaskEnabled(args.TaskID, args.Enabled); err != nil {
 		return fmt.Sprintf("error updating schedule: %v", err)
 	}
 
@@ -268,7 +269,7 @@ func execUpdateSchedule(argsJSON string, tctx *toolContext) string {
 
 // execDeleteSchedule handles the delete_schedule agent tool.
 // Permanently removes a scheduled task.
-func execDeleteSchedule(argsJSON string, tctx *toolContext) string {
+func execDeleteSchedule(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		TaskID int64 `json:"task_id"`
 	}
@@ -280,7 +281,7 @@ func execDeleteSchedule(argsJSON string, tctx *toolContext) string {
 		return "error: task_id is required"
 	}
 
-	if err := tctx.store.DeleteScheduledTask(args.TaskID); err != nil {
+	if err := tctx.Store.DeleteScheduledTask(args.TaskID); err != nil {
 		return fmt.Sprintf("error deleting schedule: %v", err)
 	}
 

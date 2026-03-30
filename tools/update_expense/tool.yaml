@@ -1,0 +1,46 @@
+name: update_expense
+description: >-
+  Update fields on an existing expense. Use when {{user}} wants to correct a
+  scanned receipt (wrong amount, vendor, category, or date). Only pass the
+  fields that need changing.
+hot: false
+category: expenses
+parameters:
+  type: object
+  properties:
+    id:
+      type: integer
+      description: "The expense ID to update."
+    amount:
+      type: number
+      description: "Corrected total amount (omit to keep current)."
+    vendor:
+      type: string
+      description: "Corrected vendor name (omit to keep current)."
+    category:
+      type: string
+      description: "Corrected category (omit to keep current)."
+      enum:
+        - groceries
+        - dining
+        - coffee
+        - transport
+        - shopping
+        - entertainment
+        - health
+        - utilities
+        - housing
+        - subscriptions
+        - personal_care
+        - other
+    date:
+      type: string
+      description: "Corrected date in YYYY-MM-DD format (omit to keep current)."
+    currency:
+      type: string
+      description: "Corrected currency code (omit to keep current)."
+    note:
+      type: string
+      description: "Updated note (omit to keep current)."
+  required:
+    - id

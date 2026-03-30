@@ -1,0 +1,34 @@
+name: reply_confirm
+description: >-
+  Send a Yes/No confirmation prompt with inline buttons before executing a
+  destructive action. The action executes ONLY when the user clicks Yes.
+  Use this for: deleting expenses, removing facts, deleting schedules.
+  After calling this, proceed to reply and done — the action runs
+  asynchronously when the user responds.
+hot: true
+parameters:
+  type: object
+  properties:
+    message:
+      type: string
+      description: >-
+        The confirmation question to display. Be specific about what will
+        happen. Example: 'Delete the £47.23 Trader Joe's expense from
+        March 25?'
+    action_type:
+      type: string
+      description: "The type of destructive action to execute on confirmation."
+      enum:
+        - delete_expense
+        - remove_fact
+        - delete_schedule
+    action_payload:
+      type: string
+      description: >-
+        JSON payload for the action. delete_expense: {"id": 42} for one,
+        or {"ids": [1,2,3]} for multiple. remove_fact: {"fact_id": 17}.
+        delete_schedule: {"task_id": 5}.
+  required:
+    - message
+    - action_type
+    - action_payload

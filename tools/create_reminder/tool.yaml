@@ -1,0 +1,24 @@
+name: create_reminder
+description: >-
+  Create a one-shot reminder that fires at a specific time. Convert natural
+  language times to ISO 8601 timestamps.
+hot: false
+category: scheduling
+parameters:
+  type: object
+  properties:
+    message:
+      type: string
+      description: "What to remind the user about"
+    trigger_at:
+      type: string
+      description: >-
+        When to fire, as ISO 8601 datetime (e.g.,
+        '2026-03-24T15:00:00')
+    natural_time:
+      type: string
+      description: >-
+        The original natural language time (e.g., 'tomorrow at 3pm')
+  required:
+    - message
+    - trigger_at

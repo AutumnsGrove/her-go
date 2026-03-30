@@ -1,0 +1,16 @@
+name: find_skill
+description: >-
+  Search for a skill by describing what you need. Returns matching skills
+  ranked by relevance. Use this when you need a capability that isn't one
+  of your built-in tools.
+hot: true
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: >-
+        Natural language description of what you need (e.g., 'get weather
+        forecast', 'search the web', 'look up a book').
+  required:
+    - query

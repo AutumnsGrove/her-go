@@ -12,13 +12,15 @@
 //  5. User clicks Yes → bot/callbacks.go executes the action
 //  6. User clicks No → bot/callbacks.go marks it cancelled
 //
-// The action executes completely outside the agent loop — no toolContext
+// The action executes completely outside the agent loop — no tools.Context
 // needed. The callback handler calls store methods directly.
 package agent
 
 import (
 	"encoding/json"
 	"fmt"
+
+	"her/tools"
 )
 
 // validConfirmActions lists the action types that reply_confirm supports.
@@ -43,7 +45,7 @@ var validConfirmActions = map[string]bool{
 //   - message:        string — the confirmation question to display
 //   - action_type:    enum — what to execute on confirmation
 //   - action_payload: string — JSON payload for the action
-func execReplyConfirm(argsJSON string, tctx *toolContext) string {
+func execReplyConfirm(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Message       string `json:"message"`
 		ActionType    string `json:"action_type"`
@@ -66,11 +68,11 @@ func execReplyConfirm(argsJSON string, tctx *toolContext) string {
 
 	// The sendConfirmCallback is nil-safe — if not provided (e.g., in
 	// tests or non-Telegram contexts), we can't send buttons.
-	if tctx.sendConfirmCallback == nil {
+	if tctx.SendConfirmCallback == nil {
 		return "error: confirmation buttons not available in this context"
 	}
 
-	if tctx.store == nil {
+	if tctx.Store == nil {
 		return "error: database not available"
 	}
 
@@ -78,7 +80,7 @@ func execReplyConfirm(argsJSON string, tctx *toolContext) string {
 	// The closure provided by bot/telegram.go builds the inline keyboard
 	// and returns the Telegram message ID so we can key the pending
 	// confirmation to it.
-	telegramMsgID, err := tctx.sendConfirmCallback(args.Message)
+	telegramMsgID, err := tctx.SendConfirmCallback(args.Message)
 	if err != nil {
 		log.Error("sending confirmation keyboard", "err", err)
 		return fmt.Sprintf("error sending confirmation: %v", err)
@@ -87,7 +89,7 @@ func execReplyConfirm(argsJSON string, tctx *toolContext) string {
 	// Store the pending confirmation in SQLite. When the user clicks
 	// a button, handleConfirmCallback in bot/callbacks.go looks this
 	// up by telegram_msg_id and either executes or cancels the action.
-	_, err = tctx.store.CreatePendingConfirmation(
+	_, err = tctx.Store.CreatePendingConfirmation(
 		telegramMsgID,
 		args.ActionType,
 		json.RawMessage(args.ActionPayload),

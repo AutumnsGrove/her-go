@@ -1,0 +1,21 @@
+name: update_persona
+description: >-
+  Rewrite {{her}}'s persona description. Use RARELY — only when accumulated
+  self-facts suggest a meaningful evolution in how {{her}} sees herself. The
+  persona should evolve gradually.
+hot: false
+category: memory
+parameters:
+  type: object
+  properties:
+    content:
+      type: string
+      description: >-
+        The full new persona.md content. Should preserve core personality
+        while incorporating growth.
+    reason:
+      type: string
+      description: "Brief explanation of what changed and why"
+  required:
+    - content
+    - reason

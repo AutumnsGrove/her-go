@@ -1,0 +1,87 @@
+name: scan_receipt
+description: >-
+  Save a purchase/expense from a receipt photo or manual mention. Use when
+  OCR text from a photo looks like a receipt (amounts, totals, store names),
+  or when {{user}} mentions spending money in conversation. Extract the total
+  amount, vendor name, category, and date from the OCR text. If the date
+  isn't visible on the receipt, use today's date. IMPORTANT: Extract ALL
+  line items from the receipt, including discounts (as negative amounts),
+  overrides, and adjustments. Every line with a price should be an item.
+hot: false
+category: expenses
+parameters:
+  type: object
+  properties:
+    amount:
+      type: number
+      description: >-
+        Total amount spent (e.g., 47.23). Just the number, no currency
+        symbol.
+    vendor:
+      type: string
+      description: >-
+        Store or restaurant name as shown on the receipt (e.g., 'Trader
+        Joe's', 'Shell Gas Station').
+    category:
+      type: string
+      description: "Expense category. Pick the closest match from the list."
+      enum:
+        - groceries
+        - dining
+        - coffee
+        - transport
+        - shopping
+        - entertainment
+        - health
+        - utilities
+        - housing
+        - subscriptions
+        - personal_care
+        - other
+    date:
+      type: string
+      description: >-
+        Purchase date in YYYY-MM-DD format. Use the date printed on the
+        receipt if visible, otherwise use today's date.
+    currency:
+      type: string
+      description: >-
+        ISO 4217 currency code (default: USD). Only set if the receipt
+        clearly shows a different currency.
+    note:
+      type: string
+      description: >-
+        Optional brief note about the purchase (e.g., 'weekly grocery run',
+        'birthday dinner').
+    items:
+      type: array
+      description: >-
+        ALL individual line items from the receipt. Extract EVERY line that
+        has a price — products, discounts, overrides, adjustments. Use
+        negative total_price for discounts/refunds (e.g., -2.00 for a £2
+        discount).
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+            description: "Item name as shown on receipt (e.g., 'Bulmers Original Bottle')."
+          quantity:
+            type: integer
+            description: "Number of this item (default 1)."
+          unit_price:
+            type: number
+            description: "Price per unit."
+          total_price:
+            type: number
+            description: >-
+              Total price for this line (quantity * unit_price, or the line
+              total shown on receipt).
+        required:
+          - total_price
+          - description
+  required:
+    - amount
+    - vendor
+    - category
+    - date

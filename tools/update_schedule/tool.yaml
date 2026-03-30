@@ -1,0 +1,17 @@
+name: update_schedule
+description: >-
+  Pause or resume an existing scheduled task by ID.
+hot: false
+category: scheduling
+parameters:
+  type: object
+  properties:
+    task_id:
+      type: integer
+      description: "ID of the scheduled task to update"
+    enabled:
+      type: boolean
+      description: "true to enable/resume, false to pause"
+  required:
+    - task_id
+    - enabled

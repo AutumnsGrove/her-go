@@ -1,0 +1,23 @@
+name: reply
+description: >-
+  Generate and send a response to the user. REQUIRED — you MUST call this at
+  least once per turn. The instruction is a DIRECTIVE to a separate
+  conversational model — describe what to say, not the words themselves.
+hot: true
+parameters:
+  type: object
+  properties:
+    instruction:
+      type: string
+      description: >-
+        A directive to the conversational model describing what to respond
+        about, the tone, and key points. Do NOT write the actual reply text
+        — another model generates that. Example: 'Warmly greet the user and
+        ask about their day' NOT 'hey! how's your day going?'
+    context:
+      type: string
+      description: >-
+        Optional additional context (search results, book data, URL content)
+        to include in the prompt.
+  required:
+    - instruction

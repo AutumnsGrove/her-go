@@ -1,0 +1,21 @@
+name: recall_memories
+description: >-
+  Search through stored memories using semantic similarity. Use when the
+  user asks 'do you remember...', references something from a past
+  conversation, or when you need specific context that isn't in the current
+  memory window.
+hot: false
+category: memory
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: >-
+        What to search for in memory. Be specific — 'user's dog' works
+        better than 'pet'.
+    limit:
+      type: integer
+      description: "Max results to return (default 5, max 10)"
+  required:
+    - query

@@ -1,0 +1,9 @@
+name: done
+description: >-
+  Signal that you are completely finished with this turn. Call this
+  LAST, after reply and any memory operations. Every turn MUST end
+  with done.
+hot: true
+parameters:
+  type: object
+  properties: {}

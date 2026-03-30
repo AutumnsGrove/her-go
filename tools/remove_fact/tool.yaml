@@ -1,0 +1,19 @@
+name: remove_fact
+description: >-
+  Remove a fact that is no longer true, was incorrect, or is redundant with
+  another fact. The fact is soft-deleted (kept for audit but excluded from
+  memory).
+hot: false
+category: memory
+parameters:
+  type: object
+  properties:
+    fact_id:
+      type: integer
+      description: "ID of the fact to remove"
+    reason:
+      type: string
+      description: "Brief reason for removal (for logging)"
+  required:
+    - fact_id
+    - reason

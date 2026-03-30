@@ -1,0 +1,17 @@
+name: run_skill
+description: >-
+  Execute a skill by name with the given arguments. Use find_skill first to
+  discover available skills, then call this with the skill name and a JSON
+  object of arguments matching the skill's parameter schema.
+hot: true
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: "Exact skill name (from find_skill results)."
+    args:
+      type: object
+      description: "Arguments to pass to the skill, matching its parameter schema."
+  required:
+    - name

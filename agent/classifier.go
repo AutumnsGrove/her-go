@@ -14,17 +14,14 @@ import (
 
 	"her/llm"
 	"her/memory"
+	"her/tools"
 )
 
-// ClassifyVerdict is the result of a classifier check on a proposed
-// memory write. The classifier is a small, fast LLM (Haiku-class) that
-// evaluates content for multiple quality dimensions: reality vs fiction,
-// usefulness, inference vs stated, and proper categorization.
-type ClassifyVerdict struct {
-	Allowed bool   // true = write should proceed to DB
-	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", etc.
-	Reason  string // human-readable explanation from the classifier
-}
+// ClassifyVerdict is an alias for tools.ClassifyVerdict. It was originally
+// defined here but moved to the tools package so handler code in tools/
+// can reference it without creating a circular import. The agent still
+// uses the type by its tools-package name.
+type ClassifyVerdict = tools.ClassifyVerdict
 
 // ---------------------------------------------------------------------------
 // YAML schema types
