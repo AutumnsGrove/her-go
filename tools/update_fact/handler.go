@@ -61,9 +61,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	args.Fact = tools.StripTimestamps(args.Fact)
 
 	// --- Classifier gate ---
+	// For updates, show the classifier BOTH old and new text so it can
+	// evaluate the delta. Without this, the classifier only sees the
+	// final merged text (e.g. "senior backend engineer making $95k")
+	// and can't tell that the salary part was inferred from a search
+	// query, not stated by the user. Framing as "Original → Updated"
+	// lets the INFERRED verdict catch additions that weren't said.
 	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
 		snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
-		verdict := ctx.ClassifyWriteFunc("fact", args.Fact, snippet)
+		classifyContent := args.Fact
+		if oldText, err := ctx.Store.GetFactText(args.FactID); err == nil && oldText != "" {
+			classifyContent = fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldText, args.Fact)
+		}
+		verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
 		if !verdict.Allowed {
 			if ctx.RejectionMessageFunc != nil {
 				return ctx.RejectionMessageFunc(verdict)
