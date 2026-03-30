@@ -1902,17 +1902,6 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
 	}
 
-	// Auto-inject timestamp for "context" category facts.
-	if args.Category == "context" {
-		tz := tctx.cfg.Scheduler.Timezone
-		loc, err := time.LoadLocation(tz)
-		if err != nil {
-			loc = time.UTC
-		}
-		stamp := time.Now().In(loc).Format("2006-01-02")
-		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
-	}
-
 	// Embed by TAGS (not by fact text) so the vector space organizes by
 	// topic. "mental health, burnout, coping" lands far from "programming,
 	// go, backend" — which is what we want for retrieval. Fall back to
@@ -2113,20 +2102,6 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 	if len(args.Fact) > maxFactLength {
 		log.Warn("blocked fact update (too long)", "len", len(args.Fact))
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
-	}
-
-	// Auto-inject timestamp for "context" category facts. These are
-	// ephemeral day-to-day facts (like "working on X today") that need
-	// a date stamp so they age out naturally. The agent doesn't need to
-	// worry about timestamps — we inject them behind the scenes.
-	if args.Category == "context" {
-		tz := tctx.cfg.Scheduler.Timezone
-		loc, err := time.LoadLocation(tz)
-		if err != nil {
-			loc = time.UTC
-		}
-		stamp := time.Now().In(loc).Format("2006-01-02")
-		args.Fact = fmt.Sprintf("[%s] %s", stamp, args.Fact)
 	}
 
 	// --- Classifier gate ---
