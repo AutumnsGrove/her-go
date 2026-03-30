@@ -1376,9 +1376,24 @@ func buildMoodContext(store *memory.Store) string {
 	return b.String()
 }
 
-// ---------------------------------------------------------------------------
-// Utility functions
-// ---------------------------------------------------------------------------
+// execLogMood saves a mood entry from the agent when the user expresses
+// how they're feeling. This is the "manual" source — the agent explicitly
+// decided to log mood based on what the user said.
+// execLogMood has been migrated to a standalone skill (skills/log_mood/).
+// The skill inserts into mood_entries via the DB proxy.
+
+// --- Search tool execution (migrated to skills) ---
+//
+// web_search, web_read, and book_search have been migrated to standalone
+// skills in skills/web_search/, skills/web_read/, and skills/book_search/.
+// The agent discovers them via find_skill and runs them via run_skill.
+// The built-in implementations below have been removed.
+
+// --- Memory tool execution (migrated to tools/) ---
+//
+// save_fact, save_self_fact, update_fact, remove_fact, and update_persona
+// have been migrated to standalone tool handlers in tools/<name>/handler.go.
+// They are dispatched via tools.Execute in executeTool.
 
 // truncateLog shortens a string for log output, adding "..." if it was cut.
 // mustJSON marshals a string to a JSON string literal (with quotes and

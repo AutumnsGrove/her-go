@@ -945,8 +945,9 @@ func (s *Store) LastExtractionMessageID() (int64, error) {
 
 // GetFactText returns the current text of a fact by ID. Returns an empty
 // string and no error if the fact doesn't exist (soft-deleted or never
-// created). This is used by update_fact to show the classifier both the
-// old and new text so it can evaluate what actually changed.
+// created). Used by update_fact to show the classifier both the old and
+// new text so it can evaluate what actually changed — without this, the
+// classifier only sees the final text and can't catch inferred additions.
 func (s *Store) GetFactText(factID int64) (string, error) {
 	var text string
 	err := s.db.QueryRow(`SELECT fact FROM facts WHERE id = ?`, factID).Scan(&text)

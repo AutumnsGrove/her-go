@@ -172,6 +172,15 @@ CREATE TABLE IF NOT EXISTS sim_agent_turns (
 	tool_args TEXT,
 	content TEXT
 );
+
+CREATE TABLE IF NOT EXISTS sim_summaries (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
+	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+	conversation_id TEXT,
+	summary TEXT NOT NULL,
+	messages_summarized INTEGER
+);
 `
 
 // --------------------------------------------------------------------------
@@ -457,6 +466,15 @@ func runSim(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
+		// TraceCallback surfaces agent internals (compaction, persona
+		// reflection, etc.) in the sim output. In production this edits
+		// a Telegram message; here we log to stdout so it appears in
+		// the sim trace alongside tool calls and replies.
+		traceCallback := func(html string) error {
+			fmt.Printf("       [trace] %s\n", html)
+			return nil
+		}
+
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
 			AgentLLM:            agentClient,
@@ -473,6 +491,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			ConversationID:      conversationID,
 			TriggerMsgID:        msgID,
 			StatusCallback:      statusCallback,
+			TraceCallback:       traceCallback,
 			TTSCallback:         nil, // no TTS in sim
 			ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
 			RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
@@ -550,6 +569,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// Copy agent turns
 	if err := copyAgentTurns(tmpDB, simDB, runID, total); err != nil {
 		log.Error("failed to copy agent turns", "err", err)
+	}
+
+	// Copy compaction summaries — these show when conversation history
+	// exceeded the token budget and older messages were compressed into
+	// a summary. Without this, compaction is invisible in sim results.
+	if err := copySummaries(tmpDB, simDB, runID); err != nil {
+		log.Error("failed to copy summaries", "err", err)
 	}
 
 	// Update the run row with final totals.
@@ -669,6 +695,43 @@ func copyFacts(tmpDB, simDB *sql.DB, runID int64) error {
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_fact: %w", err)
+		}
+	}
+	return rows.Err()
+}
+
+// copySummaries copies compaction summaries from the temp DB into
+// sim_summaries. Each row represents one compaction event where older
+// messages were compressed into a running summary.
+func copySummaries(tmpDB, simDB *sql.DB, runID int64) error {
+	rows, err := tmpDB.Query(
+		`SELECT timestamp, conversation_id, summary, messages_start_id, messages_end_id
+		 FROM summaries ORDER BY id ASC`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying summaries: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts, convID, summary string
+		var startID, endID int64
+		if err := rows.Scan(&ts, &convID, &summary, &startID, &endID); err != nil {
+			return fmt.Errorf("scanning summary: %w", err)
+		}
+		// messages_summarized = how many messages were compressed.
+		// endID - startID is approximate but directionally useful.
+		msgCount := endID - startID
+		if msgCount < 0 {
+			msgCount = 0
+		}
+		_, err := simDB.Exec(
+			`INSERT INTO sim_summaries (run_id, timestamp, conversation_id, summary, messages_summarized)
+			 VALUES (?, ?, ?, ?, ?)`,
+			runID, ts, convID, summary, msgCount,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting sim_summary: %w", err)
 		}
 	}
 	return rows.Err()
@@ -844,6 +907,9 @@ func generateReport(
 
 	// Mood section
 	writeMoodSection(&b, simDB, runID)
+
+	// Compaction summaries section
+	writeSummariesSection(&b, simDB, runID)
 
 	// Cost summary
 	writeCostSection(&b, simDB, runID)
@@ -1048,6 +1114,46 @@ func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		}
 	}
 	b.WriteString("\n")
+}
+
+// writeSummariesSection writes any compaction summaries to the report.
+// Each summary represents a point where older conversation history was
+// compressed to stay within the token budget.
+func writeSummariesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	rows, err := simDB.Query(
+		`SELECT timestamp, summary, messages_summarized
+		 FROM sim_summaries WHERE run_id = ? ORDER BY id ASC`, runID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type summaryRow struct {
+		ts               string
+		summary          string
+		msgsSummarized   int
+	}
+	var summaries []summaryRow
+	for rows.Next() {
+		var s summaryRow
+		if err := rows.Scan(&s.ts, &s.summary, &s.msgsSummarized); err != nil {
+			continue
+		}
+		summaries = append(summaries, s)
+	}
+
+	fmt.Fprintf(b, "## Compaction Events (%d)\n\n", len(summaries))
+	if len(summaries) == 0 {
+		b.WriteString("_No compaction triggered during this run._\n\n")
+	} else {
+		for i, s := range summaries {
+			fmt.Fprintf(b, "### Compaction %d (%s) — %d messages summarized\n\n", i+1, s.ts, s.msgsSummarized)
+			b.WriteString("```\n")
+			b.WriteString(s.summary)
+			b.WriteString("\n```\n\n")
+		}
+	}
 }
 
 // writeCostSection writes the cost summary table grouped by model.
