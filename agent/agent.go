@@ -576,7 +576,7 @@ func Run(params RunParams) (*RunResult, error) {
 		hasSearchResult := false
 		hasThinkCall := false
 		for _, tc := range resp.ToolCalls {
-			if tc.Function.Name == "run_skill" || tc.Function.Name == "web_search" || tc.Function.Name == "book_search" {
+			if tc.Function.Name == "web_search" || tc.Function.Name == "book_search" {
 				hasSearchResult = true
 			}
 			if tc.Function.Name == "think" {
@@ -779,7 +779,22 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 	// Recent conversation history — gives the agent context for references.
 	if len(history) > 0 {
 		b.WriteString("## Recent Conversation\n\n")
+
+		// prevDay tracks the calendar date of the previous message so we can
+		// detect day boundaries. time.Time's zero value means "no previous
+		// message yet" — checked with prevDay.IsZero().
+		var prevDay time.Time
+
 		for _, msg := range history {
+			// Compare by calendar date only (year, month, day), not clock time.
+			// time.Date() with zeroed time components is Go's equivalent of
+			// Python's datetime.date() — strip the time, keep the date.
+			msgDate := time.Date(msg.Timestamp.Year(), msg.Timestamp.Month(), msg.Timestamp.Day(), 0, 0, 0, 0, msg.Timestamp.Location())
+			if !prevDay.IsZero() && !msgDate.Equal(prevDay) {
+				b.WriteString("--- the above messages are from a previous day ---\n\n")
+			}
+			prevDay = msgDate
+
 			role := userName
 			if msg.Role == "assistant" {
 				role = botName
@@ -905,6 +920,12 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 	if err != nil {
 		log.Error("reply: loading history", "err", err)
 	} else {
+		// prevDay tracks the calendar date of the last message we appended.
+		// When consecutive messages cross a midnight boundary, we inject a
+		// system message so the chat model knows the earlier context is
+		// from a different day (prevents perseveration on stale topics).
+		var prevDay time.Time
+
 		for _, msg := range recentMsgs {
 			// For continuation replies (2nd, 3rd, etc.), strip out this
 			// turn's messages — the trigger message and any replies we
@@ -916,6 +937,19 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 			if tctx.ReplyCount > 0 && msg.ID >= tctx.TriggerMsgID {
 				continue
 			}
+
+			// Day boundary detection — inject a separator when messages
+			// cross midnight so the model treats earlier context as
+			// "yesterday" rather than the active conversation topic.
+			msgDate := time.Date(msg.Timestamp.Year(), msg.Timestamp.Month(), msg.Timestamp.Day(), 0, 0, 0, 0, msg.Timestamp.Location())
+			if !prevDay.IsZero() && !msgDate.Equal(prevDay) {
+				llmMessages = append(llmMessages, llm.ChatMessage{
+					Role:    "system",
+					Content: "--- the above messages are from a previous day ---",
+				})
+			}
+			prevDay = msgDate
+
 			content := msg.ContentScrubbed
 			if content == "" {
 				content = msg.ContentRaw
