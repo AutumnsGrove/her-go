@@ -1,0 +1,169 @@
+# Classifier verdict definitions.
+#
+# Each classifier (fact, mood, receipt) has a preamble, an ordered list
+# of verdicts, and a footer. YAML order = check priority order.
+#
+# To add a new verdict: add a block under the right classifier's verdicts
+# list, rebuild, and restart. The prompt, parser, and rejection message
+# are all generated from this file automatically.
+
+classifiers:
+  fact:
+    preamble: >-
+      You are a quality gate for a personal chatbot's memory system.
+      A fact has been proposed for permanent storage. Evaluate it against
+      ALL of the following criteria and return the FIRST matching verdict.
+    write_types:
+      - fact
+      - self_fact
+    verdicts:
+      - name: FICTIONAL
+        description: >-
+          Does the fact describe something that happened to a character
+          in a video game, book, movie, TV show, or roleplay AS IF it
+          happened to the real user?
+        examples:
+          - '"User got a new apartment in Night City" (in-game event)'
+          - '"User pulled out a katana at a festival" (game action)'
+          - '"User prefers spontaneous plans and enjoys pulling out a katana at festivals" (mixes real and fictional)'
+        note: >-
+          discussing fiction is fine. "User enjoys playing Cyberpunk 2077"
+          is SAVE — that's a real preference about the user.
+        rejection:
+          default_detail: this describes fictional/in-game content, not the real user
+          suffix: Only save facts about the real user's actual life.
+
+      - name: MOOD_NOT_FACT
+        description: >-
+          Is this a transient emotional state being stored as a permanent
+          fact? Moods belong in the mood tracker, not the fact database.
+        examples:
+          - '"User feels low and frustrated after conflict with parents"'
+          - '"User is feeling kind of nothing today"'
+          - '"User feels overwhelmed and may need a break"'
+          - '"Feeling lonely seeing couples at coffee shop"'
+        note: >-
+          a DURABLE emotional pattern IS a fact. "User experiences recurring
+          episodes of emotional flatness" is SAVE — that's a lasting pattern,
+          not today's mood.
+        rejection:
+          default_detail: this is a transient emotional state, not a permanent fact
+          suffix: >-
+            Use the log_mood skill instead — it's designed for tracking how
+            the user feels in the moment. Facts should be durable truths,
+            not snapshots of today's mood.
+
+      - name: INFERRED
+        description: >-
+          Did the user actually say this, or is the chatbot inferring,
+          diagnosing, or editorializing?
+        examples:
+          - '"User is very self-critical about coping mechanisms" (therapist-style assessment)'
+          - '"User tends to share emotional states early in conversations" (behavioral analysis the user never stated)'
+          - '"User has a toxic relationship with [person]" (judgment call, not stated)'
+        note: >-
+          reasonable summarization is fine. "User is reading a book about
+          addiction" from "I'm reading Never Enough" is SAVE — that's a
+          direct restatement.
+        rejection:
+          default_detail: the user didn't actually state this — the agent is inferring or editorializing
+          suffix: >-
+            Only save things the user explicitly said or clearly implied.
+            Don't add interpretations, diagnoses, or pattern analysis.
+
+      - name: LOW_VALUE
+        description: >-
+          Is the fact too vague, generic, or obvious to be worth permanent
+          storage? Would it add meaningful context in future conversations?
+        examples:
+          - '"User enjoys reading and finds it a pleasant activity" (says nothing specific)'
+          - '"User had a conversation today" (trivially obvious)'
+          - '"User sent a message about their day" (meta-observation with no content)'
+          - '"User is interested in technology" (too broad to be useful)'
+        note: >-
+          specificity is what matters. "User enjoys short, surreal books
+          like Piranesi" is SAVE — that's actionable.
+        rejection:
+          default_detail: this fact is too vague or generic to be worth saving
+          suffix: >-
+            Facts should capture specific, meaningful information that
+            couldn't be inferred from conversation history.
+
+      - name: HAS_TIMESTAMP
+        description: >-
+          Does the fact contain a specific date, time, or relative time
+          reference? Timestamps are automatically attached to every fact
+          by the system. The agent must NOT embed dates into the fact text.
+        examples:
+          - '"User visited Zaxby''s on March 29" (contains specific date)'
+          - '"As of 2026-03-29, user prefers..." (contains ISO date)'
+          - '"User started therapy last Tuesday" (relative time reference)'
+          - '"User went to a coffee shop today" (relative time — "today")'
+          - '"Yesterday user mentioned feeling better" (relative time — "yesterday")'
+        note: >-
+          recurring schedules and durations are NOT timestamps. "User has
+          therapy on Thursdays" is SAVE — that's a pattern. "User has been
+          learning Go for 3 months" is SAVE — that's a duration, not a date.
+        rejection:
+          default_detail: the fact contains a date or time reference
+          suffix: >-
+            Timestamps are automatically attached to every fact — do NOT
+            include dates, times, or relative time words (today, yesterday,
+            last week) in the fact text. Rewrite the fact without the
+            temporal reference.
+
+      - name: SAVE
+        description: >-
+          The fact is real, specific, useful, and actually stated or
+          clearly implied by the user.
+    footer: |-
+      Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
+      Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable", "HAS_TIMESTAMP — contains specific date"
+
+  mood:
+    preamble: >-
+      You are a quality gate for a personal chatbot's mood tracker.
+      A mood entry has been proposed. Evaluate it:
+    write_types:
+      - mood
+    verdicts:
+      - name: EXTERNAL
+        description: >-
+          The mood describes how a fictional character feels (in a game,
+          book, movie, show), not the real user.
+        examples:
+          - '"excited about katana build" (game character''s excitement)'
+          - '"anticipatory after talking with Wakako" (Wakako is an NPC)'
+        note: >-
+          the user's real emotional REACTION to fiction is SAVE. "Feeling
+          sad about a character's death" is the user's real emotion.
+        rejection:
+          default_detail: this mood is about a fictional character, not the real user
+          suffix: Only log the real user's emotional state.
+
+      - name: SAVE
+        description: The mood reflects the real user's actual emotional state.
+    footer: 'Respond with exactly one verdict on a single line: SAVE or EXTERNAL'
+
+  receipt:
+    preamble: >-
+      You are a quality gate for a personal chatbot's expense tracker.
+      A receipt/expense has been proposed. Evaluate it:
+    write_types:
+      - receipt
+    verdicts:
+      - name: FICTIONAL
+        description: >-
+          An in-game purchase, fictional vendor, virtual currency, or
+          game economy event.
+        examples:
+          - buying weapons in a game shop
+          - paying an NPC for services
+          - virtual currency transactions
+        rejection:
+          default_detail: this describes fictional/in-game content, not the real user
+          suffix: Only save facts about the real user's actual life.
+
+      - name: SAVE
+        description: A real-world purchase at a real store or service.
+    footer: 'Respond with exactly one verdict on a single line: SAVE or FICTIONAL'

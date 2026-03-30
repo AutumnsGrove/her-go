@@ -1,8 +1,16 @@
 package agent
 
 import (
+	// embed is imported for its side effect: the //go:embed directive below
+	// bakes classifiers.yaml into the binary at compile time. No import
+	// alias needed — the blank identifier tells Go "I need this package
+	// but I'm not calling any of its functions directly."
+	_ "embed"
 	"fmt"
 	"strings"
+	"text/template"
+
+	"gopkg.in/yaml.v3"
 
 	"her/llm"
 	"her/memory"
@@ -14,9 +22,158 @@ import (
 // usefulness, inference vs stated, and proper categorization.
 type ClassifyVerdict struct {
 	Allowed bool   // true = write should proceed to DB
-	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", "MOOD_NOT_FACT", "INFERRED", "EXTERNAL", "HAS_TIMESTAMP"
+	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", etc.
 	Reason  string // human-readable explanation from the classifier
 }
+
+// ---------------------------------------------------------------------------
+// YAML schema types
+// ---------------------------------------------------------------------------
+
+// classifierFile is the top-level YAML structure. It maps classifier
+// names (fact, mood, receipt) to their definitions.
+type classifierFile struct {
+	Classifiers map[string]classifierDef `yaml:"classifiers"`
+}
+
+// classifierDef defines one classifier (fact, mood, or receipt).
+// WriteTypes lists which writeType values route to this classifier
+// (e.g., "fact" and "self_fact" both route to the fact classifier).
+type classifierDef struct {
+	Preamble   string       `yaml:"preamble"`
+	WriteTypes []string     `yaml:"write_types"`
+	Verdicts   []verdictDef `yaml:"verdicts"`
+	Footer     string       `yaml:"footer"`
+}
+
+// verdictDef defines a single verdict within a classifier. Order in the
+// YAML list = priority order (first match wins). SAVE verdicts have no
+// Rejection field.
+type verdictDef struct {
+	Name        string        `yaml:"name"`
+	Description string        `yaml:"description"`
+	Examples    []string      `yaml:"examples,omitempty"`
+	Note        string        `yaml:"note,omitempty"`
+	Rejection   *rejectionDef `yaml:"rejection,omitempty"`
+}
+
+// rejectionDef defines the rejection message for a verdict.
+// DefaultDetail is the fallback when the classifier doesn't provide a reason.
+// Suffix is the actionable guidance appended after the detail.
+type rejectionDef struct {
+	DefaultDetail string `yaml:"default_detail"`
+	Suffix        string `yaml:"suffix"`
+}
+
+// ---------------------------------------------------------------------------
+// Compiled state — built once at init(), immutable after that
+// ---------------------------------------------------------------------------
+
+// classifierState holds everything derived from the YAML at startup:
+// pre-rendered system prompts, verdict name lists for parsing, and
+// rejection message data for each verdict type.
+type classifierState struct {
+	// systemPrompts maps writeType ("fact", "mood", etc.) to the
+	// pre-rendered system prompt string for that classifier.
+	systemPrompts map[string]string
+
+	// verdictNames lists all non-SAVE verdict names across all
+	// classifiers. Used by parseClassifierResponse for matching.
+	verdictNames []string
+
+	// rejections maps verdict name to its rejection definition.
+	// Used by rejectionMessage to build the response string.
+	rejections map[string]*rejectionDef
+}
+
+var classifiers classifierState
+
+// classifiers.yaml is embedded into the binary at compile time.
+// This means no runtime file I/O, no path issues when running the
+// binary from a different directory. Changes require a rebuild,
+// which is already the expectation ("add YAML block + restart").
+//
+//go:embed classifiers.yaml
+var classifiersYAML []byte
+
+// The system prompt template. It takes a classifierDef and renders the
+// numbered verdict list that the LLM sees. Each verdict gets its index,
+// name, description, examples, and note. The template uses {{- to trim
+// whitespace so the output matches the original hand-written prompts.
+//
+// "add" is a custom template function: Go templates don't have arithmetic
+// built in, so we register a simple func(a, b int) int { return a + b }
+// to generate 1-based numbering from 0-based indices.
+var systemPromptTmpl = template.Must(template.New("prompt").Funcs(template.FuncMap{
+	"add": func(a, b int) int { return a + b },
+}).Parse(`{{ .Preamble }}
+
+Check in this order:
+{{ range $i, $v := .Verdicts }}
+{{ add $i 1 }}. {{ $v.Name }}{{ if $v.Description }} — {{ $v.Description }}{{ end }}
+{{- if and $v.Examples (ne $v.Name "SAVE") }}
+   Examples{{ if ne $v.Name "SAVE" }} of {{ $v.Name }}{{ end }}:
+{{- range $v.Examples }}
+   - {{ . }}
+{{- end }}
+{{- end }}
+{{- if $v.Note }}
+   Note: {{ $v.Note }}
+{{- end }}
+{{ end }}
+{{ .Footer }}`))
+
+func init() {
+	var file classifierFile
+	if err := yaml.Unmarshal(classifiersYAML, &file); err != nil {
+		panic(fmt.Sprintf("classifier: failed to parse classifiers.yaml: %v", err))
+	}
+
+	state := classifierState{
+		systemPrompts: make(map[string]string),
+		rejections:    make(map[string]*rejectionDef),
+	}
+
+	// Track verdict names we've already seen so we don't add duplicates.
+	// FICTIONAL appears in both fact and receipt classifiers, but the
+	// parser only needs it once.
+	seen := make(map[string]bool)
+
+	for _, def := range file.Classifiers {
+		// Render the system prompt once and cache it.
+		var buf strings.Builder
+		if err := systemPromptTmpl.Execute(&buf, def); err != nil {
+			panic(fmt.Sprintf("classifier: failed to render prompt template: %v", err))
+		}
+		prompt := buf.String()
+
+		// Map each writeType to this classifier's rendered prompt.
+		for _, wt := range def.WriteTypes {
+			state.systemPrompts[wt] = prompt
+		}
+
+		// Collect verdict names and rejection definitions.
+		for i := range def.Verdicts {
+			v := &def.Verdicts[i]
+			if v.Name == "SAVE" {
+				continue
+			}
+			if !seen[v.Name] {
+				state.verdictNames = append(state.verdictNames, v.Name)
+				seen[v.Name] = true
+			}
+			if v.Rejection != nil {
+				state.rejections[v.Name] = v.Rejection
+			}
+		}
+	}
+
+	classifiers = state
+}
+
+// ---------------------------------------------------------------------------
+// Public API — signatures unchanged from before the YAML migration
+// ---------------------------------------------------------------------------
 
 // classifyMemoryWrite asks the classifier LLM whether a proposed memory
 // write should be saved to the database. It checks for multiple quality
@@ -58,17 +215,10 @@ func classifyMemoryWrite(
 	}
 	contextStr := strings.Join(contextLines, "\n")
 
-	// Pick the right system prompt and format the user message.
-	var systemPrompt string
-	switch writeType {
-	case "fact", "self_fact":
-		systemPrompt = classifierFactSystem
-	case "mood":
-		systemPrompt = classifierMoodSystem
-	case "receipt":
-		systemPrompt = classifierReceiptSystem
-	default:
-		// Unknown write type → don't block it.
+	// Look up the pre-rendered system prompt for this writeType.
+	// Unknown write types → don't block the write.
+	systemPrompt, ok := classifiers.systemPrompts[writeType]
+	if !ok {
 		return ClassifyVerdict{Allowed: true, Type: "SAVE"}
 	}
 
@@ -104,7 +254,8 @@ func classifyMemoryWrite(
 //
 // We use simple string prefix matching rather than JSON parsing because
 // small models (Haiku-class) are more reliable with free-form text than
-// structured output.
+// structured output. The verdict names are loaded from classifiers.yaml
+// so adding a new verdict there automatically makes the parser recognize it.
 func parseClassifierResponse(response string) ClassifyVerdict {
 	line := strings.TrimSpace(response)
 	// Take only the first line — the model might add extra explanation.
@@ -119,27 +270,13 @@ func parseClassifierResponse(response string) ClassifyVerdict {
 	}
 
 	// --- Rejected verdicts ---
-	// Each verdict type maps to a specific quality problem. The rejection
-	// message in the exec function uses the Type to give the agent
-	// actionable feedback (e.g., "use log_mood instead" for MOOD_NOT_FACT).
-
-	if strings.HasPrefix(upper, "FICTIONAL") {
-		return ClassifyVerdict{Allowed: false, Type: "FICTIONAL", Reason: extractReason(line)}
-	}
-	if strings.HasPrefix(upper, "EXTERNAL") {
-		return ClassifyVerdict{Allowed: false, Type: "EXTERNAL", Reason: extractReason(line)}
-	}
-	if strings.HasPrefix(upper, "LOW_VALUE") {
-		return ClassifyVerdict{Allowed: false, Type: "LOW_VALUE", Reason: extractReason(line)}
-	}
-	if strings.HasPrefix(upper, "MOOD_NOT_FACT") {
-		return ClassifyVerdict{Allowed: false, Type: "MOOD_NOT_FACT", Reason: extractReason(line)}
-	}
-	if strings.HasPrefix(upper, "INFERRED") {
-		return ClassifyVerdict{Allowed: false, Type: "INFERRED", Reason: extractReason(line)}
-	}
-	if strings.HasPrefix(upper, "HAS_TIMESTAMP") {
-		return ClassifyVerdict{Allowed: false, Type: "HAS_TIMESTAMP", Reason: extractReason(line)}
+	// Loop through all known verdict names (loaded from YAML).
+	// Order doesn't matter here — the LLM already picked one verdict,
+	// we're just matching the response text to a known name.
+	for _, name := range classifiers.verdictNames {
+		if strings.HasPrefix(upper, name) {
+			return ClassifyVerdict{Allowed: false, Type: name, Reason: extractReason(line)}
+		}
 	}
 
 	// Unparseable response → fail-open.
@@ -166,127 +303,18 @@ func extractReason(line string) string {
 // when the classifier rejects a write. The message is tailored to the
 // verdict type so the agent knows what to do differently — not just
 // "rejected" but "rejected, and here's the right action to take."
+//
+// The detail and suffix text come from classifiers.yaml. If the
+// classifier provided a reason, it replaces the default detail.
 func rejectionMessage(verdict ClassifyVerdict) string {
-	switch verdict.Type {
-	case "FICTIONAL":
-		detail := "this describes fictional/in-game content, not the real user"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Only save facts about the real user's actual life.", detail)
-
-	case "LOW_VALUE":
-		detail := "this fact is too vague or generic to be worth saving"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Facts should capture specific, meaningful information that couldn't be inferred from conversation history.", detail)
-
-	case "MOOD_NOT_FACT":
-		detail := "this is a transient emotional state, not a permanent fact"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Use the log_mood skill instead — it's designed for tracking how the user feels in the moment. Facts should be durable truths, not snapshots of today's mood.", detail)
-
-	case "INFERRED":
-		detail := "the user didn't actually state this — the agent is inferring or editorializing"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Only save things the user explicitly said or clearly implied. Don't add interpretations, diagnoses, or pattern analysis.", detail)
-
-	case "EXTERNAL":
-		detail := "this mood is about a fictional character, not the real user"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Only log the real user's emotional state.", detail)
-
-	case "HAS_TIMESTAMP":
-		detail := "the fact contains a date or time reference"
-		if verdict.Reason != "" {
-			detail = verdict.Reason
-		}
-		return fmt.Sprintf("rejected: %s. Timestamps are automatically attached to every fact — do NOT include dates, times, or relative time words (today, yesterday, last week) in the fact text. Rewrite the fact without the temporal reference.", detail)
-
-	default:
+	rej, ok := classifiers.rejections[verdict.Type]
+	if !ok {
 		return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
 	}
+
+	detail := rej.DefaultDetail
+	if verdict.Reason != "" {
+		detail = verdict.Reason
+	}
+	return fmt.Sprintf("rejected: %s. %s", detail, rej.Suffix)
 }
-
-// --- Classifier system prompts ---
-//
-// These are intentionally direct with concrete examples. Small models
-// do better with clear rules and real examples than with nuanced
-// instructions. Each write type gets its own prompt so the classifier
-// doesn't have to figure out what kind of content it's looking at.
-
-const classifierFactSystem = `You are a quality gate for a personal chatbot's memory system. A fact has been proposed for permanent storage. Evaluate it against ALL of the following criteria and return the FIRST matching verdict.
-
-Check in this order:
-
-1. FICTIONAL — Does the fact describe something that happened to a character in a video game, book, movie, TV show, or roleplay AS IF it happened to the real user?
-   Examples of FICTIONAL:
-   - "User got a new apartment in Night City" (in-game event)
-   - "User pulled out a katana at a festival" (game action)
-   - "User prefers spontaneous plans and enjoys pulling out a katana at festivals" (mixes real and fictional)
-   Note: discussing fiction is fine. "User enjoys playing Cyberpunk 2077" is SAVE — that's a real preference about the user.
-
-2. MOOD_NOT_FACT — Is this a transient emotional state being stored as a permanent fact? Moods belong in the mood tracker, not the fact database.
-   Examples of MOOD_NOT_FACT:
-   - "User feels low and frustrated after conflict with parents"
-   - "User is feeling kind of nothing today"
-   - "User feels overwhelmed and may need a break"
-   - "Feeling lonely seeing couples at coffee shop"
-   Note: a DURABLE emotional pattern IS a fact. "User experiences recurring episodes of emotional flatness" is SAVE — that's a lasting pattern, not today's mood.
-
-3. INFERRED — Did the user actually say this, or is the chatbot inferring, diagnosing, or editorializing?
-   Examples of INFERRED:
-   - "User is very self-critical about coping mechanisms" (therapist-style assessment)
-   - "User tends to share emotional states early in conversations" (behavioral analysis the user never stated)
-   - "User has a toxic relationship with [person]" (judgment call, not stated)
-   Note: reasonable summarization is fine. "User is reading a book about addiction" from "I'm reading Never Enough" is SAVE — that's a direct restatement.
-
-4. LOW_VALUE — Is the fact too vague, generic, or obvious to be worth permanent storage? Would it add meaningful context in future conversations?
-   Examples of LOW_VALUE:
-   - "User enjoys reading and finds it a pleasant activity" (says nothing specific)
-   - "User had a conversation today" (trivially obvious)
-   - "User sent a message about their day" (meta-observation with no content)
-   - "User is interested in technology" (too broad to be useful)
-   Note: specificity is what matters. "User enjoys short, surreal books like Piranesi" is SAVE — that's actionable.
-
-5. HAS_TIMESTAMP — Does the fact contain a specific date, time, or relative time reference? Timestamps are automatically attached to every fact by the system. The agent must NOT embed dates into the fact text.
-   Examples of HAS_TIMESTAMP:
-   - "User visited Zaxby's on March 29" (contains specific date)
-   - "As of 2026-03-29, user prefers..." (contains ISO date)
-   - "User started therapy last Tuesday" (relative time reference)
-   - "User went to a coffee shop today" (relative time — "today")
-   - "Yesterday user mentioned feeling better" (relative time — "yesterday")
-   Note: recurring schedules and durations are NOT timestamps. "User has therapy on Thursdays" is SAVE — that's a pattern. "User has been learning Go for 3 months" is SAVE — that's a duration, not a date.
-
-6. SAVE — The fact is real, specific, useful, and actually stated or clearly implied by the user.
-
-Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable", "HAS_TIMESTAMP — contains specific date"`
-
-const classifierMoodSystem = `You are a quality gate for a personal chatbot's mood tracker. A mood entry has been proposed. Evaluate it:
-
-1. EXTERNAL — The mood describes how a fictional character feels (in a game, book, movie, show), not the real user.
-   Examples of EXTERNAL:
-   - "excited about katana build" (game character's excitement)
-   - "anticipatory after talking with Wakako" (Wakako is an NPC)
-   Note: the user's real emotional REACTION to fiction is SAVE. "Feeling sad about a character's death" is the user's real emotion.
-
-2. SAVE — The mood reflects the real user's actual emotional state.
-
-Respond with exactly one verdict on a single line: SAVE or EXTERNAL`
-
-const classifierReceiptSystem = `You are a quality gate for a personal chatbot's expense tracker. A receipt/expense has been proposed. Evaluate it:
-
-1. FICTIONAL — An in-game purchase, fictional vendor, virtual currency, or game economy event.
-   Examples: buying weapons in a game shop, paying an NPC for services, virtual currency transactions.
-
-2. SAVE — A real-world purchase at a real store or service.
-
-Respond with exactly one verdict on a single line: SAVE or FICTIONAL`
