@@ -172,7 +172,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// recent_messages window (10), which was always under the token
 	// threshold — so compaction never fired and older messages just
 	// vanished from context with no summary.
-	const compactionWindow = 40
+	const compactionWindow = 100
 	compactionMsgs, err := params.Store.RecentMessages(params.ConversationID, compactionWindow)
 	if err != nil {
 		log.Error("loading compaction history", "err", err)
