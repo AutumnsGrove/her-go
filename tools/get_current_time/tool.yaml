@@ -1,0 +1,8 @@
+name: get_current_time
+description: >-
+  Get the current date and time in the user's timezone.
+hot: false
+category: context
+parameters:
+  type: object
+  properties: {}

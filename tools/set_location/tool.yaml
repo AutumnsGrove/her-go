@@ -1,0 +1,16 @@
+name: set_location
+description: >-
+  Set the user's location by city/place name. Enables weather data in
+  conversations. Coordinates are saved to config automatically — do NOT
+  save a separate location fact for coordinates. The user's natural-language
+  location (city, state) is already captured in regular conversation facts.
+hot: false
+category: context
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: "City and state/country name (e.g., 'Portland Oregon', 'Tokyo')"
+  required:
+    - query

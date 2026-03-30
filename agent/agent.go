@@ -18,223 +18,48 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/skills/loader"
+	"her/tools"
 	"her/tui"
 	"her/weather"
+
+	// Blank imports trigger init() registration for each tool's handler.
+	// Same pattern as database drivers: import _ "github.com/lib/pq"
+	// Each import causes the package's init() to run, which calls
+	// tools.Register("name", Handle) to add the handler to the registry.
+	_ "her/tools/create_reminder"
+	_ "her/tools/create_schedule"
+	_ "her/tools/delete_expense"
+	_ "her/tools/delete_schedule"
+	_ "her/tools/done"
+	_ "her/tools/find_skill"
+	_ "her/tools/get_current_time"
+	_ "her/tools/list_schedules"
+	_ "her/tools/no_action"
+	_ "her/tools/query_expenses"
+	_ "her/tools/recall_memories"
+	_ "her/tools/remove_fact"
+	_ "her/tools/reply_confirm"
+	_ "her/tools/run_skill"
+	_ "her/tools/save_fact"
+	_ "her/tools/save_self_fact"
+	_ "her/tools/scan_receipt"
+	_ "her/tools/search_history"
+	_ "her/tools/set_location"
+	_ "her/tools/think"
+	_ "her/tools/update_expense"
+	_ "her/tools/update_fact"
+	_ "her/tools/update_persona"
+	_ "her/tools/update_schedule"
+	_ "her/tools/use_tools"
+	_ "her/tools/view_image"
 )
 
 // log is the package-level logger for the agent package.
 var log = logger.WithPrefix("agent")
 
-// StatusCallback is a function the bot provides so the agent can update
-// the Telegram message in real time. When the agent calls web_search,
-// the callback edits the placeholder message to show a status like
-// "searching...". When reply is called, it edits the message to the
-// final response.
-//
-// This is the same pattern as SendMessageFunc before, but used for
-// live status updates instead of follow-up messages. In Python you'd
-// pass a lambda; in Go you declare the function signature as a type.
-type StatusCallback func(status string) error
-
-// SendCallback is a function the bot provides for sending NEW messages
-// (as opposed to editing the placeholder). Used by the reply tool for
-// follow-up replies — the first reply edits the placeholder via
-// StatusCallback, subsequent replies send new messages via SendCallback.
-// This lets Mira say "let me look that up" and then "here's what I found"
-// as separate visible messages.
-type SendCallback func(text string) error
-
-// TTSCallback is a function the bot provides so the agent can trigger
-// voice synthesis immediately when a reply is sent, rather than waiting
-// for the entire agent loop to finish. This runs in a goroutine so it
-// doesn't block the agent from continuing to think/act.
-type TTSCallback func(text string)
-
-// TraceCallback is a function the bot provides for sending/updating the
-// agent thinking trace message. The first call sends a new message; subsequent
-// calls edit it with the accumulated trace. The agent builds up trace lines
-// as it processes each tool call and sends updates after each step.
-// Returns the message (for subsequent edits) and any error.
-type TraceCallback func(text string) error
-
-// StageResetCallback is a function the bot provides so the agent can get
-// a fresh Telegram placeholder after sending a reply. Without this, the
-// statusCallback would keep editing the message that already contains the
-// reply text — so a follow-up "searching..." status would overwrite the
-// user's response. After the reset, statusCallback targets the new
-// placeholder and the sent reply is left untouched.
-type StageResetCallback func() error
-
-// SendConfirmCallback sends a message with Yes/No inline keyboard buttons
-// and returns the Telegram message ID. The agent uses this for the
-// reply_confirm tool — it sends a confirmation prompt before executing
-// destructive actions (deleting expenses, removing facts, etc.).
-//
-// The returned message ID gets stored in the pending_confirmations table
-// so the callback handler can look it up when the user clicks a button.
-// Think of it as an async RPC: the agent fires the confirmation and moves
-// on, and the action executes later when the user responds.
-type SendConfirmCallback func(text string) (telegramMsgID int64, err error)
-
-// DeletePlaceholderCallback deletes the current Telegram placeholder
-// message. Called after the agent loop exits to clean up the orphan
-// placeholder left by the last stage reset — if the agent replied and
-// then finished, there's an empty 💭 sitting in the chat that needs
-// removing.
-type DeletePlaceholderCallback func() error
-
-// toolContext bundles all the dependencies that tool execution functions need.
-// This grew from the original version — it now includes everything the
-// reply tool needs to generate a full conversational response, plus the
-// search clients for web_search, web_read, and book_search.
-type toolContext struct {
-	store               *memory.Store
-	embedClient         *embed.Client
-	similarityThreshold float64
-	personaFile         string
-	statusCallback      StatusCallback
-	// activeTools points to the tools slice in the agent loop. The
-	// use_tools handler appends deferred tools to it so they become
-	// available in subsequent iterations without restarting the loop.
-	activeTools         *[]llm.ToolDef
-	sendCallback        SendCallback
-	ttsCallback         TTSCallback
-	traceCallback       TraceCallback
-	sendConfirmCallback SendConfirmCallback
-
-	// chatLLM is the conversational model (Deepseek). The reply tool
-	// uses this to generate the actual natural language response.
-	chatLLM *llm.Client
-
-	// visionLLM is the vision language model (Gemini Flash). The
-	// view_image tool uses this to describe photos the user sends.
-	// Nil if vision is not configured.
-	visionLLM *llm.Client
-
-	// classifierLLM is the classifier model (Haiku-class). Validates
-	// memory writes (facts, moods, receipts) to catch fictional content
-	// before it hits the DB. Nil if classifier is not configured —
-	// writes pass through unchanged.
-	classifierLLM *llm.Client
-
-	// imageBase64 and imageMIME hold the current photo data (if any).
-	// Populated by the bot when the user sends a photo on Telegram.
-	imageBase64 string
-	imageMIME   string
-
-	// ocrText holds pre-flight OCR text extracted from the photo (if any).
-	// Populated by handlePhoto before the agent runs. The agent reads this
-	// to decide if the photo is a receipt, calendar event, etc. — without
-	// needing a VLM call. Empty if no image or OCR is unavailable.
-	ocrText string
-
-	// expenseContext holds receipt scan results for injection into the
-	// chat model's system prompt. Populated by execScanReceipt so the
-	// chat model knows exactly what was scanned (vendor, amount, items)
-	// and doesn't hallucinate different values in its reply.
-	// Same pattern as searchContext but goes into the system prompt
-	// instead of the message context.
-	expenseContext string
-
-	// tavilyClient provides web search and URL extraction.
-	// Can be nil if Tavily is not configured — search tools will
-	// return an error message instead of crashing.
-	tavilyClient *search.TavilyClient
-
-	// weatherClient fetches and caches current weather from Open-Meteo.
-	// Used by buildWeatherContext to inject weather into the system prompt.
-	// Nil if weather is not configured (no lat/lon).
-	weatherClient *weather.Client
-
-	// cfg holds the full config for building prompts (prompt file paths,
-	// memory limits, etc.).
-	cfg *config.Config
-
-	// configPath is the path to config.yaml on disk. Used by set_location
-	// to persist lat/lon coordinates so they survive restarts.
-	configPath string
-
-	// scrubVault holds the PII token mappings from the current message.
-	// The reply tool uses this to deanonymize the LLM response before
-	// sending it to Telegram.
-	scrubVault *scrub.Vault
-
-	// scrubbedUserMessage is the PII-scrubbed version of what the user said.
-	// Used by the reply tool when building the prompt for the conversational model.
-	scrubbedUserMessage string
-
-	// conversationID identifies the current conversation for history retrieval.
-	conversationID string
-
-	// triggerMsgID is the DB message ID of the user's message that started
-	// this agent run. Used for linking metrics and saving the response.
-	triggerMsgID int64
-
-	// conversationSummary is the compacted summary of older messages.
-	// Injected into the system prompt so the model has context of what
-	// was discussed earlier without needing the full message history.
-	conversationSummary string
-
-	// relevantFacts holds the results of semantic search on the user's message.
-	// These are the facts closest in meaning to what the user just said.
-	// Passed to BuildMemoryContext so the system prompt includes relevant context.
-	relevantFacts []memory.Fact
-
-	// searchContext accumulates search results, book data, and URL content
-	// across tool calls. When reply is called, this context is included
-	// in the prompt so the conversational model can reference it.
-	searchContext string
-
-	// stageResetCallback sends a new Telegram placeholder so that
-	// statusCallback targets a fresh message after a reply is sent.
-	// Nil if not provided (e.g., in tests).
-	stageResetCallback StageResetCallback
-
-	// deletePlaceholderCallback removes the current placeholder message.
-	// Used for cleanup after the agent loop exits — the last stage reset
-	// leaves an orphan 💭 that needs deleting.
-	deletePlaceholderCallback DeletePlaceholderCallback
-
-	// replyCalled tracks whether the reply tool has been called since
-	// the last stage reset. Reset to false after each stage reset so
-	// the next reply edits the new placeholder instead of using sendCallback.
-	replyCalled bool
-
-	// replyCount tracks the total number of replies sent during this
-	// agent run. Used for the fallback check — if zero, the user never
-	// got a response and we need to generate one.
-	replyCount int
-
-	// doneCalled tracks whether the done tool has been called,
-	// signaling the agent is finished with all actions for this turn.
-	doneCalled bool
-
-	// skillRegistry holds discovered skills for find_skill/run_skill.
-	// Nil if the skills system is not configured (no skills/ directory).
-	skillRegistry *loader.Registry
-
-	// replyText stores the final response text (after deanonymization).
-	// Used by the bot to know what was sent.
-	replyText string
-
-	// savedFacts tracks facts saved during this agent run.
-	// Used to trigger reflection (Trigger B) when enough facts accumulate.
-	savedFacts []string
-
-	// replyCost accumulates cost from chat model calls (execReply).
-	// The agent model cost is tracked separately in the Run loop.
-	// Both feed into RunResult.TotalCost for the TUI.
-	replyCost float64
-
-	// replyUsedFallback is set by execReply when the chat model falls
-	// back to the fallback model (e.g. Haiku). The trace formatter uses
-	// this to show which model actually generated the reply.
-	replyUsedFallback bool
-	replyModel        string
-
-	// eventBus emits rich typed events for the TUI. Nil-safe.
-	eventBus *tui.Bus
-}
+// Callback types and toolContext have been moved to the tools package
+// (tools/context.go). The agent imports them as tools.Context,
+// tools.StatusCallback, etc. See tools/context.go for documentation.
 
 // defaultAgentPrompt is used as a fallback if agent_prompt.md can't be loaded.
 // Uses {{her}} placeholder so it still works with the template expansion.
@@ -276,13 +101,13 @@ type RunParams struct {
 	ScrubVault                *scrub.Vault
 	ConversationID            string
 	TriggerMsgID              int64
-	StatusCallback            StatusCallback
-	SendCallback              SendCallback
-	TTSCallback               TTSCallback
-	TraceCallback             TraceCallback             // nil if traces disabled
-	StageResetCallback        StageResetCallback        // nil-safe — sends new placeholder after reply
-	DeletePlaceholderCallback DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
-	SendConfirmCallback       SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
+	StatusCallback            tools.StatusCallback
+	SendCallback              tools.SendCallback
+	TTSCallback               tools.TTSCallback
+	TraceCallback             tools.TraceCallback             // nil if traces disabled
+	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
+	DeletePlaceholderCallback tools.DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
+	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
 	ReflectionThreshold       int
 	RewriteEveryN             int
 	ImageBase64               string           // base64-encoded image data (empty if no image)
@@ -454,40 +279,50 @@ func Run(params RunParams) (*RunResult, error) {
 	// Start with only the hot tools (7 instead of 26). The agent can
 	// load deferred tools on demand via use_tools(["search"]) etc.
 	// This reduces context pressure on the agent model significantly.
-	tools := HotToolDefs(params.Cfg)
+	toolDefs := tools.HotToolDefs(params.Cfg)
 
 	// Build the tool context with everything the tools need.
-	tctx := &toolContext{
-		store:                     params.Store,
-		embedClient:               params.EmbedClient,
-		similarityThreshold:       params.SimilarityThreshold,
-		personaFile:               params.Cfg.Persona.PersonaFile,
-		statusCallback:            params.StatusCallback,
-		sendCallback:              params.SendCallback,
-		ttsCallback:               params.TTSCallback,
-		traceCallback:             params.TraceCallback,
-		stageResetCallback:        params.StageResetCallback,
-		deletePlaceholderCallback: params.DeletePlaceholderCallback,
-		sendConfirmCallback:       params.SendConfirmCallback,
-		chatLLM:                   params.ChatLLM,
-		visionLLM:                 params.VisionLLM,
-		classifierLLM:             params.ClassifierLLM,
-		tavilyClient:              params.TavilyClient,
-		weatherClient:             params.WeatherClient,
-		cfg:                       params.Cfg,
-		scrubVault:                params.ScrubVault,
-		scrubbedUserMessage:       params.ScrubbedUserMessage,
-		conversationID:            params.ConversationID,
-		triggerMsgID:              params.TriggerMsgID,
-		conversationSummary:       conversationSummary,
-		relevantFacts:             relevantFacts,
-		imageBase64:               params.ImageBase64,
-		imageMIME:                 params.ImageMIME,
-		ocrText:                   params.OCRText,
-		activeTools:               &tools,
-		eventBus:                  params.EventBus,
-		configPath:                params.ConfigPath,
-		skillRegistry:             params.SkillRegistry,
+	tctx := &tools.Context{
+		Store:                     params.Store,
+		EmbedClient:               params.EmbedClient,
+		SimilarityThreshold:       params.SimilarityThreshold,
+		PersonaFile:               params.Cfg.Persona.PersonaFile,
+		StatusCallback:            params.StatusCallback,
+		SendCallback:              params.SendCallback,
+		TTSCallback:               params.TTSCallback,
+		TraceCallback:             params.TraceCallback,
+		StageResetCallback:        params.StageResetCallback,
+		DeletePlaceholderCallback: params.DeletePlaceholderCallback,
+		SendConfirmCallback:       params.SendConfirmCallback,
+		ChatLLM:                   params.ChatLLM,
+		VisionLLM:                 params.VisionLLM,
+		ClassifierLLM:             params.ClassifierLLM,
+		TavilyClient:              params.TavilyClient,
+		WeatherClient:             params.WeatherClient,
+		Cfg:                       params.Cfg,
+		ScrubVault:                params.ScrubVault,
+		ScrubbedUserMessage:       params.ScrubbedUserMessage,
+		ConversationID:            params.ConversationID,
+		TriggerMsgID:              params.TriggerMsgID,
+		ConversationSummary:       conversationSummary,
+		RelevantFacts:             relevantFacts,
+		ImageBase64:               params.ImageBase64,
+		ImageMIME:                 params.ImageMIME,
+		OCRText:                   params.OCRText,
+		ActiveTools:               &toolDefs,
+		EventBus:                  params.EventBus,
+		ConfigPath:                params.ConfigPath,
+		SkillRegistry:             params.SkillRegistry,
+		// Inject classifier hooks so tool handlers in tools/ can call the
+		// classifier without importing agent (which would be circular).
+		// The ClassifyWriteFunc wraps classifyMemoryWrite, and
+		// RejectionMessageFunc wraps rejectionMessage — both defined here.
+		ClassifyWriteFunc: func(writeType, content string, snippet []memory.Message) tools.ClassifyVerdict {
+			return classifyMemoryWrite(params.ClassifierLLM, writeType, content, snippet)
+		},
+		RejectionMessageFunc: func(verdict tools.ClassifyVerdict) string {
+			return rejectionMessage(verdict)
+		},
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -525,7 +360,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// is enabled, the trace message gets sent/updated after each tool call
 	// so the user can watch the agent think in real time.
 	var traceLines []string
-	tracing := tctx.traceCallback != nil
+	tracing := tctx.TraceCallback != nil
 
 	// sendTrace pushes the current trace to Telegram (sends or edits).
 	sendTrace := func() {
@@ -533,7 +368,7 @@ func Run(params RunParams) (*RunResult, error) {
 			return
 		}
 		text := strings.Join(traceLines, "\n")
-		if err := tctx.traceCallback(text); err != nil {
+		if err := tctx.TraceCallback(text); err != nil {
 			log.Warn("trace: failed to send/update", "err", err)
 		}
 	}
@@ -544,7 +379,7 @@ func Run(params RunParams) (*RunResult, error) {
 	nudgedToolUse := false
 
 	for i := 0; i < 10; i++ {
-		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, tools)
+		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs)
 		if err != nil {
 			// The LLM client handles fallback automatically on retriable
 			// errors (429, 500-503, timeout). If we still get an error here,
@@ -610,7 +445,7 @@ func Run(params RunParams) (*RunResult, error) {
 						Role:    "user",
 						Content: "You must use your tools to respond. Call the reply tool with an instruction for how to respond, then call done. Do not respond with plain text.",
 					})
-					resp, err = params.AgentLLM.ChatCompletionWithTools(messages, tools, "required")
+					resp, err = params.AgentLLM.ChatCompletionWithTools(messages, toolDefs, "required")
 					if err != nil {
 						log.Error("nudge LLM error", "err", err)
 						break
@@ -706,13 +541,13 @@ func Run(params RunParams) (*RunResult, error) {
 				line := formatTraceLine(tc.Function.Name, tc.Function.Arguments, result)
 				// If the chat model fell back during a reply, annotate the trace
 				// so it's obvious which model generated the user-facing response.
-				if tc.Function.Name == "reply" && tctx.replyUsedFallback {
+				if tc.Function.Name == "reply" && tctx.ReplyUsedFallback {
 					var rArgs struct {
 						Instruction string `json:"instruction"`
 					}
 					json.Unmarshal([]byte(tc.Function.Arguments), &rArgs)
 					line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
-						tctx.replyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
+						tctx.ReplyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
 				}
 				traceLines = append(traceLines, line)
 				sendTrace()
@@ -748,7 +583,7 @@ func Run(params RunParams) (*RunResult, error) {
 				hasThinkCall = true
 			}
 		}
-		if hasSearchResult && !hasThinkCall && !tctx.doneCalled {
+		if hasSearchResult && !hasThinkCall && !tctx.DoneCalled {
 			log.Info("  injecting post-search think nudge")
 			messages = append(messages, llm.ChatMessage{
 				Role:    "user",
@@ -758,7 +593,7 @@ func Run(params RunParams) (*RunResult, error) {
 
 		// Exit when the agent explicitly signals it's done.
 		// (The "done" trace line is already added by formatTraceLine above.)
-		if tctx.doneCalled {
+		if tctx.DoneCalled {
 			log.Info("  done signal received")
 			break
 		}
@@ -776,16 +611,16 @@ func Run(params RunParams) (*RunResult, error) {
 	// sometimes omit the done tool call even after completing all work.
 	// If reply was called and the loop ended naturally (not via done),
 	// treat it as a clean completion rather than an error.
-	if tctx.replyCount > 0 && !tctx.doneCalled {
+	if tctx.ReplyCount > 0 && !tctx.DoneCalled {
 		log.Info("auto-done: reply was called but done was not — treating as complete")
-		tctx.doneCalled = true
+		tctx.DoneCalled = true
 	}
 
 	// --- Fallback: ensure the user always gets a response ---
 	// If the agent never called the reply tool, we still need to respond.
 	// We use replyCount (not replyCalled) because replyCalled gets reset
 	// after each stage reset — but replyCount tracks lifetime replies.
-	if tctx.replyCount == 0 {
+	if tctx.ReplyCount == 0 {
 		if tracing {
 			traceLines = append(traceLines, "⚠️ <i>agent never called reply — using fallback</i>")
 			sendTrace()
@@ -794,14 +629,14 @@ func Run(params RunParams) (*RunResult, error) {
 			log.Warn("reply was never called, using agent text as instruction")
 			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
 			fallbackResult := execReply(instruction, tctx)
-			if tctx.replyCount == 0 {
+			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
 			}
 		} else {
 			log.Warn("reply was never called, generating generic fallback")
 			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
-			if tctx.replyCount == 0 {
+			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
 			}
@@ -812,17 +647,17 @@ func Run(params RunParams) (*RunResult, error) {
 	// The last stage reset (after the final reply) sends a new 💭
 	// placeholder that never gets used. If replyCalled is false but
 	// we DID reply at least once, the current placeholder is orphaned.
-	if !tctx.replyCalled && tctx.replyCount > 0 && tctx.deletePlaceholderCallback != nil {
-		if err := tctx.deletePlaceholderCallback(); err != nil {
+	if !tctx.ReplyCalled && tctx.ReplyCount > 0 && tctx.DeletePlaceholderCallback != nil {
+		if err := tctx.DeletePlaceholderCallback(); err != nil {
 			log.Warn("cleanup: failed to delete orphan placeholder", "err", err)
 		}
 	}
 
 	result := &RunResult{
-		ReplyText:  tctx.replyText,
-		TotalCost:  totalCost + tctx.replyCost,
+		ReplyText:  tctx.ReplyText,
+		TotalCost:  totalCost + tctx.ReplyCost,
 		ToolCalls:  totalToolCalls,
-		FactsSaved: len(tctx.savedFacts),
+		FactsSaved: len(tctx.SavedFacts),
 	}
 
 	// --- Persona Evolution Triggers ---
@@ -858,7 +693,7 @@ func Run(params RunParams) (*RunResult, error) {
 					factStrings = append(factStrings, f.Fact)
 				}
 
-				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.replyText, factStrings, params.Cfg.Identity.Her, params.Cfg.Identity.User); err != nil {
+				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.ReplyText, factStrings, params.Cfg.Identity.Her, params.Cfg.Identity.User); err != nil {
 					log.Error("reflection error", "err", err)
 					if tracing {
 						traceLines = append(traceLines, fmt.Sprintf("❌ <b>reflection</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
@@ -1004,7 +839,7 @@ func buildAgentContext(userMessage string, history []memory.Message, userFacts, 
 // If the tool call has truncated/malformed JSON arguments (usually from
 // hitting max_tokens mid-generation), we return an error message that
 // tells the model what happened so it can retry with shorter arguments.
-func executeTool(tc llm.ToolCall, tctx *toolContext) string {
+func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 	// Validate JSON before dispatching. Truncated tool calls happen when
 	// the model hits max_tokens while generating the arguments JSON.
 	// Rather than letting each tool fail with a confusing parse error,
@@ -1015,65 +850,14 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 
 	switch tc.Function.Name {
 	case "reply":
+		// reply remains in agent — it builds the full chat prompt using
+		// agent-internal functions (buildReplyMessages, sendReply, etc.).
 		return execReply(tc.Function.Arguments, tctx)
-	case "save_fact":
-		return execSaveFact(tc.Function.Arguments, "user", tctx)
-	case "save_self_fact":
-		return execSaveFact(tc.Function.Arguments, "self", tctx)
-	case "update_fact":
-		return execUpdateFact(tc.Function.Arguments, tctx)
-	case "remove_fact":
-		return execRemoveFact(tc.Function.Arguments, tctx.store)
-	case "update_persona":
-		return execUpdatePersona(tc.Function.Arguments, tctx.store, tctx.personaFile, tctx.cfg.Identity.Her)
-	case "view_image":
-		return execViewImage(tc.Function.Arguments, tctx)
-	case "create_reminder":
-		return execCreateReminder(tc.Function.Arguments, tctx)
-	case "create_schedule":
-		return execCreateSchedule(tc.Function.Arguments, tctx)
-	case "list_schedules":
-		return execListSchedules(tc.Function.Arguments, tctx)
-	case "update_schedule":
-		return execUpdateSchedule(tc.Function.Arguments, tctx)
-	case "delete_schedule":
-		return execDeleteSchedule(tc.Function.Arguments, tctx)
-	case "recall_memories":
-		return execRecallMemories(tc.Function.Arguments, tctx)
-	// log_mood has been migrated to a standalone skill (skills/log_mood/).
-	// The agent discovers it via find_skill and runs it via run_skill.
-	case "scan_receipt":
-		return execScanReceipt(tc.Function.Arguments, tctx)
-	case "query_expenses":
-		return execQueryExpenses(tc.Function.Arguments, tctx)
-	case "delete_expense":
-		return execDeleteExpense(tc.Function.Arguments, tctx)
-	case "update_expense":
-		return execUpdateExpense(tc.Function.Arguments, tctx)
-	case "think":
-		return execThink(tc.Function.Arguments, tctx)
-	case "get_current_time":
-		return execGetCurrentTime(tctx)
-	case "set_location":
-		return execSetLocation(tc.Function.Arguments, tctx)
-	case "reply_confirm":
-		return execReplyConfirm(tc.Function.Arguments, tctx)
-	case "find_skill":
-		return execFindSkill(tc.Function.Arguments, tctx)
-	case "run_skill":
-		return execRunSkill(tc.Function.Arguments, tctx)
-	case "search_history":
-		return execSearchHistory(tc.Function.Arguments, tctx)
-	case "use_tools":
-		return execUseTools(tc.Function.Arguments, tctx)
-	case "no_action":
-		return "tool call complete, no action taken"
-	case "done":
-		tctx.doneCalled = true
-		log.Info("  done called — finishing turn")
-		return "tool call complete, turn complete"
 	default:
-		return fmt.Sprintf("unknown tool: %s", tc.Function.Name)
+		// All other tools are registered in tools/ subdirectories and
+		// dispatched via the central registry. tools.Execute validates JSON
+		// and returns a clear error for unknown tools.
+		return tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
 	}
 }
 
@@ -1082,11 +866,11 @@ func executeTool(tc llm.ToolCall, tctx *toolContext) string {
 // execReply is the most important tool. It builds the full conversational
 // prompt (prompt.md + persona + memory + search context + history) and
 // calls the chatLLM to generate the actual response the user sees.
-func execReply(argsJSON string, tctx *toolContext) string {
+func execReply(argsJSON string, tctx *tools.Context) string {
 	// Reset fallback tracking from any previous reply call in this turn.
 	// Without this, a fallback on reply #1 would incorrectly flag reply #2.
-	tctx.replyUsedFallback = false
-	tctx.replyModel = ""
+	tctx.ReplyUsedFallback = false
+	tctx.ReplyModel = ""
 
 	var args struct {
 		Instruction string `json:"instruction"`
@@ -1101,7 +885,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	systemPrompt := buildChatSystemPrompt(tctx)
 
 	// Combine any accumulated search context with the explicit context parameter.
-	fullContext := tctx.searchContext
+	fullContext := tctx.SearchContext
 	if args.Context != "" {
 		if fullContext != "" {
 			fullContext += "\n\n"
@@ -1117,7 +901,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	})
 
 	// Add conversation history so the model has context of the ongoing chat.
-	recentMsgs, err := tctx.store.RecentMessages(tctx.conversationID, tctx.cfg.Memory.RecentMessages)
+	recentMsgs, err := tctx.Store.RecentMessages(tctx.ConversationID, tctx.Cfg.Memory.RecentMessages)
 	if err != nil {
 		log.Error("reply: loading history", "err", err)
 	} else {
@@ -1129,7 +913,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 			// thinks it already answered, and generates identical output.
 			// We keep everything BEFORE this turn so the model still has
 			// the broader conversation context.
-			if tctx.replyCount > 0 && msg.ID >= tctx.triggerMsgID {
+			if tctx.ReplyCount > 0 && msg.ID >= tctx.TriggerMsgID {
 				continue
 			}
 			content := msg.ContentScrubbed
@@ -1164,12 +948,12 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	}
 	llmMessages = append(llmMessages, llm.ChatMessage{
 		Role:    "user",
-		Content: tctx.scrubbedUserMessage,
+		Content: tctx.ScrubbedUserMessage,
 	})
 
 	// Call the conversational model.
 	start := time.Now()
-	resp, err := tctx.chatLLM.ChatCompletion(llmMessages)
+	resp, err := tctx.ChatLLM.ChatCompletion(llmMessages)
 	latencyMs := int(time.Since(start).Milliseconds())
 
 	if err != nil {
@@ -1177,14 +961,14 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error generating response: %v", err)
 	}
 
-	tctx.replyCost += resp.CostUSD
-	tctx.replyUsedFallback = resp.UsedFallback
-	tctx.replyModel = resp.Model
+	tctx.ReplyCost += resp.CostUSD
+	tctx.ReplyUsedFallback = resp.UsedFallback
+	tctx.ReplyModel = resp.Model
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
-	if tctx.eventBus != nil {
-		tctx.eventBus.Emit(tui.ReplyEvent{
-			Time: time.Now(), TurnID: tctx.triggerMsgID,
+	if tctx.EventBus != nil {
+		tctx.EventBus.Emit(tui.ReplyEvent{
+			Time: time.Now(), TurnID: tctx.TriggerMsgID,
 			Text:             truncateLog(resp.Content, 200),
 			PromptTokens:     resp.PromptTokens,
 			CompletionTokens: resp.CompletionTokens,
@@ -1203,7 +987,7 @@ func execReply(argsJSON string, tctx *toolContext) string {
 		log.Warn("reply: degenerate response detected, retrying once", "content", truncateLog(resp.Content, 80))
 		// One retry — if the model is genuinely down, the fallback
 		// in the agent loop will catch it.
-		resp, err = tctx.chatLLM.ChatCompletion(llmMessages)
+		resp, err = tctx.ChatLLM.ChatCompletion(llmMessages)
 		if err != nil {
 			log.Error("reply: retry LLM error", "err", err)
 			return fmt.Sprintf("error generating response: %v", err)
@@ -1215,29 +999,29 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Save the response to the database.
-	respID, err := tctx.store.SaveMessage("assistant", resp.Content, resp.Content, tctx.conversationID)
+	respID, err := tctx.Store.SaveMessage("assistant", resp.Content, resp.Content, tctx.ConversationID)
 	if err != nil {
 		log.Error("reply: saving response", "err", err)
 	}
 
 	// Update token counts on both the user message and the response.
-	if tctx.triggerMsgID > 0 {
-		tctx.store.UpdateMessageTokenCount(tctx.triggerMsgID, resp.PromptTokens)
+	if tctx.TriggerMsgID > 0 {
+		tctx.Store.UpdateMessageTokenCount(tctx.TriggerMsgID, resp.PromptTokens)
 	}
 	if respID > 0 {
-		tctx.store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		tctx.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
+		tctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
+		tctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
 	}
 
 	// Deanonymize PII tokens before sending to the user.
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
-	replyText := scrub.Deanonymize(resp.Content, tctx.scrubVault)
+	replyText := scrub.Deanonymize(resp.Content, tctx.ScrubVault)
 
 	// Duplicate reply guard — if the agent calls reply twice with the
 	// same (or very similar) text, skip the second one. Trinity sometimes
 	// loops think→reply→think→reply with identical content.
-	if tctx.replyCalled && replyText == tctx.replyText {
+	if tctx.ReplyCalled && replyText == tctx.ReplyText {
 		log.Warn("reply: duplicate detected, skipping")
 		return "reply skipped (duplicate of previous reply)"
 	}
@@ -1246,14 +1030,14 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// First reply: edit the placeholder message (statusCallback).
 	// Follow-up replies: send as a new message (sendCallback) so both
 	// are visible — e.g., "let me look that up" → "here's what I found".
-	if tctx.replyCalled && tctx.sendCallback != nil {
+	if tctx.ReplyCalled && tctx.SendCallback != nil {
 		// Follow-up reply — send as a new message.
-		if err := tctx.sendCallback(replyText); err != nil {
+		if err := tctx.SendCallback(replyText); err != nil {
 			log.Error("reply: sending follow-up to Telegram", "err", err)
 		}
-	} else if tctx.statusCallback != nil {
+	} else if tctx.StatusCallback != nil {
 		// First reply — edit the placeholder.
-		if err := tctx.statusCallback(replyText); err != nil {
+		if err := tctx.StatusCallback(replyText); err != nil {
 			log.Error("reply: sending to Telegram", "err", err)
 		}
 	}
@@ -1261,24 +1045,24 @@ func execReply(argsJSON string, tctx *toolContext) string {
 	// Fire TTS immediately — don't wait for the agent loop to finish.
 	// This runs in a goroutine so the agent can keep thinking/acting
 	// while the voice memo is being synthesized and sent.
-	if tctx.ttsCallback != nil {
-		go tctx.ttsCallback(replyText)
+	if tctx.TTSCallback != nil {
+		go tctx.TTSCallback(replyText)
 	}
 
-	tctx.replyCalled = true
-	tctx.replyCount++
-	tctx.replyText = replyText
+	tctx.ReplyCalled = true
+	tctx.ReplyCount++
+	tctx.ReplyText = replyText
 
 	// Stage reset: send a new Telegram placeholder so that any follow-up
 	// work (search status updates, additional replies) doesn't overwrite
 	// the reply we just sent. After the reset, statusCallback targets the
 	// new placeholder and replyCalled is cleared so the next reply edits
 	// it instead of using sendCallback.
-	if tctx.stageResetCallback != nil {
-		if err := tctx.stageResetCallback(); err != nil {
+	if tctx.StageResetCallback != nil {
+		if err := tctx.StageResetCallback(); err != nil {
 			log.Warn("reply: stage reset failed", "err", err)
 		} else {
-			tctx.replyCalled = false
+			tctx.ReplyCalled = false
 		}
 	}
 
@@ -1319,31 +1103,31 @@ func isDegenerate(text string) bool {
 
 // buildChatSystemPrompt assembles the full system prompt for the
 // conversational model, exactly as the old bot.buildSystemPrompt did.
-func buildChatSystemPrompt(tctx *toolContext) string {
+func buildChatSystemPrompt(tctx *tools.Context) string {
 	var parts []string
 
 	// Layer 1: prompt.md — base identity (hot-reloaded from disk).
 	// ExpandPrompt replaces {{her}}/{{user}} with configured names.
-	if promptBytes, err := os.ReadFile(tctx.cfg.Persona.PromptFile); err == nil {
-		parts = append(parts, tctx.cfg.ExpandPrompt(string(promptBytes)))
+	if promptBytes, err := os.ReadFile(tctx.Cfg.Persona.PromptFile); err == nil {
+		parts = append(parts, tctx.Cfg.ExpandPrompt(string(promptBytes)))
 	}
 
 	// Layer 2: persona.md — evolving self-image (if it exists).
-	if personaBytes, err := os.ReadFile(tctx.cfg.Persona.PersonaFile); err == nil {
-		parts = append(parts, tctx.cfg.ExpandPrompt(string(personaBytes)))
+	if personaBytes, err := os.ReadFile(tctx.Cfg.Persona.PersonaFile); err == nil {
+		parts = append(parts, tctx.Cfg.ExpandPrompt(string(personaBytes)))
 	}
 
 	// Layer 2.5: Personality traits — soft guidance for tone and style.
 	// These come from the most recent persona rewrite and nudge the
 	// chatLLM toward the right warmth, directness, humor, etc.
-	if traitCtx := buildTraitContext(tctx.store); traitCtx != "" {
+	if traitCtx := buildTraitContext(tctx.Store); traitCtx != "" {
 		parts = append(parts, traitCtx)
 	}
 
 	// Layer 3: Current time — always injected so Mira knows what time
 	// of day it is, what day of the week, etc. This is NOT optional —
 	// without it, she has no sense of time at all.
-	parts = append(parts, buildTimeContext(tctx.cfg.Scheduler.Timezone))
+	parts = append(parts, buildTimeContext(tctx.Cfg.Scheduler.Timezone))
 
 	// Layer 4: Memory context — blend of semantically relevant facts
 	// (from KNN search) and high-importance facts (always-present).
@@ -1352,18 +1136,18 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	// in the recent conversation history. This prevents "context echo"
 	// where the model sees the same information in both the facts section
 	// AND the message history, causing it to fixate and regurgitate.
-	filteredFacts := tctx.relevantFacts
-	if tctx.embedClient != nil {
-		recentMsgs, err := tctx.store.RecentMessages(tctx.conversationID, tctx.cfg.Memory.RecentMessages)
+	filteredFacts := tctx.RelevantFacts
+	if tctx.EmbedClient != nil {
+		recentMsgs, err := tctx.Store.RecentMessages(tctx.ConversationID, tctx.Cfg.Memory.RecentMessages)
 		if err == nil && len(recentMsgs) > 0 {
 			before := len(filteredFacts)
-			filteredFacts = memory.FilterRedundantFacts(filteredFacts, recentMsgs, tctx.embedClient)
+			filteredFacts = memory.FilterRedundantFacts(filteredFacts, recentMsgs, tctx.EmbedClient)
 			if dropped := before - len(filteredFacts); dropped > 0 {
 				log.Infof("  conversation dedup: %d/%d facts filtered as redundant with history", dropped, before)
 			}
 		}
 	}
-	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.store, tctx.cfg.Memory.MaxFactsInContext, filteredFacts, tctx.cfg.Identity.User, tctx.cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
+	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.Store, tctx.Cfg.Memory.MaxFactsInContext, filteredFacts, tctx.Cfg.Identity.User, tctx.Cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
 		parts = append(parts, memCtx)
 		// Log which facts were injected and why — this is the observability
 		// that lets you debug "why did she mention X when I asked about Y?"
@@ -1377,15 +1161,15 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 			}
 		}
 		// Emit for TUI
-		if tctx.eventBus != nil {
+		if tctx.EventBus != nil {
 			for _, f := range injectedFacts {
 				args := fmt.Sprintf("#%d %s imp=%d", f.ID, f.Source, f.Importance)
 				if f.Source == "semantic" {
 					args = fmt.Sprintf("#%d %s imp=%d dist=%.2f", f.ID, f.Source, f.Importance, f.Distance)
 				}
-				tctx.eventBus.Emit(tui.ToolCallEvent{
+				tctx.EventBus.Emit(tui.ToolCallEvent{
 					Time:     time.Now(),
-					TurnID:   tctx.triggerMsgID,
+					TurnID:   tctx.TriggerMsgID,
 					ToolName: "fact→chat",
 					Args:     args,
 					Result:   truncateLog(f.Fact, 80),
@@ -1396,21 +1180,21 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 
 	// Layer 4: Weather context — current conditions so Mira can reference
 	// the weather naturally. Only included if weather is configured.
-	if weatherCtx := buildWeatherContext(tctx.weatherClient); weatherCtx != "" {
+	if weatherCtx := buildWeatherContext(tctx.WeatherClient); weatherCtx != "" {
 		parts = append(parts, weatherCtx)
 	}
 
 	// Layer 5: Mood context — recent mood trend so Mira is aware of
 	// emotional patterns. Only included if there's mood data.
-	if moodCtx := buildMoodContext(tctx.store); moodCtx != "" {
+	if moodCtx := buildMoodContext(tctx.Store); moodCtx != "" {
 		parts = append(parts, moodCtx)
 	}
 
 	// Layer 5.5: Expense context — if a receipt was just scanned, inject
 	// the exact data so the chat model references real numbers and vendor
 	// names instead of hallucinating them.
-	if tctx.expenseContext != "" {
-		parts = append(parts, tctx.expenseContext)
+	if tctx.ExpenseContext != "" {
+		parts = append(parts, tctx.ExpenseContext)
 	}
 
 	// Layer 6: Conversation summary — compacted older messages.
@@ -1418,8 +1202,8 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 	// without burning tokens on the full message history.
 	// The header reminds the model not to echo summary content verbatim,
 	// which caused a bug where old advice/phrases were recycled word-for-word.
-	if tctx.conversationSummary != "" {
-		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation (summary — do not repeat phrases or advice from this section)\n\n%s", tctx.conversationSummary))
+	if tctx.ConversationSummary != "" {
+		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation (summary — do not repeat phrases or advice from this section)\n\n%s", tctx.ConversationSummary))
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
@@ -1444,7 +1228,7 @@ func buildChatSystemPrompt(tctx *toolContext) string {
 // updates the weather client's coordinates. Coordinates are persisted
 // to config.yaml via cfg.SetLocation so they survive restarts — no
 // separate fact is saved for the raw coordinates.
-func execSetLocation(argsJSON string, tctx *toolContext) string {
+func execSetLocation(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Query string `json:"query"`
 	}
@@ -1462,15 +1246,15 @@ func execSetLocation(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Update the weather client so future weather fetches use the new location.
-	if tctx.weatherClient != nil {
-		tctx.weatherClient.SetLocation(loc.Latitude, loc.Longitude)
+	if tctx.WeatherClient != nil {
+		tctx.WeatherClient.SetLocation(loc.Latitude, loc.Longitude)
 	}
 
 	// Persist coordinates to config.yaml so they survive restarts.
 	// We log a warning on failure but don't return an error — the
 	// in-memory update already worked, so weather is live immediately.
-	if tctx.configPath != "" {
-		if err := tctx.cfg.SetLocation(tctx.configPath, loc.Latitude, loc.Longitude); err != nil {
+	if tctx.ConfigPath != "" {
+		if err := tctx.Cfg.SetLocation(tctx.ConfigPath, loc.Latitude, loc.Longitude); err != nil {
 			log.Warn("set_location: failed to persist coordinates to config", "err", err)
 		}
 	}
@@ -1481,89 +1265,12 @@ func execSetLocation(argsJSON string, tctx *toolContext) string {
 		loc.Name, loc.Region, loc.Country)
 }
 
-// execGetCurrentTime returns the current date and time in the user's
-// configured timezone. Simple but essential — without this, the agent
-// has no idea if it's morning or midnight.
-func execGetCurrentTime(tctx *toolContext) string {
-	loc, err := time.LoadLocation(tctx.cfg.Scheduler.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
 
-	now := time.Now().In(loc)
-
-	// Include day of week, full date, time, and timezone — everything
-	// the agent might need for time-based reasoning.
-	result := now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
-	log.Info("  get_current_time", "result", result)
-	return result
-}
-
-// execUseTools loads deferred tools into the active tool set. The agent
-// calls this to gain access to tools it needs for the current turn —
-// e.g., use_tools(["search"]) before calling web_search.
-//
-// This is the Go equivalent of Claude Code's ToolSearch: reduce the
-// default tool count so the model focuses on core actions, and let it
-// pull in extras when actually needed.
-func execUseTools(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		Tools []string `json:"tools"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	if len(args.Tools) == 0 {
-		return "no tools requested. Available categories: vision, memory, scheduling, context, expenses, skills. For search/web/books/mood, use find_skill instead."
-	}
-
-	newTools := LookupTools(args.Tools, tctx.cfg)
-	if len(newTools) == 0 {
-		return "no matching tools found. Available categories: vision, memory, scheduling, context, expenses, skills. For search/web/books/mood, use find_skill to discover skills, then run_skill to execute them."
-	}
-
-	// Deduplicate — don't add tools already in the active set.
-	existing := make(map[string]bool)
-	for _, t := range *tctx.activeTools {
-		existing[t.Function.Name] = true
-	}
-
-	var added []string
-	for _, t := range newTools {
-		if !existing[t.Function.Name] {
-			*tctx.activeTools = append(*tctx.activeTools, t)
-			added = append(added, t.Function.Name)
-		}
-	}
-
-	if len(added) == 0 {
-		return "all requested tools are already loaded"
-	}
-
-	log.Infof("  loaded deferred tools: %s", strings.Join(added, ", "))
-	return fmt.Sprintf("loaded: %s. You can now call them.", strings.Join(added, ", "))
-}
-
-func execThink(argsJSON string, tctx *toolContext) string {
-	var args struct {
-		Thought string `json:"thought"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return "tool call complete"
-	}
-
-	log.Infof("  think: %s", args.Thought)
-	// Don't return "ok" — the agent sees tool results in its conversation
-	// history and was interpreting "ok" as the user saying "ok", causing
-	// infinite think→reply loops.
-	return "tool call complete"
-}
 
 // execRecallMemories searches stored facts by semantic similarity.
 // The agent calls this when it needs to actively look something up
 // in memory — "do you remember when I told you about..." style queries.
-func execRecallMemories(argsJSON string, tctx *toolContext) string {
+func execRecallMemories(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
@@ -1572,10 +1279,10 @@ func execRecallMemories(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	if tctx.embedClient == nil {
+	if tctx.EmbedClient == nil {
 		return "memory search is not available (embedding client not configured)"
 	}
-	if tctx.store.EmbedDimension == 0 {
+	if tctx.Store.EmbedDimension == 0 {
 		return "memory search is not available (vector index not configured)"
 	}
 
@@ -1584,12 +1291,12 @@ func execRecallMemories(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Embed the query and search.
-	queryVec, err := tctx.embedClient.Embed(args.Query)
+	queryVec, err := tctx.EmbedClient.Embed(args.Query)
 	if err != nil {
 		return fmt.Sprintf("error embedding query: %v", err)
 	}
 
-	facts, err := tctx.store.SemanticSearch(queryVec, args.Limit)
+	facts, err := tctx.Store.SemanticSearch(queryVec, args.Limit)
 	if err != nil {
 		return fmt.Sprintf("error searching memories: %v", err)
 	}
@@ -1848,7 +1555,7 @@ const maxFactLength = 200
 // still allowing genuinely different contexts on the same day.
 const sameDayContextThreshold = 0.70
 
-func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
+func execSaveFact(argsJSON string, subject string, tctx *tools.Context) string {
 	var args struct {
 		Fact       string `json:"fact"`
 		Category   string `json:"category"`
@@ -1877,7 +1584,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		}
 		// Dynamic name check — "i am <name>" and "my name is <name>"
 		// are identity restatements from the system prompt, not learned facts.
-		nameLower := strings.ToLower(tctx.cfg.Identity.Her)
+		nameLower := strings.ToLower(tctx.Cfg.Identity.Her)
 		if strings.Contains(lower, "i am "+nameLower) || strings.Contains(lower, "my name is "+nameLower) {
 			log.Warn("blocked self-fact (identity restatement)", "fact", args.Fact)
 			return "rejected: this is an identity restatement from the system prompt, not a learned observation."
@@ -1917,9 +1624,9 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	// raw fact text separately for the text-based dedup pass.
 	var newVec []float32
 	var textVec []float32
-	if tctx.embedClient != nil {
+	if tctx.EmbedClient != nil {
 		var err error
-		newVec, err = tctx.embedClient.Embed(embedText)
+		newVec, err = tctx.EmbedClient.Embed(embedText)
 		if err != nil {
 			log.Warn("embedding failed, skipping duplicate check", "err", err)
 		} else {
@@ -1931,7 +1638,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 				// Only need a separate text embedding when tags differ
 				// from the fact text (otherwise newVec already IS the
 				// text embedding).
-				textVec, err = tctx.embedClient.Embed(args.Fact)
+				textVec, err = tctx.EmbedClient.Embed(args.Fact)
 				if err != nil {
 					log.Warn("text embedding failed, using tag-only dedup", "err", err)
 				}
@@ -1940,7 +1647,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 			// Same-day context facts use a tighter threshold because
 			// multiple snapshots of the same situation (location, mood,
 			// activity) within a single day are almost always duplicates.
-			threshold := tctx.similarityThreshold
+			threshold := tctx.SimilarityThreshold
 			if args.Category == "context" {
 				threshold = sameDayContextThreshold
 			}
@@ -1958,13 +1665,13 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 	// useful, actually stated by the user, and not a transient mood?
 	// Runs AFTER style/length/dedup gates — no point classifying something
 	// that would be rejected anyway. Fail-open if classifier is nil or errors.
-	if tctx.classifierLLM != nil {
+	if tctx.ClassifierLLM != nil {
 		writeType := "fact"
 		if subject == "self" {
 			writeType = "self_fact"
 		}
-		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
-		verdict := classifyMemoryWrite(tctx.classifierLLM, writeType, args.Fact, snippet)
+		snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
+		verdict := classifyMemoryWrite(tctx.ClassifierLLM, writeType, args.Fact, snippet)
 		if !verdict.Allowed {
 			return rejectionMessage(verdict)
 		}
@@ -1972,7 +1679,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 
 	// textVec is nil when tags were empty — SaveFact stores NULL in that case,
 	// which is correct because newVec already encodes the text embedding.
-	id, err := tctx.store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
+	id, err := tctx.Store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}
@@ -1981,7 +1688,7 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 		label = "self fact"
 	}
 
-	tctx.savedFacts = append(tctx.savedFacts, args.Fact)
+	tctx.SavedFacts = append(tctx.SavedFacts, args.Fact)
 
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
 }
@@ -1996,8 +1703,8 @@ func execSaveFact(argsJSON string, subject string, tctx *toolContext) string {
 //
 // The returned "source" string indicates which check caught the duplicate
 // ("tags" or "text") for logging/debugging.
-func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold float64, tctx *toolContext) (isDuplicate bool, existingID int64, existingFact string, similarity float64, source string) {
-	existingFacts, err := tctx.store.AllActiveFacts()
+func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold float64, tctx *tools.Context) (isDuplicate bool, existingID int64, existingFact string, similarity float64, source string) {
+	existingFacts, err := tctx.Store.AllActiveFacts()
 	if err != nil {
 		log.Warn("couldn't load facts for duplicate check", "err", err)
 		return false, 0, "", 0, ""
@@ -2020,13 +1727,13 @@ func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold f
 			if embedText == "" {
 				embedText = existing.Fact
 			}
-			existTagVec, err = tctx.embedClient.Embed(embedText)
+			existTagVec, err = tctx.EmbedClient.Embed(embedText)
 			if err != nil {
 				continue
 			}
 			// Backfill: persist the computed tag embedding (and preserve the
 			// existing text embedding so we don't wipe it with nil).
-			_ = tctx.store.UpdateFactEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
+			_ = tctx.Store.UpdateFactEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
 			log.Debug("backfilled tag embedding for fact", "fact_id", existing.ID)
 		}
 
@@ -2048,11 +1755,11 @@ func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold f
 			// and backfilling if the cache is empty (e.g. older facts).
 			existTextVec := existing.EmbeddingText
 			if len(existTextVec) == 0 {
-				existTextVec, err = tctx.embedClient.Embed(existing.Fact)
+				existTextVec, err = tctx.EmbedClient.Embed(existing.Fact)
 				if err != nil {
 					continue
 				}
-				_ = tctx.store.UpdateFactEmbedding(existing.ID, existing.Embedding, existTextVec)
+				_ = tctx.Store.UpdateFactEmbedding(existing.ID, existing.Embedding, existTextVec)
 				log.Debug("backfilled text embedding for fact", "fact_id", existing.ID)
 			}
 			textSim := embed.CosineSimilarity(newTextVec, existTextVec)
@@ -2071,7 +1778,7 @@ func checkDuplicate(newTagVec, newTextVec []float32, subject string, threshold f
 	return false, 0, "", 0, ""
 }
 
-func execUpdateFact(argsJSON string, tctx *toolContext) string {
+func execUpdateFact(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		FactID     int64  `json:"fact_id"`
 		Fact       string `json:"fact"`
@@ -2105,33 +1812,33 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 	}
 
 	// --- Classifier gate ---
-	if tctx.classifierLLM != nil {
-		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
-		verdict := classifyMemoryWrite(tctx.classifierLLM, "fact", args.Fact, snippet)
+	if tctx.ClassifierLLM != nil {
+		snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
+		verdict := classifyMemoryWrite(tctx.ClassifierLLM, "fact", args.Fact, snippet)
 		if !verdict.Allowed {
 			return rejectionMessage(verdict)
 		}
 	}
 
-	if err := tctx.store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {
+	if err := tctx.Store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {
 		return fmt.Sprintf("error updating fact: %v", err)
 	}
 
 	// Re-embed using tags (same as save_fact — embed by topic, not by text).
 	// Also re-embed the raw fact text so the cached text embedding stays fresh.
-	if tctx.embedClient != nil {
+	if tctx.EmbedClient != nil {
 		embedText := args.Tags
 		if embedText == "" {
 			embedText = args.Fact
 		}
-		if newVec, err := tctx.embedClient.Embed(embedText); err == nil {
+		if newVec, err := tctx.EmbedClient.Embed(embedText); err == nil {
 			// Recompute text embedding. When tags are empty, newVec already
 			// encodes the text, so we pass nil to avoid a redundant embed call.
 			var newTextVec []float32
 			if args.Tags != "" {
-				newTextVec, _ = tctx.embedClient.Embed(args.Fact)
+				newTextVec, _ = tctx.EmbedClient.Embed(args.Fact)
 			}
-			_ = tctx.store.UpdateFactEmbedding(args.FactID, newVec, newTextVec)
+			_ = tctx.Store.UpdateFactEmbedding(args.FactID, newVec, newTextVec)
 			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
 		}
 	}
@@ -2139,7 +1846,7 @@ func execUpdateFact(argsJSON string, tctx *toolContext) string {
 	return fmt.Sprintf("updated fact ID=%d: %s", args.FactID, args.Fact)
 }
 
-func execRemoveFact(argsJSON string, store *memory.Store) string {
+func execRemoveFact(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		FactID int64  `json:"fact_id"`
 		Reason string `json:"reason"`
@@ -2148,13 +1855,13 @@ func execRemoveFact(argsJSON string, store *memory.Store) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	if err := store.DeactivateFact(args.FactID); err != nil {
+	if err := tctx.Store.DeactivateFact(args.FactID); err != nil {
 		return fmt.Sprintf("error removing fact: %v", err)
 	}
 	return fmt.Sprintf("removed fact ID=%d (reason: %s)", args.FactID, args.Reason)
 }
 
-func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string, botName string) string {
+func execUpdatePersona(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Content string `json:"content"`
 		Reason  string `json:"reason"`
@@ -2165,14 +1872,14 @@ func execUpdatePersona(argsJSON string, store *memory.Store, personaFile string,
 
 	// Swap the bot's literal name back to {{her}} before writing to disk,
 	// keeping the persona file as a portable template.
-	personaContent := strings.ReplaceAll(args.Content, botName, "{{her}}")
+	personaContent := strings.ReplaceAll(args.Content, tctx.Cfg.Identity.Her, "{{her}}")
 
-	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
+	if err := os.WriteFile(tctx.PersonaFile, []byte(personaContent), 0644); err != nil {
 		return fmt.Sprintf("error writing persona file: %v", err)
 	}
 
 	// Store the raw LLM output (with literal name) in the DB for history.
-	id, err := store.SavePersonaVersion(args.Content, "agent: "+args.Reason)
+	id, err := tctx.Store.SavePersonaVersion(args.Content, "agent: "+args.Reason)
 	if err != nil {
 		return fmt.Sprintf("persona file updated but failed to save version: %v", err)
 	}

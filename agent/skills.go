@@ -7,6 +7,7 @@ import (
 
 	"her/embed"
 	"her/skills/loader"
+	"her/tools"
 )
 
 // execFindSkill handles the find_skill tool call. It searches the skill
@@ -15,8 +16,8 @@ import (
 // The agent calls this with a natural language query like "get weather
 // forecast" and gets back matching skills ranked by relevance. The agent
 // then decides which one to call (or none, if nothing fits).
-func execFindSkill(argsJSON string, tctx *toolContext) string {
-	if tctx.skillRegistry == nil {
+func execFindSkill(argsJSON string, tctx *tools.Context) string {
+	if tctx.SkillRegistry == nil {
 		return "no skills available — skill registry not initialized"
 	}
 
@@ -33,7 +34,7 @@ func execFindSkill(argsJSON string, tctx *toolContext) string {
 	// Search with reasonable defaults: top 5 results, minimum 0.3 score.
 	// 0.3 is intentionally low — we'd rather show marginal matches than
 	// miss something useful. The agent can judge relevance from scores.
-	results, err := tctx.skillRegistry.Find(args.Query, 5, 0.3)
+	results, err := tctx.SkillRegistry.Find(args.Query, 5, 0.3)
 	if err != nil {
 		return fmt.Sprintf("error searching skills: %s", err)
 	}
@@ -74,8 +75,8 @@ func execFindSkill(argsJSON string, tctx *toolContext) string {
 // The skill binary receives args as JSON on stdin and writes its result
 // to stdout. The runner handles compilation (Go), timeouts, and
 // environment sandboxing.
-func execRunSkill(argsJSON string, tctx *toolContext) string {
-	if tctx.skillRegistry == nil {
+func execRunSkill(argsJSON string, tctx *tools.Context) string {
+	if tctx.SkillRegistry == nil {
 		return "no skills available — skill registry not initialized"
 	}
 
@@ -91,10 +92,10 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Look up the skill.
-	skill := tctx.skillRegistry.Get(args.Name)
+	skill := tctx.SkillRegistry.Get(args.Name)
 	if skill == nil {
 		// Suggest using find_skill — common mistake is to guess a name.
-		available := tctx.skillRegistry.List()
+		available := tctx.SkillRegistry.List()
 		if len(available) > 0 {
 			return fmt.Sprintf("unknown skill %q. Available: %s. Use find_skill to search by intent.",
 				args.Name, strings.Join(available, ", "))
@@ -112,7 +113,7 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 	// logged recently. This mirrors how save_fact rejects duplicate facts
 	// via embedding similarity. Without this, the agent tends to log the
 	// same mood on every message in an emotional conversation.
-	if skill.Name == "log_mood" && tctx.store != nil && tctx.embedClient != nil {
+	if skill.Name == "log_mood" && tctx.Store != nil && tctx.EmbedClient != nil {
 		if dup := checkMoodDuplicate(args.Args, tctx); dup != "" {
 			return dup
 		}
@@ -122,11 +123,11 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 	// Check if the mood is about the real user or a fictional character.
 	// Runs after dedup (no point classifying a duplicate) and before
 	// execution (we can't intercept the DB write inside the skill).
-	if skill.Name == "log_mood" && tctx.classifierLLM != nil {
+	if skill.Name == "log_mood" && tctx.ClassifierLLM != nil {
 		moodNote, _ := args.Args["note"].(string)
 		if moodNote != "" {
-			snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
-			verdict := classifyMemoryWrite(tctx.classifierLLM, "mood", moodNote, snippet)
+			snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
+			verdict := classifyMemoryWrite(tctx.ClassifierLLM, "mood", moodNote, snippet)
 			if !verdict.Allowed {
 				return rejectionMessage(verdict)
 			}
@@ -134,8 +135,8 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Update status so the user sees what's happening.
-	if tctx.statusCallback != nil {
-		tctx.statusCallback(fmt.Sprintf("running %s...", skill.Name))
+	if tctx.StatusCallback != nil {
+		tctx.StatusCallback(fmt.Sprintf("running %s...", skill.Name))
 	}
 
 	log.Info("running skill", "name", skill.Name)
@@ -172,11 +173,11 @@ func execRunSkill(argsJSON string, tctx *toolContext) string {
 // This lets the agent check "did I already search for this?" before
 // re-running a skill. Past results include freshness metadata so the
 // agent can judge whether to reuse a cached result or run fresh.
-func execSearchHistory(argsJSON string, tctx *toolContext) string {
-	if tctx.skillRegistry == nil {
+func execSearchHistory(argsJSON string, tctx *tools.Context) string {
+	if tctx.SkillRegistry == nil {
 		return "no skills available — skill registry not initialized"
 	}
-	if tctx.embedClient == nil {
+	if tctx.EmbedClient == nil {
 		return "search_history unavailable — embedding client not configured"
 	}
 
@@ -192,7 +193,7 @@ func execSearchHistory(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Look up the skill.
-	skill := tctx.skillRegistry.Get(args.SkillName)
+	skill := tctx.SkillRegistry.Get(args.SkillName)
 	if skill == nil {
 		return fmt.Sprintf("unknown skill %q", args.SkillName)
 	}
@@ -203,13 +204,13 @@ func execSearchHistory(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Embed the query.
-	queryVec, err := tctx.embedClient.Embed(args.Query)
+	queryVec, err := tctx.EmbedClient.Embed(args.Query)
 	if err != nil {
 		return fmt.Sprintf("error embedding query: %s", err)
 	}
 
 	// Open the sidecar DB and search.
-	sdb, err := loader.OpenSidecar(skill, tctx.embedClient.Dimension)
+	sdb, err := loader.OpenSidecar(skill, tctx.EmbedClient.Dimension)
 	if err != nil {
 		return fmt.Sprintf("no execution history for %s", args.SkillName)
 	}
@@ -261,13 +262,13 @@ const moodSimilarityThreshold = 0.75
 //     of content (the user's emotional state doesn't change that fast).
 //  2. Semantic gate — any mood in the last 2 hours with a similar note
 //     (cosine similarity >= 0.75) is a duplicate.
-func checkMoodDuplicate(skillArgs map[string]any, tctx *toolContext) string {
+func checkMoodDuplicate(skillArgs map[string]any, tctx *tools.Context) string {
 	note, _ := skillArgs["note"].(string)
 
 	// Tier 1: time gate — if ANY mood was logged in the last 30 minutes,
 	// skip this one. The agent shouldn't be logging mood multiple times
 	// per conversation exchange.
-	recentNotes, err := tctx.store.RecentMoodNotes(30)
+	recentNotes, err := tctx.Store.RecentMoodNotes(30)
 	if err != nil {
 		log.Warn("mood dedup: couldn't check recent moods", "err", err)
 		return "" // fail open — let it through
@@ -282,7 +283,7 @@ func checkMoodDuplicate(skillArgs map[string]any, tctx *toolContext) string {
 	if note == "" {
 		return "" // no note to compare
 	}
-	windowNotes, err := tctx.store.RecentMoodNotes(moodDedupWindowMinutes)
+	windowNotes, err := tctx.Store.RecentMoodNotes(moodDedupWindowMinutes)
 	if err != nil {
 		log.Warn("mood dedup: couldn't check window moods", "err", err)
 		return ""
@@ -292,7 +293,7 @@ func checkMoodDuplicate(skillArgs map[string]any, tctx *toolContext) string {
 	}
 
 	// Embed the proposed note.
-	newVec, err := tctx.embedClient.Embed(note)
+	newVec, err := tctx.EmbedClient.Embed(note)
 	if err != nil {
 		log.Warn("mood dedup: embed failed", "err", err)
 		return "" // fail open
@@ -300,7 +301,7 @@ func checkMoodDuplicate(skillArgs map[string]any, tctx *toolContext) string {
 
 	// Compare against each recent note.
 	for _, existing := range windowNotes {
-		existVec, err := tctx.embedClient.Embed(existing)
+		existVec, err := tctx.EmbedClient.Embed(existing)
 		if err != nil {
 			continue
 		}

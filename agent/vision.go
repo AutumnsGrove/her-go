@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"her/tools"
 	"her/vision"
 )
 
@@ -14,7 +15,7 @@ import (
 // The description gets accumulated in searchContext — same pattern as
 // web_search results — so the reply tool can reference it when
 // generating the conversational response.
-func execViewImage(argsJSON string, tctx *toolContext) string {
+func execViewImage(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Prompt string `json:"prompt"`
 	}
@@ -23,39 +24,39 @@ func execViewImage(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Guard: no image attached to this message.
-	if tctx.imageBase64 == "" {
+	if tctx.ImageBase64 == "" {
 		return "No image attached to this message. The user didn't send a photo."
 	}
 
 	// Guard: vision model not configured.
-	if tctx.visionLLM == nil {
+	if tctx.VisionLLM == nil {
 		return "Vision is not configured. Add a vision section to config.yaml to enable image understanding."
 	}
 
 	// Show a status update while the VLM works.
-	if tctx.statusCallback != nil {
-		_ = tctx.statusCallback("looking at the image...")
+	if tctx.StatusCallback != nil {
+		_ = tctx.StatusCallback("looking at the image...")
 	}
 
 	log.Info("  view_image", "prompt", args.Prompt)
 
 	// Call the VLM through the vision package.
-	result, err := vision.Describe(tctx.visionLLM, tctx.imageBase64, tctx.imageMIME, args.Prompt)
+	result, err := vision.Describe(tctx.VisionLLM, tctx.ImageBase64, tctx.ImageMIME, args.Prompt)
 	if err != nil {
 		log.Error("vision describe failed", "err", err)
 		return fmt.Sprintf("Failed to analyze the image: %v", err)
 	}
 
 	// Log metrics — same pattern as other LLM calls.
-	if tctx.store != nil && tctx.triggerMsgID > 0 {
-		if err := tctx.store.SaveMetric(
+	if tctx.Store != nil && tctx.TriggerMsgID > 0 {
+		if err := tctx.Store.SaveMetric(
 			result.Model,
 			result.PromptTokens,
 			result.CompletionTokens,
 			result.TotalTokens,
 			result.CostUSD,
 			0, // latency — not tracked at this level
-			tctx.triggerMsgID,
+			tctx.TriggerMsgID,
 		); err != nil {
 			log.Error("saving vision metric", "err", err)
 		}
@@ -69,8 +70,8 @@ func execViewImage(argsJSON string, tctx *toolContext) string {
 
 	// Persist the VLM description to the messages table so we have a
 	// permanent text record of what the bot "saw" in the image.
-	if tctx.store != nil && tctx.triggerMsgID > 0 {
-		if err := tctx.store.UpdateMessageMedia(tctx.triggerMsgID, "", result.Description); err != nil {
+	if tctx.Store != nil && tctx.TriggerMsgID > 0 {
+		if err := tctx.Store.UpdateMessageMedia(tctx.TriggerMsgID, "", result.Description); err != nil {
 			log.Error("saving media description", "err", err)
 		}
 	}
@@ -78,10 +79,10 @@ func execViewImage(argsJSON string, tctx *toolContext) string {
 	// Accumulate the image description in searchContext so the reply
 	// tool can reference it — same pattern as web_search results.
 	imageContext := fmt.Sprintf("## Image Description\n\n%s", result.Description)
-	if tctx.searchContext != "" {
-		tctx.searchContext += "\n\n" + imageContext
+	if tctx.SearchContext != "" {
+		tctx.SearchContext += "\n\n" + imageContext
 	} else {
-		tctx.searchContext = imageContext
+		tctx.SearchContext = imageContext
 	}
 
 	return result.Description

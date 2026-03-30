@@ -1,0 +1,47 @@
+name: create_schedule
+description: >-
+  Create a recurring scheduled task with a cron expression.
+hot: false
+category: scheduling
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: "Human-readable name (e.g., 'morning briefing')"
+    cron_expr:
+      type: string
+      description: >-
+        Cron expression: '0 8 * * *' (8am daily), '0 9 * * 1-5' (9am
+        weekdays)
+    task_type:
+      type: string
+      description: >-
+        'run_prompt' runs through the full agent pipeline. 'send_message'
+        sends a static message.
+      enum:
+        - run_prompt
+        - send_message
+    payload:
+      type: object
+      description: >-
+        Task config — for run_prompt: {"prompt": "..."}, for
+        send_message: {"message": "..."}
+    priority:
+      type: string
+      description: "Priority level. Default: 'normal'."
+      enum:
+        - normal
+        - high
+        - critical
+    max_runs:
+      type: integer
+      description: "Maximum number of executions. Omit for unlimited."
+    description:
+      type: string
+      description: "What this schedule does, in plain English"
+  required:
+    - name
+    - cron_expr
+    - task_type
+    - payload

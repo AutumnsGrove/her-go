@@ -1,0 +1,16 @@
+name: view_image
+description: >-
+  Analyze an image the user sent. Returns a detailed description of what's
+  in it. Call this BEFORE reply when the user sends a photo.
+hot: false
+category: vision
+parameters:
+  type: object
+  properties:
+    prompt:
+      type: string
+      description: >-
+        What to focus on when describing the image. E.g., 'describe this
+        photo', 'what food is this', 'read any text in this image'.
+  required:
+    - prompt

@@ -1,0 +1,38 @@
+name: save_self_fact
+description: >-
+  Save a fact about {{her}} herself — her own observations, communication
+  patterns, identity, or things she's learned about the relationship dynamic.
+  NOT for facts about {{user}}.
+hot: false
+category: memory
+parameters:
+  type: object
+  properties:
+    fact:
+      type: string
+      description: "A self-observation or identity fact about {{her}}"
+    category:
+      type: string
+      description: "Category of the self-fact"
+      enum:
+        - identity
+        - observation
+        - pattern
+        - preference
+        - relationship_dynamic
+    importance:
+      type: integer
+      description: "How important this is (1=minor note, 10=core identity)"
+      minimum: 1
+      maximum: 10
+    tags:
+      type: string
+      description: >-
+        Comma-separated topic tags for semantic search — describes WHAT this
+        self-fact is about. Example: 'identity, communication style,
+        authenticity' or 'relationship, boundaries, user dynamic'.
+  required:
+    - fact
+    - category
+    - importance
+    - tags

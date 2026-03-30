@@ -1,0 +1,13 @@
+name: delete_schedule
+description: >-
+  Permanently delete a scheduled task by ID.
+hot: false
+category: scheduling
+parameters:
+  type: object
+  properties:
+    task_id:
+      type: integer
+      description: "ID of the scheduled task to delete"
+  required:
+    - task_id

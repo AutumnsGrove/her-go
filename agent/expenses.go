@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"her/tools"
 )
 
 // validExpenseCategories is the fixed set of categories the agent can assign.
@@ -84,7 +86,7 @@ type lineItem struct {
 //   - currency: string, ISO 4217 code (optional, defaults to "USD")
 //   - note:     string, optional context about the purchase
 //   - items:    array of {description, quantity, unit_price, total_price}
-func execScanReceipt(argsJSON string, tctx *toolContext) string {
+func execScanReceipt(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Amount   float64    `json:"amount"`
 		Vendor   string     `json:"vendor"`
@@ -139,10 +141,10 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 
 	// --- Classifier gate ---
 	// Check if this is a real purchase or an in-game/fictional transaction.
-	if tctx.classifierLLM != nil {
+	if tctx.ClassifierLLM != nil {
 		receiptSummary := fmt.Sprintf("%s %.2f at %s (%s)", args.Currency, args.Amount, args.Vendor, args.Category)
-		snippet, _ := tctx.store.RecentMessages(tctx.conversationID, 3)
-		verdict := classifyMemoryWrite(tctx.classifierLLM, "receipt", receiptSummary, snippet)
+		snippet, _ := tctx.Store.RecentMessages(tctx.ConversationID, 3)
+		verdict := classifyMemoryWrite(tctx.ClassifierLLM, "receipt", receiptSummary, snippet)
 		if !verdict.Allowed {
 			return rejectionMessage(verdict)
 		}
@@ -150,18 +152,18 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 
 	// --- Save to database ---
 
-	if tctx.store == nil {
+	if tctx.Store == nil {
 		return "error: database not available"
 	}
 
-	id, err := tctx.store.SaveExpense(
+	id, err := tctx.Store.SaveExpense(
 		args.Amount,
 		args.Currency,
 		args.Vendor,
 		args.Category,
 		args.Date,
 		args.Note,
-		tctx.triggerMsgID,
+		tctx.TriggerMsgID,
 	)
 	if err != nil {
 		log.Error("saving expense", "err", err)
@@ -179,7 +181,7 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 		if qty < 1 {
 			qty = 1
 		}
-		if err := tctx.store.SaveExpenseItem(id, desc, qty, item.UnitPrice, item.TotalPrice); err != nil {
+		if err := tctx.Store.SaveExpenseItem(id, desc, qty, item.UnitPrice, item.TotalPrice); err != nil {
 			log.Error("saving expense item", "err", err, "expense_id", id, "item", desc)
 			continue // non-fatal — the parent expense is already saved
 		}
@@ -208,7 +210,7 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 	// data in its system prompt. Without this, only the agent model sees
 	// the result — the chat model hallucinated vendor/amount details.
 	// Same pattern as weather and mood context injection.
-	tctx.expenseContext = fmt.Sprintf(
+	tctx.ExpenseContext = fmt.Sprintf(
 		"# Recent Receipt Scan\n\n"+
 			"You just scanned a receipt. Use ONLY these exact details in your reply.\n"+
 			"IMPORTANT: Item names from receipts are often abbreviated or coded (e.g., 'CHIO BANANAS' means bananas, "+
@@ -223,7 +225,7 @@ func execScanReceipt(argsJSON string, tctx *toolContext) string {
 // execQueryExpenses handles the query_expenses tool call. Returns expense
 // data so the agent can answer questions like "what do my finances look like?"
 // or "how much did I spend on groceries this month?"
-func execQueryExpenses(argsJSON string, tctx *toolContext) string {
+func execQueryExpenses(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		Period    string `json:"period"`     // "week", "month", "year", "all", or custom range
 		Category  string `json:"category"`   // optional filter
@@ -234,7 +236,7 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	if tctx.store == nil {
+	if tctx.Store == nil {
 		return "error: database not available"
 	}
 
@@ -266,7 +268,7 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Get summary stats.
-	total, byCategory, count, err := tctx.store.ExpenseSummary(startDate, endDate)
+	total, byCategory, count, err := tctx.Store.ExpenseSummary(startDate, endDate)
 	if err != nil {
 		log.Error("querying expense summary", "err", err)
 		return fmt.Sprintf("error querying expenses: %v", err)
@@ -290,7 +292,7 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 	}
 
 	// Also fetch recent individual expenses for detail.
-	expenses, items, err := tctx.store.RecentExpenses(10)
+	expenses, items, err := tctx.Store.RecentExpenses(10)
 	if err == nil && len(expenses) > 0 {
 		b.WriteString("**Recent transactions:**\n")
 		for _, e := range expenses {
@@ -320,7 +322,7 @@ func execQueryExpenses(argsJSON string, tctx *toolContext) string {
 // execDeleteExpense handles the delete_expense tool call. Removes an expense
 // and its line items by ID. Used when the user wants to clear test data or
 // correct a mistaken entry.
-func execDeleteExpense(argsJSON string, tctx *toolContext) string {
+func execDeleteExpense(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		ID int64 `json:"id"`
 	}
@@ -332,11 +334,11 @@ func execDeleteExpense(argsJSON string, tctx *toolContext) string {
 		return "error: expense ID is required"
 	}
 
-	if tctx.store == nil {
+	if tctx.Store == nil {
 		return "error: database not available"
 	}
 
-	err := tctx.store.DeleteExpense(args.ID)
+	err := tctx.Store.DeleteExpense(args.ID)
 	if err != nil {
 		log.Error("deleting expense", "err", err)
 		return fmt.Sprintf("error deleting expense: %v", err)
@@ -348,7 +350,7 @@ func execDeleteExpense(argsJSON string, tctx *toolContext) string {
 
 // execUpdateExpense handles the update_expense tool call. Modifies fields
 // on an existing expense. The agent passes only the fields that need changing.
-func execUpdateExpense(argsJSON string, tctx *toolContext) string {
+func execUpdateExpense(argsJSON string, tctx *tools.Context) string {
 	var args struct {
 		ID       int64   `json:"id"`
 		Amount   float64 `json:"amount"`
@@ -366,7 +368,7 @@ func execUpdateExpense(argsJSON string, tctx *toolContext) string {
 		return "error: expense ID is required"
 	}
 
-	if tctx.store == nil {
+	if tctx.Store == nil {
 		return "error: database not available"
 	}
 
@@ -392,7 +394,7 @@ func execUpdateExpense(argsJSON string, tctx *toolContext) string {
 		args.Currency = strings.ToUpper(strings.TrimSpace(args.Currency))
 	}
 
-	err := tctx.store.UpdateExpense(args.ID, args.Amount, args.Currency, args.Vendor, args.Category, args.Date, args.Note)
+	err := tctx.Store.UpdateExpense(args.ID, args.Amount, args.Currency, args.Vendor, args.Category, args.Date, args.Note)
 	if err != nil {
 		log.Error("updating expense", "err", err)
 		return fmt.Sprintf("error updating expense: %v", err)

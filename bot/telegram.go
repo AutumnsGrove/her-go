@@ -20,6 +20,7 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/skills/loader"
+	"her/tools"
 	"her/tui"
 	"her/voice"
 	"her/weather"
@@ -474,7 +475,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Step 4: Build the trace callback FIRST if enabled — its placeholder
 	// (🧠) needs to appear ABOVE the reply placeholder in chat order.
-	var traceCallback agent.TraceCallback
+	var traceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
 		traceCallback = b.makeTraceCallback(c)
 	}
@@ -551,7 +552,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Build the TTS callback — fires inside execReply so voice synthesis
 	// starts immediately when text is sent, not after the whole agent loop.
-	var ttsCallback agent.TTSCallback
+	var ttsCallback tools.TTSCallback
 	if b.ttsClient != nil && b.ttsClient.ReplyMode() == "voice" {
 		ttsCallback = func(text string) {
 			b.sendVoiceReply(c, text)

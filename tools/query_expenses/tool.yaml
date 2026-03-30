@@ -1,0 +1,27 @@
+name: query_expenses
+description: >-
+  Look up {{user}}'s expense history. Use when they ask about spending,
+  finances, budgets, or how much they've spent. Returns totals, category
+  breakdowns, and recent transactions.
+hot: false
+category: expenses
+parameters:
+  type: object
+  properties:
+    period:
+      type: string
+      description: >-
+        Time period to query. 'week' = this week, 'month' = this month,
+        'year' = this year, 'all' = everything.
+      enum:
+        - week
+        - month
+        - year
+        - all
+    category:
+      type: string
+      description: >-
+        Optional category filter (e.g., 'groceries', 'dining'). Omit to
+        see all categories.
+  required:
+    - period

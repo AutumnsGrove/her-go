@@ -1,0 +1,43 @@
+name: update_fact
+description: >-
+  Update an existing fact when new information changes or refines what we
+  knew. Use this instead of save_fact when a fact already exists but needs
+  correction or expansion.
+hot: true
+parameters:
+  type: object
+  properties:
+    fact_id:
+      type: integer
+      description: "ID of the fact to update"
+    fact:
+      type: string
+      description: "The updated fact text"
+    category:
+      type: string
+      description: "Updated category. Use 'context' for ephemeral day-to-day info."
+      enum:
+        - identity
+        - relationship
+        - health
+        - work
+        - mood
+        - goal
+        - event
+        - preference
+        - context
+        - other
+    importance:
+      type: integer
+      description: "Updated importance score"
+      minimum: 1
+      maximum: 10
+    tags:
+      type: string
+      description: "Updated comma-separated topic tags for semantic search."
+  required:
+    - fact_id
+    - fact
+    - category
+    - importance
+    - tags

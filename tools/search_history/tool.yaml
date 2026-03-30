@@ -1,0 +1,19 @@
+name: search_history
+description: >-
+  Search a skill's execution history for cached results. Returns past runs
+  ranked by relevance, with freshness metadata. Use before re-running a
+  skill to check if you already have a recent answer.
+hot: false
+category: skills
+parameters:
+  type: object
+  properties:
+    skill_name:
+      type: string
+      description: "Exact skill name to search history for."
+    query:
+      type: string
+      description: "What to search for in past results (natural language)."
+  required:
+    - skill_name
+    - query

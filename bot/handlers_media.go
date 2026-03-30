@@ -14,6 +14,7 @@ import (
 	"her/agent"
 	"her/ocr"
 	"her/scrub"
+	"her/tools"
 	"her/tui"
 
 	tele "gopkg.in/telebot.v4"
@@ -172,7 +173,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}()
 
 	// Trace placeholder first (so it appears above the reply).
-	var traceCallback agent.TraceCallback
+	var traceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
 		traceCallback = b.makeTraceCallback(c)
 	}
@@ -354,7 +355,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Trace placeholder first (so it appears above the reply) — but only
 	// for voice handler, since the main trace callback is built later.
 	// We build it here just to send the 🧠 placeholder in the right order.
-	var traceCallback agent.TraceCallback
+	var traceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
 		traceCallback = b.makeTraceCallback(c)
 	}
@@ -436,7 +437,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	// TTS callback — same pattern as handleMessage.
-	var ttsCallback agent.TTSCallback
+	var ttsCallback tools.TTSCallback
 	if b.ttsClient != nil {
 		ttsCallback = func(text string) {
 			b.sendVoiceReply(c, text)

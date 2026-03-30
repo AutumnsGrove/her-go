@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"her/agent"
 	"her/memory"
+	"her/tools"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -82,7 +82,7 @@ func (b *Bot) getConversationID(chatID int64) string {
 // This is the same closure pattern as statusCallback and sendCallback —
 // the returned function "closes over" the traceMsg variable so it
 // always knows which message to edit.
-func (b *Bot) makeTraceCallback(c tele.Context) agent.TraceCallback {
+func (b *Bot) makeTraceCallback(c tele.Context) tools.TraceCallback {
 	// Pre-send a placeholder so the trace message is ABOVE the reply
 	// in chat order. It gets replaced on the first real trace update.
 	// Uses a short-timeout client so a Telegram blip doesn't stall the

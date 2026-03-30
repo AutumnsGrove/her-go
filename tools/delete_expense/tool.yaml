@@ -1,0 +1,14 @@
+name: delete_expense
+description: >-
+  Delete an expense by ID. Use when {{user}} wants to remove a mistaken or
+  test entry. Also deletes all associated line items.
+hot: false
+category: expenses
+parameters:
+  type: object
+  properties:
+    id:
+      type: integer
+      description: "The expense ID to delete (shown in query_expenses results)."
+  required:
+    - id

@@ -1,0 +1,18 @@
+name: think
+description: >-
+  Pause and reason before acting. Use this to evaluate search results,
+  resolve contradictions in memory, plan your next step, or decide
+  between multiple approaches. This tool does nothing except give you
+  space to think — call it whenever you need to deliberate before
+  making a decision.
+hot: true
+parameters:
+  type: object
+  properties:
+    thought:
+      type: string
+      description: >-
+        Your internal reasoning. What are you considering? What's the
+        best next step?
+  required:
+    - thought
