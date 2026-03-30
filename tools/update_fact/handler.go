@@ -57,6 +57,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), tools.MaxFactLength())
 	}
 
+	// Strip temporal references before saving — same as save_fact.
+	args.Fact = tools.StripTimestamps(args.Fact)
+
 	// --- Classifier gate ---
 	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
 		snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)

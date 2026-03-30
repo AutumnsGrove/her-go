@@ -89,36 +89,13 @@ classifiers:
             Facts should capture specific, meaningful information that
             couldn't be inferred from conversation history.
 
-      - name: HAS_TIMESTAMP
-        description: >-
-          Does the fact contain a specific date, time, or relative time
-          reference? Timestamps are automatically attached to every fact
-          by the system. The agent must NOT embed dates into the fact text.
-        examples:
-          - '"User visited Zaxby''s on March 29" (contains specific date)'
-          - '"As of 2026-03-29, user prefers..." (contains ISO date)'
-          - '"User started therapy last Tuesday" (relative time reference)'
-          - '"User went to a coffee shop today" (relative time — "today")'
-          - '"Yesterday user mentioned feeling better" (relative time — "yesterday")'
-        note: >-
-          recurring schedules and durations are NOT timestamps. "User has
-          therapy on Thursdays" is SAVE — that's a pattern. "User has been
-          learning Go for 3 months" is SAVE — that's a duration, not a date.
-        rejection:
-          default_detail: the fact contains a date or time reference
-          suffix: >-
-            Timestamps are automatically attached to every fact — do NOT
-            include dates, times, or relative time words (today, yesterday,
-            last week) in the fact text. Rewrite the fact without the
-            temporal reference.
-
       - name: SAVE
         description: >-
           The fact is real, specific, useful, and actually stated or
           clearly implied by the user.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-      Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable", "HAS_TIMESTAMP — contains specific date"
+      Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable"
 
   mood:
     preamble: >-

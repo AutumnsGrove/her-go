@@ -169,6 +169,11 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
 	}
 
+	// Strip temporal references (dates, "today", "last Tuesday", etc.) before
+	// embedding or saving. The DB timestamp handles "when" — fact text should
+	// be timeless so it stays accurate as time passes.
+	args.Fact = StripTimestamps(args.Fact)
+
 	// Embed by TAGS (not by fact text) so the vector space organizes by
 	// topic. "mental health, burnout, coping" lands far from "programming,
 	// go, backend" — which is what we want for retrieval. Fall back to
