@@ -1,4 +1,5 @@
 name: run_skill
+hint: "execute a discovered skill"
 description: >-
   Execute a skill by name with the given arguments. Use find_skill first to
   discover available skills, then call this with the skill name and a JSON

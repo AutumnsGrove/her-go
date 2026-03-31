@@ -31,6 +31,7 @@ import (
 type toolManifest struct {
 	Name        string         `yaml:"name"`
 	Description string         `yaml:"description"`
+	Hint        string         `yaml:"hint,omitempty"`
 	Hot         bool           `yaml:"hot"`
 	Category    string         `yaml:"category,omitempty"`
 	Parameters  parametersDef  `yaml:"parameters"`
@@ -78,6 +79,10 @@ var hotTools []string
 // Built from the "category" field in each tool's YAML.
 var categories = map[string][]string{}
 
+// hotToolHints maps hot tool name → terse one-liner for the agent prompt.
+// Built from the "hint" field in each hot tool's YAML.
+var hotToolHints = map[string]string{}
+
 // ---------------------------------------------------------------------------
 // Embedded YAML files — baked into the binary at compile time
 // ---------------------------------------------------------------------------
@@ -89,6 +94,21 @@ var categories = map[string][]string{}
 //
 //go:embed */tool.yaml
 var toolYAMLs embed.FS
+
+// categoriesYAML embeds the category hints file. This is separate from
+// toolYAMLs because it lives in the tools/ root, not a subdirectory.
+//
+//go:embed categories.yaml
+var categoriesYAML []byte
+
+// categoryHintDef is the YAML structure for a single category in categories.yaml.
+type categoryHintDef struct {
+	Hint string `yaml:"hint"`
+}
+
+// categoryHints maps category name → agent-facing "when to use" hint.
+// Built from categories.yaml at init time.
+var categoryHints = map[string]string{}
 
 // ---------------------------------------------------------------------------
 // Loader — runs at init, parses YAML into llm.ToolDef structs
@@ -143,6 +163,9 @@ func init() {
 
 		if manifest.Hot {
 			hotTools = append(hotTools, manifest.Name)
+			if manifest.Hint != "" {
+				hotToolHints[manifest.Name] = manifest.Hint
+			}
 		}
 
 		if manifest.Category != "" {
@@ -164,6 +187,15 @@ func init() {
 	sort.Strings(hotTools)
 	for cat := range categories {
 		sort.Strings(categories[cat])
+	}
+
+	// Parse category hints from categories.yaml.
+	var rawHints map[string]categoryHintDef
+	if err := yaml.Unmarshal(categoriesYAML, &rawHints); err != nil {
+		panic(fmt.Sprintf("tools: failed to parse categories.yaml: %v", err))
+	}
+	for name, def := range rawHints {
+		categoryHints[name] = def.Hint
 	}
 
 	// Register trace spec for use_tools — it has no YAML file since its
@@ -280,6 +312,78 @@ func CategoryDescription() string {
 	}
 
 	return strings.Join(parts, " | ")
+}
+
+// ---------------------------------------------------------------------------
+// Prompt rendering — generates markdown sections for agent_prompt.md
+// ---------------------------------------------------------------------------
+
+// RenderHotToolsList returns a markdown bullet list of hot tools for the
+// agent prompt. Each bullet has the tool name bolded and its hint.
+// Output is deterministic (sorted by tool name).
+//
+// Example output:
+//
+//	- **done** — signal you're finished (REQUIRED, call last)
+//	- **reply** — generate and send a response (REQUIRED every turn)
+func RenderHotToolsList() string {
+	var lines []string
+	for _, name := range hotTools {
+		hint := hotToolHints[name]
+		if hint == "" {
+			// Fallback: use first sentence of the tool's description.
+			if def, ok := toolDefs[name]; ok {
+				hint = firstSentence(def.Function.Description)
+			}
+		}
+		lines = append(lines, fmt.Sprintf("- **%s** — %s", name, hint))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// RenderCategoryTable returns a markdown table of deferred tool categories
+// for the agent prompt. Output is deterministic (sorted by category name).
+//
+// Example output:
+//
+//	| Category | Tools | When to use |
+//	|---|---|---|
+//	| **context** | get_current_time, set_location | You need precise time... |
+func RenderCategoryTable() string {
+	catNames := sortedCategoryNames()
+
+	var lines []string
+	lines = append(lines, "| Category | Tools | When to use |")
+	lines = append(lines, "|---|---|---|")
+	for _, name := range catNames {
+		members := categories[name]
+		hint := categoryHints[name]
+		lines = append(lines, fmt.Sprintf("| **%s** | %s | %s |",
+			name, strings.Join(members, ", "), hint))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// sortedCategoryNames returns category names in sorted order.
+func sortedCategoryNames() []string {
+	names := make([]string, 0, len(categories))
+	for name := range categories {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// firstSentence returns the text up to the first period+space or newline.
+// Used as a fallback hint when a tool's YAML doesn't have a hint field.
+func firstSentence(s string) string {
+	if i := strings.Index(s, ". "); i >= 0 {
+		return s[:i+1]
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // RegisterDef adds a Go-defined tool to the registry. Used by agent/

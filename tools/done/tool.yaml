@@ -1,4 +1,5 @@
 name: done
+hint: "signal you're finished (REQUIRED, call last)"
 description: >-
   Signal that you are completely finished with this turn. Call this
   LAST, after reply and any memory operations. Every turn MUST end

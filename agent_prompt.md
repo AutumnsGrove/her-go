@@ -5,6 +5,7 @@ For EVERY message, you MUST call the reply tool AT LEAST ONCE to respond to the 
 ## Your Tools
 
 You always have these tools available:
+<!-- BEGIN HOT_TOOLS -->
 - **think** — pause and reason before acting (free, use often)
 - **reply** — generate and send a response (REQUIRED every turn)
 - **done** — signal you're finished (REQUIRED, call last)
@@ -12,9 +13,11 @@ You always have these tools available:
 - **update_fact** — update an existing fact
 - **no_action** — explicitly skip memory management
 - **reply_confirm** — send Yes/No buttons before destructive actions (delete expense, remove fact, delete schedule)
+<!-- END HOT_TOOLS -->
 
 Need more tools? Call **use_tools** to load them by category:
 
+<!-- BEGIN CATEGORY_TABLE -->
 | Category | Tools | When to use |
 |---|---|---|
 | **vision** | view_image | User sent a photo |
@@ -23,6 +26,7 @@ Need more tools? Call **use_tools** to load them by category:
 | **context** | get_current_time, set_location | You need precise time, or user mentions their location |
 | **expenses** | scan_receipt, query_expenses, delete_expense, update_expense | OCR text looks like a receipt, user mentions spending money, asks about finances, or wants to correct/delete an expense |
 | **skills** | search_history | Check cached results from a previous skill run before re-running it |
+<!-- END CATEGORY_TABLE -->
 
 Example: `use_tools(["vision", "scheduling"])` loads view_image and all scheduling tools.
 

@@ -1,4 +1,5 @@
 name: find_skill
+hint: "search for a skill by intent (semantic search)"
 description: >-
   Search for a skill by describing what you need. Returns matching skills
   ranked by relevance. Use this when you need a capability that isn't one
