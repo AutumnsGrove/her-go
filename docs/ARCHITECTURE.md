@@ -205,7 +205,41 @@ Mira: message text
 
 ---
 
-### 6. Embedding Model — nomic (local)
+### 6. Reflection Model — Deepseek V3.2 (same client as chat)
+
+**Purpose:** After memory-dense conversations, generate a private journal-like
+reflection about what was learned.
+
+**Called from:** `persona/evolution.go:110` — `llmClient.ChatCompletion()`
+Triggered from `agent/agent.go` after the agent loop when >= `reflection_memory_threshold`
+facts were saved in one turn.
+
+**System prompt:** `reflectionPromptTmpl` (persona/evolution.go:34)
+- botName + recent exchange + facts just learned
+- Instructs 2-4 sentence first-person reflection
+
+**Token storage:** Metrics only.
+
+**Frequency:** Infrequent — only after conversations where many facts were saved.
+
+---
+
+### 7. Persona Rewrite Model — Deepseek V3.2 (same client as chat)
+
+**Purpose:** Every N reflections, rewrite `persona.md` — the bot's evolving self-image.
+
+**Called from:** `persona/evolution.go:192` — `llmClient.ChatCompletion()`
+Triggered by `MaybeRewrite()` after every `rewrite_every_n_reflections` reflections.
+
+**Input:** Current persona.md + recent reflections + up to 20 self-facts.
+
+**Token storage:** Metrics only.
+
+**Frequency:** Very rare — every ~3 reflections, which themselves are rare.
+
+---
+
+### 8. Embedding Model — nomic (local)
 
 **Purpose:** Convert text to vectors for semantic search and dedup.
 
@@ -298,3 +332,68 @@ These are the largest files in the codebase (potential refactoring targets):
 
 `memory/store.go` and `agent/agent.go` are the two files most likely to benefit from
 splitting into focused sub-files.
+
+---
+
+## Full Data Flow Visualization
+
+```
+User Message (Telegram)
+    │
+    ▼
+bot/telegram.go → PII scrub → agent.Run(RunParams)
+    │
+    ├─ Load ALL facts (user + self) from DB
+    │
+    ├─ Compaction check (100-message window)
+    │  ├─ Two triggers: context-aware (75% of prompt budget)
+    │  │                 + estimation (75% of history budget)
+    │  ├─ If triggered → chatLLM summarization call
+    │  └─ Result: conversationSummary string
+    │
+    ├─ Semantic search (embed user message → KNN in sqlite-vec)
+    │  └─ Result: relevantFacts slice
+    │
+    ├─ Build agent context:
+    │  ├─ agent_prompt.md (system) + tool schemas (hot only)
+    │  └─ User msg + recent 10 msgs + ALL facts (user context)
+    │
+    └─ Agent Loop (0-10 iterations, Kimi K2.5):
+        │
+        ├─ think ──────── internal reasoning (no external call)
+        │
+        ├─ reply ──────── builds chat prompt (9 layers), calls Deepseek
+        │  │               ├─ prompt.md + persona.md + traits
+        │  │               ├─ time + SEMANTIC facts + weather + mood
+        │  │               ├─ conversation summary (from compaction)
+        │  │               └─ 10 recent messages + instruction
+        │  │
+        │  └─ Deanonymize PII → send to Telegram → fire TTS
+        │
+        ├─ save_fact ──── local gates → classifier (Haiku) → embed → save
+        │
+        ├─ view_image ── vision model (Gemini Flash)
+        │
+        ├─ web_search ── Tavily API
+        │
+        ├─ use_tools ─── loads deferred tool schemas into active set
+        │
+        └─ done ───────── exit loop
+            │
+            ▼
+        Post-agent (if many facts saved):
+            ├─ Reflection (chatLLM) → save to reflections table
+            └─ Maybe Persona Rewrite (chatLLM) → update persona.md
+```
+
+### Key Difference: Agent vs Chat Context
+
+The agent and chat model see **different** versions of the facts:
+
+| | Agent (Kimi K2.5) | Chat (Deepseek V3.2) |
+|--|---|---|
+| **Facts** | ALL user + ALL self facts | Only semantically relevant facts (KNN-filtered, redundancy-filtered) |
+| **Summary** | Not included | Included as Layer 6 of system prompt |
+| **History** | Last 10 messages (raw) | Last 10 messages (with day boundary markers) |
+| **Tools** | Yes (7 hot + deferred) | No tools |
+| **Persona** | Not included (in agent_prompt.md rules) | prompt.md + persona.md + traits |
