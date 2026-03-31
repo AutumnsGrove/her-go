@@ -76,14 +76,16 @@ type LayerContext struct {
 	WeatherClient *weather.Client
 
 	// Runtime state — set by the agent before building the prompt.
-	RelevantFacts      []memory.Fact   // KNN results for semantic injection
-	ConversationSummary string         // from compaction
-	ConversationID     string          // current conversation
-	ScrubbedUserMessage string         // PII-scrubbed user input
-	RecentMessages     []memory.Message // sliding window for agent context
-	HasImage           bool            // user sent a photo
-	OCRText            string          // pre-flight OCR extraction
-	ExpenseContext     string          // from receipt scanning (if any)
+	RelevantFacts       []memory.Fact         // KNN results for semantic injection
+	ConversationSummary string                // from chat compaction
+	AgentActionSummary  string                // from agent compaction (tool call history)
+	RecentAgentActions  []memory.AgentAction  // recent tool calls kept in full fidelity
+	ConversationID      string                // current conversation
+	ScrubbedUserMessage string                // PII-scrubbed user input
+	RecentMessages      []memory.Message      // sliding window for agent context
+	HasImage            bool                  // user sent a photo
+	OCRText             string                // pre-flight OCR extraction
+	ExpenseContext      string                // from receipt scanning (if any)
 
 	// Instruction and search context from the agent (for chat stream messages).
 	Instruction   string

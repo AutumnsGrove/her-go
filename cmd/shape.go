@@ -107,9 +107,19 @@ func runShape(cmd *cobra.Command, args []string) error {
 		}
 
 		// Get the latest conversation summary.
-		summary, _, err := store.LatestSummary("")
+		summary, _, err := store.LatestSummary("", "chat")
 		if err == nil {
 			ctx.ConversationSummary = summary
+		}
+
+		// Get the latest agent action summary and recent actions.
+		agentSummary, _, err := store.LatestSummary("", "agent")
+		if err == nil {
+			ctx.AgentActionSummary = agentSummary
+		}
+		agentActions, err := store.RecentAgentActions(30)
+		if err == nil {
+			ctx.RecentAgentActions = agentActions
 		}
 	}
 
@@ -171,9 +181,9 @@ func printStreamShape(name, model string, stream layers.Stream, ctx *layers.Laye
 	// Show budget and headroom if configured.
 	var budget int
 	if stream == layers.StreamAgent {
-		budget = cfg.Memory.MaxContextTokens // TODO: use separate agent budget
+		budget = cfg.Memory.AgentContextBudget
 	} else {
-		budget = cfg.Memory.MaxContextTokens
+		budget = cfg.Memory.ChatContextBudget
 	}
 
 	if budget > 0 {
