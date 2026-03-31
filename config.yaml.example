@@ -14,8 +14,8 @@ llm:
   model: "deepseek/deepseek-v3.2"
   temperature: 0.85
   max_tokens: 4096
-  fallback:                                      # optional — used when primary model is unavailable (rate limit, timeout, server error)
-    model: "anthropic/claude-haiku-4.5"  # reliable paid fallback
+  fallback:
+    model: "anthropic/claude-haiku-4.5"
     temperature: 0.85
     max_tokens: 4096
 
@@ -24,80 +24,35 @@ agent:
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
-  fallback:                                      # optional — used when primary model is unavailable
+  fallback:
     model: "anthropic/claude-haiku-4.5"
     temperature: 0.1
     max_tokens: 1024
-
-vision:
-  model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
-  temperature: 0.3                         # low temp for accurate descriptions
-  max_tokens: 512
-  fallback:                                      # optional — Gemini Flash is free but may rate-limit
-    model: "anthropic/claude-haiku-4.5"
-    temperature: 0.3
-    max_tokens: 512
 
 classifier:
   model: "anthropic/claude-haiku-4.5"  # small, fast model that validates memory writes against fiction
   temperature: 0                        # deterministic — consistent REAL/FICTIONAL verdicts
   max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
 
+vision:
+  model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
+  temperature: 0.3                         # low temp for accurate descriptions
+  max_tokens: 512
+  fallback:
+    model: "anthropic/claude-haiku-4.5"
+    temperature: 0.3
+    max_tokens: 512
+
 embed:
   base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
   model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
   dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
-  max_semantic_distance: 0.45                                    # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter — Mira can use recall for anything not auto-injected.
+  max_semantic_distance: 0.45                                   # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter.
 
 search:
   tavily_api_key: "${TAVILY_API_KEY}"
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
-
-weather:
-  latitude: 0                    # your location — set via set_location tool or manually here
-  longitude: 0                   # Open-Meteo is free, no API key needed
-  temp_unit: "fahrenheit"        # "fahrenheit" or "celsius"
-  wind_speed_unit: "mph"         # "mph" or "kmh"
-  cache_ttl: 3600                # seconds between API refreshes (default: 1 hour)
-
-memory:
-  db_path: "./her.db"
-  recent_messages: 10       # sliding window size (compaction summaries cover older context)
-  max_facts_in_context: 10  # top-K facts to inject
-  extraction_interval: 10   # extract facts every N messages
-  max_history_tokens: 3000  # estimation-based compaction budget — estimates tokens across the full history window using len/4 heuristic. Triggers at 75%.
-  chat_context_budget: 8000  # chat model (Deepseek) total prompt budget — compaction fires when actual prompt tokens exceed 75% of this. The chat prompt includes system prompt layers (~1500 tokens) + history + messages. Set higher than you'd expect because you want compaction to fire based on HISTORY growth, not baseline scaffolding. 0 = use max_history_tokens only.
-  agent_context_budget: 6000 # agent model (Kimi K2.5) action history budget — when the agent's accumulated tool call history exceeds 75% of this, older actions get summarized. The agent uses this to remember what it did in previous turns. 0 = use 6000 default.
-  auto_link_count: 3         # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
-  auto_link_threshold: 0.7  # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
-
-scrub:
-  enabled: true
-  # tier 1 (hard redact) and tier 2 (tokenize) are always on
-  # tier 3 (names, places, context) passes through by design
-
-persona:
-  prompt_file: "./prompt.md"             # base template (static, user-authored)
-  persona_file: "./persona.md"           # evolving self-image (bot-authored)
-  agent_prompt_file: "./agent_prompt.md" # agent orchestration rules (editable, hot-reloadable)
-  rewrite_every_n_reflections: 3  # trigger persona rewrite after N reflections accumulate
-  reflection_memory_threshold: 8     # trigger reflection after N new facts accumulate since last reflection
-  max_trait_shift: 0.1               # max trait score change per rewrite cycle
-
-scheduler:
-  timezone: "America/New_York"     # IANA timezone — cron expressions evaluated in this zone
-  quiet_hours_start: "23:00"       # no scheduled messages during this window
-  quiet_hours_end: "07:00"         # resume after this time
-  max_proactive_per_day: 5         # cap on non-reminder scheduled messages (0 = unlimited)
-
-  # Default recurring tasks — created on startup if enabled.
-  # All can be customized or deleted via /schedule commands.
-  morning_briefing: false          # daily briefing at 8am (weather, tasks, follow-ups)
-  mood_checkin: false              # daily mood check-in at 9pm (inline keyboard)
-  medication_checkin: false        # daily medication check-in at 9pm (critical — always fires)
-  proactive_followups: false       # scan for follow-ups at 9am (conditional — only if needed)
-  auto_journal: false              # auto-journal entry at 10pm
 
 ocr:
   vision_ocr_path: "macos-vision-ocr"    # path to macos-vision-ocr binary (or name if on PATH)
@@ -106,6 +61,48 @@ ocr:
     engine: "glm-ocr"                     # purpose-built OCR model (0.9B, MIT licensed)
     base_url: "http://localhost:1234/v1"  # LM Studio endpoint (same instance as embeddings)
     model: "glm-ocr"                      # model name in LM Studio
+
+memory:
+  db_path: "./her.db"
+  recent_messages: 10            # sliding window size (compaction summaries cover older context)
+  max_facts_in_context: 10       # top-K facts to inject
+  extraction_interval: 10        # extract facts every N messages
+  max_history_tokens: 3000       # estimation-based compaction budget — estimates tokens across the full history window using len/4 heuristic. Triggers at 75%.
+  chat_context_budget: 8000      # chat model (Deepseek) total prompt budget — compaction fires when actual prompt tokens exceed 75% of this. 0 = use max_history_tokens only.
+  agent_context_budget: 16000    # agent model (Kimi K2.5) action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
+  auto_link_count: 3             # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
+  auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
+
+scrub:
+  enabled: true
+  # tier 1 (hard redact) and tier 2 (tokenize) are always on
+  # tier 3 (names, places, context) passes through by design
+
+persona:
+  prompt_file: "./prompt.md"
+  persona_file: "./persona.md"
+  agent_prompt_file: "./agent_prompt.md"
+  rewrite_every_n_reflections: 3
+  reflection_memory_threshold: 8     # trigger reflection when N+ facts extracted from one conversation
+  max_trait_shift: 0.1               # max trait score change per rewrite cycle
+
+scheduler:
+  timezone: "America/New_York"
+  quiet_hours_start: "23:00"
+  quiet_hours_end: "07:00"
+  max_proactive_per_day: 5
+  morning_briefing: false
+  mood_checkin: false
+  medication_checkin: false
+  proactive_followups: false
+  auto_journal: false
+
+weather:
+  latitude: 0                    # your location — set via set_location tool or manually here
+  longitude: 0                   # Open-Meteo is free, no API key needed
+  temp_unit: "fahrenheit"        # "fahrenheit" or "celsius"
+  wind_speed_unit: "mph"         # "mph" or "kmh"
+  cache_ttl: 3600                # seconds between API refreshes (default: 1 hour)
 
 voice:
   enabled: false                                                  # set true to accept voice memos

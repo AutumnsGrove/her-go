@@ -46,6 +46,13 @@ func init() {
 	})
 }
 
+// Quiet raises the fallback (stderr) logger to only show warnings and above.
+// Use this for CLI commands like `her shape` where info-level noise from
+// subsystems (fact filtering, weather fetches) clutters the output.
+func Quiet() {
+	fallback.SetLevel(charmlog.WarnLevel)
+}
+
 // Init sets the global event bus and optional file logger. Must be called
 // before any log calls if you want events routed to the TUI/file.
 //

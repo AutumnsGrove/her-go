@@ -372,7 +372,7 @@ func MaybeCompactAgent(
 	botName string,
 ) (*AgentCompactResult, error) {
 	if agentContextBudget <= 0 {
-		agentContextBudget = 6000 // default
+		agentContextBudget = 16000 // default
 	}
 
 	// Load existing agent summary.
