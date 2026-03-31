@@ -25,7 +25,7 @@ go build -o her && ./her run
 ## Architecture
 
 ```
-You (Telegram) → her binary → Mercury (agent model, orchestrates everything)
+You (Telegram) → her binary → Kimi K2.5 (agent model, orchestrates everything)
                                  ├── think (reason about what to do)
                                  ├── find_skill / run_skill (sandboxed skill execution)
                                  ├── web_search / book_search (via skills or built-in)
@@ -36,13 +36,13 @@ You (Telegram) → her binary → Mercury (agent model, orchestrates everything)
                                  └── done (signals turn complete)
 ```
 
-Every message goes through the **Mercury** agent first — a diffusion LLM (`inception/mercury-2`) that handles all tool-calling and orchestration. Mercury decides whether to search, remember, schedule, or call a skill. The conversational model (Deepseek V3.2) generates the actual natural language response when the agent calls `reply`. A separate vision model (Gemini Flash) handles image understanding.
+Every message goes through the **Kimi K2.5** agent first — an autoregressive LLM (`moonshotai/kimi-k2.5`) that handles all tool-calling and orchestration. Kimi decides whether to search, remember, schedule, or call a skill. The conversational model (Deepseek V3.2) generates the actual natural language response when the agent calls `reply`. A separate vision model (Gemini Flash) handles image understanding.
 
 ### Model Stack
 
 | Role | Model | Via |
 |---|---|---|
-| Agent (orchestration) | Mercury 2 (`inception/mercury-2`) | OpenRouter |
+| Agent (orchestration) | Kimi K2.5 (`moonshotai/kimi-k2.5`) | OpenRouter |
 | Chat (responses) | Deepseek V3.2 (`deepseek/deepseek-v3.2`) | OpenRouter |
 | Vision (images) | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter |
 | OCR (text extraction) | Apple Vision (primary), GLM-OCR (fallback) | Local |
@@ -52,7 +52,7 @@ Every message goes through the **Mercury** agent first — a diffusion LLM (`inc
 
 ## Features
 
-- **Agent-first pipeline** — Mercury orchestrates every turn: think, search, reply, remember, schedule
+- **Agent-first pipeline** — Kimi K2.5 orchestrates every turn: think, search, reply, remember, schedule
 - **Skills system** — Extensible sandboxed skills (Go or Python) with a 4-tier trust model, network proxy, and per-skill sidecar databases
 - **Memory system** — Facts extracted and stored in SQLite, semantic deduplication via local embeddings, quality gates that reject AI writing tics
 - **Persona evolution** — Mira reflects on conversations and rewrites her own personality description over time, with trait tracking and damped updates
@@ -135,7 +135,7 @@ Copy `config.yaml.example` to `config.yaml` and fill in:
 - `telegram.token` — from @BotFather on Telegram
 - `llm.api_key` — from OpenRouter
 - `llm.model` — conversational model (default: `deepseek/deepseek-v3.2`)
-- `agent.model` — tool-calling model (default: `inception/mercury-2`)
+- `agent.model` — tool-calling model (default: `moonshotai/kimi-k2.5`)
 - `search.tavily_api_key` — from Tavily (free tier: 1000 searches/month)
 - `embed.base_url` — local embedding server (LM Studio, Ollama)
 - `embed.model` — embedding model name

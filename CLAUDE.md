@@ -10,7 +10,7 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** agent_prompt.md (agent orchestration rules, hot-reloadable)
-- **Agent model:** Mercury 2 (inception/mercury-2) via OpenRouter
+- **Agent model:** Kimi K2.5 (moonshotai/kimi-k2.5) via OpenRouter
 - **Chat model:** Deepseek V3.2 via OpenRouter
 - **Vision model:** Gemini 3 Flash via OpenRouter
 - **Classifier model:** Claude Haiku 4.5 via OpenRouter (validates memory writes)
