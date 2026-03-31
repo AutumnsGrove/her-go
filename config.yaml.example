@@ -66,8 +66,8 @@ memory:
   recent_messages: 10       # sliding window size (compaction summaries cover older context)
   max_facts_in_context: 10  # top-K facts to inject
   extraction_interval: 10   # extract facts every N messages
-  max_history_tokens: 3000  # token budget for conversation history (compaction triggers at 75%)
-  max_context_tokens: 2500  # total prompt budget including scaffolding (system prompt, persona, facts, mood, history). 0 = disable
+  max_history_tokens: 3000  # estimation-based compaction budget — estimates tokens across the full history window using len/4 heuristic. Triggers at 75%.
+  chat_context_budget: 8000 # chat model (Deepseek) total prompt budget — compaction fires when actual prompt tokens exceed 75% of this. The chat prompt includes system prompt layers (~1500 tokens) + history + messages. Set higher than you'd expect because you want compaction to fire based on HISTORY growth, not baseline scaffolding. 0 = use max_history_tokens only.
   auto_link_count: 3        # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
   auto_link_threshold: 0.7  # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
 

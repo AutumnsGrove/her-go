@@ -207,7 +207,7 @@ func Run(params RunParams) (*RunResult, error) {
 		cr, compactErr := compact.MaybeCompact(
 			params.ChatLLM, params.Store, params.ConversationID,
 			compactionMsgs, params.Cfg.Memory.MaxHistoryTokens,
-			params.Cfg.Memory.MaxContextTokens,
+			params.Cfg.Memory.ChatContextBudget,
 			params.Cfg.Identity.Her, params.Cfg.Identity.User,
 		)
 		if compactErr != nil {
