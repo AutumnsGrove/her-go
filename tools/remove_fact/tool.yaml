@@ -14,6 +14,9 @@ parameters:
     reason:
       type: string
       description: "Brief reason for removal (for logging)"
+    replaced_by:
+      type: integer
+      description: "ID of the newer fact that replaces this one (if applicable). Creates a supersession chain so we can trace knowledge evolution."
   required:
     - fact_id
     - reason

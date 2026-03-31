@@ -20,16 +20,27 @@ func init() {
 	tools.Register("remove_fact", Handle)
 }
 
-// Handle soft-deletes a fact by ID. The reason parameter is for logging only —
-// it's not stored in the DB, just surfaced in the return message to help the
-// agent confirm what it did.
+// Handle soft-deletes a fact by ID. If replaced_by is provided, it creates a
+// supersession chain — recording which newer fact replaced this one and why.
+// This preserves knowledge evolution: "used to work at X" → "now at Y."
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		FactID int64  `json:"fact_id"`
-		Reason string `json:"reason"`
+		FactID     int64  `json:"fact_id"`
+		Reason     string `json:"reason"`
+		ReplacedBy int64  `json:"replaced_by"` // optional — if set, creates supersession chain
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// If replaced_by is set, use SupersedeFact to record the chain.
+	// Otherwise, plain DeactivateFact (same behavior as before).
+	if args.ReplacedBy > 0 {
+		if err := ctx.Store.SupersedeFact(args.FactID, args.ReplacedBy, args.Reason); err != nil {
+			return fmt.Sprintf("error superseding fact: %v", err)
+		}
+		log.Infof("  remove_fact: superseded ID=%d → ID=%d (reason: %s)", args.FactID, args.ReplacedBy, args.Reason)
+		return fmt.Sprintf("superseded fact ID=%d → ID=%d (reason: %s)", args.FactID, args.ReplacedBy, args.Reason)
 	}
 
 	if err := ctx.Store.DeactivateFact(args.FactID); err != nil {

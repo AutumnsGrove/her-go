@@ -39,6 +39,8 @@ func runRetag(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("opening database: %w", err)
 	}
 	defer store.Close()
+	store.AutoLinkCount = cfg.Memory.AutoLinkCount
+	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
 
 	// Load all active facts that need tagging.
 	facts, err := store.AllActiveFacts()

@@ -30,6 +30,14 @@ import (
 type Store struct {
 	db             *sql.DB
 	EmbedDimension int // vector dimension for the vec_facts table (e.g. 768)
+
+	// Zettelkasten fact linking — auto-connect new facts to similar existing ones.
+	// When a fact is saved, we KNN-search for neighbors and create bidirectional
+	// links. During retrieval, 1-hop traversal pulls in related facts that didn't
+	// directly match the query. Think of it as Python's networkx graph, but
+	// stored in SQLite so it persists across restarts.
+	AutoLinkCount     int     // max links per new fact (0 = disabled)
+	AutoLinkThreshold float64 // min cosine similarity to create a link (0.0-1.0)
 }
 
 // Message represents a single conversation message (user or assistant).
@@ -383,9 +391,32 @@ func (s *Store) initTables() error {
 		// meaning but use different tag angles. Caching it avoids repeated
 		// on-the-fly embedding calls during dedup checks.
 		`ALTER TABLE facts ADD COLUMN embedding_text BLOB`,
+
+		// Zettelkasten supersession — when a fact is replaced by a newer version,
+		// we record what replaced it and why. This preserves knowledge evolution:
+		// "used to work at Company A" → superseded by → "now at Company B".
+		`ALTER TABLE facts ADD COLUMN superseded_by INTEGER REFERENCES facts(id)`,
+		`ALTER TABLE facts ADD COLUMN supersede_reason TEXT`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
+	}
+
+	// Zettelkasten fact links — a graph of connections between related facts.
+	// This is an adjacency list: each row is an edge between two fact nodes.
+	// IDs are normalized (source < target) to prevent duplicate bidirectional
+	// entries — same trick social graph databases use for mutual friendships.
+	factLinksTable := `CREATE TABLE IF NOT EXISTS fact_links (
+		source_id  INTEGER NOT NULL,
+		target_id  INTEGER NOT NULL,
+		similarity REAL NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (source_id, target_id),
+		FOREIGN KEY (source_id) REFERENCES facts(id),
+		FOREIGN KEY (target_id) REFERENCES facts(id)
+	)`
+	if _, err := s.db.Exec(factLinksTable); err != nil {
+		return fmt.Errorf("creating fact_links table: %w", err)
 	}
 
 	// Indexes — CREATE INDEX IF NOT EXISTS is idempotent like the tables.
@@ -400,6 +431,12 @@ func (s *Store) initTables() error {
 		// used by Financial Pulse (phase 2).
 		`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`,
 		`CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)`,
+
+		// Fact link indexes — one per direction so the UNION query in
+		// LinkedFacts can use an index for each sub-query. Without these,
+		// the query planner would fall back to a full table scan.
+		`CREATE INDEX IF NOT EXISTS idx_fact_links_source ON fact_links(source_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_fact_links_target ON fact_links(target_id)`,
 	}
 	for _, idx := range indexes {
 		if _, err := s.db.Exec(idx); err != nil {
@@ -682,6 +719,11 @@ type Fact struct {
 	Embedding       []float32 // cached tag embedding vector (nil if not yet computed)
 	EmbeddingText   []float32 // cached text embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
+
+	// Zettelkasten fields — knowledge graph edges and supersession tracking.
+	SupersededBy    int64  // ID of the fact that replaced this one (0 = not superseded)
+	SupersedeReason string // why this fact was replaced (e.g. "job changed")
+	Source          string // populated during retrieval: "semantic", "importance", or "linked"
 }
 
 // Reflection represents a journal-like entry Mira writes after a
@@ -792,6 +834,14 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 			// Log but don't fail — the fact is saved, we just can't search it yet.
 			// This handles the case where vec_facts doesn't exist (dimension=0).
 			fmt.Printf("[memory] warning: vec_facts insert failed for fact %d: %v\n", id, err)
+		}
+
+		// Zettelkasten auto-linking: connect this fact to its nearest neighbors
+		// in embedding space. Non-fatal — the fact is saved regardless.
+		if s.AutoLinkCount > 0 {
+			if err := s.AutoLinkFact(id, embedding); err != nil {
+				log.Warn("auto-link failed", "fact_id", id, "err", err)
+			}
 		}
 	}
 
@@ -994,6 +1044,171 @@ func (s *Store) DeactivateFact(factID int64) error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Zettelkasten: fact linking + supersession
+// ---------------------------------------------------------------------------
+
+// LinkFacts creates a bidirectional link between two facts with a similarity
+// score. IDs are normalized (min, max) so the same pair can't be stored twice
+// in different order — same trick social graph databases use for friendships.
+//
+// INSERT OR IGNORE means calling this with an already-linked pair is a no-op.
+func (s *Store) LinkFacts(id1, id2 int64, similarity float64) error {
+	// Normalize: always store (smaller ID, larger ID).
+	// This is like sorting a tuple in Python: min/max guarantees one
+	// canonical order regardless of which direction the link was found.
+	source, target := id1, id2
+	if id1 > id2 {
+		source, target = id2, id1
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO fact_links (source_id, target_id, similarity) VALUES (?, ?, ?)`,
+		source, target, similarity,
+	)
+	if err != nil {
+		return fmt.Errorf("linking facts %d↔%d: %w", source, target, err)
+	}
+	return nil
+}
+
+// LinkedFacts returns active facts linked to the given fact (1-hop traversal).
+// Because links are normalized (source < target), we need to check both
+// directions — that's why this uses a UNION query. Each sub-query can use
+// its own index, which is faster than a single query with OR.
+func (s *Store) LinkedFacts(factID int64, limit int) ([]Fact, error) {
+	rows, err := s.db.Query(`
+		SELECT f.id, f.timestamp, f.fact, f.category, COALESCE(f.subject, 'user'),
+		       f.importance, COALESCE(f.tags, ''), fl.similarity
+		FROM facts f
+		JOIN fact_links fl ON fl.target_id = f.id
+		WHERE fl.source_id = ? AND f.active = 1
+		UNION
+		SELECT f.id, f.timestamp, f.fact, f.category, COALESCE(f.subject, 'user'),
+		       f.importance, COALESCE(f.tags, ''), fl.similarity
+		FROM facts f
+		JOIN fact_links fl ON fl.source_id = f.id
+		WHERE fl.target_id = ? AND f.active = 1
+		ORDER BY similarity DESC
+		LIMIT ?`,
+		factID, factID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying linked facts for %d: %w", factID, err)
+	}
+	defer rows.Close()
+
+	var facts []Fact
+	for rows.Next() {
+		var f Fact
+		var sim float64
+		if err := rows.Scan(&f.ID, &f.Timestamp, &f.Fact, &f.Category,
+			&f.Subject, &f.Importance, &f.Tags, &sim); err != nil {
+			return nil, fmt.Errorf("scanning linked fact: %w", err)
+		}
+		f.Active = true
+		// Convert similarity (0-1, higher=closer) to distance (0-2, lower=closer)
+		// so linked facts use the same scale as KNN results. This lets the
+		// distance filter in BuildMemoryContext treat them uniformly.
+		f.Distance = 1 - sim
+		f.Source = "linked"
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// AutoLinkFact finds the most similar existing facts and links them to the
+// given fact. This is the Zettelkasten core — when a new fact is saved, it
+// automatically connects to its neighbors in embedding space, building a
+// knowledge graph over time.
+//
+// Uses the same KNN search as SemanticSearch but with the new fact's own
+// embedding as the query. The fact itself will appear as distance=0, so
+// we skip it explicitly.
+func (s *Store) AutoLinkFact(factID int64, embedding []float32) error {
+	if s.AutoLinkCount == 0 {
+		return nil // linking disabled
+	}
+	if s.EmbedDimension == 0 {
+		return nil // no vector index
+	}
+
+	queryBytes, err := serializeEmbedding(embedding)
+	if err != nil {
+		return fmt.Errorf("serializing embedding for auto-link: %w", err)
+	}
+
+	// Request extra results to account for the self-match and inactive facts.
+	k := s.AutoLinkCount + 2
+	rows, err := s.db.Query(`
+		SELECT v.rowid, v.distance
+		FROM vec_facts v
+		JOIN facts f ON f.id = v.rowid
+		WHERE v.embedding MATCH ?
+		  AND k = ?
+		  AND f.active = 1`,
+		queryBytes, k,
+	)
+	if err != nil {
+		return fmt.Errorf("KNN search for auto-link: %w", err)
+	}
+	defer rows.Close()
+
+	linked := 0
+	for rows.Next() && linked < s.AutoLinkCount {
+		var neighborID int64
+		var distance float64
+		if err := rows.Scan(&neighborID, &distance); err != nil {
+			continue
+		}
+		// Skip self — the new fact is already in vec_facts, so it shows up
+		// as distance=0 in its own KNN results.
+		if neighborID == factID {
+			continue
+		}
+		// Convert cosine distance to similarity. sqlite-vec uses distance
+		// (0=identical, 2=opposite), but our threshold is in similarity
+		// terms (0.7 = "at least 70% similar").
+		similarity := 1 - distance
+		if similarity < s.AutoLinkThreshold {
+			continue
+		}
+		if err := s.LinkFacts(factID, neighborID, similarity); err != nil {
+			log.Warn("auto-link: failed to link", "fact", factID, "neighbor", neighborID, "err", err)
+			continue
+		}
+		log.Debugf("auto-link: %d ↔ %d (similarity=%.3f)", factID, neighborID, similarity)
+		linked++
+	}
+	return nil
+}
+
+// SupersedeFact marks a fact as replaced by a newer one. This is like
+// DeactivateFact but records the supersession chain — which fact replaced
+// it and why. The chain lets the agent naturally reference knowledge
+// evolution: "you used to work at X, now at Y."
+func (s *Store) SupersedeFact(oldID, newID int64, reason string) error {
+	_, err := s.db.Exec(
+		`UPDATE facts SET active = 0, superseded_by = ?, supersede_reason = ? WHERE id = ?`,
+		newID, reason, oldID,
+	)
+	if err != nil {
+		return fmt.Errorf("superseding fact %d → %d: %w", oldID, newID, err)
+	}
+	// Remove from vec_facts — same as DeactivateFact.
+	if s.EmbedDimension > 0 {
+		s.db.Exec(`DELETE FROM vec_facts WHERE rowid = ?`, oldID)
+	}
+	return nil
+}
+
+// CountFactLinks returns the total number of links in the fact graph.
+// Used by the relink command to report progress.
+func (s *Store) CountFactLinks() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM fact_links`).Scan(&count)
+	return count, err
+}
+
 // AllActiveFacts returns every active fact (both user and self).
 // Used by the agent to see the full memory state when deciding
 // what to update or consolidate. Includes cached embeddings.
@@ -1076,6 +1291,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 		}
 		f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
 		f.Active = true
+		f.Source = "semantic"
 		f.EmbeddingText = deserializeEmbedding(embTextData)
 		facts = append(facts, f)
 
@@ -1084,6 +1300,32 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Fact, error) {
 			break
 		}
 	}
+
+	// Zettelkasten 1-hop traversal: for each primary KNN result, pull in
+	// linked neighbors that didn't directly match the query. This is the
+	// graph payoff — "what does she like to cook?" finds cooking facts via
+	// KNN, then linked dietary preferences, grocery habits, etc. via links.
+	if s.AutoLinkCount > 0 && len(facts) > 0 {
+		seen := make(map[int64]bool, len(facts))
+		for _, f := range facts {
+			seen[f.ID] = true
+		}
+		var linkedFacts []Fact
+		for _, f := range facts {
+			neighbors, err := s.LinkedFacts(f.ID, 3)
+			if err != nil {
+				continue
+			}
+			for _, n := range neighbors {
+				if !seen[n.ID] {
+					seen[n.ID] = true
+					linkedFacts = append(linkedFacts, n)
+				}
+			}
+		}
+		facts = append(facts, linkedFacts...)
+	}
+
 	return facts, nil
 }
 

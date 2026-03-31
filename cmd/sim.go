@@ -323,6 +323,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating temp store: %w", err)
 	}
 	defer store.Close()
+	store.AutoLinkCount = cfg.Memory.AutoLinkCount
+	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
 
 	// ------------------------------------------------------------------
 	// 5. Create LLM + embed + search clients (same pattern as run.go)

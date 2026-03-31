@@ -78,6 +78,8 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Fatal("Failed to initialize database", "err", err)
 	}
 	defer store.Close()
+	store.AutoLinkCount = cfg.Memory.AutoLinkCount
+	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
 
 	// --- Start the event bus and logger bridge ---
 	// From this point on, all log.Info/Warn/Error calls flow through the bus.
