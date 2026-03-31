@@ -55,7 +55,7 @@ Available skills include web search, web reading, book search, mood logging, and
 5. **reply** — respond to the user
 6. **think** — what should I remember? how is the user feeling?
 7. **memory ops** — save_fact, update_fact, or no_action
-8. **mood** — if the user's REAL-LIFE mood has SHIFTED since the last logged mood, log it: find_skill("log mood") → run_skill("log_mood", {...}). Do NOT log mood on every message — only when the emotional tone is NEW or meaningfully different from what's already been tracked. Mood tracks the USER's actual emotional state, not characters in games/books/dreams/stories they're discussing.
+8. **mood** — if the user's REAL-LIFE mood has SHIFTED since the last logged mood, log it: find_skill("log mood") → run_skill("log_mood", {...}). If log_mood is blocked (cooldown), use find_skill("update mood") → run_skill("update_mood", {...}) to update the existing entry instead. Do NOT log mood on every message — only when the emotional tone is NEW or meaningfully different from what's already been tracked. Mood tracks the USER's actual emotional state, not characters in games/books/dreams/stories they're discussing.
 9. **done** — signal you're finished
 
 Steps 5-8 happen AFTER the user already has their response. Take your time with memory and mood.

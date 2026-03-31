@@ -156,7 +156,7 @@ func checkMoodDuplicate(skillArgs map[string]any, ctx *tools.Context) string {
 	if len(recentNotes) > 0 {
 		log.Info("mood dedup: skipped (mood already logged in last 30 min)",
 			"recent_note", recentNotes[0], "proposed_note", note)
-		return fmt.Sprintf("mood already logged in the last 30 minutes (%q) — skipping to avoid duplicates", recentNotes[0])
+		return fmt.Sprintf("mood already logged in the last 30 minutes (%q) — if the mood has genuinely shifted, use update_mood instead to update the existing entry", recentNotes[0])
 	}
 
 	// Tier 2: semantic gate — check the last 2 hours for similar notes.

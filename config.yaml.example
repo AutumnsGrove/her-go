@@ -68,6 +68,8 @@ memory:
   extraction_interval: 10   # extract facts every N messages
   max_history_tokens: 3000  # token budget for conversation history (compaction triggers at 75%)
   max_context_tokens: 2500  # total prompt budget including scaffolding (system prompt, persona, facts, mood, history). 0 = disable
+  auto_link_count: 3        # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
+  auto_link_threshold: 0.7  # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
 
 scrub:
   enabled: true

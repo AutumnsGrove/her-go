@@ -121,12 +121,14 @@ type ClassifierConfig struct {
 
 // MemoryConfig controls the SQLite-backed memory system.
 type MemoryConfig struct {
-	DBPath             string `yaml:"db_path"`
-	RecentMessages     int    `yaml:"recent_messages"`
-	MaxFactsInContext  int    `yaml:"max_facts_in_context"`
-	ExtractionInterval int    `yaml:"extraction_interval"`
-	MaxHistoryTokens   int    `yaml:"max_history_tokens"`  // token budget for conversation history (fallback when max_context_tokens is 0)
-	MaxContextTokens   int    `yaml:"max_context_tokens"`  // total prompt budget (scaffolding + history); 0 = use max_history_tokens fallback
+	DBPath             string  `yaml:"db_path"`
+	RecentMessages     int     `yaml:"recent_messages"`
+	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
+	ExtractionInterval int     `yaml:"extraction_interval"`
+	MaxHistoryTokens   int     `yaml:"max_history_tokens"`  // token budget for conversation history (fallback when max_context_tokens is 0)
+	MaxContextTokens   int     `yaml:"max_context_tokens"`  // total prompt budget (scaffolding + history); 0 = use max_history_tokens fallback
+	AutoLinkCount      int     `yaml:"auto_link_count"`     // max links per new fact (0 = disabled)
+	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"` // min cosine similarity to create a link (0.0-1.0)
 }
 
 // ScrubConfig controls PII scrubbing behavior.

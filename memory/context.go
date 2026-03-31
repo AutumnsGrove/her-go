@@ -213,10 +213,16 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 			if !seen[f.ID] {
 				seen[f.ID] = true
 				result = append(result, f)
+				// Preserve the fact's source — "semantic" for direct KNN hits,
+				// "linked" for facts pulled in via Zettelkasten 1-hop traversal.
+				source := "semantic"
+				if f.Source == "linked" {
+					source = "linked"
+				}
 				injected = append(injected, InjectedFact{
 					ID: f.ID, Fact: f.Fact, Category: f.Category,
 					Subject: f.Subject, Importance: f.Importance,
-					Distance: f.Distance, Source: "semantic",
+					Distance: f.Distance, Source: source,
 				})
 			}
 		}
