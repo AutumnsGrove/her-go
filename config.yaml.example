@@ -20,8 +20,8 @@ llm:
     max_tokens: 4096
 
 agent:
-  model: "inception/mercury-2"                   # tool-calling model for agent orchestration (diffusion LLM, ZDR, fast)
-  temperature: 0.6                               # Mercury (diffusion LLM) needs higher temp than transformers — 0.1 causes degenerate outputs
+  model: "moonshotai/kimi-k2.5"                   # tool-calling model for agent orchestration — best protocol compliance and fact quality in sim testing
+  temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   fallback:                                      # optional — used when primary model is unavailable
