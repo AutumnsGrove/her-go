@@ -138,8 +138,6 @@ func (e ToolCallEvent) EventSource() string  { return "agent" }
 type ContextEvent struct {
 	Time          time.Time
 	TurnID        int64
-	UserFacts     int
-	SelfFacts     int
 	RelevantFacts int
 }
 
