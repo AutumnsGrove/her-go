@@ -123,6 +123,8 @@ func MaybeCompact(
 
 	// Trigger at 75% of budget.
 	threshold := int(float64(maxHistoryTokens) * 0.75)
+	log.Infof("  compaction check: %d msgs, %d tokens (threshold: %d, budget: %d)",
+		len(recentMessages), currentTokens, threshold, maxHistoryTokens)
 	if currentTokens < threshold {
 		// Under budget, no compaction needed.
 		return &CompactResult{
