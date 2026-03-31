@@ -119,7 +119,7 @@ func MaybeCompact(
 	conversationID string,
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
-	maxContextTokens int,
+	chatContextBudget int,
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
@@ -127,29 +127,30 @@ func MaybeCompact(
 	}
 
 	// Load existing summary for this conversation.
-	existingSummary, _, err := store.LatestSummary(conversationID)
+	existingSummary, _, err := store.LatestSummary(conversationID, "chat")
 	if err != nil {
 		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
 	// Two independent compaction triggers. Either one can fire compaction:
 	//
-	// 1. Context-aware (#38): checks real total prompt tokens (from the chat
-	//    model's last response) against a budget. Catches scaffolding bloat
-	//    (growing facts, persona, mood context).
+	// 1. Context-aware: checks the chat model's actual prompt tokens
+	//    (stored on the user message by execReply) against the chat
+	//    context budget. Catches scaffolding bloat (growing facts,
+	//    persona, mood context) and history growth together.
 	//
-	// 2. Estimation-based (#37): checks the compaction window's estimated
+	// 2. Estimation-based: checks the compaction window's estimated
 	//    tokens against a history budget. Catches unsummarized history
 	//    accumulating in the DB. This is the day-to-day trigger.
 	//
 	// These are independent because they measure different things:
-	// context-aware sees the 10-message sliding window prompt,
+	// context-aware sees the chat model's 10-message prompt,
 	// estimation sees the full 100-message compaction window.
 
 	shouldCompact := false
 
-	// --- Context-aware trigger ---
-	if maxContextTokens > 0 {
+	// --- Context-aware trigger (chat model) ---
+	if chatContextBudget > 0 {
 		var lastPromptTokens int
 		for i := len(recentMessages) - 1; i >= 0; i-- {
 			if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
@@ -158,9 +159,9 @@ func MaybeCompact(
 			}
 		}
 		if lastPromptTokens > 0 {
-			threshold := int(float64(maxContextTokens) * 0.75)
-			log.Infof("  compaction check (context-aware): %d/%d total prompt tokens (threshold: %d)",
-				lastPromptTokens, maxContextTokens, threshold)
+			threshold := int(float64(chatContextBudget) * 0.75)
+			log.Infof("  compaction check (chat context): %d/%d prompt tokens (threshold: %d)",
+				lastPromptTokens, chatContextBudget, threshold)
 			if lastPromptTokens >= threshold {
 				shouldCompact = true
 			}
@@ -251,7 +252,7 @@ func MaybeCompact(
 	// Store the summary in the DB.
 	startID := toSummarize[0].ID
 	endID := toSummarize[len(toSummarize)-1].ID
-	_, err = store.SaveSummary(conversationID, newSummary, startID, endID)
+	_, err = store.SaveSummary(conversationID, newSummary, startID, endID, "chat")
 	if err != nil {
 		log.Error("failed to save summary", "err", err)
 		return &CompactResult{
@@ -275,6 +276,195 @@ func MaybeCompact(
 		Summarized:   len(toSummarize),
 		TokensBefore: tokensBefore,
 		TokensAfter:  newTokens,
+	}, nil
+}
+
+// verboseTools is a package-level alias for VerboseTools, used by the
+// agent compaction logic below. The canonical list lives in verbose_tools.go.
+var verboseTools = VerboseTools
+
+// agentSummaryPromptTmpl is the prompt for summarizing the agent's action
+// history. Unlike the chat summary (conversational flow), this focuses on
+// what the agent DID — tools called, decisions made, outcomes achieved.
+// %s placeholders: botName.
+const agentSummaryPromptTmpl = `You are summarizing the action history of %s's agent system — the tool-calling orchestrator that runs behind the scenes.
+
+Preserve:
+- Which tools were called and why (save_fact, update_fact, remove_fact, create_reminder, set_location, etc.)
+- What facts were saved, updated, or removed (include fact IDs when available)
+- Decisions made: why the agent chose one action over another
+- Outcomes: did the tool call succeed or fail? What was the result?
+- Any patterns: repeated searches, fact corrections, reminder chains
+
+Don't preserve:
+- Raw search results (web_search, book_search output) — just note what was searched and if useful results were found
+- Tool discovery (find_skill) — just note which tools were activated
+- Exact JSON arguments — paraphrase the intent
+- Think tool internal monologue — summarize the conclusion only
+
+Write the summary as a concise action log. Use brief, factual statements. Example:
+"Saved fact #42 about user's job (software engineer). Searched web for Go testing patterns — found useful results. Set reminder for medication at 9pm daily. Updated fact #15 (corrected user's timezone from EST to PST)."
+
+If there's an existing summary of earlier actions, incorporate it naturally.`
+
+// AgentCompactResult holds the output of MaybeCompactAgent.
+type AgentCompactResult struct {
+	Summary      string            // running agent action summary
+	RecentActions []memory.AgentAction // actions kept in full fidelity
+	DidCompact   bool              // true if summarization ran this call
+	Summarized   int               // number of actions summarized
+	TokensBefore int               // estimated tokens before
+	TokensAfter  int               // estimated tokens after
+}
+
+// estimateActionTokens estimates the token count for a set of agent actions
+// plus an existing summary. Verbose tool results are counted at their
+// truncated size since that's what actually goes into the prompt.
+func estimateActionTokens(summary string, actions []memory.AgentAction) int {
+	total := estimateTokens(summary)
+	for _, a := range actions {
+		total += estimateTokens(a.ToolName) + 5 // tool name + formatting
+		total += estimateTokens(a.ToolArgs)
+		if verboseTools[a.ToolName] {
+			// Verbose tools get truncated to ~200 chars in the prompt
+			if len(a.Result) > 200 {
+				total += 50 // ~200 chars / 4
+			} else {
+				total += estimateTokens(a.Result)
+			}
+		} else {
+			total += estimateTokens(a.Result)
+		}
+		total += 10 // overhead for formatting
+	}
+	return total
+}
+
+// formatActionTranscript builds the text that gets sent to the LLM for
+// summarization. Verbose tool results are truncated to save prompt tokens.
+func formatActionTranscript(existingSummary string, actions []memory.AgentAction) string {
+	var b strings.Builder
+	if existingSummary != "" {
+		fmt.Fprintf(&b, "[Summary of earlier agent actions:]\n%s\n\n[Actions since then:]\n\n", existingSummary)
+	}
+	for _, a := range actions {
+		result := a.Result
+		if verboseTools[a.ToolName] && len(result) > 200 {
+			result = result[:200] + "... (truncated)"
+		}
+		fmt.Fprintf(&b, "→ %s(%s)\n  Result: %s\n\n", a.ToolName, a.ToolArgs, result)
+	}
+	return b.String()
+}
+
+// MaybeCompactAgent checks if the agent's action history needs compaction
+// and performs it if so. This is the agent-side counterpart to MaybeCompact.
+//
+// Instead of summarizing conversation messages, it summarizes the agent's
+// tool call history (from agent_turns). The summary preserves what the
+// agent DID so it can build on past decisions, update previous facts, etc.
+func MaybeCompactAgent(
+	chatLLM *llm.Client,
+	store *memory.Store,
+	conversationID string,
+	actions []memory.AgentAction,
+	agentContextBudget int,
+	botName string,
+) (*AgentCompactResult, error) {
+	if agentContextBudget <= 0 {
+		agentContextBudget = 6000 // default
+	}
+
+	// Load existing agent summary.
+	existingSummary, _, err := store.LatestSummary(conversationID, "agent")
+	if err != nil {
+		return nil, fmt.Errorf("loading agent summary: %w", err)
+	}
+
+	// Check if we need to compact.
+	estTokens := estimateActionTokens(existingSummary, actions)
+	threshold := int(float64(agentContextBudget) * 0.75)
+	log.Infof("  agent compaction check: %d actions, ~%d tokens (threshold: %d, budget: %d)",
+		len(actions), estTokens, threshold, agentContextBudget)
+
+	if estTokens < threshold {
+		return &AgentCompactResult{
+			Summary:       existingSummary,
+			RecentActions: actions,
+		}, nil
+	}
+
+	tokensBefore := estTokens
+	log.Infof("  compacting agent actions: %d actions, ~%d tokens", len(actions), tokensBefore)
+
+	// Keep the most recent actions in full fidelity, summarize the rest.
+	// We keep more actions than chat messages because actions are smaller
+	// and the agent benefits from seeing its recent tool call chain.
+	minKeep := 10
+	if len(actions) <= minKeep {
+		return &AgentCompactResult{
+			Summary:       existingSummary,
+			RecentActions: actions,
+		}, nil
+	}
+	splitPoint := len(actions) - minKeep
+
+	toSummarize := actions[:splitPoint]
+	toKeep := actions[splitPoint:]
+
+	transcript := formatActionTranscript(existingSummary, toSummarize)
+
+	if chatLLM == nil {
+		log.Warn("no LLM client available, skipping agent compaction")
+		return &AgentCompactResult{
+			Summary:       existingSummary,
+			RecentActions: actions,
+		}, nil
+	}
+
+	llmMessages := []llm.ChatMessage{
+		{Role: "system", Content: fmt.Sprintf(agentSummaryPromptTmpl, botName)},
+		{Role: "user", Content: transcript},
+	}
+
+	resp, err := chatLLM.ChatCompletion(llmMessages)
+	if err != nil {
+		log.Warn("agent summarization failed, skipping compaction", "err", err)
+		return &AgentCompactResult{
+			Summary:       existingSummary,
+			RecentActions: actions,
+		}, nil
+	}
+
+	newSummary := resp.Content
+
+	// Store with stream="agent". We use the first/last action's message IDs
+	// as the range markers (same concept as chat compaction).
+	startID := toSummarize[0].MessageID
+	endID := toSummarize[len(toSummarize)-1].MessageID
+	_, err = store.SaveSummary(conversationID, newSummary, startID, endID, "agent")
+	if err != nil {
+		log.Error("failed to save agent summary", "err", err)
+		return &AgentCompactResult{
+			Summary:       existingSummary,
+			RecentActions: actions,
+		}, nil
+	}
+
+	newTokens := estimateActionTokens(newSummary, toKeep)
+	log.Infof("  agent compacted %d actions (%d→%d tokens, saved %d)",
+		len(toSummarize), tokensBefore, newTokens, tokensBefore-newTokens)
+	log.Infof("  agent summary: %s", truncate(newSummary, 200))
+
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+
+	return &AgentCompactResult{
+		Summary:       newSummary,
+		RecentActions: toKeep,
+		DidCompact:    true,
+		Summarized:    len(toSummarize),
+		TokensBefore:  tokensBefore,
+		TokensAfter:   newTokens,
 	}, nil
 }
 

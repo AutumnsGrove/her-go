@@ -73,8 +73,7 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 
 			case ContextEvent:
 				logger.WithPrefix("agent").Info(
-					fmt.Sprintf("facts: %d user, %d self, semantic: %d relevant",
-						e.UserFacts, e.SelfFacts, e.RelevantFacts),
+					fmt.Sprintf("semantic: %d relevant facts", e.RelevantFacts),
 					"turn_id", e.TurnID,
 				)
 

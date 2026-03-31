@@ -397,10 +397,21 @@ func (s *Store) initTables() error {
 		// "used to work at Company A" → superseded by → "now at Company B".
 		`ALTER TABLE facts ADD COLUMN superseded_by INTEGER REFERENCES facts(id)`,
 		`ALTER TABLE facts ADD COLUMN supersede_reason TEXT`,
+
+		// stream: "chat" or "agent" — allows separate summaries for each model.
+		// The chat summary captures conversational flow; the agent summary
+		// captures tool call history and decisions. Existing rows default to
+		// "chat" since that's what they were before this column existed.
+		`ALTER TABLE summaries ADD COLUMN stream TEXT NOT NULL DEFAULT 'chat'`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
 	}
+
+	// Index for the dual-stream summary lookups. LatestSummary queries
+	// (conversation_id, stream) on every message — without this, SQLite
+	// does a full table scan that degrades as summaries accumulate.
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream ON summaries(conversation_id, stream)`)
 
 	// Zettelkasten fact links — a graph of connections between related facts.
 	// This is an adjacency list: each row is an edge between two fact nodes.
@@ -590,6 +601,90 @@ func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTo
 		return fmt.Errorf("saving metric: %w", err)
 	}
 	return nil
+}
+
+// AgentAction represents a single tool call from a previous turn,
+// loaded from agent_turns for the agent's action history context.
+// Paired: the assistant row (tool call) and tool row (result) are
+// combined into one struct so the agent sees call + outcome together.
+type AgentAction struct {
+	MessageID int64  // which user message triggered this action
+	ToolName  string // e.g. "save_fact", "web_search", "recall_memories"
+	ToolArgs  string // JSON arguments (may be truncated for verbose tools)
+	Result    string // tool result (may be truncated for verbose tools)
+}
+
+// RecentAgentActions loads the agent's tool call history for recent messages
+// in a specific conversation. It pairs each "assistant" row (the tool call)
+// with its following "tool" row (the result) into AgentAction structs.
+// Returns actions oldest-first within the most recent N message IDs.
+//
+// The limit controls how many message IDs worth of actions to load (not
+// individual tool calls). A message that triggered 5 tool calls returns
+// all 5 as separate AgentAction structs.
+func (s *Store) RecentAgentActions(conversationID string, messageLimit int) ([]AgentAction, error) {
+	if messageLimit <= 0 {
+		messageLimit = 20
+	}
+
+	// Get the most recent message IDs that have agent turns.
+	// We use a subquery to get the last N distinct message_ids,
+	// then load all turns for those messages. The JOIN on messages
+	// ensures we only pull actions from the requested conversation.
+	rows, err := s.db.Query(
+		`SELECT at.message_id, at.turn_index, at.role, at.tool_name, at.tool_args, at.content
+		 FROM agent_turns at
+		 JOIN messages m ON at.message_id = m.id
+		 WHERE m.conversation_id = ? AND at.message_id IN (
+			 SELECT DISTINCT at2.message_id FROM agent_turns at2
+			 JOIN messages m2 ON at2.message_id = m2.id
+			 WHERE at2.message_id IS NOT NULL AND m2.conversation_id = ?
+			 ORDER BY at2.message_id DESC
+			 LIMIT ?
+		 )
+		 ORDER BY at.message_id ASC, at.turn_index ASC`,
+		conversationID, conversationID, messageLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying agent actions: %w", err)
+	}
+	defer rows.Close()
+
+	// Pair assistant (call) + tool (result) rows into AgentAction structs.
+	// The agent_turns table alternates: assistant row, then tool row.
+	var actions []AgentAction
+	var pending *AgentAction // waiting for its tool result
+
+	for rows.Next() {
+		var msgID int64
+		var turnIndex int
+		var role, toolName, toolArgs, content string
+		if err := rows.Scan(&msgID, &turnIndex, &role, &toolName, &toolArgs, &content); err != nil {
+			return nil, fmt.Errorf("scanning agent turn: %w", err)
+		}
+
+		if role == "assistant" {
+			// This is a tool call — start a new pending action.
+			if pending != nil {
+				// Previous call had no result (shouldn't happen, but be safe).
+				actions = append(actions, *pending)
+			}
+			pending = &AgentAction{
+				MessageID: msgID,
+				ToolName:  toolName,
+				ToolArgs:  toolArgs,
+			}
+		} else if role == "tool" && pending != nil {
+			// This is the result for the pending call.
+			pending.Result = content
+			actions = append(actions, *pending)
+			pending = nil
+		}
+	}
+	if pending != nil {
+		actions = append(actions, *pending)
+	}
+	return actions, rows.Err()
 }
 
 // SaveAgentTurn logs a single step in the agent's reasoning chain.
@@ -1406,11 +1501,12 @@ func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
 
 // SaveSummary stores a compacted summary of older messages.
 // startID and endID mark the range of message IDs that were summarized.
-func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64) (int64, error) {
+// stream is "chat" or "agent" — each model maintains its own running summary.
+func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64, stream string) (int64, error) {
 	result, err := s.db.Exec(
-		`INSERT INTO summaries (conversation_id, summary, messages_start_id, messages_end_id)
-		 VALUES (?, ?, ?, ?)`,
-		conversationID, summary, startID, endID,
+		`INSERT INTO summaries (conversation_id, summary, messages_start_id, messages_end_id, stream)
+		 VALUES (?, ?, ?, ?, ?)`,
+		conversationID, summary, startID, endID, stream,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving summary: %w", err)
@@ -1422,19 +1518,22 @@ func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64
 	return id, nil
 }
 
-// LatestSummary returns the most recent summary for a conversation.
-// Returns empty string if no summary exists yet.
-func (s *Store) LatestSummary(conversationID string) (string, int64, error) {
+// LatestSummary returns the most recent summary for a conversation and stream.
+// stream is "chat" or "agent". Returns empty string if no summary exists yet.
+func (s *Store) LatestSummary(conversationID, stream string) (string, int64, error) {
 	var summary string
 	var endID int64
 	err := s.db.QueryRow(
 		`SELECT summary, messages_end_id FROM summaries
-		 WHERE conversation_id = ?
+		 WHERE conversation_id = ? AND stream = ?
 		 ORDER BY id DESC LIMIT 1`,
-		conversationID,
+		conversationID, stream,
 	).Scan(&summary, &endID)
-	if err != nil {
+	if err == sql.ErrNoRows {
 		return "", 0, nil // no summary yet
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("querying latest summary: %w", err)
 	}
 	return summary, endID, nil
 }
