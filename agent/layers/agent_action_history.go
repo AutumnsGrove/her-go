@@ -15,24 +15,14 @@ package layers
 
 import (
 	"fmt"
+	"her/compact"
 	"strings"
 )
-
-// verboseTools whose results get truncated in the action history.
-// These produce large outputs that aren't useful for long-term memory.
-var verboseTools = map[string]bool{
-	"web_search":      true,
-	"book_search":     true,
-	"find_skill":      true,
-	"recall_memories": true,
-	"search_history":  true,
-	"query_expenses":  true,
-}
 
 func init() {
 	Register(PromptLayer{
 		Name:    "Action History",
-		Order:   150, // after agent prompt (10) and tools (50), before time (100)... actually before conversation history (200)
+		Order:   150, // after agent prompt (10), tools (50), and time (100); before conversation history (200)
 		Stream:  StreamAgent,
 		Builder: buildAgentActionHistory,
 	})
@@ -61,7 +51,7 @@ func buildAgentActionHistory(ctx *LayerContext) LayerResult {
 			result := a.Result
 			// Truncate verbose tool results — the agent doesn't need
 			// full search results from previous turns.
-			if verboseTools[a.ToolName] && len(result) > 200 {
+			if compact.VerboseTools[a.ToolName] && len(result) > 200 {
 				result = result[:200] + "... (truncated)"
 			}
 			args := a.ToolArgs

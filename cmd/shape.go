@@ -69,14 +69,14 @@ func runShape(cmd *cobra.Command, args []string) error {
 
 	// Set up embedding client if configured.
 	var embedClient *embed.Client
-	if cfg.Embed.URL != "" {
-		embedClient = embed.NewClient(cfg.Embed.URL, cfg.Embed.Dimension)
+	if cfg.Embed.BaseURL != "" {
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
 	}
 
 	// Set up weather client if configured.
 	var weatherClient *weather.Client
 	if cfg.Weather.Latitude != 0 || cfg.Weather.Longitude != 0 {
-		weatherClient = weather.NewClient(cfg.Weather.Latitude, cfg.Weather.Longitude)
+		weatherClient = weather.NewClient(cfg.Weather.Latitude, cfg.Weather.Longitude, cfg.Weather.TempUnit, cfg.Weather.WindSpeedUnit, cfg.Weather.CacheTTL)
 	}
 
 	// Build the layer context with whatever live data we have.
@@ -117,7 +117,7 @@ func runShape(cmd *cobra.Command, args []string) error {
 		if err == nil {
 			ctx.AgentActionSummary = agentSummary
 		}
-		agentActions, err := store.RecentAgentActions(30)
+		agentActions, err := store.RecentAgentActions("", 30)
 		if err == nil {
 			ctx.RecentAgentActions = agentActions
 		}

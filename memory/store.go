@@ -408,6 +408,11 @@ func (s *Store) initTables() error {
 		s.db.Exec(m) // ignore errors (column already exists)
 	}
 
+	// Index for the dual-stream summary lookups. LatestSummary queries
+	// (conversation_id, stream) on every message — without this, SQLite
+	// does a full table scan that degrades as summaries accumulate.
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream ON summaries(conversation_id, stream)`)
+
 	// Zettelkasten fact links — a graph of connections between related facts.
 	// This is an adjacency list: each row is an edge between two fact nodes.
 	// IDs are normalized (source < target) to prevent duplicate bidirectional
@@ -609,32 +614,36 @@ type AgentAction struct {
 	Result    string // tool result (may be truncated for verbose tools)
 }
 
-// RecentAgentActions loads the agent's tool call history for recent messages.
-// It pairs each "assistant" row (the tool call) with its following "tool" row
-// (the result) into AgentAction structs. Returns actions newest-first.
+// RecentAgentActions loads the agent's tool call history for recent messages
+// in a specific conversation. It pairs each "assistant" row (the tool call)
+// with its following "tool" row (the result) into AgentAction structs.
+// Returns actions oldest-first within the most recent N message IDs.
 //
 // The limit controls how many message IDs worth of actions to load (not
 // individual tool calls). A message that triggered 5 tool calls returns
 // all 5 as separate AgentAction structs.
-func (s *Store) RecentAgentActions(messageLimit int) ([]AgentAction, error) {
+func (s *Store) RecentAgentActions(conversationID string, messageLimit int) ([]AgentAction, error) {
 	if messageLimit <= 0 {
 		messageLimit = 20
 	}
 
 	// Get the most recent message IDs that have agent turns.
 	// We use a subquery to get the last N distinct message_ids,
-	// then load all turns for those messages.
+	// then load all turns for those messages. The JOIN on messages
+	// ensures we only pull actions from the requested conversation.
 	rows, err := s.db.Query(
 		`SELECT at.message_id, at.turn_index, at.role, at.tool_name, at.tool_args, at.content
 		 FROM agent_turns at
-		 WHERE at.message_id IN (
-			 SELECT DISTINCT message_id FROM agent_turns
-			 WHERE message_id IS NOT NULL
-			 ORDER BY message_id DESC
+		 JOIN messages m ON at.message_id = m.id
+		 WHERE m.conversation_id = ? AND at.message_id IN (
+			 SELECT DISTINCT at2.message_id FROM agent_turns at2
+			 JOIN messages m2 ON at2.message_id = m2.id
+			 WHERE at2.message_id IS NOT NULL AND m2.conversation_id = ?
+			 ORDER BY at2.message_id DESC
 			 LIMIT ?
 		 )
 		 ORDER BY at.message_id ASC, at.turn_index ASC`,
-		messageLimit,
+		conversationID, conversationID, messageLimit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying agent actions: %w", err)
@@ -1520,8 +1529,11 @@ func (s *Store) LatestSummary(conversationID, stream string) (string, int64, err
 		 ORDER BY id DESC LIMIT 1`,
 		conversationID, stream,
 	).Scan(&summary, &endID)
-	if err != nil {
+	if err == sql.ErrNoRows {
 		return "", 0, nil // no summary yet
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("querying latest summary: %w", err)
 	}
 	return summary, endID, nil
 }
