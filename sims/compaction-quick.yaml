@@ -1,0 +1,26 @@
+name: "Compaction Quick Check"
+description: >
+  Fast compaction sanity check — 12 turns. Establishes a few facts,
+  burns tokens with chatty messages, then verifies recall after
+  compaction fires. Expect compaction around turn 8-10.
+
+tags: ["compaction", "quick"]
+
+messages:
+  # --- Establish facts (turns 1-3) ---
+  - "hey! im maya. i live in chicago and i have two cats named pickle and olive"
+  - "ive been learning pottery at mud and fire studio in wicker park. its my favorite weekend thing"
+  - "my best friend dee is a nurse. we hike together at starved rock state park pretty often"
+
+  # --- Burn tokens (turns 4-9) ---
+  - "so today was rough at work. we had this massive product review where the VP tore apart our dashboard design. she had like fifteen things she wanted changed and some of them contradicted each other. the worst part is we did user testing last week and people loved the flow but she didnt even look at the research deck"
+  - "after that i had a one-on-one with my manager who was actually really supportive. she said the VP does this with every team and i might be up for a lead role on the next project which would be huge for my career"
+  - "came home and pickle had knocked over a bag of clay and got it all over his fur. had to give him a bath which was a disaster. olive just watched from the windowsill looking judgy about the whole situation"
+  - "dee called and we talked for an hour about this new trail she found. apparently theres these cool canyon formations at starved rock we havent explored yet. were going this weekend. also i finished the mugs im making for her birthday — ocean mist glaze, turned out beautiful"
+  - "i started watching severance. its about people who surgically separate work memories from personal memories. SO good and creepy. also finally ordered a standing desk because my back is killing me from sitting all day"
+  - "honestly today balanced out pretty well. the work stuff was stressful but pottery and dee and thai food made it okay. thats a good ratio"
+
+  # --- Recall check (turns 10-12) ---
+  - "pop quiz — whats my cats names?"
+  - "and where do i take pottery classes?"
+  - "ok last one. what do i do for work? gotta go, pickle is yelling for dinner"
