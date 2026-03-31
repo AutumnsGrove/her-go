@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"her/agent/layers"
 	"her/compact"
 	"her/config"
 	"her/embed"
@@ -167,24 +167,6 @@ type RunResult struct {
 func Run(params RunParams) (*RunResult, error) {
 	log.Info("─── agent ───")
 
-	// Gather current facts for the agent's context.
-	facts, err := params.Store.AllActiveFacts()
-	if err != nil {
-		log.Error("loading facts", "err", err)
-		return nil, fmt.Errorf("loading facts: %w", err)
-	}
-
-	// Split facts into user and self categories for the context.
-	var userFacts, selfFacts []memory.Fact
-	for _, f := range facts {
-		if f.Subject == "self" {
-			selfFacts = append(selfFacts, f)
-		} else {
-			userFacts = append(userFacts, f)
-		}
-	}
-	log.Infof("  facts: %d user, %d self", len(userFacts), len(selfFacts))
-
 	// Helper for nil-safe event emission — avoids if-checks everywhere.
 	emit := func(e tui.Event) {
 		if params.EventBus != nil {
@@ -285,14 +267,38 @@ func Run(params RunParams) (*RunResult, error) {
 	// Emit context event for the TUI
 	emit(tui.ContextEvent{
 		Time: time.Now(), TurnID: params.TriggerMsgID,
-		UserFacts: len(userFacts), SelfFacts: len(selfFacts),
 		RelevantFacts: len(relevantFacts),
 	})
 
-	// Build the context message for the agent. We pass the current
-	// time and timezone so the agent can convert natural language times
-	// to ISO timestamps for create_reminder.
-	context := buildAgentContext(params.ScrubbedUserMessage, recentMsgs, userFacts, selfFacts, params.ImageBase64 != "", params.OCRText, params.Cfg.Scheduler.Timezone, params.Cfg.Identity.Her, params.Cfg.Identity.User)
+	// Build the context message for the agent using the layer registry.
+	// Each layer (time, history, message, image, facts) lives in its own
+	// file under agent/layers/ and registers itself via init().
+	layerCtx := &layers.LayerContext{
+		Store:               params.Store,
+		Cfg:                 params.Cfg,
+		EmbedClient:         params.EmbedClient,
+		WeatherClient:       params.WeatherClient,
+		RelevantFacts:       relevantFacts,
+		ConversationSummary: conversationSummary,
+		ConversationID:      params.ConversationID,
+		ScrubbedUserMessage: params.ScrubbedUserMessage,
+		RecentMessages:      recentMsgs,
+		HasImage:            params.ImageBase64 != "",
+		OCRText:             params.OCRText,
+	}
+	context, agentLayerResults := layers.BuildAll(layers.StreamAgent, layerCtx)
+
+	// Log the agent context shape for observability.
+	var agentTotalTokens int
+	for _, lr := range agentLayerResults {
+		agentTotalTokens += lr.Tokens
+		if lr.Detail != "" {
+			log.Infof("  [agent layer] %s: ~%d tokens (%s)", lr.Name, lr.Tokens, lr.Detail)
+		} else {
+			log.Infof("  [agent layer] %s: ~%d tokens", lr.Name, lr.Tokens)
+		}
+	}
+	log.Infof("  agent context total: ~%d tokens", agentTotalTokens)
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile, params.Cfg)
@@ -783,100 +789,6 @@ func Run(params RunParams) (*RunResult, error) {
 	return result, nil
 }
 
-// buildAgentContext formats the user's message, recent conversation history,
-// and current facts into a context string for the agent to reason about.
-//
-// The conversation history is critical — without it, the agent can't resolve
-// references like "it", "that book", "what you said earlier". This was the
-// cause of the wrong-search-term bug where the agent searched for AI realism
-// instead of The Martian's realism.
-func buildAgentContext(userMessage string, history []memory.Message, userFacts, selfFacts []memory.Fact, hasImage bool, ocrText string, timezone string, botName, userName string) string {
-	var b strings.Builder
-
-	// Current date/time — the agent needs this to convert natural
-	// language times ("in 2 hours", "tomorrow at 3pm") to absolute
-	// ISO timestamps for create_reminder.
-	loc, err := time.LoadLocation(timezone)
-	if err != nil {
-		loc = time.UTC
-	}
-	now := time.Now().In(loc)
-	fmt.Fprintf(&b, "## Current Time\n\n%s (timezone: %s)\n\n", now.Format("2006-01-02T15:04:05 (Monday)"), loc.String())
-
-	// Recent conversation history — gives the agent context for references.
-	if len(history) > 0 {
-		b.WriteString("## Recent Conversation\n\n")
-
-		// prevDay tracks the calendar date of the previous message so we can
-		// detect day boundaries. time.Time's zero value means "no previous
-		// message yet" — checked with prevDay.IsZero().
-		var prevDay time.Time
-
-		for _, msg := range history {
-			// Compare by calendar date only (year, month, day), not clock time.
-			// time.Date() with zeroed time components is Go's equivalent of
-			// Python's datetime.date() — strip the time, keep the date.
-			msgDate := time.Date(msg.Timestamp.Year(), msg.Timestamp.Month(), msg.Timestamp.Day(), 0, 0, 0, 0, msg.Timestamp.Location())
-			if !prevDay.IsZero() && !msgDate.Equal(prevDay) {
-				b.WriteString("--- the above messages are from a previous day ---\n\n")
-			}
-			prevDay = msgDate
-
-			role := userName
-			if msg.Role == "assistant" {
-				role = botName
-			}
-			content := msg.ContentScrubbed
-			if content == "" {
-				content = msg.ContentRaw
-			}
-			fmt.Fprintf(&b, "**%s:** %s\n\n", role, content)
-		}
-	}
-
-	b.WriteString("## Current Message\n\n")
-	fmt.Fprintf(&b, "%s\n\n", userMessage)
-
-	// If the user sent a photo, tell the agent about it. If OCR text
-	// was extracted (pre-flight), include it so the agent can decide
-	// whether it's a receipt, document, or something that needs the VLM.
-	if hasImage {
-		b.WriteString("## Attached Image\n\n")
-		if ocrText != "" {
-			b.WriteString("The user sent a photo. Pre-flight OCR extracted the following text:\n\n")
-			b.WriteString("```\n")
-			b.WriteString(ocrText)
-			b.WriteString("\n```\n\n")
-			b.WriteString("If this looks like a receipt (amounts, totals, store names), use `use_tools([\"expenses\"])` → `scan_receipt` to log the expense. ")
-			b.WriteString("If the OCR text is garbled or not useful, call `view_image` to see the photo with the VLM instead.\n\n")
-		} else {
-			b.WriteString("The user sent a photo. No OCR text was extracted (image may not contain text). ")
-			b.WriteString("Call `view_image` to see what's in it before replying.\n\n")
-		}
-	}
-
-	b.WriteString("## User Memories\n\n")
-	if len(userFacts) > 0 {
-		for _, f := range userFacts {
-			fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d] %s\n", f.ID, f.Category, f.Importance, f.Fact)
-		}
-	} else {
-		b.WriteString("(none yet)\n")
-	}
-
-	b.WriteString(fmt.Sprintf("\n## Self Memories (%s's own knowledge)\n\n", botName))
-	if len(selfFacts) > 0 {
-		for _, f := range selfFacts {
-			fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d] %s\n", f.ID, f.Category, f.Importance, f.Fact)
-		}
-	} else {
-		b.WriteString("(none yet)\n")
-	}
-
-	b.WriteString("\nDecide what to do: search if needed, then reply, then manage memory if appropriate.")
-	return b.String()
-}
-
 // executeTool runs a single tool call and returns a result string.
 // If the tool call has truncated/malformed JSON arguments (usually from
 // hitting max_tokens mid-generation), we return an error message that
@@ -922,9 +834,49 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// Build the system prompt — same layered approach as the old buildSystemPrompt
-	// in the bot package, but done here because the agent now owns the pipeline.
-	systemPrompt := buildChatSystemPrompt(tctx)
+	// Build the system prompt using the layer registry.
+	// Each layer (persona, traits, memory, mood, etc.) lives in its own
+	// file under agent/layers/ and auto-registers via init().
+	chatLayerCtx := &layers.LayerContext{
+		Store:               tctx.Store,
+		Cfg:                 tctx.Cfg,
+		EmbedClient:         tctx.EmbedClient,
+		WeatherClient:       tctx.WeatherClient,
+		RelevantFacts:       tctx.RelevantFacts,
+		ConversationSummary: tctx.ConversationSummary,
+		ConversationID:      tctx.ConversationID,
+		ScrubbedUserMessage: tctx.ScrubbedUserMessage,
+		ExpenseContext:      tctx.ExpenseContext,
+	}
+	systemPrompt, chatLayerResults := layers.BuildAll(layers.StreamChat, chatLayerCtx)
+
+	// Log chat prompt shape for observability.
+	var chatTotalTokens int
+	for _, lr := range chatLayerResults {
+		chatTotalTokens += lr.Tokens
+		if lr.Detail != "" {
+			log.Infof("  [chat layer] %s: ~%d tokens (%s)", lr.Name, lr.Tokens, lr.Detail)
+		} else {
+			log.Infof("  [chat layer] %s: ~%d tokens", lr.Name, lr.Tokens)
+		}
+		// Pass injected facts observability to the TUI.
+		if tctx.EventBus != nil {
+			for _, f := range lr.InjectedFacts {
+				args := fmt.Sprintf("#%d %s imp=%d", f.ID, f.Source, f.Importance)
+				if f.Source == "semantic" {
+					args = fmt.Sprintf("#%d %s imp=%d dist=%.2f", f.ID, f.Source, f.Importance, f.Distance)
+				}
+				tctx.EventBus.Emit(tui.ToolCallEvent{
+					Time:     time.Now(),
+					TurnID:   tctx.TriggerMsgID,
+					ToolName: "fact→chat",
+					Args:     args,
+					Result:   truncateLog(f.Fact, 80),
+				})
+			}
+		}
+	}
+	log.Infof("  chat system prompt total: ~%d tokens", chatTotalTokens)
 
 	// Combine any accumulated search context with the explicit context parameter.
 	fullContext := tctx.SearchContext
@@ -1161,266 +1113,6 @@ func isDegenerate(text string) bool {
 
 	return false
 }
-
-// buildChatSystemPrompt assembles the full system prompt for the
-// conversational model, exactly as the old bot.buildSystemPrompt did.
-func buildChatSystemPrompt(tctx *tools.Context) string {
-	var parts []string
-
-	// Layer 1: prompt.md — base identity (hot-reloaded from disk).
-	// ExpandPrompt replaces {{her}}/{{user}} with configured names.
-	if promptBytes, err := os.ReadFile(tctx.Cfg.Persona.PromptFile); err == nil {
-		parts = append(parts, tctx.Cfg.ExpandPrompt(string(promptBytes)))
-	}
-
-	// Layer 2: persona.md — evolving self-image (if it exists).
-	if personaBytes, err := os.ReadFile(tctx.Cfg.Persona.PersonaFile); err == nil {
-		parts = append(parts, tctx.Cfg.ExpandPrompt(string(personaBytes)))
-	}
-
-	// Layer 2.5: Personality traits — soft guidance for tone and style.
-	// These come from the most recent persona rewrite and nudge the
-	// chatLLM toward the right warmth, directness, humor, etc.
-	if traitCtx := buildTraitContext(tctx.Store); traitCtx != "" {
-		parts = append(parts, traitCtx)
-	}
-
-	// Layer 3: Current time — always injected so Mira knows what time
-	// of day it is, what day of the week, etc. This is NOT optional —
-	// without it, she has no sense of time at all.
-	parts = append(parts, buildTimeContext(tctx.Cfg.Scheduler.Timezone))
-
-	// Layer 4: Memory context — blend of semantically relevant facts
-	// (from KNN search) and high-importance facts (always-present).
-	//
-	// Before injecting, filter out facts that are already represented
-	// in the recent conversation history. This prevents "context echo"
-	// where the model sees the same information in both the facts section
-	// AND the message history, causing it to fixate and regurgitate.
-	filteredFacts := tctx.RelevantFacts
-	if tctx.EmbedClient != nil {
-		recentMsgs, err := tctx.Store.RecentMessages(tctx.ConversationID, tctx.Cfg.Memory.RecentMessages)
-		if err == nil && len(recentMsgs) > 0 {
-			before := len(filteredFacts)
-			filteredFacts = memory.FilterRedundantFacts(filteredFacts, recentMsgs, tctx.EmbedClient)
-			if dropped := before - len(filteredFacts); dropped > 0 {
-				log.Infof("  conversation dedup: %d/%d facts filtered as redundant with history", dropped, before)
-			}
-		}
-	}
-	if memCtx, injectedFacts, err := memory.BuildMemoryContext(tctx.Store, tctx.Cfg.Memory.MaxFactsInContext, filteredFacts, tctx.Cfg.Identity.User, tctx.Cfg.Embed.MaxSemanticDistance); err == nil && memCtx != "" {
-		parts = append(parts, memCtx)
-		// Log which facts were injected and why — this is the observability
-		// that lets you debug "why did she mention X when I asked about Y?"
-		for _, f := range injectedFacts {
-			if f.Source == "semantic" {
-				log.Infof("  [fact→chat] #%d %s imp=%d dist=%.3f src=%s — %s",
-					f.ID, f.Subject, f.Importance, f.Distance, f.Source, truncateLog(f.Fact, 60))
-			} else {
-				log.Infof("  [fact→chat] #%d %s imp=%d src=%s — %s",
-					f.ID, f.Subject, f.Importance, f.Source, truncateLog(f.Fact, 60))
-			}
-		}
-		// Emit for TUI
-		if tctx.EventBus != nil {
-			for _, f := range injectedFacts {
-				args := fmt.Sprintf("#%d %s imp=%d", f.ID, f.Source, f.Importance)
-				if f.Source == "semantic" {
-					args = fmt.Sprintf("#%d %s imp=%d dist=%.2f", f.ID, f.Source, f.Importance, f.Distance)
-				}
-				tctx.EventBus.Emit(tui.ToolCallEvent{
-					Time:     time.Now(),
-					TurnID:   tctx.TriggerMsgID,
-					ToolName: "fact→chat",
-					Args:     args,
-					Result:   truncateLog(f.Fact, 80),
-				})
-			}
-		}
-	}
-
-	// Layer 4: Weather context — current conditions so Mira can reference
-	// the weather naturally. Only included if weather is configured.
-	if weatherCtx := buildWeatherContext(tctx.WeatherClient); weatherCtx != "" {
-		parts = append(parts, weatherCtx)
-	}
-
-	// Layer 5: Mood context — recent mood trend so Mira is aware of
-	// emotional patterns. Only included if there's mood data.
-	if moodCtx := buildMoodContext(tctx.Store); moodCtx != "" {
-		parts = append(parts, moodCtx)
-	}
-
-	// Layer 5.5: Expense context — if a receipt was just scanned, inject
-	// the exact data so the chat model references real numbers and vendor
-	// names instead of hallucinating them.
-	if tctx.ExpenseContext != "" {
-		parts = append(parts, tctx.ExpenseContext)
-	}
-
-	// Layer 6: Conversation summary — compacted older messages.
-	// This gives the model awareness of what was discussed earlier
-	// without burning tokens on the full message history.
-	// The header reminds the model not to echo summary content verbatim,
-	// which caused a bug where old advice/phrases were recycled word-for-word.
-	if tctx.ConversationSummary != "" {
-		parts = append(parts, fmt.Sprintf("# Earlier in This Conversation (summary — do not repeat phrases or advice from this section)\n\n%s", tctx.ConversationSummary))
-	}
-
-	return strings.Join(parts, "\n\n---\n\n")
-}
-
-// ---------------------------------------------------------------------------
-// System prompt context builders
-// ---------------------------------------------------------------------------
-
-func buildTimeContext(timezone string) string {
-	loc, err := time.LoadLocation(timezone)
-	if err != nil {
-		loc = time.UTC
-	}
-	now := time.Now().In(loc)
-	return "# Current Time\n" + now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
-}
-
-// buildWeatherContext returns a short weather summary for the system prompt.
-// Returns "" if weather is not configured or unavailable.
-func buildWeatherContext(client *weather.Client) string {
-	if client == nil {
-		return ""
-	}
-	summary := client.FormatContext()
-	if summary == "" {
-		return ""
-	}
-	return "# Current Weather\n" + summary
-}
-
-// buildTraitContext formats the current personality trait scores as a
-// soft guidance section for the system prompt.
-func buildTraitContext(store *memory.Store) string {
-	traits, err := store.GetCurrentTraits()
-	if err != nil || len(traits) == 0 {
-		return ""
-	}
-
-	descriptions := map[string]func(string) string{
-		"warmth": func(v string) string {
-			f, _ := strconv.ParseFloat(v, 64)
-			if f >= 0.7 {
-				return "lean warm and emotionally present"
-			} else if f <= 0.3 {
-				return "keep a bit of emotional distance"
-			}
-			return "balanced warmth"
-		},
-		"directness": func(v string) string {
-			f, _ := strconv.ParseFloat(v, 64)
-			if f >= 0.7 {
-				return "be straightforward and blunt"
-			} else if f <= 0.3 {
-				return "be diplomatic and gentle"
-			}
-			return "balanced directness"
-		},
-		"initiative": func(v string) string {
-			f, _ := strconv.ParseFloat(v, 64)
-			if f >= 0.7 {
-				return "proactively lead conversations"
-			} else if f <= 0.3 {
-				return "follow the user's lead"
-			}
-			return "balanced initiative"
-		},
-		"depth": func(v string) string {
-			f, _ := strconv.ParseFloat(v, 64)
-			if f >= 0.7 {
-				return "comfortable going deep and philosophical"
-			} else if f <= 0.3 {
-				return "keep things light and casual"
-			}
-			return "balanced depth"
-		},
-	}
-
-	var b strings.Builder
-	b.WriteString("# Personality Traits\n\n")
-	b.WriteString("These describe your current communication tendencies. Let them guide your tone naturally — don't mention them explicitly.\n\n")
-
-	for _, t := range traits {
-		if t.TraitName == "humor_style" {
-			fmt.Fprintf(&b, "- Humor style: %s\n", t.Value)
-		} else if descFn, ok := descriptions[t.TraitName]; ok {
-			fmt.Fprintf(&b, "- %s: %s (%s)\n", strings.Title(t.TraitName), t.Value, descFn(t.Value))
-		}
-	}
-
-	return b.String()
-}
-
-// buildMoodContext formats recent mood data for the system prompt.
-func buildMoodContext(store *memory.Store) string {
-	entries, err := store.RecentMoodEntries(5)
-	if err != nil || len(entries) == 0 {
-		return ""
-	}
-
-	labels := map[int]string{1: "bad", 2: "rough", 3: "meh", 4: "good", 5: "great"}
-
-	var b strings.Builder
-	b.WriteString("# Mood Awareness\n\n")
-	b.WriteString("Recent emotional states (use this to be attentive, not to announce it):\n\n")
-
-	for _, e := range entries {
-		label := labels[e.Rating]
-		if label == "" {
-			label = "unknown"
-		}
-		ts := e.Timestamp.Format("Mon Jan 2, 3:04 PM")
-		if e.Note != "" {
-			fmt.Fprintf(&b, "- %s: %s (%d/5) — %s\n", ts, label, e.Rating, e.Note)
-		} else {
-			fmt.Fprintf(&b, "- %s: %s (%d/5)\n", ts, label, e.Rating)
-		}
-	}
-
-	avg, count, err := store.MoodTrend(10)
-	if err == nil && count >= 3 {
-		var trend string
-		switch {
-		case avg >= 4.0:
-			trend = "trending positive"
-		case avg >= 3.0:
-			trend = "mostly neutral"
-		case avg >= 2.0:
-			trend = "trending down"
-		default:
-			trend = "going through a rough patch"
-		}
-		fmt.Fprintf(&b, "\nOverall trend (last %d entries): %.1f/5 — %s\n", count, avg, trend)
-	}
-
-	return b.String()
-}
-
-// execLogMood saves a mood entry from the agent when the user expresses
-// how they're feeling. This is the "manual" source — the agent explicitly
-// decided to log mood based on what the user said.
-// execLogMood has been migrated to a standalone skill (skills/log_mood/).
-// The skill inserts into mood_entries via the DB proxy.
-
-// --- Search tool execution (migrated to skills) ---
-//
-// web_search, web_read, and book_search have been migrated to standalone
-// skills in skills/web_search/, skills/web_read/, and skills/book_search/.
-// The agent discovers them via find_skill and runs them via run_skill.
-// The built-in implementations below have been removed.
-
-// --- Memory tool execution (migrated to tools/) ---
-//
-// save_fact, save_self_fact, update_fact, remove_fact, and update_persona
-// have been migrated to standalone tool handlers in tools/<name>/handler.go.
-// They are dispatched via tools.Execute in executeTool.
 
 // truncateLog shortens a string for log output, adding "..." if it was cut.
 // mustJSON marshals a string to a JSON string literal (with quotes and
