@@ -132,14 +132,24 @@ func MaybeCompact(
 		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
-	// --- Context-aware trigger (#38) ---
-	// If we have a total prompt budget, check real prompt utilization instead
-	// of just history size. The most recent user message's TokenCount stores
-	// the total prompt tokens from the last chat completion call — that
-	// includes everything: system prompt, persona, facts, mood, history.
+	// Two independent compaction triggers. Either one can fire compaction:
+	//
+	// 1. Context-aware (#38): checks real total prompt tokens (from the chat
+	//    model's last response) against a budget. Catches scaffolding bloat
+	//    (growing facts, persona, mood context).
+	//
+	// 2. Estimation-based (#37): checks the compaction window's estimated
+	//    tokens against a history budget. Catches unsummarized history
+	//    accumulating in the DB. This is the day-to-day trigger.
+	//
+	// These are independent because they measure different things:
+	// context-aware sees the 10-message sliding window prompt,
+	// estimation sees the full 100-message compaction window.
+
 	shouldCompact := false
+
+	// --- Context-aware trigger ---
 	if maxContextTokens > 0 {
-		// Scan backward for the most recent user message with a real token count.
 		var lastPromptTokens int
 		for i := len(recentMessages) - 1; i >= 0; i-- {
 			if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
@@ -148,27 +158,17 @@ func MaybeCompact(
 			}
 		}
 		if lastPromptTokens > 0 {
-			// Same 75% threshold as the estimation path, but applied to the
-			// total prompt budget. This accounts for scaffolding overhead
-			// (system prompt, persona, facts, mood) that the history-only
-			// check can't see.
 			threshold := int(float64(maxContextTokens) * 0.75)
 			log.Infof("  compaction check (context-aware): %d/%d total prompt tokens (threshold: %d)",
 				lastPromptTokens, maxContextTokens, threshold)
 			if lastPromptTokens >= threshold {
 				shouldCompact = true
-			} else {
-				return &CompactResult{
-					Summary:      existingSummary,
-					KeptMessages: recentMessages,
-				}, nil
 			}
 		}
-		// If no prompt token data yet (first message), fall through to estimation.
+		// No early return — always continue to the estimation check.
 	}
 
-	// --- Estimation-based trigger (#37, improved with real counts) ---
-	// Fallback when context_window isn't configured or no prompt token data exists.
+	// --- Estimation-based trigger ---
 	if !shouldCompact {
 		estTokens := EstimateHistoryTokens(existingSummary, recentMessages)
 		threshold := int(float64(maxHistoryTokens) * 0.75)
@@ -180,7 +180,6 @@ func MaybeCompact(
 				KeptMessages: recentMessages,
 			}, nil
 		}
-		shouldCompact = true
 	}
 
 	// Estimate tokens before compaction (for logging and the result struct).
