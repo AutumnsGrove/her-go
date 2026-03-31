@@ -250,7 +250,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// of what it did in previous turns (facts saved, searches run, etc.).
 	var agentActionSummary string
 	var recentAgentActions []memory.AgentAction
-	agentActions, err := params.Store.RecentAgentActions(30) // last 30 messages worth
+	agentActions, err := params.Store.RecentAgentActions(params.ConversationID, 30) // last 30 messages worth
 	if err != nil {
 		log.Warn("failed to load agent actions", "err", err)
 	} else if len(agentActions) > 0 {

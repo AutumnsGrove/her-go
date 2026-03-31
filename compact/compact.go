@@ -279,17 +279,9 @@ func MaybeCompact(
 	}, nil
 }
 
-// verboseTools lists tools whose results are large and low-value for
-// long-term agent memory. We keep the tool name and args (so the agent
-// knows it searched for X) but aggressively truncate the result.
-var verboseTools = map[string]bool{
-	"web_search":       true,
-	"book_search":      true,
-	"find_skill":       true,
-	"recall_memories":  true,
-	"search_history":   true,
-	"query_expenses":   true,
-}
+// verboseTools is a package-level alias for VerboseTools, used by the
+// agent compaction logic below. The canonical list lives in verbose_tools.go.
+var verboseTools = VerboseTools
 
 // agentSummaryPromptTmpl is the prompt for summarizing the agent's action
 // history. Unlike the chat summary (conversational flow), this focuses on
