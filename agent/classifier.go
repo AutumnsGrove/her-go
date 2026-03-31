@@ -201,12 +201,21 @@ func classifyMemoryWrite(
 	// Build conversation context from the message snippet.
 	// We show the classifier the last few messages so it can tell whether
 	// "I got a new sword" is the user talking about a game or real life.
+	//
+	// Messages are truncated to 200 chars each. The classifier only needs
+	// enough context to distinguish real-life from fictional — it doesn't
+	// need Deepseek's full 1500-char responses. This keeps the prompt
+	// under ~1000 tokens instead of 2500-3500 (issue #40).
+	const maxSnippetChars = 200
 	var contextLines []string
 	for _, msg := range snippet {
 		// Prefer scrubbed content (PII-safe), fall back to raw.
 		text := msg.ContentScrubbed
 		if text == "" {
 			text = msg.ContentRaw
+		}
+		if len(text) > maxSnippetChars {
+			text = text[:maxSnippetChars] + "..."
 		}
 		contextLines = append(contextLines, fmt.Sprintf("%s: %s", msg.Role, text))
 	}
