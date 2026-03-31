@@ -1,0 +1,22 @@
+# Category hints for the deferred-tools table in agent_prompt.md.
+# Each category has a "hint" that tells the agent when to load it.
+# This is the single source of truth — the table in agent_prompt.md
+# is auto-generated from this file at prompt load time.
+
+vision:
+  hint: "User sent a photo"
+
+memory:
+  hint: "Need to delete/search memories, save self-observations, or rewrite persona"
+
+scheduling:
+  hint: "User wants reminders, recurring tasks, or to manage schedules"
+
+context:
+  hint: "You need precise time, or user mentions their location"
+
+expenses:
+  hint: "OCR text looks like a receipt, user mentions spending money, asks about finances, or wants to correct/delete an expense"
+
+skills:
+  hint: "Check cached results from a previous skill run before re-running it"

@@ -1,4 +1,5 @@
 name: save_fact
+hint: "save a new fact about the user"
 description: >-
   Save a new fact learned from the conversation. Only for information worth
   remembering WEEKS later. Ask: 'Would this matter in a month?' If not,

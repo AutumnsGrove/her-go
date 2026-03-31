@@ -67,7 +67,8 @@ const defaultAgentPrompt = `You are {{her}}'s brain. You orchestrate every respo
 
 // loadAgentPrompt reads the agent prompt from disk (hot-reloadable),
 // falling back to a minimal default if the file doesn't exist.
-// After reading, it expands {{her}}/{{user}} placeholders via cfg.ExpandPrompt.
+// After reading, it replaces tool inventory markers with auto-generated
+// sections from the YAML registry, then expands {{her}}/{{user}} placeholders.
 // This is the same pattern as prompt.md — edit the file, restart the
 // bot (or it reloads on next message), and the behavior changes.
 func loadAgentPrompt(path string, cfg *config.Config) string {
@@ -76,7 +77,32 @@ func loadAgentPrompt(path string, cfg *config.Config) string {
 		log.Warn("couldn't load agent prompt, using default", "path", path)
 		return cfg.ExpandPrompt(defaultAgentPrompt)
 	}
-	return cfg.ExpandPrompt(string(data))
+	content := expandToolSections(string(data))
+	return cfg.ExpandPrompt(content)
+}
+
+// expandToolSections replaces content between marker comments in the
+// agent prompt with auto-generated tool inventory from the YAML registry.
+// Markers look like <!-- BEGIN HOT_TOOLS --> ... <!-- END HOT_TOOLS -->.
+// If markers are missing, the content is returned unchanged.
+func expandToolSections(content string) string {
+	content = replaceBetweenMarkers(content, "HOT_TOOLS", tools.RenderHotToolsList())
+	content = replaceBetweenMarkers(content, "CATEGORY_TABLE", tools.RenderCategoryTable())
+	return content
+}
+
+// replaceBetweenMarkers replaces the text between <!-- BEGIN tag --> and
+// <!-- END tag --> with the replacement string. The markers themselves
+// are preserved; only the content between them is swapped.
+func replaceBetweenMarkers(content, tag, replacement string) string {
+	begin := "<!-- BEGIN " + tag + " -->"
+	end := "<!-- END " + tag + " -->"
+	startIdx := strings.Index(content, begin)
+	endIdx := strings.Index(content, end)
+	if startIdx < 0 || endIdx < 0 || endIdx <= startIdx {
+		return content // markers not found, return unchanged
+	}
+	return content[:startIdx+len(begin)] + "\n" + replacement + "\n" + content[endIdx:]
 }
 
 // RunParams bundles all the parameters for an agent run.

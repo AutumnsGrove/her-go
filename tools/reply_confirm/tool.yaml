@@ -1,4 +1,5 @@
 name: reply_confirm
+hint: "send Yes/No buttons before destructive actions"
 description: >-
   Send a Yes/No confirmation prompt with inline buttons before executing a
   destructive action. The action executes ONLY when the user clicks Yes.

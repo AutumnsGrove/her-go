@@ -1,4 +1,5 @@
 name: no_action
+hint: "explicitly skip memory management"
 description: >-
   Explicitly skip memory management. Use when the exchange doesn't
   reveal new information worth saving. You still MUST call reply
