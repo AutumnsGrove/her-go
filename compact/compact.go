@@ -123,7 +123,7 @@ func MaybeCompact(
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
-		maxHistoryTokens = 1400 // default — triggers compaction at 75% (~1050 tokens)
+		maxHistoryTokens = 3000 // default — triggers compaction at 75% (~2250 tokens)
 	}
 
 	// Load existing summary for this conversation.
@@ -186,21 +186,19 @@ func MaybeCompact(
 	tokensBefore := EstimateHistoryTokens(existingSummary, recentMessages)
 	log.Infof("  compacting: %d messages, ~%d history tokens", len(recentMessages), tokensBefore)
 
-	// Split: older half gets summarized, newer half stays verbatim.
-	// We keep at least 6 messages (3 exchanges) in full fidelity so
-	// the model doesn't lose immediate context.
-	splitPoint := len(recentMessages) / 2
+	// Split: keep only the most recent messages in full fidelity,
+	// summarize everything else. We keep 6 messages (3 exchanges) —
+	// enough for the model to resolve references like "it", "that
+	// thing", etc. Everything older goes into the running summary.
 	minKeep := 6
-	if len(recentMessages)-splitPoint < minKeep && len(recentMessages) > minKeep {
-		splitPoint = len(recentMessages) - minKeep
-	}
-	if splitPoint <= 0 {
+	if len(recentMessages) <= minKeep {
 		// Not enough messages to compact.
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
 		}, nil
 	}
+	splitPoint := len(recentMessages) - minKeep
 
 	toSummarize := recentMessages[:splitPoint]
 	toKeep := recentMessages[splitPoint:]

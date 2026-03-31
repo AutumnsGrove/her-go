@@ -158,7 +158,7 @@ func TestMaybeCompact_OverThreshold(t *testing.T) {
 
 func TestMaybeCompact_ZeroBudget_UsesDefault(t *testing.T) {
 	// When maxHistoryTokens is 0 (not set in config), it should use
-	// the default of 1400. This is the case that was broken in production.
+	// the default of 3000. This is the case that was broken in production.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestMaybeCompact_ZeroBudget_UsesDefault(t *testing.T) {
 	defer store.Close()
 
 	// Pass maxHistoryTokens=0 (simulating unset config).
-	// 10 messages, 100 chars each = 350 tokens. Should be under default threshold (1050).
+	// 10 messages, 100 chars each = 350 tokens. Should be under default threshold (2250).
 	msgs := makeMessages(10, 100)
 	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 0, 0, "Mira", "User")
 	if err != nil {
