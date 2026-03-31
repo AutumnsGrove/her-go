@@ -244,6 +244,34 @@ func Run(params RunParams) (*RunResult, error) {
 		recentMsgs = recentMsgs[len(recentMsgs)-params.Cfg.Memory.RecentMessages:]
 	}
 
+	// --- Agent action history compaction ---
+	// Load the agent's tool call history from agent_turns and compact it
+	// if it's getting too large. This gives the agent persistent memory
+	// of what it did in previous turns (facts saved, searches run, etc.).
+	var agentActionSummary string
+	var recentAgentActions []memory.AgentAction
+	agentActions, err := params.Store.RecentAgentActions(30) // last 30 messages worth
+	if err != nil {
+		log.Warn("failed to load agent actions", "err", err)
+	} else if len(agentActions) > 0 {
+		acr, compactErr := compact.MaybeCompactAgent(
+			params.ChatLLM, params.Store, params.ConversationID,
+			agentActions, params.Cfg.Memory.AgentContextBudget,
+			params.Cfg.Identity.Her,
+		)
+		if compactErr != nil {
+			log.Error("agent compaction error", "err", compactErr)
+			recentAgentActions = agentActions
+		} else {
+			agentActionSummary = acr.Summary
+			recentAgentActions = acr.RecentActions
+			if acr.DidCompact {
+				log.Infof("  agent compacted %d actions (%d→%d tokens)",
+					acr.Summarized, acr.TokensBefore, acr.TokensAfter)
+			}
+		}
+	}
+
 	// Semantic search — find facts most relevant to what the user just said.
 	// This is the core of v0.4: instead of showing the LLM ALL facts sorted
 	// by importance, we embed the user's message and find the closest matches
@@ -280,6 +308,8 @@ func Run(params RunParams) (*RunResult, error) {
 		WeatherClient:       params.WeatherClient,
 		RelevantFacts:       relevantFacts,
 		ConversationSummary: conversationSummary,
+		AgentActionSummary:  agentActionSummary,
+		RecentAgentActions:  recentAgentActions,
 		ConversationID:      params.ConversationID,
 		ScrubbedUserMessage: params.ScrubbedUserMessage,
 		RecentMessages:      recentMsgs,
