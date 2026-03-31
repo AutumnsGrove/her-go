@@ -27,7 +27,7 @@ func buildAgentUserFacts(ctx *LayerContext) LayerResult {
 	var count int
 	var b strings.Builder
 	b.WriteString("## Relevant User Memories\n\n")
-	b.WriteString("(Use recall_memories to search for more if needed)\n\n")
+	b.WriteString("These are the facts most relevant to the current message. To search for more, use `use_tools([\"memory\"])` then `recall_memories`.\n\n")
 
 	for _, f := range ctx.RelevantFacts {
 		if f.Subject != "user" {
@@ -39,7 +39,7 @@ func buildAgentUserFacts(ctx *LayerContext) LayerResult {
 
 	if count == 0 {
 		return LayerResult{
-			Content: "## Relevant User Memories\n\n(none matched — use recall_memories to search)",
+			Content: "## Relevant User Memories\n\n(none matched this message — to search for specific facts, use `use_tools([\"memory\"])` then `recall_memories`)",
 			Detail:  "0 facts",
 		}
 	}

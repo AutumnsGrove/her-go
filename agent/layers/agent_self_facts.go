@@ -26,7 +26,7 @@ func buildAgentSelfFacts(ctx *LayerContext) LayerResult {
 	var count int
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Relevant Self Memories (%s's own knowledge)\n\n", botName)
-	b.WriteString("(Use recall_memories to search for more if needed)\n\n")
+	b.WriteString("These are the self-observations most relevant to the current message. To search for more, use `use_tools([\"memory\"])` then `recall_memories`.\n\n")
 
 	for _, f := range ctx.RelevantFacts {
 		if f.Subject != "self" {
@@ -38,7 +38,7 @@ func buildAgentSelfFacts(ctx *LayerContext) LayerResult {
 
 	if count == 0 {
 		return LayerResult{
-			Content: fmt.Sprintf("## Relevant Self Memories (%s's own knowledge)\n\n(none matched — use recall_memories to search)", botName),
+			Content: fmt.Sprintf("## Relevant Self Memories (%s's own knowledge)\n\n(none matched this message — to search for specific self-knowledge, use `use_tools([\"memory\"])` then `recall_memories`)", botName),
 			Detail:  "0 facts",
 		}
 	}
