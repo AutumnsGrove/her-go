@@ -25,7 +25,7 @@ func (b *Bot) handleCompact(c tele.Context) error {
 	tokensBefore := compact.EstimateHistoryTokens("", recent)
 
 	// Force compaction by passing a very low threshold (0 = always compact).
-	cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
+	cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, 0, b.cfg.Identity.Her, b.cfg.Identity.User)
 	if err != nil {
 		return c.Send(fmt.Sprintf("Compaction failed: %v", err))
 	}
