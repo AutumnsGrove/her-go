@@ -42,9 +42,22 @@ func estimateTokens(s string) int {
 
 // EstimateHistoryTokens calculates the approximate token count of
 // a conversation history, including any existing summary.
+//
+// For assistant messages with a real TokenCount (from CompletionTokens),
+// we use that directly instead of estimating. User messages always use
+// estimation because their TokenCount stores total prompt size, not
+// per-message size. Messages without token data (TokenCount == 0) fall
+// back to the len/4 heuristic.
 func EstimateHistoryTokens(summary string, messages []memory.Message) int {
 	total := estimateTokens(summary)
 	for _, msg := range messages {
+		// Assistant messages with real token counts: use directly.
+		// Their TokenCount is CompletionTokens — the actual response size.
+		if msg.Role == "assistant" && msg.TokenCount > 0 {
+			total += msg.TokenCount
+			total += 10 // overhead for role markers, formatting
+			continue
+		}
 		content := msg.ContentScrubbed
 		if content == "" {
 			content = msg.ContentRaw
@@ -106,6 +119,7 @@ func MaybeCompact(
 	conversationID string,
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
+	maxContextTokens int,
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
@@ -118,22 +132,60 @@ func MaybeCompact(
 		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
-	// Estimate current token usage.
-	currentTokens := EstimateHistoryTokens(existingSummary, recentMessages)
-
-	// Trigger at 75% of budget.
-	threshold := int(float64(maxHistoryTokens) * 0.75)
-	log.Infof("  compaction check: %d msgs, %d tokens (threshold: %d, budget: %d)",
-		len(recentMessages), currentTokens, threshold, maxHistoryTokens)
-	if currentTokens < threshold {
-		// Under budget, no compaction needed.
-		return &CompactResult{
-			Summary:      existingSummary,
-			KeptMessages: recentMessages,
-		}, nil
+	// --- Context-aware trigger (#38) ---
+	// If we have a total prompt budget, check real prompt utilization instead
+	// of just history size. The most recent user message's TokenCount stores
+	// the total prompt tokens from the last chat completion call — that
+	// includes everything: system prompt, persona, facts, mood, history.
+	shouldCompact := false
+	if maxContextTokens > 0 {
+		// Scan backward for the most recent user message with a real token count.
+		var lastPromptTokens int
+		for i := len(recentMessages) - 1; i >= 0; i-- {
+			if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
+				lastPromptTokens = recentMessages[i].TokenCount
+				break
+			}
+		}
+		if lastPromptTokens > 0 {
+			// Same 75% threshold as the estimation path, but applied to the
+			// total prompt budget. This accounts for scaffolding overhead
+			// (system prompt, persona, facts, mood) that the history-only
+			// check can't see.
+			threshold := int(float64(maxContextTokens) * 0.75)
+			log.Infof("  compaction check (context-aware): %d/%d total prompt tokens (threshold: %d)",
+				lastPromptTokens, maxContextTokens, threshold)
+			if lastPromptTokens >= threshold {
+				shouldCompact = true
+			} else {
+				return &CompactResult{
+					Summary:      existingSummary,
+					KeptMessages: recentMessages,
+				}, nil
+			}
+		}
+		// If no prompt token data yet (first message), fall through to estimation.
 	}
 
-	log.Infof("  history at %d tokens (threshold: %d), compacting...", currentTokens, threshold)
+	// --- Estimation-based trigger (#37, improved with real counts) ---
+	// Fallback when context_window isn't configured or no prompt token data exists.
+	if !shouldCompact {
+		estTokens := EstimateHistoryTokens(existingSummary, recentMessages)
+		threshold := int(float64(maxHistoryTokens) * 0.75)
+		log.Infof("  compaction check (estimated): %d msgs, %d tokens (threshold: %d, budget: %d)",
+			len(recentMessages), estTokens, threshold, maxHistoryTokens)
+		if estTokens < threshold {
+			return &CompactResult{
+				Summary:      existingSummary,
+				KeptMessages: recentMessages,
+			}, nil
+		}
+		shouldCompact = true
+	}
+
+	// Estimate tokens before compaction (for logging and the result struct).
+	tokensBefore := EstimateHistoryTokens(existingSummary, recentMessages)
+	log.Infof("  compacting: %d messages, ~%d history tokens", len(recentMessages), tokensBefore)
 
 	// Split: older half gets summarized, newer half stays verbatim.
 	// We keep at least 6 messages (3 exchanges) in full fidelity so
@@ -177,6 +229,15 @@ func MaybeCompact(
 		{Role: "user", Content: transcript.String()},
 	}
 
+	// Guard against nil LLM (happens in tests and if chat model is misconfigured).
+	if chatLLM == nil {
+		log.Warn("no LLM client available, skipping compaction")
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
+	}
+
 	resp, err := chatLLM.ChatCompletion(llmMessages)
 	if err != nil {
 		// If summarization fails, just return everything unsummarized.
@@ -204,7 +265,7 @@ func MaybeCompact(
 
 	newTokens := EstimateHistoryTokens(newSummary, toKeep)
 	log.Infof("  compacted %d messages (%d→%d tokens, saved %d)",
-		len(toSummarize), currentTokens, newTokens, currentTokens-newTokens)
+		len(toSummarize), tokensBefore, newTokens, tokensBefore-newTokens)
 	log.Infof("  summary: %s", truncate(newSummary, 200))
 
 	// Log metrics for the summarization call.
@@ -215,7 +276,7 @@ func MaybeCompact(
 		KeptMessages: toKeep,
 		DidCompact:   true,
 		Summarized:   len(toSummarize),
-		TokensBefore: currentTokens,
+		TokensBefore: tokensBefore,
 		TokensAfter:  newTokens,
 	}, nil
 }

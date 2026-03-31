@@ -457,9 +457,9 @@ func (s *Store) SaveMessage(role, contentRaw, contentScrubbed, conversationID st
 // of which conversation ID they belong to.
 func (s *Store) GlobalRecentMessages(limit int) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
 		 FROM (
-			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count
 			FROM messages
 			ORDER BY id DESC
 			LIMIT ?
@@ -476,7 +476,7 @@ func (s *Store) GlobalRecentMessages(limit int) ([]Message, error) {
 		var m Message
 		var ts string
 		var scrubbed sql.NullString
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
@@ -494,9 +494,9 @@ func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, err
 	// The subquery grabs the last N rows (newest first), then the outer
 	// query flips them to chronological order for the prompt.
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
 		 FROM (
-			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count
 			FROM messages
 			WHERE conversation_id = ?
 			ORDER BY id DESC
@@ -523,7 +523,7 @@ func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, err
 		// Scan reads column values into Go variables. The order must match
 		// the SELECT column order exactly. sql.NullString handles NULL values —
 		// regular strings can't represent NULL in Go.
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 
