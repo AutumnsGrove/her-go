@@ -125,10 +125,12 @@ type MemoryConfig struct {
 	RecentMessages     int     `yaml:"recent_messages"`
 	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
 	ExtractionInterval int     `yaml:"extraction_interval"`
-	MaxHistoryTokens   int     `yaml:"max_history_tokens"`  // token budget for conversation history (fallback when max_context_tokens is 0)
-	MaxContextTokens   int     `yaml:"max_context_tokens"`  // total prompt budget (scaffolding + history); 0 = use max_history_tokens fallback
-	AutoLinkCount      int     `yaml:"auto_link_count"`     // max links per new fact (0 = disabled)
-	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"` // min cosine similarity to create a link (0.0-1.0)
+	MaxHistoryTokens    int     `yaml:"max_history_tokens"`     // estimation-based compaction budget (len/4 heuristic over full history window)
+	ChatContextBudget   int     `yaml:"chat_context_budget"`    // chat model total prompt budget (compaction fires at 75%); 0 = use max_history_tokens only
+	AgentContextBudget  int     `yaml:"agent_context_budget"`   // agent model total prompt budget for action history compaction; 0 = use 6000 default
+	MaxContextTokens    int     `yaml:"max_context_tokens"`     // DEPRECATED: use chat_context_budget instead. Kept for backwards compat.
+	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
+	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
 }
 
 // ScrubConfig controls PII scrubbing behavior.
@@ -293,6 +295,12 @@ func Load(path string) (*Config, error) {
 
 	if err := yaml.Unmarshal([]byte(expanded), &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
+	}
+
+	// Backwards compat: if the user still has max_context_tokens set but
+	// hasn't migrated to chat_context_budget, use the old value.
+	if cfg.Memory.ChatContextBudget == 0 && cfg.Memory.MaxContextTokens > 0 {
+		cfg.Memory.ChatContextBudget = cfg.Memory.MaxContextTokens
 	}
 
 	return &cfg, nil

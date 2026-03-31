@@ -38,6 +38,8 @@ You (Telegram) → her binary → Kimi K2.5 (agent model, orchestrates everythin
 
 Every message goes through the **Kimi K2.5** agent first — an autoregressive LLM (`moonshotai/kimi-k2.5`) that handles all tool-calling and orchestration. Kimi decides whether to search, remember, schedule, or call a skill. The conversational model (Deepseek V3.2) generates the actual natural language response when the agent calls `reply`. A separate vision model (Gemini Flash) handles image understanding.
 
+For a deep dive into all model calls, data flow, and the dual compaction system, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ### Model Stack
 
 | Role | Model | Via |
@@ -45,6 +47,7 @@ Every message goes through the **Kimi K2.5** agent first — an autoregressive L
 | Agent (orchestration) | Kimi K2.5 (`moonshotai/kimi-k2.5`) | OpenRouter |
 | Chat (responses) | Deepseek V3.2 (`deepseek/deepseek-v3.2`) | OpenRouter |
 | Vision (images) | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter |
+| Classifier (memory quality) | Claude Haiku 4.5 (`anthropic/claude-haiku-4.5`) | OpenRouter |
 | OCR (text extraction) | Apple Vision (primary), GLM-OCR (fallback) | Local |
 | Embeddings | Nomic Embed Text v1.5 | Local (LM Studio/Ollama) |
 | STT (speech-to-text) | Parakeet | Local |
@@ -63,7 +66,7 @@ Every message goes through the **Kimi K2.5** agent first — an autoregressive L
 - **Voice** — Local speech-to-text (Parakeet) and text-to-speech (Piper)
 - **Weather** — Open-Meteo integration (no API key needed)
 - **PII scrubbing** — Tiered: hard identifiers redacted, contact info tokenized + deanonymized, names pass through
-- **Conversation compaction** — Older messages summarized to stay within token budget
+- **Dual compaction** — Separate compaction streams for chat (conversation flow) and agent (tool call history), each with independent budgets and summaries
 - **Thinking traces** — Optional `/traces` command shows the agent's decision-making before each reply
 - **Full observability** — Agent turns, search queries, skill executions, metrics, all stored in SQLite
 
@@ -112,6 +115,7 @@ Each skill gets its own **sidecar SQLite database** that stores execution histor
 
 ```bash
 her run      # Start the bot (foreground)
+her shape    # Show what fills each model's context window (per-layer token breakdown)
 her setup    # Build binary, generate launchd plist, install service
 her start    # Start launchd service (runs setup if needed)
 her stop     # Stop launchd service
@@ -157,10 +161,11 @@ All three are hot-reloaded from disk on every message.
 
 ```
 her-go/
-├── cmd/              # CLI commands (Cobra): run, setup, start, stop, status, logs, trust
-├── agent/            # Agent orchestrator, tool dispatch, skills integration
+├── cmd/              # CLI commands (Cobra): run, setup, start, stop, status, logs, trust, shape
+├── agent/            # Agent orchestrator, tool dispatch, classifier, skills integration
+│   └── layers/       # Prompt layer registry (20 files, one per layer for agent + chat)
 ├── bot/              # Telegram bot + message pipeline
-├── compact/          # Conversation history compaction
+├── compact/          # Dual compaction (chat conversations + agent action history)
 ├── config/           # YAML config loading + env var substitution
 ├── embed/            # Local embedding client for semantic similarity
 ├── llm/              # OpenAI-compatible LLM client (streaming, multi-modal)
@@ -171,6 +176,8 @@ her-go/
 ├── scheduler/        # Cron-based task runner (reminders, check-ins, journaling)
 ├── scrub/            # Tiered PII detection + deanonymization
 ├── search/           # Tavily web search + Open Library books
+├── tools/            # Tool YAML manifests + handlers (init-registered)
+├── tui/              # Terminal UI events and rendering
 ├── skills/
 │   ├── loader/       # Skill discovery, trust verification, sandbox, proxy, sidecar DB
 │   ├── skillkit/     # Shared libraries for Go and Python skills
@@ -180,6 +187,7 @@ her-go/
 ├── vision/           # Image understanding via Gemini Flash
 ├── voice/            # Parakeet STT + Piper TTS
 ├── weather/          # Open-Meteo weather integration
+├── docs/             # Architecture docs (model calls, data flow, compaction)
 ├── prompt.md         # Mira's personality
 ├── agent_prompt.md   # Agent behavior rules
 ├── persona.md        # Mira's evolving self-image (bot-authored)
