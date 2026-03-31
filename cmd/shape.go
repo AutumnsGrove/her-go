@@ -7,6 +7,7 @@ import (
 	"her/agent/layers"
 	"her/config"
 	"her/embed"
+	"her/logger"
 	"her/memory"
 	"her/weather"
 
@@ -37,6 +38,10 @@ func init() {
 }
 
 func runShape(cmd *cobra.Command, args []string) error {
+	// Suppress info-level logs from subsystems (fact filtering, weather, etc.)
+	// so the shape output stays clean — just the table, no noise.
+	logger.Quiet()
+
 	showAgent := true
 	showChat := true
 
