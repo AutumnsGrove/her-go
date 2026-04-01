@@ -1,0 +1,165 @@
+name: "Embedding-a-thon"
+description: >
+  Stress test for embedding model quality. Exercises semantic search recall,
+  deduplication, cross-topic discrimination, and synonym handling. Run this
+  suite with different --embed-model / --embed-dimension values and compare
+  the sim.db results to see which model retrieves better context.
+
+  Usage:
+    # Baseline (default nomic model)
+    her sim --suite sims/embedding-a-thon.yaml
+
+    # Compare with a different model
+    her sim --suite sims/embedding-a-thon.yaml \
+      --embed-model "voyage-4-nano" \
+      --embed-dimension 512
+
+  What to compare across runs:
+  - Facts saved: are near-duplicates caught or saved twice?
+  - Agent traces: which facts does recall_memories / semantic search pull in?
+  - Replies: does the bot surface the RIGHT facts when asked indirectly?
+  - Cost/latency: embedding calls add overhead — how much varies by model
+
+  After running, compare with:
+    SELECT r.id, r.embed_model, r.total_cost_usd, r.duration_ms,
+           COUNT(f.id) as facts_saved
+    FROM sim_runs r
+    LEFT JOIN sim_facts f ON f.run_id = r.id
+    WHERE r.suite_name = 'Embedding-a-thon'
+    GROUP BY r.id
+    ORDER BY r.id DESC;
+
+tags: ["embedding", "semantic-search", "dedup", "retrieval"]
+
+messages:
+  # ==================================================================
+  # PHASE 1: Seed diverse facts across very different topics
+  # ==================================================================
+  # Goal: Build up a rich fact store that the embedding model has to
+  # organize in its vector space. Good models will cluster related
+  # facts and separate unrelated ones.
+
+  - "hey! so a bit about me — i'm a photographer, mostly landscape and street photography. i shoot with a fujifilm x-t5 and my favorite lens is the 23mm f/1.4"
+
+  - "food-wise, i'm really into fermentation. i make my own kimchi, kombucha, and i just started a sourdough starter last week. named it Gerald"
+
+  - "i've been reading a lot lately. just finished Project Hail Mary by Andy Weir — loved it. before that i read Piranesi by Susanna Clarke which was... weird but beautiful"
+
+  - "oh and i play bass guitar. been playing for about six years, mostly jazz and funk. i have a fender jazz bass from the 90s that i got secondhand"
+
+  # Expected: ~15-20 facts across 4 distinct topic clusters:
+  # photography, food/fermentation, books, music
+
+  # ==================================================================
+  # PHASE 2: Synonym & paraphrase recall
+  # ==================================================================
+  # Goal: Test whether the embedding model can match concepts described
+  # with DIFFERENT WORDS than how they were originally stored. This is
+  # where embedding quality really shows — a good model understands that
+  # "camera" relates to "fujifilm x-t5" even though they share no words.
+
+  - "what do you know about my camera gear?"
+
+  # Expected: Should recall fujifilm x-t5, 23mm lens, landscape/street photography.
+  # "camera gear" was never said — the model has to connect it to "shoot with"
+  # and "fujifilm" and "lens" semantically.
+
+  - "do i have any hobbies related to making things with my hands?"
+
+  # Expected: Should recall fermentation (kimchi, kombucha, sourdough) AND
+  # bass guitar. Both involve making things with hands. A weak model might
+  # miss bass guitar since "playing music" doesn't obviously match "making
+  # things with hands" — but a good model should get the connection.
+
+  - "what kind of fiction do i like?"
+
+  # Expected: Should recall both books. "Fiction" was never said — the model
+  # needs to know that Project Hail Mary and Piranesi are fiction. This tests
+  # world knowledge encoded in the embedding space.
+
+  # ==================================================================
+  # PHASE 3: Near-duplicate stress test
+  # ==================================================================
+  # Goal: Feed facts that are semantically similar but worded differently.
+  # A good embedding model should catch these as duplicates (cosine
+  # similarity above the dedup threshold). A weak model might save both.
+
+  - "oh yeah i should mention — i really love landscape photography. like hiking to remote spots and shooting golden hour, that's my favorite thing"
+
+  # Expected: The dedup check should catch this — "landscape photography" was
+  # already stored from turn 1. The new phrasing adds "golden hour" and
+  # "hiking to remote spots" but the core fact is the same. Watch the agent
+  # trace to see if save_fact is called or if dedup catches it.
+
+  - "i make fermented foods at home, been doing it for a while. kimchi is my best one"
+
+  # Expected: Again, near-duplicate of the fermentation facts from turn 2.
+  # The dedup should catch "fermented foods" matching "fermentation" and
+  # "kimchi" matching the earlier mention. If both get saved, the embedding
+  # model's similarity scores aren't tight enough.
+
+  # ==================================================================
+  # PHASE 4: Cross-topic discrimination
+  # ==================================================================
+  # Goal: Ask about ONE topic and verify that unrelated facts DON'T
+  # leak into the response. This tests whether the embedding model
+  # keeps distinct topics separate in vector space.
+
+  - "tell me everything you know about my music — instruments, genres, all of it"
+
+  # Expected: Should recall bass guitar, jazz, funk, fender jazz bass, 6 years.
+  # Should NOT mention photography, food, or books. If the agent's reply
+  # includes "fujifilm" or "kimchi" or "Project Hail Mary", the embedding
+  # model is bleeding across topic clusters.
+
+  - "what about my reading habits? just the books stuff"
+
+  # Expected: Should recall Project Hail Mary, Piranesi, Andy Weir, Susanna Clarke.
+  # Should NOT mention photography, fermentation, or music.
+
+  # ==================================================================
+  # PHASE 5: Fact updates with semantic matching
+  # ==================================================================
+  # Goal: Update facts and verify the embedding model handles the
+  # transition — old embeddings should be superseded by new ones.
+
+  - "update on the camera front — i sold the x-t5 and switched to a sony a7iv. completely different system but i'm loving the autofocus"
+
+  # Expected: update_fact should fire. The old "fujifilm x-t5" fact should be
+  # superseded by "sony a7iv". The embedding for the new fact needs to land
+  # close enough to the old one for the system to recognize it as an update
+  # rather than a brand new fact about a different topic.
+
+  - "also i finished my latest book — The Kaiju Preservation Society by John Scalzi. fun read, not as deep as Piranesi but really entertaining"
+
+  # Expected: New fact saved (not an update — this is a NEW book, not a
+  # correction). Tests whether the model can distinguish "new item in same
+  # category" from "update to existing item".
+
+  # ==================================================================
+  # PHASE 6: Final recall audit
+  # ==================================================================
+  # Goal: Comprehensive recall to verify the full state of memory.
+  # Compare this response across different embedding model runs.
+
+  - "ok give me the full rundown — everything you remember about me, organized by topic"
+
+  # Expected comprehensive recall:
+  # Photography: sony a7iv (NOT x-t5), 23mm lens(?), landscape + street
+  # Food: kimchi, kombucha, sourdough starter named Gerald, fermentation
+  # Books: Project Hail Mary, Piranesi, The Kaiju Preservation Society
+  # Music: bass guitar, jazz + funk, fender jazz bass, 6 years
+  #
+  # Key things to check:
+  # - Is the x-t5 superseded or does it leak through?
+  # - Are duplicate facts collapsed or do they appear twice?
+  # - Are all 4 topic clusters represented?
+  # - Is the newest book included?
+
+  - "and which of those things did i seem most passionate about when i talked about them?"
+
+  # Expected: This is a meta-question that tests contextual understanding.
+  # The embedding model needs to retrieve facts with enough surrounding
+  # context for the chat model to make a judgment. Not strictly an
+  # embedding test, but the quality of retrieval heavily influences
+  # whether the chat model can answer this well.
