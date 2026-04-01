@@ -1,0 +1,33 @@
+name: "Model Comparison (Quick)"
+description: >
+  Minimal 8-message suite for comparing agent models. Covers the core
+  behaviors: fact saving, fiction filtering, mood logging, tool selection,
+  and natural conversation. Short enough to keep costs low, dense enough
+  to show differences in reasoning quality and tool compliance.
+
+tags: ["model-compare", "quick"]
+
+messages:
+  # Turn 1: Basic intro — should save a few identity facts
+  - "hey! im autumn, im 25, i live in portland. i work as a frontend dev but im trying to learn go on the side"
+
+  # Turn 2: Fiction + real preference — tests FICTIONAL filtering
+  - "ive been playing cyberpunk lately. i always play as female V, the voice acting is just better. last night i did the panam questline and it was incredible"
+
+  # Turn 3: Emotional content — tests mood vs fact distinction
+  - "honestly today has been rough. had a terrible meeting at work and i just feel like shit. but this isnt new, i always get like this after confrontation"
+
+  # Turn 4: Update existing fact — tests update_fact and carrying forward
+  - "oh also with the go stuff, im building a chatbot project. its actually how im learning the language. python is my comfort zone but go is growing on me"
+
+  # Turn 5: Inference bait — tests INFERRED filtering
+  - "ive been going to this coffee shop every day after work. its just nice to have a place thats not home or the office you know?"
+
+  # Turn 6: Mixed rapid-fire — everything at once
+  - "so in elden ring i finally beat malenia with my bleed build. but anyway, real talk, i think i want to adopt a cat. ive been looking at shelters"
+
+  # Turn 7: Follow-up on something real — tests recall
+  - "yeah the cat thing is serious. i want a black cat specifically. ive always loved them. my apartment allows pets so thats not an issue"
+
+  # Turn 8: Casual close — should call done cleanly
+  - "ok im gonna go make dinner. talk later!"
