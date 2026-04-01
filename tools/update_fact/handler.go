@@ -65,6 +65,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Strip temporal references before saving — same as save_fact.
 	args.Fact = tools.StripTimestamps(args.Fact)
 
+	// --- Retry budget check ---
+	var retryVec []float32
+	if maxRetries := ctx.Cfg.Memory.MaxFactRetries; maxRetries > 0 {
+		var block string
+		block, retryVec = tools.CheckRetryBudget(args.Fact, maxRetries, ctx)
+		if block != "" {
+			return block
+		}
+	}
+
 	// --- Read old fact ---
 	// We need the old fact's subject and source_message_id so the new
 	// fact inherits them. Also used to show the classifier the delta.
@@ -90,6 +100,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
 			verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
 			if !verdict.Allowed {
+				tools.RecordFactRejection(retryVec, ctx)
 				if ctx.RejectionMessageFunc != nil {
 					return ctx.RejectionMessageFunc(verdict)
 				}

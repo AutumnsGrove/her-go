@@ -240,6 +240,19 @@ type Context struct {
 	// suggests text and then rejects that exact text on retry.
 	// Key: the rewrite text (lowercased for case-insensitive matching).
 	PreApprovedRewrites map[string]bool
+
+	// FactRetries tracks rejected fact save attempts per turn so we can
+	// cut off the agent after N tries on the same fact. Each entry holds
+	// the embedding of a rejected fact text and how many times the agent
+	// has retried it (detected by cosine similarity > 0.75).
+	// Resets every turn (lives on Context, not persistent).
+	FactRetries []FactRetryEntry
+}
+
+// FactRetryEntry records a rejected fact attempt for retry budgeting.
+type FactRetryEntry struct {
+	Embedding []float32 // embedding of the rejected fact text
+	Count     int       // how many times this fact has been rejected
 }
 
 // ClassifyVerdict is the result of a classifier check on a proposed memory
