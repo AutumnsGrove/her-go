@@ -226,18 +226,26 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 	// Runs AFTER style/length/dedup gates — no point classifying something
 	// that would be rejected anyway. Fail-open if classifier is nil or
 	// if the agent didn't inject a classify function.
+	//
+	// Pre-approved bypass: if the classifier previously suggested this exact
+	// text as a rewrite, skip re-classification. This prevents the self-
+	// contradiction bug where the classifier rejects its own suggestion.
 	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
-		writeType := "fact"
-		if subject == "self" {
-			writeType = "self_fact"
-		}
-		snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
-		verdict := ctx.ClassifyWriteFunc(writeType, args.Fact, snippet)
-		if !verdict.Allowed {
-			if ctx.RejectionMessageFunc != nil {
-				return ctx.RejectionMessageFunc(verdict)
+		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
+			log.Info("classifier bypass: fact matches pre-approved rewrite", "fact", args.Fact)
+		} else {
+			writeType := "fact"
+			if subject == "self" {
+				writeType = "self_fact"
 			}
-			return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
+			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
+			verdict := ctx.ClassifyWriteFunc(writeType, args.Fact, snippet)
+			if !verdict.Allowed {
+				if ctx.RejectionMessageFunc != nil {
+					return ctx.RejectionMessageFunc(verdict)
+				}
+				return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
+			}
 		}
 	}
 

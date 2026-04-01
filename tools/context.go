@@ -233,6 +233,13 @@ type Context struct {
 	// RejectionMessageFunc builds the agent-facing rejection string from a
 	// ClassifyVerdict. The detail text comes from classifiers.yaml.
 	RejectionMessageFunc func(verdict ClassifyVerdict) string
+
+	// PreApprovedRewrites holds classifier-suggested rewrite texts that
+	// should bypass the classifier if the agent saves them verbatim.
+	// This prevents the self-contradiction bug where the classifier
+	// suggests text and then rejects that exact text on retry.
+	// Key: the rewrite text (lowercased for case-insensitive matching).
+	PreApprovedRewrites map[string]bool
 }
 
 // ClassifyVerdict is the result of a classifier check on a proposed memory
@@ -242,4 +249,5 @@ type ClassifyVerdict struct {
 	Allowed bool   // true = write should proceed to DB
 	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", etc.
 	Reason  string // human-readable explanation from the classifier
+	Rewrite string // suggested rewrite for soft verdicts (FICTIONAL, INFERRED) — empty for hard rejects
 }

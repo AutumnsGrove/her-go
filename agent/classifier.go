@@ -48,6 +48,7 @@ type classifierDef struct {
 // Rejection field.
 type verdictDef struct {
 	Name        string        `yaml:"name"`
+	Soft        bool          `yaml:"soft,omitempty"`         // soft verdicts suggest rewrites instead of hard rejecting
 	Description string        `yaml:"description"`
 	Examples    []string      `yaml:"examples,omitempty"`
 	Note        string        `yaml:"note,omitempty"`
@@ -81,6 +82,10 @@ type classifierState struct {
 	// rejections maps verdict name to its rejection definition.
 	// Used by rejectionMessage to build the response string.
 	rejections map[string]*rejectionDef
+
+	// softVerdicts tracks which verdict types suggest rewrites instead
+	// of hard rejecting. Set from `soft: true` in classifiers.yaml.
+	softVerdicts map[string]bool
 }
 
 var classifiers classifierState
@@ -129,6 +134,7 @@ func init() {
 	state := classifierState{
 		systemPrompts: make(map[string]string),
 		rejections:    make(map[string]*rejectionDef),
+		softVerdicts:  make(map[string]bool),
 	}
 
 	// Track verdict names we've already seen so we don't add duplicates.
@@ -161,6 +167,9 @@ func init() {
 			}
 			if v.Rejection != nil {
 				state.rejections[v.Name] = v.Rejection
+			}
+			if v.Soft {
+				state.softVerdicts[v.Name] = true
 			}
 		}
 	}
@@ -281,7 +290,19 @@ func parseClassifierResponse(response string) ClassifyVerdict {
 	// we're just matching the response text to a known name.
 	for _, name := range classifiers.verdictNames {
 		if strings.HasPrefix(upper, name) {
-			return ClassifyVerdict{Allowed: false, Type: name, Reason: extractReason(line)}
+			verdict := ClassifyVerdict{Allowed: false, Type: name}
+
+			// Check for REWRITE: in the response. Soft verdicts
+			// (FICTIONAL, INFERRED) can suggest a cleaned-up version.
+			// Format: "FICTIONAL REWRITE: "cleaned text""
+			rewrite := extractRewrite(line, name)
+			if rewrite != "" && classifiers.softVerdicts[name] {
+				verdict.Rewrite = rewrite
+				verdict.Reason = extractReason(line)
+			} else {
+				verdict.Reason = extractReason(line)
+			}
+			return verdict
 		}
 	}
 
@@ -305,6 +326,25 @@ func extractReason(line string) string {
 	return reason
 }
 
+// extractRewrite looks for a REWRITE: directive in the classifier response.
+// Format: "FICTIONAL REWRITE: "User prefers playing as female V""
+// Returns the quoted text, or empty string if no rewrite found.
+func extractRewrite(line, verdictName string) string {
+	upper := strings.ToUpper(line)
+	// Find "REWRITE:" after the verdict name.
+	idx := strings.Index(upper, "REWRITE:")
+	if idx < 0 {
+		return ""
+	}
+	// Everything after "REWRITE:" is the suggested text.
+	after := strings.TrimSpace(line[idx+len("REWRITE:"):])
+	// Strip surrounding quotes if present.
+	if len(after) >= 2 && after[0] == '"' && after[len(after)-1] == '"' {
+		after = after[1 : len(after)-1]
+	}
+	return after
+}
+
 // rejectionMessage builds the string that gets returned to the agent
 // when the classifier rejects a write. The message is tailored to the
 // verdict type so the agent knows what to do differently — not just
@@ -313,6 +353,13 @@ func extractReason(line string) string {
 // The detail and suffix text come from classifiers.yaml. If the
 // classifier provided a reason, it replaces the default detail.
 func rejectionMessage(verdict ClassifyVerdict) string {
+	// Soft verdict with rewrite → give the agent a suggestion instead of
+	// a hard rejection. The agent can use the suggested text directly
+	// (it's pre-approved and will bypass the classifier on retry).
+	if verdict.Rewrite != "" {
+		return fmt.Sprintf("suggestion: this fact mixes real and fictional/inferred content. Try saving this instead: \"%s\"", verdict.Rewrite)
+	}
+
 	rej, ok := classifiers.rejections[verdict.Type]
 	if !ok {
 		return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
