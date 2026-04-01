@@ -115,9 +115,10 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	// Emit TurnStartEvent for the TUI — same as handleMessage.
 	// Without this, photo turns get lumped into the previous turn's section.
+	turnStart := time.Now()
 	if b.eventBus != nil {
 		b.eventBus.Emit(tui.TurnStartEvent{
-			Time:           time.Now(),
+			Time:           turnStart,
 			TurnID:         msgID,
 			UserMessage:    truncate(userText, 100),
 			ConversationID: conversationID,
@@ -249,6 +250,19 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}
 
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
+
+	// Emit TurnEndEvent for the TUI — metrics from the agent run.
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnEndEvent{
+			Time:       time.Now(),
+			TurnID:     msgID,
+			ElapsedMs:  time.Since(turnStart).Milliseconds(),
+			TotalCost:  result.TotalCost,
+			ToolCalls:  result.ToolCalls,
+			FactsSaved: result.FactsSaved,
+		})
+	}
+
 	log.Info("─── reply sent ───")
 
 	return nil
@@ -393,6 +407,18 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		}
 	}
 
+	// Emit TurnStartEvent for the TUI — same as handleMessage.
+	// Without this, voice turns don't get their own section in the TUI.
+	turnStart := time.Now()
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnStartEvent{
+			Time:           turnStart,
+			TurnID:         msgID,
+			UserMessage:    "\U0001F3A4 " + truncate(transcript, 100),
+			ConversationID: conversationID,
+		})
+	}
+
 	// PII scrub the transcribed text.
 	var scrubResult *scrub.ScrubResult
 	if b.cfg.Scrub.Enabled {
@@ -469,6 +495,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		TraceCallback:             traceCallback,
 		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
+		EventBus:                  b.eventBus,
 		SkillRegistry:             b.skillRegistry,
 	})
 	b.agentBusy.Store(false)
@@ -482,6 +509,18 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
+
+	// Emit TurnEndEvent for the TUI — metrics from the agent run.
+	if b.eventBus != nil {
+		b.eventBus.Emit(tui.TurnEndEvent{
+			Time:       time.Now(),
+			TurnID:     msgID,
+			ElapsedMs:  time.Since(turnStart).Milliseconds(),
+			TotalCost:  result.TotalCost,
+			ToolCalls:  result.ToolCalls,
+			FactsSaved: result.FactsSaved,
+		})
+	}
 
 	log.Info("─── voice reply sent ───")
 
