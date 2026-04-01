@@ -75,7 +75,7 @@ func runRetag(cmd *cobra.Command, args []string) error {
 	// Create embedding client for re-embedding.
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
-		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 	}
 
 	// Process facts in batches of 10 to reduce LLM calls.

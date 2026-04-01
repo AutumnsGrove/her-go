@@ -218,7 +218,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
-		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "ready", Detail: cfg.Embed.Model})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "skipped"})
