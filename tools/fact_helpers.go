@@ -83,7 +83,6 @@ var styleBlocklist = []string{
 	"leverage",
 	"tapestry",
 	"realm",
-	"landscape",
 	"embark",
 	"harness",
 	"utilize",
