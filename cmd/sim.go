@@ -44,6 +44,20 @@ var delayFlag int
 // Example: --agent-model "deepseek/deepseek-v3.2"
 var agentModelFlag string
 
+// embedModelFlag overrides the embedding model from config.yaml for this run.
+// Each embedding model lives in its own vector space, so swapping models
+// means all embeddings in the run use the new model's geometry. The sim's
+// clean-room temp DB ensures no stale vectors from a different model leak in.
+// Example: --embed-model "voyage-4-nano"
+var embedModelFlag string
+
+// embedDimensionFlag overrides the embedding dimension from config.yaml.
+// Must match the output dimension of the model specified by --embed-model.
+// Different models produce different-sized vectors (e.g., nomic = 768,
+// OpenAI = 1536), and the sqlite-vec virtual table needs the right size
+// at creation time.
+var embedDimensionFlag int
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -68,6 +82,8 @@ func init() {
 	simCmd.Flags().IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
 	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
 	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., deepseek/deepseek-v3.2)")
+	simCmd.Flags().StringVar(&embedModelFlag, "embed-model", "", "override embedding model for this run (e.g., voyage-4-nano)")
+	simCmd.Flags().IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension (must match --embed-model output size)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -113,6 +129,7 @@ CREATE TABLE IF NOT EXISTS sim_runs (
 	suite_path TEXT NOT NULL,
 	chat_model TEXT,
 	agent_model TEXT,
+	embed_model TEXT,
 	total_messages INTEGER,
 	total_cost_usd REAL,
 	duration_ms INTEGER
@@ -251,6 +268,19 @@ func runSim(cmd *cobra.Command, args []string) error {
 		cfg.Agent.Model = agentModelFlag
 	}
 
+	// --embed-model and --embed-dimension override the embedding config.
+	// Unlike agent models which share a common API format, embedding models
+	// each have unique output dimensions — so if you change the model, you
+	// almost certainly need to change the dimension too.
+	if embedModelFlag != "" {
+		log.Info("Embed model overridden via --embed-model", "model", embedModelFlag)
+		cfg.Embed.Model = embedModelFlag
+	}
+	if embedDimensionFlag > 0 {
+		log.Info("Embed dimension overridden via --embed-dimension", "dimension", embedDimensionFlag)
+		cfg.Embed.Dimension = embedDimensionFlag
+	}
+
 	// ------------------------------------------------------------------
 	// 3. Open/create sims/sim.db for persistent results
 	// ------------------------------------------------------------------
@@ -280,16 +310,30 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Migrate existing sim.db: add embed_model column if it doesn't exist.
+	// ALTER TABLE ADD COLUMN is idempotent-safe — SQLite returns "duplicate
+	// column name" if it already exists, which we just ignore. This is the
+	// simplest migration pattern for single-column additions.
+	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN embed_model TEXT`)
+
 	// Insert a new run row. We'll update it with totals at the end.
 	agentModel := cfg.Agent.Model
 	if agentModel == "" {
 		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
 	}
 
+	// embedModel captures the model name for the report + sim.db. If no
+	// embedding model is configured, we record "(none)" so it's clear in
+	// comparison queries that embeddings were disabled for this run.
+	embedModel := cfg.Embed.Model
+	if embedModel == "" {
+		embedModel = "(none)"
+	}
+
 	res, err := simDB.Exec(
-		`INSERT INTO sim_runs (suite_name, suite_path, chat_model, agent_model, total_messages)
-		 VALUES (?, ?, ?, ?, ?)`,
-		s.Name, suiteFlag, cfg.LLM.Model, agentModel, len(s.Messages),
+		`INSERT INTO sim_runs (suite_name, suite_path, chat_model, agent_model, embed_model, total_messages)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		s.Name, suiteFlag, cfg.LLM.Model, agentModel, embedModel, len(s.Messages),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting sim run: %w", err)
@@ -620,12 +664,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// ------------------------------------------------------------------
 
 	fmt.Printf("\n=== Simulation Complete ===\n")
-	fmt.Printf("    Suite:    %s\n", s.Name)
-	fmt.Printf("    Run ID:   %d\n", runID)
-	fmt.Printf("    Messages: %d\n", total)
-	fmt.Printf("    Duration: %s\n", totalDuration.Round(time.Millisecond))
-	fmt.Printf("    Cost:     $%.4f\n", totalCost)
-	fmt.Printf("    Results:  sims/sim.db\n\n")
+	fmt.Printf("    Suite:      %s\n", s.Name)
+	fmt.Printf("    Run ID:     %d\n", runID)
+	fmt.Printf("    Embed:      %s (dim=%d)\n", cfg.Embed.Model, cfg.Embed.Dimension)
+	fmt.Printf("    Messages:   %d\n", total)
+	fmt.Printf("    Duration:   %s\n", totalDuration.Round(time.Millisecond))
+	fmt.Printf("    Cost:       $%.4f\n", totalCost)
+	fmt.Printf("    Results:    sims/sim.db\n\n")
 
 	return nil
 }
@@ -880,14 +925,19 @@ func generateReport(
 	if agentModel == "" {
 		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
 	}
+	reportEmbedModel := cfg.Embed.Model
+	if reportEmbedModel == "" {
+		reportEmbedModel = "(none)"
+	}
 
 	// Header
 	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
-	fmt.Fprintf(&b, "**Run:** #%d | **Date:** %s | **Chat model:** %s | **Agent model:** %s | **Cost:** $%.4f\n\n",
+	fmt.Fprintf(&b, "**Run:** #%d | **Date:** %s | **Chat model:** %s | **Agent model:** %s | **Embed model:** %s | **Cost:** $%.4f\n\n",
 		runID,
 		time.Now().Format("2006-01-02 15:04"), // Go's time format uses a reference date, not %Y-%m-%d
 		cfg.LLM.Model,
 		agentModel,
+		reportEmbedModel,
 		totalCost,
 	)
 
