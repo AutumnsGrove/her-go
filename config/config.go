@@ -126,7 +126,7 @@ type MemoryConfig struct {
 	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
 	ExtractionInterval int     `yaml:"extraction_interval"`
 	MaxHistoryTokens    int     `yaml:"max_history_tokens"`     // estimation-based compaction budget (len/4 heuristic over full history window)
-	ChatContextBudget   int     `yaml:"chat_context_budget"`    // chat model total prompt budget (compaction fires at 75%); 0 = use max_history_tokens only
+	ChatContextBudget   int     `yaml:"chat_context_budget"`    // chat model total prompt budget — used by `her shape` for headroom display; compaction uses max_history_tokens
 	AgentContextBudget  int     `yaml:"agent_context_budget"`   // agent model total prompt budget for action history compaction; 0 = use 6000 default
 	MaxContextTokens    int     `yaml:"max_context_tokens"`     // DEPRECATED: use chat_context_budget instead. Kept for backwards compat.
 	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)

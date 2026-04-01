@@ -178,8 +178,7 @@ Layers are joined with `\n\n---\n\n` separators.
 
 **Typical prompt size:** ~2,600 tokens (with chat_context_budget of 8000)
 
-**Token storage:** `UpdateMessageTokenCount(triggerMsgID, resp.PromptTokens)` at line 1052 — stores on user message.
-This is the value the chat compactor reads on the NEXT turn.
+**Token storage:** `UpdateMessageTokenCount(triggerMsgID, historyTokens)` in execReply — stores history-only tokens (total prompt minus scaffolding estimate) on the user message. This is the value the chat compactor reads on the NEXT turn to decide if history is approaching the budget.
 
 ---
 

@@ -104,7 +104,7 @@ func TestMaybeCompact_UnderThreshold(t *testing.T) {
 	// 10 messages, 100 chars each = 350 estimated tokens.
 	// With maxHistoryTokens=1400, threshold = 1050. 350 < 1050 → no compaction.
 	msgs := makeMessages(10, 100)
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, 0, "Mira", "User")
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestMaybeCompact_ZeroBudget_UsesDefault(t *testing.T) {
 	// Pass maxHistoryTokens=0 (simulating unset config).
 	// 10 messages, 100 chars each = 350 tokens. Should be under default threshold (2250).
 	msgs := makeMessages(10, 100)
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 0, 0, "Mira", "User")
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 0, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +254,8 @@ func TestMaybeCompact_RealisticSimMessages(t *testing.T) {
 }
 
 func TestMaybeCompact_ContextAware(t *testing.T) {
-	// When context_window is set and we have real prompt token counts,
-	// compaction should trigger based on remaining context space.
+	// When user messages have real history-only token counts (set by
+	// execReply), compaction should trigger when history exceeds budget.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -270,12 +270,11 @@ func TestMaybeCompact_ContextAware(t *testing.T) {
 	defer store.Close()
 
 	msgs := makeMessages(10, 100)
-	// Simulate: the most recent user message's TokenCount stores the total
-	// prompt tokens from the last chat completion (80% of budget used).
-	maxContextTokens := 4000
-	msgs[8].TokenCount = 3200 // user message, 80% > 75% threshold → should trigger
+	// Simulate: the most recent user message's TokenCount stores history-only
+	// tokens (total prompt minus scaffolding). 1200 > 75% of 1400 (1050) → trigger.
+	msgs[8].TokenCount = 1200 // user message, history tokens over threshold
 
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, maxContextTokens, "Mira", "User")
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +286,7 @@ func TestMaybeCompact_ContextAware(t *testing.T) {
 }
 
 func TestMaybeCompact_ContextAware_UnderThreshold(t *testing.T) {
-	// When context usage is well under 80%, no compaction should trigger.
+	// When history tokens are well under the budget threshold, no compaction.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -302,10 +301,9 @@ func TestMaybeCompact_ContextAware_UnderThreshold(t *testing.T) {
 	defer store.Close()
 
 	msgs := makeMessages(10, 100)
-	maxContextTokens := 4000
-	msgs[8].TokenCount = 2000 // 50% utilization → under 75% threshold, should NOT trigger
+	msgs[8].TokenCount = 500 // history tokens well under 75% of 1400 (1050) → no trigger
 
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, maxContextTokens, "Mira", "User")
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,8 +316,8 @@ func TestMaybeCompact_ContextAware_UnderThreshold(t *testing.T) {
 }
 
 func TestMaybeCompact_ContextAware_NoData(t *testing.T) {
-	// When context_window is set but no messages have token counts,
-	// should fall through to the estimation-based check.
+	// When no messages have token counts, should fall through to the
+	// estimation-based check.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +333,7 @@ func TestMaybeCompact_ContextAware_NoData(t *testing.T) {
 
 	// Small messages, under estimation threshold. No TokenCount set.
 	msgs := makeMessages(10, 100)
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, 4000, "Mira", "User")
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
