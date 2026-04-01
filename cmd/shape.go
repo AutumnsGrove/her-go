@@ -183,23 +183,31 @@ func printStreamShape(name, model string, stream layers.Stream, ctx *layers.Laye
 	fmt.Println(strings.Repeat("─", width))
 	fmt.Printf("  %-38s %6d tokens\n", "TOTAL", totalTokens)
 
-	// Show budget and headroom if configured.
+	// Show budget and headroom. For chat, the effective budget is
+	// scaffolding + max_history_tokens (what compaction actually uses).
+	// For agent, it's the agent_context_budget directly.
 	var budget int
 	if stream == layers.StreamAgent {
 		budget = cfg.Memory.AgentContextBudget
 	} else {
-		budget = cfg.Memory.ChatContextBudget
+		// Derive total budget: current scaffolding + history budget.
+		// This reflects what the prompt will look like at compaction threshold.
+		scaffolding := totalTokens // current shape IS the scaffolding (no real history in shape mode)
+		historyBudget := cfg.Memory.MaxHistoryTokens
+		if historyBudget <= 0 {
+			historyBudget = 3000
+		}
+		budget = scaffolding + historyBudget
 	}
 
 	if budget > 0 {
-		threshold := int(float64(budget) * 0.75)
 		headroom := budget - totalTokens
 		status := "✓"
-		if totalTokens >= threshold {
-			status = "⚠ over threshold"
+		if headroom <= 0 {
+			status = "⚠ scaffolding alone exceeds budget"
 		}
-		fmt.Printf("  Budget: %d  Threshold (75%%): %d  Headroom: %d  %s\n",
-			budget, threshold, headroom, status)
+		fmt.Printf("  Budget: %d  Headroom: %d  %s\n",
+			budget, headroom, status)
 	}
 	fmt.Println(strings.Repeat("─", width))
 }

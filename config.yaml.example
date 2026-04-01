@@ -67,8 +67,7 @@ memory:
   recent_messages: 10            # sliding window size (compaction summaries cover older context)
   max_facts_in_context: 10       # top-K facts to inject
   extraction_interval: 10        # extract facts every N messages
-  max_history_tokens: 3000       # estimation-based compaction budget — estimates tokens across the full history window using len/4 heuristic. Triggers at 75%.
-  chat_context_budget: 8000      # chat model (Deepseek) total prompt budget — used by `her shape` for headroom display. Compaction uses max_history_tokens.
+  max_history_tokens: 3000       # history token budget for compaction — both triggers (real + estimated) fire at 75% of this.
   agent_context_budget: 16000    # agent model (Kimi K2.5) action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
   auto_link_count: 3             # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
