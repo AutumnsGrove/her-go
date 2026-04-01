@@ -341,6 +341,23 @@ func (s *Store) initTables() error {
 			conversation_id TEXT,
 			args TEXT
 		)`,
+
+		// Classifier decision log — records every classifier verdict
+		// (both SAVE and rejections) for observability and prompt tuning.
+		// write_type: "fact", "self_fact", "mood", "receipt"
+		// verdict: "SAVE", "FICTIONAL", "MOOD_NOT_FACT", etc.
+		// rewrite/accepted: reserved for future rewrite suggestions (#42)
+		`CREATE TABLE IF NOT EXISTS classifier_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			conversation_id TEXT,
+			write_type TEXT NOT NULL,
+			verdict TEXT NOT NULL,
+			content TEXT NOT NULL,
+			reason TEXT,
+			rewrite TEXT,
+			accepted BOOLEAN
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -726,6 +743,22 @@ func (s *Store) SaveSearch(messageID int64, searchType, query, results string, r
 	)
 	if err != nil {
 		return fmt.Errorf("saving search: %w", err)
+	}
+	return nil
+}
+
+// SaveClassifierLog records a classifier decision (both SAVE and rejections).
+// Every call to the classifier gate is logged here so we can track false
+// positive rates, tune prompts, and debug rejection patterns without
+// scraping her.log.
+func (s *Store) SaveClassifierLog(conversationID, writeType, verdict, content, reason string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO classifier_log (conversation_id, write_type, verdict, content, reason)
+		 VALUES (?, ?, ?, ?, ?)`,
+		conversationID, writeType, verdict, content, reason,
+	)
+	if err != nil {
+		return fmt.Errorf("saving classifier log: %w", err)
 	}
 	return nil
 }
