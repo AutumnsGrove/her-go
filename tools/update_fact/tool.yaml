@@ -36,6 +36,12 @@ parameters:
     tags:
       type: string
       description: "Updated comma-separated topic tags for semantic search."
+    context:
+      type: string
+      description: >-
+        Optional 1-2 sentence note explaining WHY this fact matters or how
+        it connects to other knowledge. Only include when the context isn't
+        obvious from the fact itself.
   required:
     - fact_id
     - fact

@@ -277,9 +277,30 @@ func Run(params RunParams) (*RunResult, error) {
 	// by importance, we embed the user's message and find the closest matches
 	// via sqlite-vec KNN. The results go into the system prompt so the
 	// conversational model has the right context without seeing everything.
+	//
+	// Query context: we prepend up to 2 prior user messages so the embedding
+	// captures conversational intent, not just the latest message. Without
+	// this, "vet says it might be his kidneys" embeds as health/medical —
+	// with "my dog max has been sick" prepended, it correctly pulls pet facts too.
 	var relevantFacts []memory.Fact
 	if params.EmbedClient != nil && params.Store.EmbedDimension > 0 {
-		queryVec, err := params.EmbedClient.Embed(params.ScrubbedUserMessage)
+		queryText := params.ScrubbedUserMessage
+		if len(recentMsgs) > 0 {
+			var priorUserMsgs []string
+			for i := len(recentMsgs) - 1; i >= 0 && len(priorUserMsgs) < 2; i-- {
+				if recentMsgs[i].Role == "user" {
+					content := recentMsgs[i].ContentScrubbed
+					if content == "" {
+						content = recentMsgs[i].ContentRaw
+					}
+					priorUserMsgs = append([]string{content}, priorUserMsgs...)
+				}
+			}
+			if len(priorUserMsgs) > 0 {
+				queryText = strings.Join(priorUserMsgs, " | ") + " | " + params.ScrubbedUserMessage
+			}
+		}
+		queryVec, err := params.EmbedClient.Embed(queryText)
 		if err != nil {
 			log.Warn("semantic search: embedding failed, falling back to importance-only", "err", err)
 		} else {

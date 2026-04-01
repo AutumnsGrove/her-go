@@ -398,6 +398,11 @@ func (s *Store) initTables() error {
 		`ALTER TABLE facts ADD COLUMN superseded_by INTEGER REFERENCES facts(id)`,
 		`ALTER TABLE facts ADD COLUMN supersede_reason TEXT`,
 
+		// Zettelkasten fact context — optional note explaining WHY a fact
+		// matters or how it connects to other knowledge. Enriches the text
+		// embedding so semantic search is aware of relationships.
+		`ALTER TABLE facts ADD COLUMN context TEXT`,
+
 		// stream: "chat" or "agent" — allows separate summaries for each model.
 		// The chat summary captures conversational flow; the agent summary
 		// captures tool call history and decisions. Existing rows default to
@@ -811,6 +816,7 @@ type Fact struct {
 	Importance      int
 	Active          bool
 	Tags            string    // comma-separated topic descriptors for semantic search
+	Context         string    // optional note explaining WHY this fact matters (max 500 chars)
 	Embedding       []float32 // cached tag embedding vector (nil if not yet computed)
 	EmbeddingText   []float32 // cached text embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
@@ -871,7 +877,7 @@ func deserializeEmbedding(data []byte) []float32 {
 // embedding is the tag-based vector (used for KNN search via vec_facts).
 // embeddingText is the raw-text vector (used for dedup and redundancy filtering).
 // Both are optional — pass nil if not yet computed.
-func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string) (int64, error) {
+func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -902,10 +908,16 @@ func (s *Store) SaveFact(fact, category, subject string, sourceMessageID int64, 
 		embTextBlob = b
 	}
 
+	// Normalize empty context to nil so it stores as NULL, not "".
+	var ctxVal interface{}
+	if context != "" {
+		ctxVal = context
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding, embedding_text, tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		fact, category, subject, srcID, importance, embBlob, embTextBlob, tags,
+		`INSERT INTO facts (fact, category, subject, source_message_id, importance, embedding, embedding_text, tags, context)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fact, category, subject, srcID, importance, embBlob, embTextBlob, tags, ctxVal,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving fact: %w", err)
@@ -1305,12 +1317,13 @@ func (s *Store) GetFact(factID int64) (*Fact, error) {
 	var active bool
 	var supersededBy sql.NullInt64
 	var supersedeReason sql.NullString
+	var context sql.NullString
 	err := s.db.QueryRow(
 		`SELECT id, timestamp, fact, category, subject, importance, tags, active,
-		        superseded_by, supersede_reason
+		        superseded_by, supersede_reason, COALESCE(context, '')
 		 FROM facts WHERE id = ?`, factID,
 	).Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance,
-		&f.Tags, &active, &supersededBy, &supersedeReason)
+		&f.Tags, &active, &supersededBy, &supersedeReason, &context)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1324,6 +1337,9 @@ func (s *Store) GetFact(factID int64) (*Fact, error) {
 	}
 	if supersedeReason.Valid {
 		f.SupersedeReason = supersedeReason.String
+	}
+	if context.Valid {
+		f.Context = context.String
 	}
 	return &f, nil
 }

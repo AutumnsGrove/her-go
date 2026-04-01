@@ -17,9 +17,9 @@ Inspired by [ScottRBK/forgetful](https://github.com/ScottRBK/forgetful) — a Ze
 | Fact linking | Done | `fact_links` table, `AutoLinkFact()`, 1-hop traversal in `SemanticSearch()` |
 | Supersession chains | Done | `SupersedeFact()`, `FactHistory()`, `update_fact` creates chain |
 | Token budget (adaptive context) | Superseded | Dual-compactor (`chat_context_budget` + `agent_context_budget`) handles history/actions; fact count cap fine at current scale |
-| Query context for retrieval | **Missing** | — |
+| Query context for retrieval | Done | Conversation-concat in `agent.go` before embedding (no LLM call) |
 | Cross-encoder reranking | **Missing** | — |
-| Fact context field ("why") | **Missing** | — |
+| Fact context field ("why") | Done | `facts.context` column, optional param on save/update tools |
 
 ---
 
@@ -145,60 +145,33 @@ memory:
 
 ---
 
-## Phase 4: Query Context ("Why Am I Searching?")
+## Phase 4: Query Context ("Why Am I Searching?") ✅
 
-**What:** Pass a short "why" string alongside the embedding query so retrieval can consider intent, not just content.
+**Status:** Complete as of 2026-03-31.
 
-**Why:** "Tell me about her dog" and "She's feeling sad about her dog" have overlapping embeddings but very different retrieval needs. The first wants pet facts; the second wants emotional context + pet facts.
+**What:** Embedding just the latest message misses conversational intent. Now we prepend up to 2 prior user messages before embedding, so "vet says it might be his kidneys" also captures the earlier "my dog max has been sick" context.
 
-### How It Works
+**Implemented:** Conversation-concat approach in `agent/agent.go` — no LLM call, no config, no schema. Prior user messages joined with ` | ` separator before embedding.
 
-This is lightweight. In `agent/agent.go` where we call `SemanticSearch()`:
+### Future: Cross-Encoder Reranking
 
-1. Before embedding the user message, have the agent generate a 1-sentence query context: "User is asking about X because Y"
-2. Concatenate: `queryText = userMessage + " | Context: " + queryContext`
-3. Embed the concatenated string
-4. Pass to `SemanticSearch()` as usual
-
-The embedding now captures intent, not just content. No schema changes needed.
-
-### Alternative (More Involved)
-
-Add a cross-encoder reranking step like forgetful does:
-1. Dense search returns 20 candidates
-2. Cross-encoder scores each (query, fact) pair
-3. Return top-K
-
-This requires a local cross-encoder model (e.g., ms-marco-MiniLM via our embed service). Worth exploring but lower priority than the other phases.
+Add a reranking step like forgetful does (dense search → cross-encoder → top-K). Requires a local cross-encoder model. Lower priority.
 
 ---
 
-## Phase 5: Fact Context Field (Stretch Goal)
+## Phase 5: Fact Context Field ✅
 
-**What:** Add a `context` column to facts — a short (500 char max) note explaining *why* this fact matters or *how* it relates to other knowledge.
+**Status:** Complete as of 2026-03-31.
 
-**Example:**
-- Fact: "Autumn is learning Go"
-- Context: "This is her primary project language. She's comfortable with Python/TS but new to Go. Teaching mode is important."
+**What:** Optional `context` column on facts — a 1-2 sentence note explaining *why* a fact matters or how it connects to other knowledge.
 
-### Schema
-
-```sql
-ALTER TABLE facts ADD COLUMN context TEXT;
-```
-
-### Extraction Change
-
-Update the extraction prompt to optionally produce context alongside each fact. Keep it optional — most facts won't need it.
-
-### Retrieval Impact
-
-When building embedding text for a fact, include context:
-```go
-embeddingText := fact.Fact + " " + fact.Context  // if context is non-empty
-```
-
-This makes semantic search aware of the *why*, not just the *what*.
+**Implemented:**
+- Schema: `ALTER TABLE facts ADD COLUMN context TEXT`
+- `Fact.Context` field on the struct
+- `save_fact`, `save_self_fact`, `update_fact` tools accept optional `context` param
+- Text embedding enriched with context when present (tag embedding unchanged)
+- Rendered in chat prompt as `- [Mar 31] Fact text (context note)`
+- `GetFact()` reads context for supersession chain traversal
 
 ---
 

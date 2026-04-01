@@ -31,6 +31,11 @@ parameters:
         Comma-separated topic tags for semantic search — describes WHAT this
         self-fact is about. Example: 'identity, communication style,
         authenticity' or 'relationship, boundaries, user dynamic'.
+    context:
+      type: string
+      description: >-
+        Optional 1-2 sentence note explaining WHY this self-fact matters or
+        how it connects to other knowledge.
   required:
     - fact
     - category

@@ -35,6 +35,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Category   string `json:"category"`
 		Importance int    `json:"importance"`
 		Tags       string `json:"tags"`
+		Context    string `json:"context"` // optional: why this fact matters
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -99,7 +100,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 		tagVec, _ = ctx.EmbedClient.Embed(embedText)
 		if args.Tags != "" {
-			textVec, _ = ctx.EmbedClient.Embed(args.Fact)
+			factTextForEmbed := args.Fact
+			if args.Context != "" {
+				factTextForEmbed = args.Fact + " " + args.Context
+			}
+			textVec, _ = ctx.EmbedClient.Embed(factTextForEmbed)
 		}
 	}
 
@@ -108,7 +113,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	newID, err := ctx.Store.SaveFact(
 		args.Fact, args.Category, oldFact.Subject,
 		oldFact.SourceMessageID, args.Importance,
-		tagVec, textVec, args.Tags,
+		tagVec, textVec, args.Tags, args.Context,
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving updated fact: %v", err)

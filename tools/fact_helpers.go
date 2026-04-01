@@ -123,6 +123,7 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 		Category   string `json:"category"`
 		Importance int    `json:"importance"`
 		Tags       string `json:"tags"`
+		Context    string `json:"context"` // optional: why this fact matters
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -194,8 +195,14 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 			// Also embed the raw fact text for a second similarity check.
 			// Tags catch topical duplicates but miss situational duplicates
 			// where the same event is described from different tag angles.
+			// When context is provided, include it in the text embedding so
+			// semantic search is aware of the "why", not just the "what".
 			if args.Tags != "" {
-				textVec, err = ctx.EmbedClient.Embed(args.Fact)
+				factTextForEmbed := args.Fact
+				if args.Context != "" {
+					factTextForEmbed = args.Fact + " " + args.Context
+				}
+				textVec, err = ctx.EmbedClient.Embed(factTextForEmbed)
 				if err != nil {
 					factLog.Warn("text embedding failed, using tag-only dedup", "err", err)
 				}
@@ -234,7 +241,7 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 		}
 	}
 
-	id, err := ctx.Store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags)
+	id, err := ctx.Store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags, args.Context)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}
