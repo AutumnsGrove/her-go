@@ -173,7 +173,7 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 			f.Importance = 10
 		}
 
-		_, err := store.SaveFact(f.Fact, f.Category, "user", lastMsgID, f.Importance, nil, nil, "")
+		_, err := store.SaveFact(f.Fact, f.Category, "user", lastMsgID, f.Importance, nil, nil, "", "")
 		if err != nil {
 			log.Error("saving extracted fact", "err", err)
 			continue

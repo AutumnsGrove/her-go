@@ -294,7 +294,13 @@ func formatFactSection(title, description string, facts []Fact) string {
 			// Render the DB timestamp as a compact date prefix.
 			// "Jan 02" format: abbreviated month + zero-padded day.
 			stamp := f.Timestamp.Format("Jan 02")
-			fmt.Fprintf(&b, "- [%s] %s\n", stamp, factText)
+			// Include context in parentheses when present — gives the chat
+			// model the "why" alongside the "what".
+			if f.Context != "" {
+				fmt.Fprintf(&b, "- [%s] %s (%s)\n", stamp, factText, f.Context)
+			} else {
+				fmt.Fprintf(&b, "- [%s] %s\n", stamp, factText)
+			}
 		}
 		b.WriteString("\n")
 	}
