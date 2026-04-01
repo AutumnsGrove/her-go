@@ -367,6 +367,11 @@ func Run(params RunParams) (*RunResult, error) {
 	toolDefs := tools.HotToolDefs(params.Cfg)
 
 	// Build the tool context with everything the tools need.
+	// Pre-approved rewrites map — shared between the closure that populates
+	// it (ClassifyWriteFunc) and the tool handlers that check it. Created
+	// here so both sides reference the same map.
+	preApproved := make(map[string]bool)
+
 	tctx := &tools.Context{
 		Store:                     params.Store,
 		EmbedClient:               params.EmbedClient,
@@ -406,15 +411,21 @@ func Run(params RunParams) (*RunResult, error) {
 			verdict := classifyMemoryWrite(params.ClassifierLLM, writeType, content, snippet)
 			// Log every classifier decision to the database for observability.
 			if err := params.Store.SaveClassifierLog(
-				params.ConversationID, writeType, verdict.Type, content, verdict.Reason,
+				params.ConversationID, writeType, verdict.Type, content, verdict.Reason, verdict.Rewrite,
 			); err != nil {
 				log.Error("saving classifier log", "err", err)
+			}
+			// Register rewrites as pre-approved so the agent can save
+			// the suggested text without hitting the classifier again.
+			if verdict.Rewrite != "" {
+				preApproved[strings.ToLower(verdict.Rewrite)] = true
 			}
 			return verdict
 		},
 		RejectionMessageFunc: func(verdict tools.ClassifyVerdict) string {
 			return rejectionMessage(verdict)
 		},
+		PreApprovedRewrites: preApproved,
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,

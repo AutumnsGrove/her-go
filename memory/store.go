@@ -751,11 +751,15 @@ func (s *Store) SaveSearch(messageID int64, searchType, query, results string, r
 // Every call to the classifier gate is logged here so we can track false
 // positive rates, tune prompts, and debug rejection patterns without
 // scraping her.log.
-func (s *Store) SaveClassifierLog(conversationID, writeType, verdict, content, reason string) error {
+func (s *Store) SaveClassifierLog(conversationID, writeType, verdict, content, reason, rewrite string) error {
+	var rewriteVal interface{}
+	if rewrite != "" {
+		rewriteVal = rewrite
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO classifier_log (conversation_id, write_type, verdict, content, reason)
-		 VALUES (?, ?, ?, ?, ?)`,
-		conversationID, writeType, verdict, content, reason,
+		`INSERT INTO classifier_log (conversation_id, write_type, verdict, content, reason, rewrite)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		conversationID, writeType, verdict, content, reason, rewriteVal,
 	)
 	if err != nil {
 		return fmt.Errorf("saving classifier log: %w", err)

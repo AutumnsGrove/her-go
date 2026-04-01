@@ -79,15 +79,22 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// --- Classifier gate ---
 	// Show the classifier BOTH old and new text so it can evaluate the
 	// delta — without this, it can't tell that an addition was inferred.
+	//
+	// Pre-approved bypass: if the classifier previously suggested this exact
+	// text as a rewrite, skip re-classification.
 	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
-		snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
-		classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
-		verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
-		if !verdict.Allowed {
-			if ctx.RejectionMessageFunc != nil {
-				return ctx.RejectionMessageFunc(verdict)
+		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
+			log.Info("classifier bypass: update matches pre-approved rewrite", "fact", args.Fact)
+		} else {
+			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
+			classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
+			verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
+			if !verdict.Allowed {
+				if ctx.RejectionMessageFunc != nil {
+					return ctx.RejectionMessageFunc(verdict)
+				}
+				return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
 			}
-			return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
 		}
 	}
 
