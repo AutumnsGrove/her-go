@@ -105,6 +105,9 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 					logger.WithPrefix(prefix).Info(e.Line)
 				}
 
+			case CompactStartEvent:
+				logger.WithPrefix("compact").Info("compacting", "stream", e.Stream)
+
 			case CompactEvent:
 				logger.WithPrefix("compact").Info("compacted",
 					"msgs", e.Summarized,

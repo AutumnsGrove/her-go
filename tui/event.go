@@ -213,6 +213,17 @@ type DDLEvent struct {
 func (e DDLEvent) EventTime() time.Time { return e.Time }
 func (e DDLEvent) EventSource() string  { return "dbproxy" }
 
+// CompactStartEvent fires when compaction begins — gives the TUI something
+// to show while the LLM summarizes, instead of a dead zone where you can't
+// tell if the bot is compacting, thinking, or crashed.
+type CompactStartEvent struct {
+	Time   time.Time
+	Stream string // "chat" or "agent"
+}
+
+func (e CompactStartEvent) EventTime() time.Time { return e.Time }
+func (e CompactStartEvent) EventSource() string  { return "compact" }
+
 // CompactEvent fires when conversation history is compacted into a summary.
 type CompactEvent struct {
 	Time         time.Time

@@ -282,6 +282,14 @@ func (m *Model) handleEvent(e Event) {
 	case SidecarEvent:
 		m.handleSidecarEvent(ev)
 
+	case CompactStartEvent:
+		label := "chat"
+		if ev.Stream == "agent" {
+			label = "agent"
+		}
+		m.appendToTurnGroup(0, "compact",
+			fmt.Sprintf("📦 compacting %s history...", label))
+
 	case CompactEvent:
 		saved := ev.TokensBefore - ev.TokensAfter
 		m.appendToTurnGroup(0, "compact",

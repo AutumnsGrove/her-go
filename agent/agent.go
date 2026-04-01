@@ -204,6 +204,7 @@ func Run(params RunParams) (*RunResult, error) {
 	var conversationSummary string
 	var keptMessages []memory.Message
 	if len(compactionMsgs) > 0 {
+		emit(tui.CompactStartEvent{Time: time.Now(), Stream: "chat"})
 		cr, compactErr := compact.MaybeCompact(
 			params.ChatLLM, params.Store, params.ConversationID,
 			compactionMsgs, params.Cfg.Memory.MaxHistoryTokens,
@@ -254,6 +255,7 @@ func Run(params RunParams) (*RunResult, error) {
 	if err != nil {
 		log.Warn("failed to load agent actions", "err", err)
 	} else if len(agentActions) > 0 {
+		emit(tui.CompactStartEvent{Time: time.Now(), Stream: "agent"})
 		acr, compactErr := compact.MaybeCompactAgent(
 			params.ChatLLM, params.Store, params.ConversationID,
 			agentActions, params.Cfg.Memory.AgentContextBudget,
