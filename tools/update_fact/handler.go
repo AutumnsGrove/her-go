@@ -1,8 +1,13 @@
-// Package update_fact implements the update_fact tool — updates an existing
-// fact when new information changes or refines what the bot knew.
+// Package update_fact implements the update_fact tool — replaces an existing
+// fact with a new version when information changes or gets refined.
 //
-// Applies the same style and length quality gates as save_fact, plus
-// re-embeds the updated fact text so semantic search stays accurate.
+// Instead of overwriting in-place (which destroys history), this creates a
+// NEW fact and supersedes the old one. The supersession chain lets the agent
+// trace knowledge evolution: "you used to work at X, now at Y."
+//
+// The new fact gets full SaveFact treatment — embedding, auto-linking,
+// classifier gate — for free. The old fact is marked inactive with a
+// superseded_by pointer to the new one.
 package update_fact
 
 import (
@@ -20,9 +25,9 @@ func init() {
 	tools.Register("update_fact", Handle)
 }
 
-// Handle updates an existing fact by ID. Applies style/length gates and
-// re-embeds the fact for accurate semantic search. Same gates as save_fact —
-// updates shouldn't sneak in AI-slop or paragraphs either.
+// Handle creates a new fact that supersedes an existing one. The old fact
+// is soft-deleted with a supersession chain pointing to the new version.
+// Applies the same style/length/classifier gates as save_fact.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		FactID     int64  `json:"fact_id"`
@@ -43,8 +48,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		args.Importance = 10
 	}
 
-	// Apply the same style and length gates as save_fact. Updates shouldn't
-	// sneak in AI-slop or paragraphs either.
+	// Apply the same style and length gates as save_fact.
 	lower := strings.ToLower(args.Fact)
 	for _, blocked := range tools.StyleBlocklist() {
 		if strings.Contains(lower, blocked) {
@@ -60,19 +64,23 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Strip temporal references before saving — same as save_fact.
 	args.Fact = tools.StripTimestamps(args.Fact)
 
+	// --- Read old fact ---
+	// We need the old fact's subject and source_message_id so the new
+	// fact inherits them. Also used to show the classifier the delta.
+	oldFact, err := ctx.Store.GetFact(args.FactID)
+	if err != nil {
+		return fmt.Sprintf("error reading old fact: %v", err)
+	}
+	if oldFact == nil {
+		return fmt.Sprintf("fact ID=%d not found", args.FactID)
+	}
+
 	// --- Classifier gate ---
-	// For updates, show the classifier BOTH old and new text so it can
-	// evaluate the delta. Without this, the classifier only sees the
-	// final merged text (e.g. "senior backend engineer making $95k")
-	// and can't tell that the salary part was inferred from a search
-	// query, not stated by the user. Framing as "Original → Updated"
-	// lets the INFERRED verdict catch additions that weren't said.
+	// Show the classifier BOTH old and new text so it can evaluate the
+	// delta — without this, it can't tell that an addition was inferred.
 	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
 		snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
-		classifyContent := args.Fact
-		if oldText, err := ctx.Store.GetFactText(args.FactID); err == nil && oldText != "" {
-			classifyContent = fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldText, args.Fact)
-		}
+		classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
 		verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
 		if !verdict.Allowed {
 			if ctx.RejectionMessageFunc != nil {
@@ -82,29 +90,37 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	if err := ctx.Store.UpdateFact(args.FactID, args.Fact, args.Category, args.Importance, args.Tags); err != nil {
-		return fmt.Sprintf("error updating fact: %v", err)
-	}
-
-	// Re-embed using tags (same as save_fact — embed by topic, not by text).
-	// Also re-embed the raw fact text so the cached text embedding stays fresh.
+	// --- Embed the new fact ---
+	var tagVec, textVec []float32
 	if ctx.EmbedClient != nil {
 		embedText := args.Tags
 		if embedText == "" {
 			embedText = args.Fact
 		}
-		if newVec, err := ctx.EmbedClient.Embed(embedText); err == nil {
-			// Recompute text embedding. When tags are empty, newVec already
-			// encodes the text, so we pass nil to avoid a redundant embed call.
-			var newTextVec []float32
-			if args.Tags != "" {
-				newTextVec, _ = ctx.EmbedClient.Embed(args.Fact)
-			}
-			_ = ctx.Store.UpdateFactEmbedding(args.FactID, newVec, newTextVec)
-			log.Debug("recomputed embedding for updated fact", "fact_id", args.FactID)
+		tagVec, _ = ctx.EmbedClient.Embed(embedText)
+		if args.Tags != "" {
+			textVec, _ = ctx.EmbedClient.Embed(args.Fact)
 		}
 	}
 
-	log.Infof("  update_fact: ID=%d → %s", args.FactID, args.Fact)
-	return fmt.Sprintf("updated fact ID=%d: %s", args.FactID, args.Fact)
+	// --- Save new fact + supersede old ---
+	// SaveFact handles embedding storage, vec_facts index, and auto-linking.
+	newID, err := ctx.Store.SaveFact(
+		args.Fact, args.Category, oldFact.Subject,
+		oldFact.SourceMessageID, args.Importance,
+		tagVec, textVec, args.Tags,
+	)
+	if err != nil {
+		return fmt.Sprintf("error saving updated fact: %v", err)
+	}
+
+	// Mark the old fact as superseded by the new one.
+	if err := ctx.Store.SupersedeFact(args.FactID, newID, "updated"); err != nil {
+		// The new fact was saved but the chain failed — log but don't fail
+		// the whole operation. The new fact is still valid.
+		log.Warnf("failed to create supersession chain %d → %d: %v", args.FactID, newID, err)
+	}
+
+	log.Infof("  update_fact: ID=%d superseded by ID=%d → %s", args.FactID, newID, args.Fact)
+	return fmt.Sprintf("updated: old fact ID=%d superseded by new fact ID=%d: %s", args.FactID, newID, args.Fact)
 }
