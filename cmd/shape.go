@@ -75,7 +75,7 @@ func runShape(cmd *cobra.Command, args []string) error {
 	// Set up embedding client if configured.
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" {
-		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 	}
 
 	// Set up weather client if configured.

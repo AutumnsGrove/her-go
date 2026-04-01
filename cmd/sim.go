@@ -51,6 +51,16 @@ var agentModelFlag string
 // Example: --embed-model "voyage-4-nano"
 var embedModelFlag string
 
+// embedBaseURLFlag overrides the embedding API base URL. Needed when
+// switching between local (LM Studio) and remote (OpenRouter) embeddings.
+// Example: --embed-base-url "https://openrouter.ai/api/v1"
+var embedBaseURLFlag string
+
+// embedAPIKeyFlag provides an API key for remote embedding APIs.
+// Not needed for local servers. If empty and a remote URL is detected,
+// falls back to the LLM API key (since OpenRouter uses the same key for both).
+var embedAPIKeyFlag string
+
 // embedDimensionFlag overrides the embedding dimension from config.yaml.
 // Must match the output dimension of the model specified by --embed-model.
 // Different models produce different-sized vectors (e.g., nomic = 768,
@@ -83,6 +93,8 @@ func init() {
 	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
 	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., deepseek/deepseek-v3.2)")
 	simCmd.Flags().StringVar(&embedModelFlag, "embed-model", "", "override embedding model for this run (e.g., voyage-4-nano)")
+	simCmd.Flags().StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL (e.g., https://openrouter.ai/api/v1)")
+	simCmd.Flags().StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs (defaults to LLM API key if empty)")
 	simCmd.Flags().IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension (must match --embed-model output size)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
@@ -268,13 +280,24 @@ func runSim(cmd *cobra.Command, args []string) error {
 		cfg.Agent.Model = agentModelFlag
 	}
 
-	// --embed-model and --embed-dimension override the embedding config.
-	// Unlike agent models which share a common API format, embedding models
-	// each have unique output dimensions — so if you change the model, you
-	// almost certainly need to change the dimension too.
+	// --embed-* flags override the embedding config. This lets you test
+	// remote models (OpenRouter, OpenAI) without touching config.yaml.
+	if embedBaseURLFlag != "" {
+		log.Info("Embed base URL overridden via --embed-base-url", "url", embedBaseURLFlag)
+		cfg.Embed.BaseURL = embedBaseURLFlag
+	}
 	if embedModelFlag != "" {
 		log.Info("Embed model overridden via --embed-model", "model", embedModelFlag)
 		cfg.Embed.Model = embedModelFlag
+	}
+	if embedAPIKeyFlag != "" {
+		cfg.Embed.APIKey = embedAPIKeyFlag
+		log.Info("Embed API key provided via --embed-api-key")
+	} else if embedBaseURLFlag != "" && cfg.Embed.APIKey == "" {
+		// If switching to a remote URL but no embed API key is set,
+		// fall back to the LLM API key — on OpenRouter, it's the same key.
+		cfg.Embed.APIKey = cfg.LLM.APIKey
+		log.Info("Embed API key defaulting to LLM API key for remote embeddings")
 	}
 	if embedDimensionFlag > 0 {
 		log.Info("Embed dimension overridden via --embed-dimension", "dimension", embedDimensionFlag)
@@ -418,7 +441,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
-		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.Dimension)
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 	}
 
 	var tavilyClient *search.TavilyClient

@@ -33,22 +33,25 @@ const DefaultDimension = 768
 type Client struct {
 	baseURL    string
 	model      string
-	Dimension  int // vector dimension (e.g. 768 for nomic-embed-text-v1.5)
+	apiKey     string // optional — needed for remote APIs (OpenRouter, OpenAI), empty for local (LM Studio, Ollama)
+	Dimension  int    // vector dimension (e.g. 768 for nomic-embed-text-v1.5)
 	httpClient *http.Client
 }
 
 // NewClient creates an embedding client pointed at the given server.
-// For LM Studio: baseURL = "http://localhost:1234/v1"
-// For Ollama: baseURL = "http://localhost:11434/v1"
-// dimension is the vector size your model produces (768 for nomic-embed-text-v1.5).
+// For LM Studio: baseURL = "http://localhost:1234/v1", apiKey = ""
+// For Ollama: baseURL = "http://localhost:11434/v1", apiKey = ""
+// For OpenRouter: baseURL = "https://openrouter.ai/api/v1", apiKey = "sk-or-..."
+// dimension is the vector size your model produces (768 for nomic, 4096 for qwen3-embedding).
 // Pass 0 to use DefaultDimension.
-func NewClient(baseURL, model string, dimension int) *Client {
+func NewClient(baseURL, model, apiKey string, dimension int) *Client {
 	if dimension <= 0 {
 		dimension = DefaultDimension
 	}
 	return &Client{
 		baseURL:   baseURL,
 		model:     model,
+		apiKey:    apiKey,
 		Dimension: dimension,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -94,11 +97,19 @@ func (c *Client) Embed(text string) ([]float32, error) {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(
-		c.baseURL+"/embeddings",
-		"application/json",
-		bytes.NewReader(jsonBytes),
-	)
+	// Build the request manually instead of using httpClient.Post so we
+	// can attach auth headers. Same pattern as llm.Client — local servers
+	// like LM Studio ignore the header, remote APIs like OpenRouter require it.
+	req, err := http.NewRequest("POST", c.baseURL+"/embeddings", bytes.NewReader(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("embedding request failed: %w", err)
 	}
