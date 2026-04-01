@@ -127,6 +127,7 @@ type MemoryConfig struct {
 	ExtractionInterval int     `yaml:"extraction_interval"`
 	MaxHistoryTokens    int     `yaml:"max_history_tokens"`     // history token budget for compaction — both triggers fire at 75% of this
 	AgentContextBudget  int     `yaml:"agent_context_budget"`   // agent model total prompt budget for action history compaction; 0 = use 6000 default
+	MaxFactRetries     int     `yaml:"max_fact_retries"`      // per-fact retry limit per turn before "move on" (0 = unlimited)
 	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
 	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
 }
