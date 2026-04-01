@@ -119,7 +119,6 @@ func MaybeCompact(
 	conversationID string,
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
-	chatContextBudget int,
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
@@ -134,35 +133,33 @@ func MaybeCompact(
 
 	// Two independent compaction triggers. Either one can fire compaction:
 	//
-	// 1. Context-aware: checks the chat model's actual prompt tokens
-	//    (stored on the user message by execReply) against the chat
-	//    context budget. Catches scaffolding bloat (growing facts,
-	//    persona, mood context) and history growth together.
+	// 1. Context-aware: checks the history-only token count from the
+	//    last chat model call (stored on user messages by execReply,
+	//    with scaffolding subtracted). Uses real API token counts.
 	//
 	// 2. Estimation-based: checks the compaction window's estimated
-	//    tokens against a history budget. Catches unsummarized history
-	//    accumulating in the DB. This is the day-to-day trigger.
+	//    tokens against the same history budget using len/4 heuristic.
+	//    Catches unsummarized history accumulating in the DB.
 	//
-	// These are independent because they measure different things:
-	// context-aware sees the chat model's 10-message prompt,
-	// estimation sees the full 100-message compaction window.
+	// Both triggers compare against maxHistoryTokens — the budget for
+	// conversation history that compaction can actually shrink.
 
 	shouldCompact := false
 
-	// --- Context-aware trigger (chat model) ---
-	if chatContextBudget > 0 {
-		var lastPromptTokens int
+	// --- Context-aware trigger (real history tokens) ---
+	{
+		var lastHistoryTokens int
 		for i := len(recentMessages) - 1; i >= 0; i-- {
 			if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
-				lastPromptTokens = recentMessages[i].TokenCount
+				lastHistoryTokens = recentMessages[i].TokenCount
 				break
 			}
 		}
-		if lastPromptTokens > 0 {
-			threshold := int(float64(chatContextBudget) * 0.75)
-			log.Infof("  compaction check (chat context): %d/%d prompt tokens (threshold: %d)",
-				lastPromptTokens, chatContextBudget, threshold)
-			if lastPromptTokens >= threshold {
+		if lastHistoryTokens > 0 {
+			threshold := int(float64(maxHistoryTokens) * 0.75)
+			log.Infof("  compaction check (real history): %d/%d tokens (threshold: %d)",
+				lastHistoryTokens, maxHistoryTokens, threshold)
+			if lastHistoryTokens >= threshold {
 				shouldCompact = true
 			}
 		}
