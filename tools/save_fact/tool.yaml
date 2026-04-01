@@ -3,7 +3,9 @@ hint: "save a new fact about the user"
 description: >-
   Save a new fact learned from the conversation. Only for information worth
   remembering WEEKS later. Ask: 'Would this matter in a month?' If not,
-  skip it.
+  skip it. User preferences ABOUT fiction are real facts (favorite genre,
+  playstyle, characters they love). In-game events are NOT (beat a boss,
+  found a location). Transient moods belong in log_mood, not here.
 hot: true
 parameters:
   type: object

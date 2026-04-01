@@ -19,19 +19,28 @@ classifiers:
     verdicts:
       - name: FICTIONAL
         description: >-
-          Does the fact describe something that happened to a character
-          in a video game, book, movie, TV show, or roleplay AS IF it
-          happened to the real user?
+          Does the fact describe an IN-GAME EVENT or STORY BEAT as if it
+          really happened? Only reject actual fictional events — things a
+          character did in a game world. The user's real preferences, play
+          choices, and opinions about fiction are NOT fictional.
         examples:
           - '"User got a new apartment in Night City" (in-game event)'
           - '"User pulled out a katana at a festival" (game action)'
-          - '"User prefers spontaneous plans and enjoys pulling out a katana at festivals" (mixes real and fictional)'
+          - '"User beat Malenia after 40 tries" (game achievement)'
+          - '"User built a greenhouse in Stardew Valley" (in-game action)'
         note: >-
-          discussing fiction is fine. "User enjoys playing Cyberpunk 2077"
-          is SAVE — that's a real preference about the user.
+          The user's preferences ABOUT fiction are real facts — SAVE these:
+          "User prefers bleed builds in Elden Ring" (real playstyle),
+          "User plays as female V in Cyberpunk" (real choice),
+          "User's favorite genre is FromSoft games" (real preference),
+          "User loves the character Takemura" (real opinion).
+          Only reject events that happened IN the fiction, not choices
+          or preferences the real human made.
         rejection:
-          default_detail: this describes fictional/in-game content, not the real user
-          suffix: Only save facts about the real user's actual life.
+          default_detail: this describes an in-game event or story beat, not the real user
+          suffix: >-
+            Only save facts about the real user. Preferences ABOUT games
+            (playstyle, favorite characters, genre taste) are real — save those.
 
       - name: MOOD_NOT_FACT
         description: >-
@@ -56,15 +65,18 @@ classifiers:
       - name: INFERRED
         description: >-
           Did the user actually say this, or is the chatbot inferring,
-          diagnosing, or editorializing?
+          diagnosing, or editorializing? Only reject genuine leaps — not
+          reasonable summarization of things the user stated.
         examples:
           - '"User is very self-critical about coping mechanisms" (therapist-style assessment)'
           - '"User tends to share emotional states early in conversations" (behavioral analysis the user never stated)'
           - '"User has a toxic relationship with [person]" (judgment call, not stated)'
         note: >-
-          reasonable summarization is fine. "User is reading a book about
-          addiction" from "I'm reading Never Enough" is SAVE — that's a
-          direct restatement.
+          Reasonable summarization is SAVE. Combining details from multiple
+          messages in the same conversation is carrying forward, not
+          inferring. "User plays Cyberpunk as female V and finds the romance
+          options frustrating" is SAVE if the user said both things — even
+          in different messages.
         rejection:
           default_detail: the user didn't actually state this — the agent is inferring or editorializing
           suffix: >-

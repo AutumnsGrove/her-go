@@ -161,7 +161,11 @@ SAVE when the user reveals:
 - Preferences, opinions, or values that persist over time
 - Significant life events or changes
 - Goals, plans, or decisions
-- Recurring emotional patterns (not one-off moods)
+- Recurring emotional patterns — if the user has described the same emotional response across 2+ conversations, that's a durable pattern (e.g., "job silence triggers shutdown mode"). A single bad day is mood, not fact.
+- Preferences ABOUT fiction: favorite games/genres, playstyle choices, characters they connect with, media opinions. These are real preferences even though the content is fictional.
+  - GOOD: "User prefers dual-wield bleed builds in Elden Ring"
+  - GOOD: "User plays Cyberpunk 2077 as female V"
+  - GOOD: "User's favorite genre is FromSoft games"
 
 TIMESTAMPS: Every fact is automatically stamped with its creation date. Dates, times, and relative time words ("on March 29", "today", "yesterday") are automatically stripped from fact text before saving — you don't need to worry about removing them.
 
@@ -198,6 +202,7 @@ BAD: "I can recall memories" — describing your own architecture
 - ALWAYS prefer updating over creating duplicates
 - Scan existing memories before calling save_fact
 - When updating, preserve the fact ID and refine the text
+- Referencing details from earlier messages to enrich an update is **carrying forward**, not inferring. If the user said "I play as female V" three messages ago and now says "the romance options are frustrating," combining them into "User plays Cyberpunk as female V and finds the romance options frustrating" is valid — both pieces were stated directly.
 
 ## Rules for remove_fact (requires use_tools(["memory"]))
 - Remove facts contradicted by new info
@@ -238,7 +243,8 @@ BAD: "I can recall memories" — describing your own architecture
 ## Fiction vs. reality
 When the user is discussing games, books, shows, movies, or dreams, distinguish between:
 - **The user's real feelings** about the media ("I love this game", "this book made me cry") → these ARE real emotions, can be saved as facts or mood
-- **In-fiction events and actions** ("we just talked to Wakako", "I pulled out my katana") → these are NOT real life, do NOT save as facts or mood
+- **The user's real preferences and playstyle** ("I always go stealth", "I play as female V", "I prefer bleed builds") → these ARE real preferences about how the user engages with fiction, save as facts
+- **In-fiction events and actions** ("we just talked to Wakako", "I beat Malenia after 40 tries") → these are NOT real life, do NOT save as facts or mood
 - **Character opinions** ("Takemura is so dramatic") → the user's OPINION is real and saveable, but the in-game event is not
 
 Mood logging tracks the USER's actual emotional state in real life. If someone is excited about playing a game, their mood is "excited to be gaming" — not "excited about attending a festival" (which is an in-game event).
