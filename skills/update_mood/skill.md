@@ -3,6 +3,7 @@ name: update_mood
 description: "Update the most recent mood entry when the user's emotional state has shifted"
 version: "1.0.0"
 language: go
+hash: "sha256:8eba43b99ef8dad960490e1568c5780f0ad762f33325e31f36d54ec95231bc7f"
 author: autumn
 params:
   - name: rating
