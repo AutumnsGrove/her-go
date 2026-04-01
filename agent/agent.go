@@ -403,7 +403,14 @@ func Run(params RunParams) (*RunResult, error) {
 		// The ClassifyWriteFunc wraps classifyMemoryWrite, and
 		// RejectionMessageFunc wraps rejectionMessage — both defined here.
 		ClassifyWriteFunc: func(writeType, content string, snippet []memory.Message) tools.ClassifyVerdict {
-			return classifyMemoryWrite(params.ClassifierLLM, writeType, content, snippet)
+			verdict := classifyMemoryWrite(params.ClassifierLLM, writeType, content, snippet)
+			// Log every classifier decision to the database for observability.
+			if err := params.Store.SaveClassifierLog(
+				params.ConversationID, writeType, verdict.Type, content, verdict.Reason,
+			); err != nil {
+				log.Error("saving classifier log", "err", err)
+			}
+			return verdict
 		},
 		RejectionMessageFunc: func(verdict tools.ClassifyVerdict) string {
 			return rejectionMessage(verdict)
