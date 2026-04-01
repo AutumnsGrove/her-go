@@ -14,9 +14,9 @@ Inspired by [ScottRBK/forgetful](https://github.com/ScottRBK/forgetful) — a Ze
 | Embeddings + vec search | Done | `embed/`, `vec_facts` virtual table |
 | Soft delete | Done | `facts.active` column |
 | Deduplication via cosine sim | Done | agent tool, `similarityThreshold` config |
-| Fact linking | **Missing** | — |
-| Supersession chains | **Missing** | — |
-| Token budget (adaptive context) | **Missing** | fixed `maxFacts` count today |
+| Fact linking | Done | `fact_links` table, `AutoLinkFact()`, 1-hop traversal in `SemanticSearch()` |
+| Supersession chains | Done | `SupersedeFact()`, `FactHistory()`, `update_fact` creates chain |
+| Token budget (adaptive context) | Superseded | Dual-compactor (`chat_context_budget` + `agent_context_budget`) handles history/actions; fact count cap fine at current scale |
 | Query context for retrieval | **Missing** | — |
 | Cross-encoder reranking | **Missing** | — |
 | Fact context field ("why") | **Missing** | — |
@@ -97,34 +97,18 @@ memory:
 
 ---
 
-## Phase 2: Supersession Chains
+## Phase 2: Supersession Chains ✅
 
-**What:** When a fact is deactivated because a newer version exists, record *which* fact replaced it and *why*.
+**Status:** Complete as of 2026-03-31.
 
-**Why:** "She works at Company A" → superseded by → "She left Company A, now at Company B." Currently we just deactivate the old fact and the history is lost. Supersession chains let us trace knowledge evolution, and the agent could use them to say "oh, you used to work at Company A" naturally.
+**What:** When a fact is replaced by a newer version, record *which* fact replaced it and *why*. Supersession chains let the agent trace knowledge evolution: "you used to work at Company A."
 
-### Schema Change
-
-```sql
--- Add columns to existing facts table
-ALTER TABLE facts ADD COLUMN superseded_by INTEGER REFERENCES facts(id);
-ALTER TABLE facts ADD COLUMN supersede_reason TEXT;
-```
-
-### Store Methods
-
-```go
-// SupersedeFact marks a fact as inactive and records what replaced it.
-func (s *Store) SupersedeFact(oldID, newID int64, reason string) error
-
-// FactHistory returns the supersession chain for a fact (follow superseded_by links).
-func (s *Store) FactHistory(factID int64) ([]Fact, error)
-```
-
-### Integration
-
-- The agent's `update_fact` / `delete_fact` tools should use `SupersedeFact()` instead of bare `DeactivateFact()` when a replacement fact exists.
-- During extraction, if the LLM detects a fact that contradicts an existing one, it could return both the new fact and a reference to the old one. (This is a stretch goal — may require extraction prompt changes.)
+**Implemented:**
+- `SupersedeFact()` — marks old fact inactive, records `superseded_by` and `supersede_reason`
+- `FactHistory()` — walks the chain both directions (predecessors + successors), cycle-safe, capped at 20 hops
+- `GetFact()` — reads full fact by ID (including inactive ones, with supersession fields)
+- `update_fact` tool — now creates a new fact via `SaveFact()` and supersedes the old one (instead of overwriting in-place). Gets embedding, auto-linking, and classifier gate for free.
+- `remove_fact` tool — already had `replaced_by` param wired to `SupersedeFact()` since Phase 1
 
 ---
 

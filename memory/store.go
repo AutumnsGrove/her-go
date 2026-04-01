@@ -1296,6 +1296,114 @@ func (s *Store) SupersedeFact(oldID, newID int64, reason string) error {
 	return nil
 }
 
+// GetFact returns a single fact by ID, including inactive (superseded) ones.
+// Returns nil and no error if the fact doesn't exist. Used by update_fact
+// to read the old fact's metadata before creating a supersession chain.
+func (s *Store) GetFact(factID int64) (*Fact, error) {
+	var f Fact
+	var ts string
+	var active bool
+	var supersededBy sql.NullInt64
+	var supersedeReason sql.NullString
+	err := s.db.QueryRow(
+		`SELECT id, timestamp, fact, category, subject, importance, tags, active,
+		        superseded_by, supersede_reason
+		 FROM facts WHERE id = ?`, factID,
+	).Scan(&f.ID, &ts, &f.Fact, &f.Category, &f.Subject, &f.Importance,
+		&f.Tags, &active, &supersededBy, &supersedeReason)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting fact %d: %w", factID, err)
+	}
+	f.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+	f.Active = active
+	if supersededBy.Valid {
+		f.SupersededBy = supersededBy.Int64
+	}
+	if supersedeReason.Valid {
+		f.SupersedeReason = supersedeReason.String
+	}
+	return &f, nil
+}
+
+// FactHistory returns the full supersession chain containing a fact —
+// all versions from the original to the current, ordered oldest → newest.
+// Walks backward (who did factID replace?) and forward (what replaced factID?).
+// Includes inactive facts — the whole point is seeing deactivated predecessors.
+// Capped at 20 hops in each direction to prevent runaway traversal.
+func (s *Store) FactHistory(factID int64) ([]Fact, error) {
+	const maxHops = 20
+
+	// Collect the starting fact.
+	start, err := s.GetFact(factID)
+	if err != nil {
+		return nil, err
+	}
+	if start == nil {
+		return nil, nil
+	}
+
+	// Walk backward: find predecessors (facts that were superseded to become this one).
+	// "SELECT id FROM facts WHERE superseded_by = ?" gives us the previous version.
+	var predecessors []Fact
+	currentID := factID
+	seen := map[int64]bool{factID: true}
+	for i := 0; i < maxHops; i++ {
+		var prevID int64
+		err := s.db.QueryRow(
+			`SELECT id FROM facts WHERE superseded_by = ?`, currentID,
+		).Scan(&prevID)
+		if err != nil {
+			break // no predecessor — we've reached the start of the chain
+		}
+		if seen[prevID] {
+			break // cycle detection
+		}
+		seen[prevID] = true
+		f, err := s.GetFact(prevID)
+		if err != nil || f == nil {
+			break
+		}
+		predecessors = append(predecessors, *f)
+		currentID = prevID
+	}
+
+	// Reverse predecessors so they go oldest → newest.
+	for i, j := 0, len(predecessors)-1; i < j; i, j = i+1, j-1 {
+		predecessors[i], predecessors[j] = predecessors[j], predecessors[i]
+	}
+
+	// Walk forward: find successors (facts that replaced this one).
+	var successors []Fact
+	currentID = factID
+	for i := 0; i < maxHops; i++ {
+		f, err := s.GetFact(currentID)
+		if err != nil || f == nil || f.SupersededBy == 0 {
+			break
+		}
+		nextID := f.SupersededBy
+		if seen[nextID] {
+			break // cycle detection
+		}
+		seen[nextID] = true
+		next, err := s.GetFact(nextID)
+		if err != nil || next == nil {
+			break
+		}
+		successors = append(successors, *next)
+		currentID = nextID
+	}
+
+	// Assemble: predecessors + start + successors
+	chain := make([]Fact, 0, len(predecessors)+1+len(successors))
+	chain = append(chain, predecessors...)
+	chain = append(chain, *start)
+	chain = append(chain, successors...)
+	return chain, nil
+}
+
 // CountFactLinks returns the total number of links in the fact graph.
 // Used by the relink command to report progress.
 func (s *Store) CountFactLinks() (int, error) {

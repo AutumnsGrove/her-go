@@ -1,0 +1,108 @@
+name: "Fact-a-thon"
+description: >
+  Stress test for memory writes and supersession chains. Exercises
+  save_fact (bulk extraction), update_fact (creating supersession chains
+  instead of in-place overwrites), and recall_memories (verifying the
+  agent sees current versions). Designed to validate Phase 2 of the
+  Zettelkasten memory plan.
+
+  Expected behavior:
+  - Turns 1-4: Rapid fact extraction (8-12 facts saved)
+  - Turns 5-8: Corrections and life updates that should trigger update_fact,
+    creating supersession chains (old facts deactivated, new ones linked)
+  - Turns 9-10: Recall check — agent should surface current facts, not old ones
+  - Turns 11-14: Second wave of updates (job change, move, relationship shift)
+  - Turn 15: Final recall — full memory audit
+
+  After the run, verify in sim.db:
+    SELECT id, fact, active, superseded_by, supersede_reason
+    FROM facts WHERE superseded_by IS NOT NULL
+    ORDER BY id;
+
+tags: ["memory", "facts", "supersession", "update", "zettelkasten"]
+
+messages:
+  # --- Block 1: Initial fact dump (bulk save_fact) ---
+  # Goal: seed 8-12 facts quickly so there's material to update later.
+
+  - "hey! im autumn. i'm 27, i live in portland oregon, and i work as a junior backend engineer at a startup called BrightLoop"
+  - "i have two cats, mochi and bean. mochi is a calico and bean is an orange tabby. they're both rescues"
+  - "i'm vegetarian, been about three years now. i mostly cook at home — lots of thai curries and pasta. my go-to comfort food is mac and cheese"
+  - "oh and i'm currently learning go. i know python and typescript pretty well but go is new. i'm building a chatbot project to learn it"
+
+  # Expected: ~10 facts saved (name, age, location, job, company, cats x2, diet,
+  # cooking preferences, comfort food, languages, current project)
+
+  # --- Block 2: Corrections (should trigger update_fact → supersession) ---
+  # Each message corrects or refines something from block 1.
+
+  - "oh wait, i should correct something — i'm actually 28 now. my birthday was last week! forgot i said 27 earlier"
+
+  # Expected: update_fact on age. Old "27" superseded by "28".
+  # Supersession chain: fact(27) → superseded_by → fact(28), reason: "updated"
+
+  - "also i got promoted recently actually. i'm a mid-level engineer now, not junior. title change happened about a month ago"
+
+  # Expected: update_fact on job title. "junior backend engineer" → "mid-level backend engineer"
+
+  - "and actually bean isn't an orange tabby, he's more of a ginger. like a dark ginger with stripes. i always describe him wrong lol"
+
+  # Expected: update_fact on bean's description. Tests a minor correction.
+
+  - "oh and i should mention — i'm not fully vegetarian anymore. i started eating fish again last month. so i guess i'm pescatarian now?"
+
+  # Expected: update_fact on diet. "vegetarian" → "pescatarian". Good test of
+  # the supersession reason — this is a genuine life change, not a correction.
+
+  # --- Block 3: Recall check ---
+  # Verify the agent retrieves CURRENT facts, not superseded ones.
+
+  - "hey what do you remember about me? like the basics — age, job, diet, that kind of stuff"
+
+  # Expected: recall_memories → should return 28 (not 27), mid-level (not junior),
+  # pescatarian (not vegetarian). If old facts leak through, supersession isn't working.
+
+  - "and what about my cats? what do you know about them?"
+
+  # Expected: recall_memories → should return correct bean description (ginger, not orange tabby).
+
+  # --- Block 4: Life changes (second wave of updates) ---
+  # Bigger life changes that create longer supersession chains.
+
+  - "so... big news. i'm leaving BrightLoop. i accepted an offer at Stripe as a backend engineer. starting in two weeks"
+
+  # Expected: update_fact on company + possibly job title.
+  # "mid-level backend engineer at BrightLoop" → "backend engineer at Stripe"
+  # This is the exact use case from the plan: "she left Company A, now at Company B"
+
+  - "and i'm moving! portland was great but the stripe office is in SF so i'm relocating. found a place in the mission district"
+
+  # Expected: update_fact on location. "portland oregon" → "SF / mission district"
+  # Creates a second supersession chain on the location fact.
+
+  - "oh and mochi... we actually had to rehome mochi last month. my new place only allows one cat. it was really hard but my friend sarah took her and mochi loves it there"
+
+  # Expected: This is tricky. The agent might update_fact OR remove_fact + save_fact.
+  # Either way, the fact about "two cats" should be superseded.
+  # Good test of whether the agent handles emotionally charged updates gracefully.
+
+  - "on the bright side, bean is adjusting great to the new apartment. he's claimed the windowsill already"
+
+  # Expected: Possibly a new fact about bean, or just conversation. Tests whether
+  # the agent knows when NOT to update (bean's core facts haven't changed).
+
+  # --- Block 5: Final recall audit ---
+
+  - "ok one more time — give me the full rundown. everything you know about me. i want to make sure your memory is up to date"
+
+  # Expected: recall_memories → comprehensive dump showing:
+  # - Age: 28 (not 27)
+  # - Job: backend engineer at Stripe (not junior at BrightLoop)
+  # - Location: SF / mission district (not portland)
+  # - Diet: pescatarian (not vegetarian)
+  # - Cats: bean only (not two cats, not mochi)
+  # - Bean: ginger with stripes (not orange tabby)
+  # - Learning Go, knows Python/TS
+  # - Comfort food: mac and cheese
+  #
+  # If any superseded facts leak through, the chain is broken.
