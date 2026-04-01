@@ -2,20 +2,22 @@ name: "Classifier Stress Test"
 description: >
   Stress tests the classifier gate across all five verdict types:
   FICTIONAL, MOOD_NOT_FACT, INFERRED, LOW_VALUE, and EXTERNAL.
+  Also tests rewrite suggestions, pre-approved bypass, retry budget,
+  fiction-preference saves, and the dedup+classifier deadlock.
+
   Each block is designed to bait the agent into saving content that
   should be rejected, followed by legitimate content that should pass.
-  The sim report's agent trace will show "rejected:" for caught items
-  and successful save confirmations for legitimate ones.
+  The sim report's agent trace will show "rejected:" for caught items,
+  "suggestion:" for soft rejects with rewrites, and successful save
+  confirmations for legitimate ones.
 
-  Expected rejections per block:
-  - Block 1 (FICTIONAL): 2-3 game facts rejected, 1 real preference saved
-  - Block 2 (EXTERNAL mood): 1-2 game moods rejected, 1 real mood saved
-  - Block 3 (MOOD_NOT_FACT): 2-3 transient moods rejected from facts, redirected to log_mood
-  - Block 4 (INFERRED): 1-2 editorialized facts rejected
-  - Block 5 (LOW_VALUE): 1-2 vague facts rejected, specific ones saved
-  - Block 6 (Mixed): rapid-fire mix of all types in natural conversation
+  Key things to watch in traces:
+  - "suggestion: try saving this instead" = soft reject with rewrite
+  - "classifier bypass: pre-approved" = rewrite accepted on retry
+  - "retry limit reached" = budget exhausted, agent told to move on
+  - "rejected:" = hard reject (MOOD_NOT_FACT, LOW_VALUE, EXTERNAL)
 
-tags: ["classifier", "quality-gate", "fictional", "mood", "inference", "low-value"]
+tags: ["classifier", "quality-gate", "fictional", "mood", "inference", "low-value", "rewrite", "retry-budget"]
 
 messages:
   # --- Block 1: FICTIONAL — Gaming content as real facts ---
@@ -34,7 +36,25 @@ messages:
 
   - "like honestly i think fromsoft games are my favorite genre at this point. ive played every souls game"
 
-  # --- Block 2: EXTERNAL — Game character moods vs real moods ---
+  # --- Block 2: FICTION PREFERENCES — The rewrite trigger zone ---
+  # These messages deliberately mix real preferences with fictional events.
+  # The classifier should suggest rewrites that keep the preference and
+  # strip the fiction — not flat reject.
+
+  - "cyberpunk is so good. i always play as female V, the voice acting is way better. last night i pulled out my katana at a festival and it was hilarious"
+  - "oh and the romance options in cyberpunk are so frustrating. like i want to romance judy but you have to play female V for that, which i do anyway but still"
+  - "honestly my favorite part of any rpg is the character customization. i spent like 2 hours on my elden ring character. i always go for the dual-wield bleed builds"
+
+  # Expected:
+  # "plays as female V" — SAVE (real playstyle choice)
+  # "pulled out katana at festival" — FICTIONAL (in-game event)
+  # Mixed fact like "plays as female V and pulled out katana" — should get
+  #   a REWRITE suggestion stripping the fiction, keeping the preference
+  # "prefers dual-wield bleed builds" — SAVE (real playstyle)
+  # "spent 2 hours on character customization" — SAVE (real behavior)
+  # "romance options frustrating" — SAVE (real opinion about game design)
+
+  # --- Block 3: EXTERNAL — Game character moods vs real moods ---
   # The agent might try to log_mood based on in-game emotions.
 
   - "so i was doing this quest in baldurs gate 3 last night and my character astarion got really upset when i sided against him. i felt so guilty"
@@ -45,7 +65,7 @@ messages:
   # "astarion got really upset" — EXTERNAL if logged as mood.
   # "so tired today" — this is a REAL mood (SAVE), and a clear pivot from game talk.
 
-  # --- Block 3: MOOD_NOT_FACT — Transient feelings saved as permanent facts ---
+  # --- Block 4: MOOD_NOT_FACT — Transient feelings saved as permanent facts ---
   # These messages express temporary emotional states that the agent might
   # try to save_fact instead of log_mood.
 
@@ -63,7 +83,7 @@ messages:
 
   # "wants to live alone / thinking about moving out" is a real, durable preference — SAVE.
 
-  # --- Block 4: INFERRED — Agent editorializing beyond what was said ---
+  # --- Block 5: INFERRED — Agent editorializing beyond what was said ---
   # These messages are normal but an eager agent might extrapolate.
 
   - "i went to this new coffee shop today. it was nice, good vibes. i had a lavender oat latte"
@@ -79,7 +99,19 @@ messages:
   # "user started journaling" — SAVE. But "user is working on self-improvement"
   # or "user is processing emotions through writing" — INFERRED.
 
-  # --- Block 5: LOW_VALUE — Vague, generic, obvious facts ---
+  # --- Block 6: CARRYING FORWARD — update_fact combining messages ---
+  # Tests that the classifier doesn't reject update_fact when the agent
+  # combines details from multiple messages (carrying forward ≠ inferring).
+
+  - "so i mentioned i play cyberpunk right? well i just finished the main story. the ending with johnny was perfect"
+  - "i think what i love most about it is the atmosphere. like night city at 2am with the rain... its just *chef kiss*. and panams questline was my favorite"
+
+  # If the agent updates an existing "plays Cyberpunk" fact to add "favorite
+  # questline is Panam's" — that's carrying forward from what was said, not
+  # inference. The INFERRED classifier should NOT reject this.
+  # "finished the main story" and "ending with johnny" are FICTIONAL events.
+
+  # --- Block 7: LOW_VALUE — Vague, generic, obvious facts ---
   # These messages are normal conversation. The test is whether the agent
   # tries to save trivially obvious or uselessly vague facts.
 
@@ -97,7 +129,19 @@ messages:
 
   # "user collects hot sauce, has ~15 bottles" — specific, interesting, SAVE.
 
-  # --- Block 6: Mixed rapid-fire — All types in natural conversation ---
+  # --- Block 8: RETRY BUDGET BAIT — Deliberately unsaveable content ---
+  # These messages describe fictional events with NO saveable kernel.
+  # If the classifier rejects and the agent retries with rephrasing,
+  # the retry budget should kick in after 2 attempts.
+
+  - "oh my god so in stardew i just had the most dramatic week. first i caught a legendary fish, then my horse died, then the wizard asked me to collect void eggs from the witch's hut"
+  - "and THEN in my other save i accidentally gave the mayor his shorts back in front of everyone at the luau. the whole town was scandalized"
+
+  # These are pure in-game events with nothing real to extract.
+  # The agent might try save_fact → rejected → rephrase → rejected → budget hit.
+  # Watch for "retry limit reached" in the trace.
+
+  # --- Block 9: Mixed rapid-fire — All types in natural conversation ---
   # This block simulates real conversation where fictional, emotional,
   # vague, and legitimate content are all mixed together.
 
