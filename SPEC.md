@@ -10,11 +10,20 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 
 ## Core Principles
 
-1. **Privacy first** — Hard identifiers (SSNs, card numbers, etc.) never leave the host machine. Names and context pass through for conversational coherence.
-2. **Own your data** — Everything lives in a local SQLite database. No cloud dependencies for storage.
+1. **Privacy first** — Hard identifiers (SSNs, card numbers, etc.) never leave the host machine. Names and context pass through for conversational coherence. Local inference wherever possible.
+2. **Own your data** — Everything lives in a local SQLite database. D1 is a sync mirror, not a replacement. No cloud dependencies for storage.
 3. **Model agnostic** — Swap models by changing a config value. System prompt lives in a plain `.md` file.
-4. **Keep it simple** — One binary, one database, one config file. No Docker, no Kubernetes, no microservices.
-5. **Learn by building** — Custom memory system, custom PII scrubbing. Understand every piece.
+4. **Defense in depth** — Trust tiers, proxy layers, PII scrubbing all carry forward.
+5. **Single user** — This is a personal tool for Autumn, not a platform.
+6. **The agent cannot read her own source** — This boundary is non-negotiable.
+7. **Learn by building** — Custom memory system, custom PII scrubbing. Understand every piece.
+
+### v2 Principles
+
+8. **Always-alive heartbeat** — Mira should be reachable 24/7, even if the full brain is sleeping.
+9. **Delegated execution** — Mira describes intent, a sandboxed agent executes. She never touches a shell directly.
+10. **Composability through delegation** — Text processing, file creation, HTTP requests all available through the sandbox, not through individual tools.
+11. **One leader at a time** — Only one instance owns the Telegram bot token. Automatic handoff on startup.
 
 ---
 
@@ -64,6 +73,73 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 │             │         │  │  grocery list, expenses, job tracker  │                 │
 └─────────────┘         │  └──────────────────────────────────────┘                 │
                         └───────────────────────────────────────────────────────────┘
+```
+
+### v2 Architecture (Target)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Cloudflare Edge (always alive, $0)            │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │ Webhook recv │  │ Telegram     │  │ Workers AI           │  │
+│  │ (GitHub,     │  │ webhook      │  │ (optional, free tier │  │
+│  │  Todoist,    │  │ (bot API)    │  │  offline ack only)   │  │
+│  │  email)      │  │              │  │                      │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────────────────────┘  │
+│         │                 │                                     │
+│         ▼                 ▼                                     │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │              MiraDO (Durable Object, SQLite-backed)     │    │
+│  │                                                         │    │
+│  │  Schedule table ──→ storage.setAlarm() at exact times   │    │
+│  │  Task queue ──────→ holds events when brain is offline  │    │
+│  │  Leader lock ─────→ which machine owns the bot          │    │
+│  │  Brain status ────→ online/offline heartbeat tracking   │    │
+│  │  Trigger rules ───→ "when X happens, do Y" definitions  │    │
+│  │                                                         │    │
+│  │  Sleeping DO costs $0. Wakes only on alarm or request.  │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
+│  ┌──────────────┐                                               │
+│  │ D1           │  (sync mirror for facts, messages, mood)      │
+│  │              │                                               │
+│  └──────────────┘                                               │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+                        Tailscale tunnel (or CF Tunnel)
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                Mac Mini — Full Brain (primary runtime)           │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    her-go binary (Go)                      │  │
+│  │                                                           │  │
+│  │  Agent loop (Kimi K2.5)  ←→  Skills harness (4-tier)     │  │
+│  │  Chat model (DSv3.2)     ←→  Memory (SQLite + KNN)       │  │
+│  │  Vision (Gemini Flash)   ←→  PII scrubber (3-tier)       │  │
+│  │  Classifier (Haiku)      ←→  Scheduler (local cron)      │  │
+│  │  STT (Parakeet, local)   ←→  Persona evolution            │  │
+│  │  TTS (Piper, local)      ←→  Telegram WebApp server       │  │
+│  │  Embeddings (nomic, local)                                │  │
+│  │  OCR (Vision OCR, local)                                  │  │
+│  └────────────────────────────────┬──────────────────────────┘  │
+│                                   │                             │
+│                                   ▼                             │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │            Docker Container — "The Workshop"              │  │
+│  │                                                           │  │
+│  │  Persistent workspace (survives restarts)                 │  │
+│  │  Coding agent (pi-agent / Claude Code / similar)          │  │
+│  │  Real bash, real filesystem — but fully isolated           │  │
+│  │  No host filesystem access                                │  │
+│  │  Network: proxied through Mira's existing proxy layer     │  │
+│  │                                                           │  │
+│  │  Mira delegates → agent executes → results return         │  │
+│  │  She can observe the workspace state at any time          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Message Flow
@@ -1821,6 +1897,679 @@ kiwix:
 
 ---
 
+## v2 — Architecture Vision
+
+> Output of a design interview session (April 2026). Captures the full v2 direction
+> based on actual needs, constraints, and security philosophy. Not a commitment —
+> a planning document to build from.
+>
+> Status: **DRAFT — needs Autumn review**
+
+### The problem v2 solves
+
+Mira v1 is a secure, well-architected companion bot that can *talk* but can't really *do*.
+The skills system gives her hands, but they're narrow — each capability requires Autumn to
+build a compiled binary. She can't reliably wake up on her own (scheduler depends on the
+binary running), she can't act on events while Autumn is away, and she can't compose
+capabilities in open-ended ways. Her security model is excellent, but her utility ceiling
+is too low for Autumn to depend on her daily.
+
+v2 solves this without compromising the security philosophy: **the agent remains a guest,
+but the house gets bigger.**
+
+---
+
+### v2.1. Heartbeat Layer (Cloudflare Worker + Durable Object)
+
+#### What it is
+
+A CF Worker + a single Durable Object ("MiraDO") that keeps Mira reachable 24/7.
+The Worker handles HTTP routing (webhooks, Telegram). The DO handles scheduling,
+queuing, and state. No cron triggers needed — the DO uses `storage.setAlarm()`
+to fire at exact timestamps.
+
+This follows the same Loom coordination pattern used throughout Grove (SessionDO,
+TenantDO, PostDO), applied to Mira's personal scheduling needs.
+
+#### Architecture
+
+```
+Incoming webhooks / Telegram
+         │
+         ▼
+   CF Worker (stateless router)
+         │
+         ▼
+   MiraDO (single instance, SQLite-backed)
+   ├── Schedule table (alarms at exact timestamps)
+   ├── Task queue (events waiting for full brain)
+   ├── Brain status (online/offline, last heartbeat)
+   └── Leader lock (which machine owns the bot)
+```
+
+#### MiraDO responsibilities
+
+| Function | How |
+|---|---|
+| Morning briefing (7:00 AM ET) | `storage.setAlarm()` at exact timestamp. On fire: check brain status, forward or queue. Set next alarm for tomorrow. |
+| Evening summary (10:00 PM ET) | Same pattern. Alarm → forward/queue → set next alarm. |
+| Todoist overdue check (every 2h) | Alarm fires → hit Todoist API directly from DO → if overdue found, forward to brain or notify via Telegram Bot API. |
+| Medication reminder | Alarm at configured time → send Telegram message directly (no LLM needed). |
+| Custom reminders | Created by Mira via tool call → stored in DO schedule → alarm set. |
+| Health check | Periodic alarm (every 5 min) → ping full brain endpoint → update status. |
+| Webhook processing | Worker forwards GitHub/Todoist/email webhooks → DO evaluates triggers → forward or queue. |
+| Queue drain | When brain comes online, it calls DO → DO returns all pending tasks in order. |
+
+#### Task queue (DO SQLite storage)
+
+```sql
+CREATE TABLE task_queue (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,      -- 'schedule.morning', 'webhook.todoist', 'telegram.message'
+    payload TEXT NOT NULL,          -- JSON event data
+    created_at TEXT NOT NULL,
+    processed_at TEXT,              -- NULL until drained by full brain
+    status TEXT DEFAULT 'pending'   -- 'pending', 'processing', 'done', 'failed'
+);
+
+CREATE TABLE schedule (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,             -- 'morning_briefing', 'evening_summary', 'med_reminder'
+    next_fire_at TEXT NOT NULL,     -- ISO timestamp (UTC)
+    recurrence TEXT,                -- 'daily', 'every_2h', 'once', or cron expression
+    payload TEXT,                   -- JSON data to include when firing
+    enabled INTEGER DEFAULT 1
+);
+```
+
+#### Why DO instead of cron triggers
+
+- **Exact timing**: Alarms fire at the millisecond you specify, not "within the minute."
+- **No wasted executions**: A sleeping DO costs nothing. No polling, no empty cron runs.
+- **State**: The DO holds the queue, the schedule, and the brain status in one place.
+  No juggling D1 + KV + cron expressions.
+- **Dynamic scheduling**: Mira can create/modify/delete reminders by calling the DO.
+  No need to redeploy the Worker to change a cron expression.
+- **Familiar pattern**: Autumn already designed the Loom DO pattern for Grove. MiraDO
+  is the same architecture applied to a personal agent.
+
+#### Offline responses
+
+When the full brain is down and a Telegram message arrives:
+- Worker forwards to MiraDO.
+- MiraDO checks brain status (offline).
+- MiraDO queues the message and responds via Telegram Bot API directly:
+  "I'm resting right now — I'll catch up when I wake up."
+- Optionally: use Workers AI (free tier neurons) for a basic acknowledgment.
+  But never pretend to be the full Mira. No hallucinated facts from a context-free model.
+
+#### Cost
+
+Effectively $0. The DO sleeps between alarms. Each alarm wake costs a fraction of a cent.
+10-15 alarms/day = negligible. Workers paid plan ($5/mo, already paying) covers everything.
+D1 reads for the leader lock and schedule: well within free tier (5M reads/day).
+
+---
+
+### v2.2. Leader Election (Dual-Machine Handoff)
+
+#### The problem
+
+Autumn develops on MacBook and runs production on Mac Mini. Both have her-go installed.
+If both are running, Telegram doesn't know which one to deliver messages to. Race condition.
+
+#### The solution
+
+Leader lock lives inside MiraDO (same Durable Object as the scheduler). The DO is
+the single source of truth for "who owns the bot right now."
+
+```sql
+-- Inside MiraDO's SQLite storage
+CREATE TABLE leader_lock (
+    id TEXT PRIMARY KEY DEFAULT 'singleton',
+    machine_id TEXT NOT NULL,       -- e.g., 'macbook-pro' or 'mac-mini'
+    claimed_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,     -- updated every 30s by the active leader
+    endpoint TEXT NOT NULL          -- Tailscale IP or CF Tunnel URL for routing
+);
+```
+
+**Startup flow:**
+
+1. `her run` starts on MacBook.
+2. Binary reads leader_lock from D1.
+3. If no lock exists → claim it, register as leader, start Telegram bot.
+4. If lock exists but heartbeat_at is stale (>60s old) → previous leader crashed. Claim it.
+5. If lock exists and heartbeat is fresh → another instance is running.
+   - Display: "Mac Mini is currently active. Claim the bot here? [y/n]"
+   - If yes → update lock, send "leader changing" event to old instance via D1 event.
+   - Old instance sees the event, gracefully stops its Telegram listener, becomes standby.
+6. Active leader updates heartbeat_at every 30s.
+
+**The CF Worker also reads this lock** to know where to forward events. The `machine_id`
+maps to a Tailscale address or CF Tunnel endpoint.
+
+#### Dev mode
+
+When running with `--dev` flag, the binary runs in poll mode (no webhook conflict) and
+does NOT claim the lock. This lets Autumn develop and test locally without disrupting
+the production instance on the Mac Mini.
+
+---
+
+### v2.3. D1 Sync (Cross-Machine Memory)
+
+#### Design decisions
+
+- **Bidirectional, last-write-wins.** Both machines are first-class. Whichever wrote a
+  fact most recently is the truth. No primary/secondary designation — the leader lock
+  determines which machine is *active*, but both can originate writes.
+- **Sync cadence: startup + every 15 min + shutdown.** Belt and suspenders.
+- **UUIDs for deduplication.** Already used throughout her.db. Both machines generate
+  UUIDs independently — collisions are effectively impossible.
+- **Embeddings never sync.** Each machine recomputes embeddings locally using its own
+  nomic model. Minor vector drift between machines is acceptable — embeddings are for
+  approximate semantic similarity, not exact matching.
+
+#### What syncs
+
+| Table | Direction | Conflict resolution |
+|---|---|---|
+| facts | Bidirectional | Last-write-wins by `updated_at` timestamp |
+| self_facts | Bidirectional | Last-write-wins by `updated_at` |
+| mood_entries | Bidirectional | Append-only (each entry has unique UUID, no conflicts) |
+| fact_links | Bidirectional | Last-write-wins by `updated_at` |
+
+#### What stays local
+
+| Table | Why |
+|---|---|
+| messages | Too heavy to sync. Conversations are machine-local context. |
+| conversations | Tied to local message history. |
+| pii_vault | Sensitive data. Never leaves the machine. |
+| embeddings | Recomputed locally per machine (nomic 768d). |
+| skill sidecar DBs | Transient operational data. Not worth syncing. |
+| runs / metrics | Per-machine diagnostics. |
+
+#### Sync queue (local SQLite)
+
+A new table in her.db that buffers writes before flushing to D1:
+
+```sql
+CREATE TABLE sync_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_name TEXT NOT NULL,       -- 'facts', 'self_facts', 'mood_entries', 'fact_links'
+    row_id TEXT NOT NULL,           -- UUID of the row that changed
+    operation TEXT NOT NULL,        -- 'INSERT', 'UPDATE', 'DELETE'
+    payload TEXT NOT NULL,          -- full row as JSON (for INSERT/UPDATE)
+    created_at TEXT NOT NULL,
+    flushed_at TEXT                 -- NULL until successfully written to D1
+);
+```
+
+When a synced table gets a write (via the existing memory store), the write also
+inserts a row into `sync_queue`. The queue is never read by the agent — it's purely
+infrastructure for the sync goroutine.
+
+#### Sync flow
+
+**On startup:**
+1. Read `last_sync_at` from local metadata table.
+2. Query D1: `SELECT * FROM facts WHERE updated_at > ?` (same for each synced table).
+3. For each remote row:
+   - If UUID doesn't exist locally → INSERT into local SQLite.
+   - If UUID exists and remote `updated_at` > local `updated_at` → UPDATE local.
+   - If UUID exists and local is newer → skip (local wins, will flush on next cycle).
+4. For each newly inserted/updated fact: **flag for re-embedding.**
+5. Update `last_sync_at` to now.
+6. Flush any pending `sync_queue` entries to D1 (from previous session's shutdown that
+   may have failed, or writes that happened between shutdown and now).
+
+**Every 15 minutes (periodic):**
+1. Flush all unflushed `sync_queue` entries to D1 (batched write).
+2. Pull any new remote writes (same as startup step 2-4, but incremental from last pull).
+3. Update `last_sync_at`.
+
+**On shutdown (graceful exit or `/update`):**
+1. Final flush of `sync_queue` to D1.
+2. Update `last_sync_at`.
+3. Best-effort — if the flush fails (network down), the queue persists in local SQLite
+   and will be flushed on next startup.
+
+#### Re-embedding on sync
+
+When a fact arrives from D1 that is new or updated locally:
+1. Insert/update the fact row in local SQLite.
+2. Add the fact's UUID to a `needs_embedding` set (in-memory).
+3. A background goroutine processes this set: reads the fact text, calls the local
+   nomic embedding model, writes the vector to the local embeddings table.
+4. Until re-embedded, the fact exists in the database but won't appear in KNN search
+   results. This is acceptable — it's a brief window (seconds) and the fact is still
+   retrievable by exact ID.
+
+#### Privacy note
+
+D1 stores facts and mood entries. Facts are already PII-scrubbed before extraction
+(the scrubber runs before the LLM sees the message, and facts are extracted from
+scrubbed content). Mood entries contain no PII. The pii_vault never syncs.
+Raw messages with hard identifiers stay in local SQLite only.
+
+---
+
+### v2.4. The Workshop (Docker Sandbox for Delegated Execution)
+
+#### Philosophy
+
+Mira v1 can't "do things" because she has no shell access. v2 gives her a workshop —
+a persistent container with a real filesystem, real bash, and a dedicated coding agent
+(pi-agent) inside. But Mira herself never enters the workshop. She talks to the agent
+through a stdin/stdout pipe and reads finished artifacts from a shared outbox.
+
+This is the **delegated execution model**: Mira's trust boundary stays intact. The workshop
+can't see the host. Pi-agent can't see Mira's config, database, or API keys. Pi-agent
+has its own separate API key for LLM access.
+
+#### Container runtime: Colima
+
+Colima over Docker Desktop. Uses Apple's Virtualization.framework — lighter weight
+(500MB-1GB idle vs Docker Desktop's 2-4GB), critical given the Mac Mini already runs
+4 local models (nomic, Parakeet, Piper, GLM-OCR). Docker-compatible API — Go code
+uses the same Docker SDK, just pointed at `~/.colima/docker.sock`.
+
+The container is **long-lived and always running**. It starts with `her start` / `her run`
+and stays alive for the duration of the session. This avoids cold-start latency on
+each delegation and lets pi-agent maintain state across tasks.
+
+#### Architecture
+
+```
+Mira (her-go binary)
+  │
+  │  stdin/stdout pipe (JSON messages, multi-turn)
+  │
+  ▼
+Workshop Container (Colima, long-lived)
+  ├── Pi-agent (coding agent, own API key)
+  ├── Real bash, grep, sed, awk, jq, curl, python, node
+  ├── Named volume: /workspace (private, pi-agent's scratch space)
+  ├── Bind-mount: /outbox → ~/.mira/workshop/outbox/ (shared with Mira)
+  ├── Network: unrestricted (container isolation is sufficient)
+  ├── No access to: host filesystem, Docker socket, her.db, config.yaml
+  ├── Capabilities: ALL dropped, no privilege escalation
+  └── PID limit, memory limit
+```
+
+#### Communication: hybrid stdin/stdout + outbox
+
+**Conversation channel: stdin/stdout pipe.**
+
+Pi-agent runs as a long-lived subprocess inside the container. Mira writes JSON messages
+to its stdin, pi-agent writes JSON responses to stdout. This is the same pattern as
+existing skills but persistent — the pipe stays open across turns.
+
+```
+Mira → stdin:  {"type": "task", "id": "001", "instruction": "Analyze this mood data and generate a chart", "data": {...}}
+Agent → stdout: {"type": "progress", "id": "001", "status": "analyzing 847 mood entries..."}
+Agent → stdout: {"type": "progress", "id": "001", "status": "generating chart..."}
+Agent → stdout: {"type": "done", "id": "001", "summary": "Chart generated", "outbox_files": ["mood-chart.html", "mood-chart.json"]}
+
+Mira → stdin:  {"type": "followup", "id": "001", "instruction": "Add a 7-day moving average line to the chart"}
+Agent → stdout: {"type": "done", "id": "001", "summary": "Moving average added", "outbox_files": ["mood-chart.html", "mood-chart.json"]}
+```
+
+**Multi-turn is native.** Mira can send follow-ups because the pipe stays open and
+pi-agent maintains context. No separate session management needed.
+
+**Artifact channel: bind-mounted outbox.**
+
+When pi-agent produces files (HTML pages, charts, reports, generated code), it writes
+them to `/outbox/` inside the container. Because `/outbox` is bind-mounted to
+`~/.mira/workshop/outbox/` on the host, Mira can read these files instantly from a
+local path — no Docker API calls, no file copying.
+
+#### Output format
+
+Pi-agent writes two things to the outbox for each task:
+
+1. **Structured result file** (`<task-id>-result.json`):
+   ```json
+   {
+     "task_id": "001",
+     "summary": "Generated mood tracker dashboard from 847 entries",
+     "content_blocks": [
+       {"type": "text", "content": "Your mood averaged 6.2/10 this week..."},
+       {"type": "chart_data", "format": "chartjs", "data": {}},
+       {"type": "file_ref", "path": "mood-chart.html", "mime": "text/html"},
+       {"type": "svg", "content": "<svg>...</svg>"}
+     ],
+     "files_produced": ["mood-chart.html", "mood-data.csv"]
+   }
+   ```
+
+2. **Raw artifact files** (HTML, CSV, images, whatever the task produced).
+
+Mira reads the structured JSON first to understand what was produced, then decides
+how to present it — text summary in Telegram, file served via WebApp, chart data
+rendered in a mini-app, etc.
+
+#### Completion notification: event bus
+
+When pi-agent writes "done" to stdout, the her-go harness (which is managing the
+pipe) fires a `WorkshopComplete` event on Mira's existing event bus. This triggers
+a new agent loop run — same pattern as the existing `CodingComplete` event from
+the delegate_coding system. Mira sees the event, reads the outbox, and responds
+to Autumn.
+
+#### What this unlocks
+
+| Use case | How |
+|---|---|
+| Data analysis | Pi-agent crunches numbers with awk/jq/python, writes summary JSON |
+| Report generation | Pi-agent generates HTML/markdown reports with inline chart data |
+| API exploration | Pi-agent curls endpoints, parses responses, writes structured results |
+| WebApp generation | Pi-agent creates HTML/JS files in outbox, Mira serves via Telegram WebApp |
+| Data transformation | Pi-agent converts formats (CSV→JSON, XML→structured), writes to outbox |
+| Mood/health analysis | Pi-agent processes mood entries, generates Chart.js data for WebApp rendering |
+
+#### Trust and security
+
+| Property | Workshop approach |
+|---|---|
+| Network | **Unrestricted inside container** — container isolation is the boundary. Pi-agent can hit any API it needs. |
+| Filesystem | **Container-only** — named volume for workspace (private), bind-mount for outbox (shared). No host filesystem access. |
+| Credentials | **Separate API key** — pi-agent has its own LLM key. Mira's OpenRouter key, Telegram token, Tavily key etc. are invisible. |
+| Host access | **None** — no Docker socket, no host mounts beyond outbox, all capabilities dropped. |
+| Mira's source code | **Invisible** — the container cannot see the her-go source directory. |
+| Trust tier | Analogous to **4th-party** — maximum restriction from Mira's perspective, but pi-agent operates freely within its container. |
+
+#### Observability
+
+Mira can inspect the workshop at any time via first-party tools:
+
+```
+inspect_workshop()        → list of files in /outbox, container status, recent task IDs
+read_workshop_file(path)  → contents of a file in the outbox (bind-mount, so just a local read)
+workshop_history()        → log of recent task results from structured JSON files
+workshop_message(text)    → send a follow-up message to pi-agent via stdin pipe
+```
+
+Previous work persists in the named volume. Pi-agent can reference files from
+earlier tasks. The outbox accumulates artifacts until Mira or Autumn cleans it up.
+
+---
+
+### v2.5. `/update` Command (Rebuild + Restart)
+
+#### Overview
+
+A Telegram command that pulls the latest code from main, builds from source on the
+local machine, and restarts the process. Works on both MacBook (`her run` / TUI mode)
+and Mac Mini (`her start` / launchd mode). Owner-only.
+
+#### Full flow
+
+```
+1. Autumn sends /update in Telegram
+2. Verify owner_chat (reject if not owner)
+3. Mira → Telegram: "Pulling latest from main..."
+4. git pull origin main
+   └─ If fails → Mira reports error, aborts. Old binary unchanged.
+5. Mira → Telegram: "Building..."
+6. go build -o /tmp/her-new ./...     ← builds to temp location, NOT in-place
+   └─ If fails → Mira reports compiler error, aborts. Old binary unchanged.
+7. Mira → Telegram: "Syncing memory before restart..."
+8. Flush sync_queue to D1 (don't lose dirty writes)
+9. Mira → Telegram: "Restarting with new version..."
+10. Rename /tmp/her-new → actual binary path (atomic swap)
+11. Machine-specific restart:
+
+    Mac Mini (launchd):
+    ├── Drain in-flight requests (finish current reply)
+    ├── Close SQLite connections cleanly
+    ├── os.Exit(0)
+    ├── launchd detects exit, restarts with new binary
+    └── MiraDO queues any messages during 2-5s gap
+
+    MacBook (TUI / her run):
+    ├── Drain in-flight requests
+    ├── Close SQLite connections cleanly
+    ├── os.Exit(0)
+    └── Autumn runs `her run` again manually
+        (or: TUI could exec() into new binary since dev mode
+         is lower-stakes — acceptable risk for convenience)
+
+12. On restart:
+    ├── Drain MiraDO task queue (catch anything from the gap)
+    ├── Run startup sync (pull latest from D1)
+    └── Mira → Telegram: "Updated and restarted. Running v0.X.Y (abc1234)."
+```
+
+#### Safety properties
+
+- **Temp build**: `go build` outputs to `/tmp/her-new`, not the running binary path.
+  A failed compilation never corrupts the running binary.
+- **Atomic swap**: `os.Rename()` is atomic on the same filesystem. The binary is either
+  the old version or the new version, never a partial write.
+- **Main only**: `git pull origin main` — Autumn controls what's on main. No branch
+  selection, no risk of pulling experimental code.
+- **Owner-only**: Checked against `owner_chat` in config. Mira cannot trigger this
+  herself, and no other Telegram user can trigger it.
+- **Sync before exit**: The D1 flush ensures no dirty facts or mood entries are lost
+  during the restart.
+- **MiraDO covers the gap**: Any Telegram messages that arrive during the 2-5 second
+  restart window are queued by the Durable Object and drained on startup.
+
+#### Build from source, always
+
+Autumn does not trust prebuilt binaries she didn't compile. There is no R2 artifact
+pull, no CI binary download, no remote build step. The machine that runs the binary
+is the machine that compiles it, from source code that Autumn pushed to main.
+
+#### Remote update scenario
+
+If Autumn pushes code from the MacBook and wants the Mac Mini to update:
+1. Push to main from MacBook.
+2. Send `/update` in Telegram (Mira is running on Mac Mini as leader).
+3. Mac Mini's her-go binary receives the command, pulls main, builds, restarts.
+4. Autumn never needs to SSH into the Mac Mini.
+
+This works because `/update` runs on whichever machine currently owns the bot
+(the leader). The command goes through Telegram → MiraDO → active leader.
+
+---
+
+### v2.6. Telegram WebApps — Mood Tracker (First App)
+
+Already scoped in v0.8. Key additions for v2:
+
+#### Mood/health tracker mini-app
+
+The first WebApp that proves the pipeline. Served from Mac Mini via CF Tunnel.
+
+**Features:**
+- Chart of mood entries over time (daily, weekly, monthly views)
+- Color-coded by mood score
+- Tap to see the conversation context around each entry
+- Current streak / patterns (e.g., "mood tends to dip on Mondays")
+- Data source: mood_entries table in her.db, rendered as Chart.js in the WebApp
+
+**How Mira creates it:**
+- Mira doesn't hand-code the HTML. She delegates to the workshop:
+  "Generate a mood tracker dashboard from this data. Use Chart.js. Follow the Telegram
+  WebApp template in /workspace/templates/."
+- The workshop agent generates the HTML/JS.
+- Mira reviews the output and serves it via the WebApp server.
+
+This establishes the pattern: **Mira generates WebApps through the workshop, not by
+hand-writing HTML in the agent loop.** Future mini-apps (daily dashboard, expense tracker,
+Grove status page) follow the same pattern.
+
+---
+
+### v2.7. Reactive Triggers (the "When X Happens" System)
+
+#### Architecture
+
+Events flow through the CF Worker heartbeat:
+
+```
+External event (webhook)
+  → CF Worker parses and classifies
+  → If urgent + brain online → forward immediately
+  → If urgent + brain offline → queue + send Telegram notification via Worker
+  → If not urgent → queue silently for next brain wake
+```
+
+#### Trigger definitions
+
+Stored in D1 (editable via Mira tool or `/triggers` command):
+
+```yaml
+triggers:
+  - name: "email-job-related"
+    source: email
+    condition: "sender contains 'panera' OR subject contains 'interview' OR subject contains 'application'"
+    action: forward_immediately
+    notify: true
+
+  - name: "todoist-overdue"
+    source: todoist
+    condition: "event_type = 'item:updated' AND due_date < now()"
+    action: queue
+    notify: true
+
+  - name: "grove-worker-error"
+    source: cloudflare
+    condition: "error_rate > 5%"
+    action: forward_immediately
+    notify: true
+
+  - name: "github-issue"
+    source: github
+    condition: "event_type = 'issues' OR event_type = 'issue_comment'"
+    action: queue
+    notify: false
+```
+
+#### What "notify" means
+
+When `notify: true` and the brain is offline, the CF Worker sends a simple Telegram
+message directly (via Bot API, no LLM): "Heads up — you have an overdue Todoist task:
+[task title]." This works even when the full brain is sleeping.
+
+---
+
+### v2.8. Morning Briefing + Evening Summary
+
+#### Morning (7:00 AM ET)
+
+CF Worker cron fires → forwards to full brain (or queues).
+
+Full brain assembles:
+1. Weather (Open-Meteo, cached in KV)
+2. Todoist tasks due today + overdue
+3. Queued events from overnight (GitHub, email flags)
+4. Mood trend (last 7 days)
+5. Any scheduled reminders for today
+
+**Output:** Formatted Telegram message + WebApp button for full dashboard.
+
+#### Evening (10:00 PM ET)
+
+Full brain assembles:
+1. What happened today (messages sent, skills used, tasks completed)
+2. Mood entry prompt (if not already logged today)
+3. Tomorrow's preview (Todoist tasks due tomorrow)
+4. Any unprocessed queue items
+
+**Output:** Telegram message. Lighter than morning — a wind-down, not a briefing.
+
+#### Degraded mode
+
+If the full brain is offline at cron time:
+- Worker sends a simpler version: just Todoist tasks (via Todoist API directly) + weather
+  (from KV cache). No memory context, no mood trends.
+- Queues the full briefing for when the brain wakes.
+
+---
+
+### v2 Implementation Phases
+
+#### Phase 1: Foundation (immediate priority)
+- [ ] `sync_queue` table in her.db
+- [ ] D1 mirror schema (facts, self_facts, mood_entries, fact_links)
+- [ ] Sync goroutine: startup pull, 15-min periodic flush, shutdown flush
+- [ ] Re-embedding pipeline for facts arriving from D1
+- [ ] `last_sync_at` metadata tracking
+- [ ] Leader election via MiraDO (lock claim on `her run` / `her start`)
+- [ ] `--dev` mode flag for local development without claiming lock
+- [ ] `/update` command: git pull → temp build → atomic swap → drain → exit
+- [ ] Telegram progress messages for `/update` (pulling... building... restarting...)
+
+#### Phase 2: Heartbeat (MiraDO)
+- [ ] CF Worker skeleton (webhook receiver, Telegram webhook mode)
+- [ ] MiraDO with SQLite storage (schedule table, task queue, leader lock)
+- [ ] `storage.setAlarm()` for morning briefing + evening summary
+- [ ] Health check alarm (ping full brain every 5 min)
+- [ ] Queue drain endpoint on her-go binary
+- [ ] Telegram webhook mode (switch from polling)
+- [ ] Basic offline response ("I'm resting")
+- [ ] Brain status tracking (online/offline heartbeat)
+
+#### Phase 3: The Workshop
+- [ ] Colima setup + long-lived container with Dockerfile
+- [ ] Named volume for `/workspace`, bind-mount for `/outbox` → `~/.mira/workshop/outbox/`
+- [ ] Pi-agent installation inside container with separate API key
+- [ ] Stdin/stdout pipe management in Go (long-lived subprocess)
+- [ ] JSON message protocol (task, progress, done, followup)
+- [ ] `delegate_workshop` first-party tool
+- [ ] `WorkshopComplete` event on event bus
+- [ ] `inspect_workshop` / `read_workshop_file` / `workshop_history` tools
+- [ ] `workshop_message` tool for multi-turn follow-ups
+- [ ] Structured output format (`<task-id>-result.json` + raw artifacts)
+- [ ] Container hardening (drop caps, no-new-privileges, PID limit)
+
+#### Phase 4: WebApps + Briefings
+- [ ] Telegram WebApp server (from v0.8)
+- [ ] Mood tracker mini-app (first WebApp, generated via workshop)
+- [ ] Morning briefing cron (CF Worker → full brain)
+- [ ] Evening summary cron
+- [ ] Todoist integration skill
+- [ ] Email webhook integration
+
+#### Phase 5: Reactive triggers
+- [ ] Trigger definition format + storage in D1
+- [ ] GitHub webhook handler in CF Worker
+- [ ] Todoist webhook handler
+- [ ] Email forwarding rule + handler
+- [ ] Cloudflare analytics/health check
+
+---
+
+### What v2 Does NOT Include
+
+- **VPS hosting** — Mac Mini is the runtime. Local LLMs (STT, TTS, embedding, OCR) require it.
+- **Self-modification of the her-go binary** — Mira can edit skills (with demotion), not herself.
+  Updates happen via `/update` command (git pull + local build).
+- **Multi-user support** — still single-user, single-owner.
+- **Grove integration** — not needed yet. If needed later, through API calls (Grove is already behind APIs).
+- **Full bash access for Mira** — she delegates to pi-agent in the Workshop. She never runs bash herself.
+- **Docker Desktop** — Colima for lower memory overhead alongside local models.
+- **Prebuilt binary distribution** — always compiled from source on the machine that runs it.
+
+---
+
+### v2 References
+
+- [skills-architecture.md](docs/plans/skills-architecture.md) — skills harness design
+- [Telegram Mini Apps docs](https://core.telegram.org/bots/webapps)
+- [just-bash (Vercel)](https://github.com/vercel-labs/just-bash) — inspiration for sandboxed execution
+- [Cloudflare Workers Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
+- [Cloudflare D1](https://developers.cloudflare.com/d1/)
+- [Tailscale](https://tailscale.com/) — mesh VPN for connecting heartbeat to full brain
+
+---
+
 ## Dependencies (Go Modules)
 
 | Package | Purpose | Since |
@@ -1853,3 +2602,17 @@ Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). 
 - **Mini Apps** are served over HTTPS from the same Mac Mini — no third-party hosting. The WebView communicates only with your own server
 - **Thumbnails** are cached locally, never uploaded anywhere
 - **Kiwix** runs entirely local — Wikipedia lookups never leave the machine
+
+### v2 Security Properties
+
+| Property | Status in v2 |
+|---|---|
+| Agent cannot read own source | Unchanged |
+| 4-tier trust model | Extended to workshop (treated as 4th-party) |
+| SSRF-safe network proxy | Extended to workshop container |
+| PII scrubber (3-tier) | Unchanged |
+| Credentials invisible to agent | Unchanged. Workshop gets no host env vars. |
+| Hash-based trust verification | Unchanged for skills |
+| Manual promotion only | Unchanged |
+| Local embedding / inference | Unchanged (Mac Mini runs all local models) |
+| No telemetry / tracking | Unchanged |
