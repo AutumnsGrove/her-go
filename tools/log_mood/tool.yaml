@@ -1,0 +1,32 @@
+name: log_mood
+description: >-
+  Log the user's current emotional state. Use when {{user}} expresses how
+  they're feeling. Rating scale: 1=bad, 2=rough, 3=meh/neutral, 4=good,
+  5=great. Always include a brief note capturing the reason or context.
+  Transient moods go here, NOT in save_fact. If a mood was already logged
+  in the last 30 minutes and the mood has shifted, use update_mood instead.
+hot: false
+category: mood
+parameters:
+  type: object
+  properties:
+    rating:
+      type: integer
+      description: "Mood rating: 1=bad, 2=rough, 3=meh/neutral, 4=good, 5=great"
+      minimum: 1
+      maximum: 5
+    note:
+      type: string
+      description: >-
+        Brief context for the rating. If {{user}} just says 'I'm good' with
+        no context, use a short note like 'feeling good'.
+  required:
+    - rating
+    - note
+trace:
+  emoji: "\U0001F3B5"
+  format: "{{.rating}}/5 — {{.note | truncate 80 | escape}}"
+  on_reject:
+    prefix: "rejected:"
+    emoji: "\U0001F6AB"
+    format: "<i>{{.Result | truncate 120 | escape}}</i>"
