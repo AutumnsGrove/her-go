@@ -106,6 +106,9 @@ github:
     # - "YourUser/your-repo"
     # - "YourOrg/another-repo"
 
+foursquare:
+  api_key: "${FOURSQUARE_API_KEY}"  # from https://foursquare.com/developers/signup (10k calls/month free)
+
 weather:
   latitude: 0                    # your location — set via set_location tool or manually here
   longitude: 0                   # Open-Meteo is free, no API key needed

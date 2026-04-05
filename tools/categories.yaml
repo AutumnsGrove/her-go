@@ -27,5 +27,8 @@ todoist:
 github:
   hint: "User asks about issues, bugs, PRs, or wants to file an issue on a project"
 
+places:
+  hint: "User wants to find nearby places, restaurants, shops, or asks what's around them"
+
 skills:
   hint: "Check cached results from a previous skill run before re-running it"

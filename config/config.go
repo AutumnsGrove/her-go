@@ -38,8 +38,9 @@ type Config struct {
 	Voice     VoiceConfig     `yaml:"voice"`
 	Weather   WeatherConfig   `yaml:"weather"`
 	Todoist   TodoistConfig   `yaml:"todoist"`
-	GitHub    GitHubConfig    `yaml:"github"`
-	OCR       OCRConfig       `yaml:"ocr"`
+	GitHub      GitHubConfig      `yaml:"github"`
+	Foursquare  FoursquareConfig  `yaml:"foursquare"`
+	OCR         OCRConfig         `yaml:"ocr"`
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into
@@ -240,6 +241,13 @@ type GitHubConfig struct {
 	Repos []string `yaml:"repos"` // allowed repos in "owner/repo" format
 }
 
+// FoursquareConfig holds Foursquare Places API settings for nearby search.
+// Free tier: 10,000 calls/month. Get your API key from
+// https://foursquare.com/developers/signup
+type FoursquareConfig struct {
+	APIKey string `yaml:"api_key"` // Foursquare Places API key
+}
+
 // OCRConfig controls the local OCR pipeline used for pre-flight text
 // extraction on photos. The primary engine is Apple Vision (via the
 // macos-vision-ocr CLI binary) — it runs on the Neural Engine, sub-200ms,
@@ -301,6 +309,7 @@ func Load(path string) (*Config, error) {
 		cfg.LLM.APIKey = ""
 		cfg.Todoist.APIKey = ""
 		cfg.GitHub.Token = ""
+		cfg.Foursquare.APIKey = ""
 	}
 
 	// Step 2: Load the user's config on top.
@@ -475,6 +484,7 @@ func (c *Config) ExportEnv() {
 		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
 		"TODOIST_API_KEY":    c.Todoist.APIKey,
 		"GITHUB_TOKEN":       c.GitHub.Token,
+		"FOURSQUARE_API_KEY": c.Foursquare.APIKey,
 		"OPENROUTER_API_KEY": c.LLM.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}
