@@ -1,0 +1,30 @@
+name: github_create_issue
+description: >-
+  Create a new GitHub issue on a configured repo. Use when {{user}} describes
+  a bug, wants to file a feature request, or asks to create an issue.
+hint: "file a GitHub issue"
+hot: false
+category: github
+parameters:
+  type: object
+  properties:
+    repo:
+      type: string
+      description: "Repository in 'owner/repo' format. Must be in the configured allow-list."
+    title:
+      type: string
+      description: "Issue title — concise summary of the bug or feature."
+    body:
+      type: string
+      description: "Issue body — details, reproduction steps, context. Markdown supported."
+    labels:
+      type: string
+      description: >-
+        Comma-separated label names to apply (e.g., 'bug,high-priority').
+        Labels must already exist on the repo.
+  required:
+    - repo
+    - title
+trace:
+  emoji: "📝"
+  format: "{{.repo}} #→ {{.title}}"

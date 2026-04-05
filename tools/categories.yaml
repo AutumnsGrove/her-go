@@ -21,5 +21,8 @@ expenses:
 todoist:
   hint: "User mentions tasks, todos, their Todoist, or asks what's on their plate"
 
+github:
+  hint: "User asks about issues, bugs, PRs, or wants to file an issue on a project"
+
 skills:
   hint: "Check cached results from a previous skill run before re-running it"

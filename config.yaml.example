@@ -100,6 +100,12 @@ scheduler:
 todoist:
   api_key: "${TODOIST_API_KEY}"  # from https://app.todoist.com/app/settings/integrations/developer
 
+github:
+  token: "${GITHUB_TOKEN}"  # personal access token with "repo" scope (or fine-grained with Issues permission)
+  repos:                     # allow-list of repos the agent can access
+    # - "YourUser/your-repo"
+    # - "YourOrg/another-repo"
+
 weather:
   latitude: 0                    # your location — set via set_location tool or manually here
   longitude: 0                   # Open-Meteo is free, no API key needed
