@@ -97,6 +97,9 @@ scheduler:
   proactive_followups: false
   auto_journal: false
 
+todoist:
+  api_key: "${TODOIST_API_KEY}"  # from https://app.todoist.com/app/settings/integrations/developer
+
 weather:
   latitude: 0                    # your location — set via set_location tool or manually here
   longitude: 0                   # Open-Meteo is free, no API key needed

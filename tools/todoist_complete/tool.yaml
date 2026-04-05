@@ -1,0 +1,18 @@
+name: todoist_complete
+description: >-
+  Mark a Todoist task as done. Use when {{user}} says they finished a task
+  or wants to check something off. Requires the task ID from todoist_list.
+hint: "complete a Todoist task"
+hot: false
+category: todoist
+parameters:
+  type: object
+  properties:
+    task_id:
+      type: string
+      description: "The Todoist task ID to mark as completed. Get this from todoist_list."
+  required:
+    - task_id
+trace:
+  emoji: "✅"
+  format: "ID={{.task_id}}"

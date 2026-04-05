@@ -1,0 +1,38 @@
+name: todoist_create
+description: >-
+  Create a new task in {{user}}'s Todoist. Use when they ask to add something
+  to their task list or want to remember to do something.
+hint: "create a Todoist task"
+hot: false
+category: todoist
+parameters:
+  type: object
+  properties:
+    content:
+      type: string
+      description: "The task title — what needs to be done."
+    description:
+      type: string
+      description: "Optional longer description or notes for the task."
+    due_string:
+      type: string
+      description: >-
+        Natural language due date. Examples: 'today', 'tomorrow',
+        'next monday', 'Jan 15', 'every day at 9am'. Omit for no due date.
+    priority:
+      type: number
+      description: >-
+        Task priority: 1 (normal), 2 (medium), 3 (high), 4 (urgent).
+        Omit for normal priority.
+      minimum: 1
+      maximum: 4
+    labels:
+      type: string
+      description: >-
+        Comma-separated label names to apply (e.g., 'work,urgent').
+        Omit for no labels.
+  required:
+    - content
+trace:
+  emoji: "➕"
+  format: "{{.content}}\n    → created"
