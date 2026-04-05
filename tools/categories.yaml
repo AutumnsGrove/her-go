@@ -18,5 +18,8 @@ context:
 expenses:
   hint: "OCR text looks like a receipt, user mentions spending money, asks about finances, or wants to correct/delete an expense"
 
+todoist:
+  hint: "User mentions tasks, todos, their Todoist, or asks what's on their plate"
+
 skills:
   hint: "Check cached results from a previous skill run before re-running it"

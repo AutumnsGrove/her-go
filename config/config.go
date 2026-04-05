@@ -37,6 +37,7 @@ type Config struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
 	Voice     VoiceConfig     `yaml:"voice"`
 	Weather   WeatherConfig   `yaml:"weather"`
+	Todoist   TodoistConfig   `yaml:"todoist"`
 	OCR       OCRConfig       `yaml:"ocr"`
 }
 
@@ -220,6 +221,15 @@ type WeatherConfig struct {
 	CacheTTL      int     `yaml:"cache_ttl"`       // seconds between API calls (default: 3600 = 1 hour)
 }
 
+// TodoistConfig holds Todoist REST API settings.
+// The API key comes from https://app.todoist.com/app/settings/integrations/developer
+// Todoist integration lets the agent manage your task list — list, create,
+// complete, and update tasks. Reminders are still handled by Mira's own
+// scheduler, not Todoist.
+type TodoistConfig struct {
+	APIKey string `yaml:"api_key"` // Todoist API token
+}
+
 // OCRConfig controls the local OCR pipeline used for pre-flight text
 // extraction on photos. The primary engine is Apple Vision (via the
 // macos-vision-ocr CLI binary) — it runs on the Neural Engine, sub-200ms,
@@ -279,6 +289,7 @@ func Load(path string) (*Config, error) {
 		// placeholders that we don't want as actual defaults.
 		cfg.Telegram.Token = ""
 		cfg.LLM.APIKey = ""
+		cfg.Todoist.APIKey = ""
 	}
 
 	// Step 2: Load the user's config on top.
@@ -450,7 +461,8 @@ func (c *Config) ExportEnv() {
 	// Map of env var name → config value. Add new entries here
 	// as skills declare new env requirements in their skill.md.
 	exports := map[string]string{
-		"TAVILY_API_KEY":    c.Search.TavilyAPIKey,
+		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
+		"TODOIST_API_KEY":    c.Todoist.APIKey,
 		"OPENROUTER_API_KEY": c.LLM.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}

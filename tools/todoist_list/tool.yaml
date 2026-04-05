@@ -1,0 +1,20 @@
+name: todoist_list
+description: >-
+  List {{user}}'s active tasks from Todoist. Use when they ask about their
+  task list, what's on their plate, what's due, or overdue tasks.
+hint: "query Todoist tasks"
+hot: false
+category: todoist
+parameters:
+  type: object
+  properties:
+    filter:
+      type: string
+      description: >-
+        Todoist filter string. Examples: 'today' (due today), 'overdue'
+        (past due), 'today | overdue' (both), '#Work' (project name),
+        'p1' (priority 1/urgent). Leave empty for all active tasks.
+  required: []
+trace:
+  emoji: "📋"
+  format: "{{.filter | default \"all\"}}\n    → {{.Result | truncate 80 | escape}}"
