@@ -180,12 +180,12 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 
 ### Milestones — In Progress / Future
 
-- **[v0.6 — She Reaches Out](docs/spec/v0.6.md)** — Scheduler phase 2 (mostly done), weather (done), mood tracking (done). Remaining: Todoist, GitHub, Obsidian, morning briefing, sleep tracking, proactive follow-ups, nearby search
+- **[v0.6 — She Reaches Out](docs/spec/v0.6.md)** — Scheduler phase 2 (mostly done), weather (done), mood tracking (done), Todoist (done), GitHub (done), morning briefing (done). Remaining: sleep tracking, proactive follow-ups, nearby search
 - **[v0.7 — She Adapts](docs/spec/v0.7.md)** — Model fallbacks (done), cloud sync via D1
 - **[v0.8 — She Has a Face](docs/spec/v0.8.md)** — Telegram Mini Apps infrastructure
 - **[v0.9 — She Collects](docs/spec/v0.9.md)** — Link saving, Mini Shutter, reader view, book highlights. OCR already implemented
 - **[v1.0 — She Helps](docs/spec/v1.0.md)** — Receipt scanner (done), grocery list, job tracker, auto-journaling, code sandbox
-- **[v1.1 — She Reads Your World](docs/spec/v1.1.md)** — Obsidian indexing, IMAP email, local Wikipedia
+- **[v1.1 — She Reads Your World](docs/spec/v1.1.md)** — Obsidian vault integration, IMAP email, local Wikipedia
 
 ### Architecture Vision
 
