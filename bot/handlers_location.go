@@ -5,19 +5,10 @@
 //  2. Run the agent pipeline with a synthetic message so Mira can respond
 //     naturally ("nice, you're at the library — want me to find a coffee
 //     shop nearby?")
-//
-// This duplicates the agent pipeline boilerplate from handleMessage.
-// TODO: extract a shared runAgent helper (see refactor discussion).
 package bot
 
 import (
 	"fmt"
-	"time"
-
-	"her/agent"
-	"her/scrub"
-	"her/tools"
-	"her/tui"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -87,9 +78,8 @@ func (b *Bot) handleVenue(c tele.Context) error {
 }
 
 // runLocationAgent runs the agent pipeline with a synthetic location message.
-// This duplicates the boilerplate from handleMessage — placeholder creation,
-// callback wiring, agent.Run, cleanup. Will be eliminated when we extract
-// a shared runAgent helper.
+// No PII scrubbing needed — coordinates and venue names aren't sensitive
+// data in our tiered model. The shared runAgent handles all the UI boilerplate.
 func (b *Bot) runLocationAgent(c tele.Context, syntheticText, conversationID string) error {
 	// Log the synthetic message to the DB.
 	msgID, err := b.store.SaveMessage("user", syntheticText, "", conversationID)
@@ -97,143 +87,9 @@ func (b *Bot) runLocationAgent(c tele.Context, syntheticText, conversationID str
 		log.Error("saving location message", "err", err)
 	}
 
-	// No PII scrubbing needed — coordinates and venue names aren't
-	// sensitive data in our tiered model. Create a passthrough vault.
-	scrubResult := &scrub.ScrubResult{
-		Text:  syntheticText,
-		Vault: scrub.NewVault(),
-	}
-
-	// Typing indicator.
-	stopTyping := make(chan struct{})
-	go func() {
-		_ = c.Notify(tele.Typing)
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopTyping:
-				return
-			case <-ticker.C:
-				_ = c.Notify(tele.Typing)
-			}
-		}
-	}()
-
-	// Trace callback (if enabled).
-	var traceCallback tools.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
-	}
-
-	// Placeholder message.
-	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
-	if sendErr != nil {
-		close(stopTyping)
-		log.Error("sending placeholder", "err", sendErr)
-		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
-	}
-
-	statusCallback := func(status string) error {
-		_, err := c.Bot().Edit(placeholder, status)
-		return err
-	}
-	sendCallback := func(text string) error {
-		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		return err
-	}
-	sendConfirmCallback := func(text string) (int64, error) {
-		markup := &tele.ReplyMarkup{}
-		btnYes := markup.Data("Yes", "confirm", "yes")
-		btnNo := markup.Data("No", "confirm", "no")
-		markup.Inline(markup.Row(btnYes, btnNo))
-		sent, err := c.Bot().Send(c.Recipient(), text, markup)
-		if err != nil {
-			return 0, err
-		}
-		return int64(sent.ID), nil
-	}
-	stageResetCallback := func() error {
-		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
-		if err != nil {
-			return err
-		}
-		placeholder = newPlaceholder
-		return nil
-	}
-	deletePlaceholderCallback := func() error {
-		return c.Bot().Delete(placeholder)
-	}
-
-	var ttsCallback tools.TTSCallback
-	if b.ttsClient != nil && b.ttsClient.ReplyMode() == "voice" {
-		ttsCallback = func(text string) {
-			b.sendVoiceReply(c, text)
-		}
-	}
-
-	turnStart := time.Now()
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnStartEvent{
-			Time:           turnStart,
-			TurnID:         msgID,
-			UserMessage:    truncate(syntheticText, 100),
-			ConversationID: conversationID,
-		})
-	}
-
-	b.agentBusy.Store(true)
-	result, err := agent.Run(agent.RunParams{
-		AgentLLM:                  b.agentLLM,
-		ChatLLM:                   b.llm,
-		VisionLLM:                 b.visionLLM,
-		ClassifierLLM:             b.classifierLLM,
-		Store:                     b.store,
-		EmbedClient:               b.embedClient,
-		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:              b.tavilyClient,
-		WeatherClient:             b.weatherClient,
-		Cfg:                       b.cfg,
-		ScrubbedUserMessage:       scrubResult.Text,
-		ScrubVault:                scrubResult.Vault,
-		ConversationID:            conversationID,
-		TriggerMsgID:              msgID,
-		StatusCallback:            statusCallback,
-		SendCallback:              sendCallback,
-		StageResetCallback:        stageResetCallback,
-		DeletePlaceholderCallback: deletePlaceholderCallback,
-		SendConfirmCallback:       sendConfirmCallback,
-		TTSCallback:               ttsCallback,
-		TraceCallback:             traceCallback,
-		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
-		EventBus:                  b.eventBus,
-		ConfigPath:                b.configPath,
-		SkillRegistry:             b.skillRegistry,
+	return b.runAgent(c, AgentInput{
+		UserMessage:    syntheticText,
+		ConversationID: conversationID,
+		TriggerMsgID:   msgID,
 	})
-	b.agentBusy.Store(false)
-
-	close(stopTyping)
-
-	if err != nil {
-		log.Error("agent error (location)", "err", err)
-		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
-		return nil
-	}
-
-	log.Infof("  %s: %s", b.cfg.Identity.Her, truncate(result.ReplyText, 100))
-	log.Info("─── reply sent ───")
-
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnEndEvent{
-			Time:       time.Now(),
-			TurnID:     msgID,
-			ElapsedMs:  time.Since(turnStart).Milliseconds(),
-			TotalCost:  result.TotalCost,
-			ToolCalls:  result.ToolCalls,
-			FactsSaved: result.FactsSaved,
-		})
-	}
-
-	return nil
 }

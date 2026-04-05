@@ -25,7 +25,6 @@ import (
 	"her/agent"
 	"her/memory"
 	"her/scheduler"
-	"her/scrub"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -157,34 +156,20 @@ func (b *Bot) runMoodFollowUp(c tele.Context, rating int) {
 		rating, label,
 	)
 
+	// Build a minimal agent run — no placeholder, typing, or traces.
+	// Event-triggered runs just send new messages to the chat.
 	chatID := c.Chat().ID
+	sendFn := func(text string) error {
+		return b.SendToChat(chatID, text)
+	}
+
+	params := b.baseRunParams()
+	params.ScrubbedUserMessage = prompt
+	params.ConversationID = "mood-checkin"
+	params.StatusCallback = sendFn
 
 	b.agentBusy.Store(true)
-	result, err := agent.Run(agent.RunParams{
-		AgentLLM:            b.agentLLM,
-		ChatLLM:             b.llm,
-		VisionLLM:           b.visionLLM,
-		ClassifierLLM:       b.classifierLLM,
-		Store:               b.store,
-		EmbedClient:         b.embedClient,
-		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:        b.tavilyClient,
-		WeatherClient:       b.weatherClient,
-		Cfg:                 b.cfg,
-		ScrubbedUserMessage: prompt,
-		ScrubVault:          scrub.NewVault(), // empty vault — no PII to deanonymize
-		ConversationID:      "mood-checkin",
-		TriggerMsgID:        0,
-		// StatusCallback sends a new message to the chat (not editing
-		// a placeholder — there isn't one for callback-triggered runs).
-		StatusCallback: func(text string) error {
-			return b.SendToChat(chatID, text)
-		},
-		TTSCallback:         nil,
-		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
-		SkillRegistry:       b.skillRegistry,
-	})
+	result, err := agent.Run(params)
 	b.agentBusy.Store(false)
 	if err != nil {
 		log.Error("mood follow-up agent error", "err", err)

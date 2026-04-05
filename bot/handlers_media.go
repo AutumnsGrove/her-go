@@ -8,14 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
-	"her/agent"
 	"her/ocr"
-	"her/scrub"
-	"her/tools"
-	"her/tui"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -107,22 +102,10 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		userText = "[User sent a photo] " + caption
 	}
 
-	// From here, same pipeline as handleMessage: save, scrub, type, run agent.
+	// From here, same pipeline as handleMessage: save, scrub, run agent.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
-	}
-
-	// Emit TurnStartEvent for the TUI — same as handleMessage.
-	// Without this, photo turns get lumped into the previous turn's section.
-	turnStart := time.Now()
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnStartEvent{
-			Time:           turnStart,
-			TurnID:         msgID,
-			UserMessage:    truncate(userText, 100),
-			ConversationID: conversationID,
-		})
 	}
 
 	// Store the Telegram file ID so we can re-download the image later.
@@ -135,137 +118,24 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}
 
 	// PII scrub the caption (not the image — images aren't text).
-	var scrubResult *scrub.ScrubResult
-	if b.cfg.Scrub.Enabled {
-		scrubResult = scrub.Scrub(userText)
-		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
-			log.Info("PII scrubbed", "tokens", vaultCount)
-		}
-	} else {
-		scrubResult = &scrub.ScrubResult{
-			Text:  userText,
-			Vault: scrub.NewVault(),
-		}
-	}
+	scrubResult := b.scrubText(userText)
 
 	if msgID > 0 {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
-		for _, entry := range scrubResult.Vault.Entries() {
-			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
-				log.Error("saving PII vault entry", "err", err)
-			}
-		}
-	}
-
-	// Typing indicator.
-	stopTyping := make(chan struct{})
-	go func() {
-		_ = c.Notify(tele.Typing)
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopTyping:
-				return
-			case <-ticker.C:
-				_ = c.Notify(tele.Typing)
-			}
-		}
-	}()
-
-	// Trace placeholder first (so it appears above the reply).
-	var traceCallback tools.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
-	}
-
-	// Reply placeholder message.
-	placeholder, sendErr := c.Bot().Send(c.Recipient(), "\U0001F4AD")
-	if sendErr != nil {
-		close(stopTyping)
-		log.Error("sending placeholder", "err", sendErr)
-		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
-	}
-
-	statusCallback := func(status string) error {
-		_, err := c.Bot().Edit(placeholder, status)
-		return err
-	}
-
-	sendCallback := func(text string) error {
-		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		return err
-	}
-
-	stageResetCallback := func() error {
-		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
-		if err != nil {
-			return fmt.Errorf("stage reset: sending new placeholder: %w", err)
-		}
-		placeholder = newPlaceholder
-		return nil
-	}
-	deletePlaceholderCallback := func() error {
-		return c.Bot().Delete(placeholder)
+		b.savePIIVaultEntries(msgID, scrubResult.Vault)
 	}
 
 	// Run the agent with image data attached.
-	b.agentBusy.Store(true)
-	result, err := agent.Run(agent.RunParams{
-		AgentLLM:                  b.agentLLM,
-		ChatLLM:                   b.llm,
-		VisionLLM:                 b.visionLLM,
-		ClassifierLLM:             b.classifierLLM,
-		Store:                     b.store,
-		EmbedClient:               b.embedClient,
-		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:              b.tavilyClient,
-		WeatherClient:             b.weatherClient,
-		Cfg:                       b.cfg,
-		ScrubbedUserMessage:       scrubResult.Text,
-		ScrubVault:                scrubResult.Vault,
-		ConversationID:            conversationID,
-		TriggerMsgID:              msgID,
-		StatusCallback:            statusCallback,
-		SendCallback:              sendCallback,
-		StageResetCallback:        stageResetCallback,
-		DeletePlaceholderCallback: deletePlaceholderCallback,
-		TraceCallback:             traceCallback,
-		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
-		ImageBase64:               imageBase64,
-		ImageMIME:                 imageMIME,
-		OCRText:                   ocrText,
-		EventBus:                  b.eventBus,
-		SkillRegistry:             b.skillRegistry,
+	return b.runAgent(c, AgentInput{
+		UserMessage:    userText,
+		ScrubbedText:   scrubResult.Text,
+		ScrubVault:     scrubResult.Vault,
+		ConversationID: conversationID,
+		TriggerMsgID:   msgID,
+		ImageBase64:    imageBase64,
+		ImageMIME:      imageMIME,
+		OCRText:        ocrText,
 	})
-	b.agentBusy.Store(false)
-
-	close(stopTyping)
-
-	if err != nil {
-		log.Error("agent error", "err", err)
-		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
-		return nil
-	}
-
-	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
-
-	// Emit TurnEndEvent for the TUI — metrics from the agent run.
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnEndEvent{
-			Time:       time.Now(),
-			TurnID:     msgID,
-			ElapsedMs:  time.Since(turnStart).Milliseconds(),
-			TotalCost:  result.TotalCost,
-			ToolCalls:  result.ToolCalls,
-			FactsSaved: result.FactsSaved,
-		})
-	}
-
-	log.Info("─── reply sent ───")
-
-	return nil
 }
 
 // handleVoice processes incoming voice memos (v0.3 — "She Listens").
@@ -366,30 +236,11 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))
 
-	// Trace placeholder first (so it appears above the reply) — but only
-	// for voice handler, since the main trace callback is built later.
-	// We build it here just to send the 🧠 placeholder in the right order.
-	var traceCallback tools.TraceCallback
-	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
-	}
-
-	// Step 5: Send a placeholder showing the transcript so the user
-	// can see what was heard while the bot thinks about a response.
-	placeholderText := fmt.Sprintf("\U0001F3A4 <i>%s</i>\n\n\U0001F4AD", transcript)
-	placeholder, sendErr := c.Bot().Send(c.Recipient(), placeholderText, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	if sendErr != nil {
-		close(stopTyping)
-		log.Error("sending placeholder", "err", sendErr)
-		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
-	}
-
-	// Step 6: From here, same pipeline as handleMessage.
-	// The transcribed text IS the user message — we treat it exactly
-	// like they typed it, except we also store the voice memo path.
+	// Step 5: Save the transcribed text as the user message. From here,
+	// the transcript IS the user message — same as if they typed it,
+	// except we also store the voice memo path.
 	userText := transcript
 
-	// Save to DB with the transcribed text as content.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
@@ -407,124 +258,27 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		}
 	}
 
-	// Emit TurnStartEvent for the TUI — same as handleMessage.
-	// Without this, voice turns don't get their own section in the TUI.
-	turnStart := time.Now()
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnStartEvent{
-			Time:           turnStart,
-			TurnID:         msgID,
-			UserMessage:    "\U0001F3A4 " + truncate(transcript, 100),
-			ConversationID: conversationID,
-		})
-	}
-
 	// PII scrub the transcribed text.
-	var scrubResult *scrub.ScrubResult
-	if b.cfg.Scrub.Enabled {
-		scrubResult = scrub.Scrub(userText)
-		if vaultCount := len(scrubResult.Vault.Entries()); vaultCount > 0 {
-			log.Info("PII scrubbed", "tokens", vaultCount)
-		}
-	} else {
-		scrubResult = &scrub.ScrubResult{
-			Text:  userText,
-			Vault: scrub.NewVault(),
-		}
-	}
+	scrubResult := b.scrubText(userText)
 
 	if msgID > 0 {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
-		for _, entry := range scrubResult.Vault.Entries() {
-			if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
-				log.Error("saving PII vault entry", "err", err)
-			}
-		}
+		b.savePIIVaultEntries(msgID, scrubResult.Vault)
 	}
 
-	statusCallback := func(status string) error {
-		_, err := c.Bot().Edit(placeholder, status, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		return err
-	}
-	sendCallback := func(text string) error {
-		_, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		return err
-	}
-	stageResetCallback := func() error {
-		newPlaceholder, err := c.Bot().Send(c.Recipient(), "\U0001F4AD")
-		if err != nil {
-			return fmt.Errorf("stage reset: sending new placeholder: %w", err)
-		}
-		placeholder = newPlaceholder
-		return nil
-	}
-	deletePlaceholderCallback := func() error {
-		return c.Bot().Delete(placeholder)
-	}
-
-	// TTS callback — same pattern as handleMessage.
-	var ttsCallback tools.TTSCallback
-	if b.ttsClient != nil {
-		ttsCallback = func(text string) {
-			b.sendVoiceReply(c, text)
-		}
-	}
-
-	// Run the agent pipeline with the transcribed text.
-	b.agentBusy.Store(true)
-	result, err := agent.Run(agent.RunParams{
-		AgentLLM:                  b.agentLLM,
-		ChatLLM:                   b.llm,
-		VisionLLM:                 b.visionLLM,
-		ClassifierLLM:             b.classifierLLM,
-		Store:                     b.store,
-		EmbedClient:               b.embedClient,
-		SimilarityThreshold:       b.cfg.Embed.SimilarityThreshold,
-		TavilyClient:              b.tavilyClient,
-		WeatherClient:             b.weatherClient,
-		Cfg:                       b.cfg,
-		ScrubbedUserMessage:       scrubResult.Text,
-		ScrubVault:                scrubResult.Vault,
-		ConversationID:            conversationID,
-		TriggerMsgID:              msgID,
-		StatusCallback:            statusCallback,
-		SendCallback:              sendCallback,
-		StageResetCallback:        stageResetCallback,
-		DeletePlaceholderCallback: deletePlaceholderCallback,
-		TTSCallback:               ttsCallback,
-		TraceCallback:             traceCallback,
-		ReflectionThreshold:       b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:             b.cfg.Persona.RewriteEveryNReflections,
-		EventBus:                  b.eventBus,
-		SkillRegistry:             b.skillRegistry,
+	// Run the agent pipeline. The voice handler customizes two things:
+	//  - PlaceholderText: shows the transcript while thinking
+	//  - ForceTTS: always reply with voice (they sent a voice memo)
+	return b.runAgent(c, AgentInput{
+		UserMessage:     "\U0001F3A4 " + userText,
+		ScrubbedText:    scrubResult.Text,
+		ScrubVault:      scrubResult.Vault,
+		ConversationID:  conversationID,
+		TriggerMsgID:    msgID,
+		PlaceholderText: fmt.Sprintf("\U0001F3A4 <i>%s</i>\n\n\U0001F4AD", transcript),
+		PlaceholderHTML: true,
+		ForceTTS:        true,
 	})
-	b.agentBusy.Store(false)
-
-	close(stopTyping)
-
-	if err != nil {
-		log.Error("agent error", "err", err)
-		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
-		return nil
-	}
-
-	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
-
-	// Emit TurnEndEvent for the TUI — metrics from the agent run.
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnEndEvent{
-			Time:       time.Now(),
-			TurnID:     msgID,
-			ElapsedMs:  time.Since(turnStart).Milliseconds(),
-			TotalCost:  result.TotalCost,
-			ToolCalls:  result.ToolCalls,
-			FactsSaved: result.FactsSaved,
-		})
-	}
-
-	log.Info("─── voice reply sent ───")
-
-	return nil
 }
 
 // sendVoiceReply synthesizes text to speech and sends it as a Telegram

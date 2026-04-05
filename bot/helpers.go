@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"her/memory"
+	"her/scrub"
 	"her/tools"
 
 	tele "gopkg.in/telebot.v4"
@@ -173,4 +174,35 @@ func (b *Bot) buildSystemPrompt() string {
 	}
 
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// scrubText applies PII scrubbing to user text based on the bot's config.
+// Returns a ScrubResult with the scrubbed text and vault. If scrubbing is
+// disabled, the text passes through unchanged with an empty vault.
+//
+// This consolidates the repeated if/else pattern from handleMessage,
+// handlePhoto, and handleVoice.
+func (b *Bot) scrubText(text string) *scrub.ScrubResult {
+	if b.cfg.Scrub.Enabled {
+		result := scrub.Scrub(text)
+		if vaultCount := len(result.Vault.Entries()); vaultCount > 0 {
+			log.Info("PII scrubbed", "tokens", vaultCount)
+		}
+		return result
+	}
+	return &scrub.ScrubResult{
+		Text:  text,
+		Vault: scrub.NewVault(),
+	}
+}
+
+// savePIIVaultEntries persists all vault entries for a message to the DB.
+// Called after scrubbing to store the token↔original mapping for later
+// deanonymization.
+func (b *Bot) savePIIVaultEntries(msgID int64, vault *scrub.Vault) {
+	for _, entry := range vault.Entries() {
+		if err := b.store.SavePIIVaultEntry(msgID, entry.Token, entry.Original, entry.EntityType); err != nil {
+			log.Error("saving PII vault entry", "err", err)
+		}
+	}
 }
