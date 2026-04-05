@@ -32,6 +32,8 @@ import (
 	_ "her/tools/delete_schedule"
 	_ "her/tools/done"
 	_ "her/tools/find_skill"
+	_ "her/tools/github_create_issue"
+	_ "her/tools/github_list_issues"
 	_ "her/tools/get_current_time"
 	_ "her/tools/list_schedules"
 	_ "her/tools/no_action"

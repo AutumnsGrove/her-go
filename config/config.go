@@ -38,6 +38,7 @@ type Config struct {
 	Voice     VoiceConfig     `yaml:"voice"`
 	Weather   WeatherConfig   `yaml:"weather"`
 	Todoist   TodoistConfig   `yaml:"todoist"`
+	GitHub    GitHubConfig    `yaml:"github"`
 	OCR       OCRConfig       `yaml:"ocr"`
 }
 
@@ -230,6 +231,15 @@ type TodoistConfig struct {
 	APIKey string `yaml:"api_key"` // Todoist API token
 }
 
+// GitHubConfig holds GitHub REST API settings for issue management.
+// The token needs "repo" scope (classic PAT) or Issues read/write
+// permission (fine-grained PAT). Repos is an allow-list — the agent
+// can only access repos explicitly listed here.
+type GitHubConfig struct {
+	Token string   `yaml:"token"` // GitHub personal access token
+	Repos []string `yaml:"repos"` // allowed repos in "owner/repo" format
+}
+
 // OCRConfig controls the local OCR pipeline used for pre-flight text
 // extraction on photos. The primary engine is Apple Vision (via the
 // macos-vision-ocr CLI binary) — it runs on the Neural Engine, sub-200ms,
@@ -290,6 +300,7 @@ func Load(path string) (*Config, error) {
 		cfg.Telegram.Token = ""
 		cfg.LLM.APIKey = ""
 		cfg.Todoist.APIKey = ""
+		cfg.GitHub.Token = ""
 	}
 
 	// Step 2: Load the user's config on top.
@@ -463,6 +474,7 @@ func (c *Config) ExportEnv() {
 	exports := map[string]string{
 		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
 		"TODOIST_API_KEY":    c.Todoist.APIKey,
+		"GITHUB_TOKEN":       c.GitHub.Token,
 		"OPENROUTER_API_KEY": c.LLM.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}
