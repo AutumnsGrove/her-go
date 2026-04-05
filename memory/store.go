@@ -2401,6 +2401,56 @@ func (s *Store) SaveMoodEntry(rating int, note, tags, source, conversationID str
 	return id, nil
 }
 
+// UpdateMoodEntry overwrites the rating and note on an existing mood entry.
+// Used when the user's mood shifts within the dedup window — instead of
+// being blocked by the time gate, the agent updates the existing entry.
+func (s *Store) UpdateMoodEntry(id int64, rating int, note string) error {
+	if rating < 1 {
+		rating = 1
+	}
+	if rating > 5 {
+		rating = 5
+	}
+
+	result, err := s.db.Exec(
+		`UPDATE mood_entries SET rating = ?, note = ? WHERE id = ?`,
+		rating, note, id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating mood entry: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking mood update: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("mood entry %d not found", id)
+	}
+	return nil
+}
+
+// LatestMoodEntry returns the most recent mood entry, or nil if none exist.
+// Used by update_mood to find the entry to modify.
+func (s *Store) LatestMoodEntry() (*MoodEntry, error) {
+	var e MoodEntry
+	var ts string
+	err := s.db.QueryRow(
+		`SELECT id, timestamp, rating, COALESCE(note, ''), COALESCE(tags, ''),
+		        COALESCE(source, 'inferred'), COALESCE(conversation_id, '')
+		 FROM mood_entries
+		 ORDER BY timestamp DESC
+		 LIMIT 1`,
+	).Scan(&e.ID, &ts, &e.Rating, &e.Note, &e.Tags, &e.Source, &e.ConversationID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying latest mood entry: %w", err)
+	}
+	e.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+	return &e, nil
+}
+
 // RecentMoodEntries returns the last N mood entries, newest first.
 // Used to build mood trend context for the system prompt.
 func (s *Store) RecentMoodEntries(limit int) ([]MoodEntry, error) {

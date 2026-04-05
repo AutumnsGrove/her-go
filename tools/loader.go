@@ -537,7 +537,7 @@ func UseToolsDef() llm.ToolDef {
 				"Load additional tools you need for this turn. Call BEFORE using a deferred tool. "+
 					"Pass category names or individual tool names. Loaded tools stay available for "+
 					"the rest of this turn.\n\nCategories: %s\n\n"+
-					"For search, mood logging, and other migrated capabilities: use find_skill to "+
+					"For web search, book lookup, and other external capabilities: use find_skill to "+
 					"discover skills, then run_skill to execute them.",
 				catDesc,
 			),

@@ -15,6 +15,9 @@ scheduling:
 context:
   hint: "You need precise time, or user mentions their location"
 
+mood:
+  hint: "User expresses how they're feeling, or you need to log/update their emotional state"
+
 expenses:
   hint: "OCR text looks like a receipt, user mentions spending money, asks about finances, or wants to correct/delete an expense"
 
