@@ -401,7 +401,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		if cfg.Scheduler.MorningBriefing {
 			defaults = append(defaults, scheduler.DefaultTask{
 				Name: "morning briefing", CronExpr: "0 8 * * *", TaskType: "run_prompt", Priority: "normal",
-				Payload: []byte(`{"prompt":"Generate a morning briefing for the user. Include anything relevant: weather if available, upcoming tasks, recent follow-ups worth mentioning. Keep it warm and concise — a few sentences, not a report."}`),
+				Payload: []byte(`{"prompt":"Generate a morning briefing. Check your available tool categories for anything useful — tasks, weather, recent memories, whatever is relevant today. Keep it warm and concise, a few sentences, not a report. If nothing interesting is going on, just say good morning."}`),
 			})
 		}
 		if cfg.Scheduler.MoodCheckin {
