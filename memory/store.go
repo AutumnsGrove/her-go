@@ -358,6 +358,21 @@ func (s *Store) initTables() error {
 			rewrite TEXT,
 			accepted BOOLEAN
 		)`,
+
+		// location_history stores every location the user shares or
+		// searches near. Separate from facts — locations are structured
+		// data, not free-text memories. Useful for future analysis
+		// (routine detection, visit frequency, etc.).
+		// source: 'pin' (Telegram), 'venue' (Telegram venue), 'text' (geocoded address), 'search' (nearby_search query)
+		`CREATE TABLE IF NOT EXISTS location_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+			latitude REAL NOT NULL,
+			longitude REAL NOT NULL,
+			label TEXT,
+			source TEXT NOT NULL,
+			conversation_id TEXT
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -2931,4 +2946,57 @@ func (s *Store) ResolvePendingConfirmation(id int64, action string) error {
 		return fmt.Errorf("resolving pending confirmation %d: %w", id, err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Location history
+// ---------------------------------------------------------------------------
+
+// LocationEntry represents a row in the location_history table.
+type LocationEntry struct {
+	ID             int64
+	Timestamp      string
+	Latitude       float64
+	Longitude      float64
+	Label          string
+	Source         string
+	ConversationID string
+}
+
+// InsertLocation records a location event. source should be one of:
+// "pin" (Telegram location share), "venue" (Telegram venue share),
+// "text" (geocoded from text input), "search" (nearby_search query).
+func (s *Store) InsertLocation(lat, lon float64, label, source, conversationID string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO location_history (latitude, longitude, label, source, conversation_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		lat, lon, label, source, conversationID,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting location: %w", err)
+	}
+	return nil
+}
+
+// LatestLocation returns the most recent location entry, or nil if none exist.
+// Used by nearby_search as a fallback when no explicit location is provided.
+func (s *Store) LatestLocation() *LocationEntry {
+	row := s.db.QueryRow(
+		`SELECT id, timestamp, latitude, longitude, label, source, conversation_id
+		 FROM location_history ORDER BY timestamp DESC LIMIT 1`,
+	)
+
+	var loc LocationEntry
+	var label, convID *string
+	err := row.Scan(&loc.ID, &loc.Timestamp, &loc.Latitude, &loc.Longitude, &label, &loc.Source, &convID)
+	if err != nil {
+		return nil
+	}
+	if label != nil {
+		loc.Label = *label
+	}
+	if convID != nil {
+		loc.ConversationID = *convID
+	}
+	return &loc
 }

@@ -37,6 +37,7 @@ import (
 	_ "her/tools/get_current_time"
 	_ "her/tools/list_schedules"
 	_ "her/tools/log_mood"
+	_ "her/tools/nearby_search"
 	_ "her/tools/no_action"
 	_ "her/tools/query_expenses"
 	_ "her/tools/recall_memories"

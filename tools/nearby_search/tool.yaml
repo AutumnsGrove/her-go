@@ -1,0 +1,34 @@
+name: nearby_search
+description: >-
+  Search for nearby places (restaurants, shops, etc.). Use when {{user}} asks
+  to find something nearby, wants recommendations for a place, or asks
+  what's around them. Accepts flexible location input — place names,
+  addresses, or coordinates all work.
+hint: "find nearby places"
+hot: false
+category: places
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: >-
+        What to search for — 'coffee shop', 'bookstore', 'pharmacy',
+        'restaurant', etc.
+    location:
+      type: string
+      description: >-
+        Where to search near. Accepts place names ('Brooklyn Library'),
+        addresses ('123 Main St, Austin TX'), or coordinates ('40.71, -74.00').
+        Omit to use the user's most recent known location.
+    radius_km:
+      type: number
+      description: "Search radius in kilometers (default 5, max 100)."
+    limit:
+      type: number
+      description: "Max results to return (default 5, max 50)."
+  required:
+    - query
+trace:
+  emoji: "📍"
+  format: "{{.query}} near {{.location | default \"current\"}}\n    → {{.Result | truncate 80 | escape}}"

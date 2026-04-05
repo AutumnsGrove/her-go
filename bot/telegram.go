@@ -228,6 +228,12 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	// use tele.OnDocument instead — we only handle voice memos here.
 	tb.Handle(tele.OnVoice, bot.handleVoice)
 
+	// Register location handlers for pin drops and venue shares (v0.6).
+	// Locations get saved to location_history and run through the agent
+	// so Mira can respond naturally or offer nearby searches.
+	tb.Handle(tele.OnLocation, bot.handleLocation)
+	tb.Handle(tele.OnVenue, bot.handleVenue)
+
 	// Register inline keyboard callback handlers (v0.6).
 	// Each Action value in scheduler.Button needs a handler here.
 	// See bot/callbacks.go for the implementations.
