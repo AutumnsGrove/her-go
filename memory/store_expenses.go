@@ -72,6 +72,21 @@ func (s *Store) SaveExpense(amount float64, currency, vendor, category, date, no
 // SaveExpenseItem inserts a line item linked to a parent expense.
 // Called in a loop after SaveExpense when the agent extracts individual
 // items from receipt OCR text.
+func (s *Store) SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error {
+	if quantity < 1 {
+		quantity = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO expense_items (expense_id, description, quantity, unit_price, total_price)
+		 VALUES (?, ?, ?, ?, ?)`,
+		expenseID, description, quantity, unitPrice, totalPrice,
+	)
+	if err != nil {
+		return fmt.Errorf("saving expense item: %w", err)
+	}
+	return nil
+}
+
 // DeleteExpense removes an expense and all its line items.
 // Uses a transaction so both deletes succeed or neither does.
 func (s *Store) DeleteExpense(id int64) error {
@@ -143,21 +158,6 @@ func (s *Store) UpdateExpense(id int64, amount float64, currency, vendor, catego
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("expense ID=%d not found", id)
-	}
-	return nil
-}
-
-func (s *Store) SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error {
-	if quantity < 1 {
-		quantity = 1
-	}
-	_, err := s.db.Exec(
-		`INSERT INTO expense_items (expense_id, description, quantity, unit_price, total_price)
-		 VALUES (?, ?, ?, ?, ?)`,
-		expenseID, description, quantity, unitPrice, totalPrice,
-	)
-	if err != nil {
-		return fmt.Errorf("saving expense item: %w", err)
 	}
 	return nil
 }
