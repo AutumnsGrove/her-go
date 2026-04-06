@@ -59,13 +59,16 @@ var traceRegistry = map[string]*compiledTrace{}
 // traceFuncs are the custom functions available in trace templates.
 // - escape: HTML-escapes for Telegram (& < >)
 // - truncate: cuts a string to N chars, appending "..." if truncated
+// - default: returns a fallback when the piped value is missing/empty
 //
 // In templates, pipe syntax makes these readable:
 //   {{.thought | escape}}
 //   {{.Result | truncate 80 | escape}}
+//   {{.repo | default "repos"}}
 //
 // Go templates pipe the value as the LAST argument, so truncate takes
-// (maxLen int, s string) — the piped value fills the string parameter.
+// (maxLen int, s string) and default takes (fallback, value) — the piped
+// value fills the last parameter in both cases.
 var traceFuncs = template.FuncMap{
 	"escape": func(s string) string {
 		s = strings.ReplaceAll(s, "&", "&amp;")
@@ -79,6 +82,18 @@ var traceFuncs = template.FuncMap{
 			return s
 		}
 		return s[:n] + "..."
+	},
+	// default returns fallback when value is nil or an empty string.
+	// Mirrors Sprig's `default` so trace templates can write
+	// {{.repo | default "repos"}} without pulling in the full library.
+	"default": func(fallback, value interface{}) interface{} {
+		if value == nil {
+			return fallback
+		}
+		if s, ok := value.(string); ok && s == "" {
+			return fallback
+		}
+		return value
 	},
 }
 

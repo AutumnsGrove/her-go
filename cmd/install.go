@@ -22,6 +22,27 @@ Use this after pulling new code to update the binary.
 	RunE: runInstall,
 }
 
+// BOOTSTRAP GOTCHA — read this if 'her install' is panicking on you.
+//
+// This command is a subcommand of the her binary itself. To run it, the
+// OS has to load ./her, which runs every package's init() function before
+// main() is reached. If anything in init() panics — most commonly a bad
+// trace template in a tool.yaml, registered via tools/loader.go — the
+// binary cannot start, which means 'her install' cannot run, which means
+// you cannot use it to fix the broken binary. Classic chicken-and-egg.
+//
+// The escape hatch: bypass the broken binary entirely and rebuild with
+// the Go toolchain directly:
+//
+//   go build -o her .
+//   go build -o "$GOPATH/bin/her" .   # also refresh the PATH copy
+//
+// Once you have a working binary again, 'her install --source' will work
+// normally. If you find yourself hitting this repeatedly, the deeper fix
+// is to make tool registration return errors instead of panicking, so a
+// single broken tool.yaml only disables that one tool instead of wedging
+// the whole binary.
+
 func init() {
 	installCmd.Flags().BoolVar(&installSource, "source", false, "rebuild from source (required)")
 	rootCmd.AddCommand(installCmd)
