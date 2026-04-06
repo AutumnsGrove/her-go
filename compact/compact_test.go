@@ -315,6 +315,60 @@ func TestMaybeCompact_ContextAware_UnderThreshold(t *testing.T) {
 	}
 }
 
+func TestMaybeCompact_RealSignalWinsOverEstimation(t *testing.T) {
+	// Regression test for the runaway re-compaction bug fixed on 2026-04-06.
+	//
+	// Scenario: a long conversation that has already been compacted once.
+	// The DB still contains 40 messages (compaction stores a summary row
+	// but doesn't delete the underlying messages), so the naive estimator
+	// counts them all and thinks the history is huge. But the chat model
+	// is actually only being shown summary + last 6 messages, so the real
+	// history-token count from the last API call is small.
+	//
+	// Before the fix: estimator (~2400 tokens) tripped the threshold and
+	// compaction ran on every turn forever, burning summarization API calls.
+	// After the fix: real signal (200 tokens) is authoritative and wins.
+	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	store, err := memory.NewStore(tmpFile.Name(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// 40 messages × 200 chars ≈ 2400 tokens by estimation. Over 75% of
+	// the 2400 budget (threshold 1800), so the estimator alone would fire.
+	msgs := makeMessages(40, 200)
+
+	// But the LAST chat turn only saw a small history (summary + 6 recent),
+	// so the real history-token count stored on the most recent user
+	// message is small — well under the threshold. msgs[38] is the most
+	// recent user message (index 38 is even → user role).
+	msgs[38].TokenCount = 200
+
+	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 2400, "Mira", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert on Triggered, not DidCompact. With nil chatLLM, DidCompact is
+	// always false (the nil-LLM short-circuit returns before summarization),
+	// so it can't distinguish "decided not to compact" from "decided to
+	// compact but couldn't." Triggered is the honest signal: it's true iff
+	// the threshold check fired.
+	if cr.Triggered {
+		t.Error("expected Triggered=false (real signal says 200 tokens, well under 1800 threshold), but the trigger fired — the estimator's lie won, regression of the 2026-04-06 fix")
+	}
+	if len(cr.KeptMessages) != 40 {
+		t.Errorf("expected all 40 messages kept, got %d", len(cr.KeptMessages))
+	}
+}
+
 func TestMaybeCompact_ContextAware_NoData(t *testing.T) {
 	// When no messages have token counts, should fall through to the
 	// estimation-based check.

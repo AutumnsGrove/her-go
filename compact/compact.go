@@ -96,7 +96,8 @@ If there's an existing summary of even earlier conversation, incorporate it natu
 type CompactResult struct {
 	Summary      string           // running summary (may be empty if no history)
 	KeptMessages []memory.Message // messages that should stay in full fidelity
-	DidCompact   bool             // true if new summarization was performed this call
+	Triggered    bool             // true if the threshold check decided compaction was needed (set even if downstream summarization later failed or was skipped)
+	DidCompact   bool             // true if new summarization was actually performed this call
 	Summarized   int              // number of messages that were summarized (0 if no compaction)
 	TokensBefore int              // estimated tokens before compaction
 	TokensAfter  int              // estimated tokens after compaction
@@ -131,54 +132,79 @@ func MaybeCompact(
 		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
-	// Two independent compaction triggers. Either one can fire compaction:
+	// Compaction trigger: prefer the real-history signal, fall back to
+	// estimation only when real data isn't available yet.
 	//
-	// 1. Context-aware: checks the history-only token count from the
-	//    last chat model call (stored on user messages by execReply,
-	//    with scaffolding subtracted). Uses real API token counts.
+	// Why this is mutually exclusive (and not "either signal can fire"):
+	// the two checks measure different things, and conflating them caused
+	// runaway re-compaction (incident on 2026-04-06).
 	//
-	// 2. Estimation-based: checks the compaction window's estimated
-	//    tokens against the same history budget using len/4 heuristic.
-	//    Catches unsummarized history accumulating in the DB.
+	// 1. Real history tokens: stored on the last user message by execReply
+	//    as (actual API prompt tokens) - (estimated chat scaffolding). This
+	//    is what the chat model actually received in its prompt last turn —
+	//    the only number that matches what compaction is trying to bound.
 	//
-	// Both triggers compare against maxHistoryTokens — the budget for
-	// conversation history that compaction can actually shrink.
+	// 2. Estimation: walks recentMessages and adds up len/4 for each one.
+	//    The catch: after a successful compaction, the summarized messages
+	//    still live in the DB (we only stored a summary row pointing at
+	//    them via start_id/end_id, never deleted them). Store.RecentMessages
+	//    happily returns them, and the estimator naively counts them again
+	//    even though the chat model is no longer being shown them.
+	//
+	// Result of conflating: every turn after the first compaction, the
+	// estimator would say "still 2400 tokens!" and re-compact already-
+	// compacted content, burning summarization API calls forever. The real
+	// signal correctly said "242 tokens, fine" but was ignored because the
+	// estimator's vote was treated as additive.
+	//
+	// Fix: when real data exists, it's authoritative — skip estimation.
+	// Estimation is only used on the very first turn, after a restart with
+	// no historic TokenCount, or for migrations from older DBs. In those
+	// cases its over-counting is fine because it errs toward compacting
+	// eagerly when we genuinely don't know.
 
+	threshold := int(float64(maxHistoryTokens) * 0.75)
 	shouldCompact := false
 
-	// --- Context-aware trigger (real history tokens) ---
-	{
-		var lastHistoryTokens int
-		for i := len(recentMessages) - 1; i >= 0; i-- {
-			if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
-				lastHistoryTokens = recentMessages[i].TokenCount
-				break
-			}
+	var lastHistoryTokens int
+	for i := len(recentMessages) - 1; i >= 0; i-- {
+		if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
+			lastHistoryTokens = recentMessages[i].TokenCount
+			break
 		}
-		if lastHistoryTokens > 0 {
-			threshold := int(float64(maxHistoryTokens) * 0.75)
-			log.Infof("  compaction check (real history): %d/%d tokens (threshold: %d)",
-				lastHistoryTokens, maxHistoryTokens, threshold)
-			if lastHistoryTokens >= threshold {
-				shouldCompact = true
-			}
-		}
-		// No early return — always continue to the estimation check.
 	}
 
-	// --- Estimation-based trigger ---
-	if !shouldCompact {
+	if lastHistoryTokens > 0 {
+		// Real data available — authoritative signal.
+		log.Infof("  compaction check (real history): %d/%d tokens (threshold: %d)",
+			lastHistoryTokens, maxHistoryTokens, threshold)
+		if lastHistoryTokens >= threshold {
+			shouldCompact = true
+		}
+	} else {
+		// No real data yet (fresh conversation, post-restart, migration).
+		// Estimation is approximate but it's all we have until the next
+		// chat turn produces real token data.
 		estTokens := EstimateHistoryTokens(existingSummary, recentMessages)
-		threshold := int(float64(maxHistoryTokens) * 0.75)
-		log.Infof("  compaction check (estimated): %d msgs, %d tokens (threshold: %d, budget: %d)",
+		log.Infof("  compaction check (estimation fallback): %d msgs, %d tokens (threshold: %d, budget: %d)",
 			len(recentMessages), estTokens, threshold, maxHistoryTokens)
-		if estTokens < threshold {
-			return &CompactResult{
-				Summary:      existingSummary,
-				KeptMessages: recentMessages,
-			}, nil
+		if estTokens >= threshold {
+			shouldCompact = true
 		}
 	}
+
+	if !shouldCompact {
+		return &CompactResult{
+			Summary:      existingSummary,
+			KeptMessages: recentMessages,
+		}, nil
+	}
+
+	// Past this point, the trigger has fired. Triggered=true is set on
+	// every CompactResult returned from here on, so callers (and tests)
+	// can distinguish "trigger decided we needed to compact" from "actual
+	// summarization happened" — DidCompact stays the source of truth for
+	// the second question.
 
 	// Estimate tokens before compaction (for logging and the result struct).
 	tokensBefore := EstimateHistoryTokens(existingSummary, recentMessages)
@@ -194,6 +220,7 @@ func MaybeCompact(
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
+			Triggered:    true,
 		}, nil
 	}
 	splitPoint := len(recentMessages) - minKeep
@@ -230,6 +257,7 @@ func MaybeCompact(
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
+			Triggered:    true,
 		}, nil
 	}
 
@@ -241,6 +269,7 @@ func MaybeCompact(
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
+			Triggered:    true,
 		}, nil
 	}
 
@@ -255,6 +284,7 @@ func MaybeCompact(
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
+			Triggered:    true,
 		}, nil
 	}
 
@@ -269,6 +299,7 @@ func MaybeCompact(
 	return &CompactResult{
 		Summary:      newSummary,
 		KeptMessages: toKeep,
+		Triggered:    true,
 		DidCompact:   true,
 		Summarized:   len(toSummarize),
 		TokensBefore: tokensBefore,
