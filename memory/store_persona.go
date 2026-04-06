@@ -1,0 +1,246 @@
+package memory
+
+import (
+	"fmt"
+	"time"
+)
+
+// SavePersonaVersion stores a snapshot of persona.md content in the
+// persona_versions table. Every rewrite is preserved for history/rollback.
+// PersonaVersion represents one historical snapshot of persona.md.
+type PersonaVersion struct {
+	ID        int64
+	Timestamp time.Time
+	Content   string
+	Trigger   string
+}
+
+// PersonaHistory returns the most recent N persona versions, newest first.
+func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, content, COALESCE(trigger, '') FROM persona_versions
+		 ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying persona history: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []PersonaVersion
+	for rows.Next() {
+		var v PersonaVersion
+		var ts string
+		if err := rows.Scan(&v.ID, &ts, &v.Content, &v.Trigger); err != nil {
+			return nil, fmt.Errorf("scanning persona version: %w", err)
+		}
+		v.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		versions = append(versions, v)
+	}
+	return versions, nil
+}
+
+func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO persona_versions (content, trigger) VALUES (?, ?)`,
+		content, trigger,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving persona version: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting persona version ID: %w", err)
+	}
+	return id, nil
+}
+
+// SaveReflection stores a new reflection entry in the dedicated reflections
+// table. Called by persona.Reflect() after a memory-dense conversation.
+func (s *Store) SaveReflection(content string, factCount int, userMessage, miraResponse string) (int64, error) {
+	result, err := s.db.Exec(
+		`INSERT INTO reflections (content, fact_count, user_message, mira_response) VALUES (?, ?, ?, ?)`,
+		content, factCount, userMessage, miraResponse,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("saving reflection: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+// FactCountSinceLastReflection counts how many facts have been saved
+// since the most recent reflection. Used to trigger reflections based
+// on accumulated new knowledge rather than per-turn counts.
+// Now queries the reflections table directly instead of filtering facts.
+func (s *Store) FactCountSinceLastReflection() (int, error) {
+	var lastReflectionTime string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM reflections ORDER BY id DESC LIMIT 1`,
+	).Scan(&lastReflectionTime)
+
+	var count int
+	if err != nil {
+		// No reflections yet. Count all active facts.
+		s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1`).Scan(&count)
+	} else {
+		// Count facts created after the last reflection.
+		s.db.QueryRow(
+			`SELECT COUNT(*) FROM facts WHERE active = 1 AND timestamp > ?`,
+			lastReflectionTime,
+		).Scan(&count)
+	}
+	return count, nil
+}
+
+// TotalReflectionCount returns the total number of reflections stored.
+// Used alongside PersonaRewriteCount to decide if a rewrite is due.
+func (s *Store) TotalReflectionCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM reflections`).Scan(&count)
+	return count, err
+}
+
+// PersonaRewriteCount returns how many persona rewrites have occurred.
+func (s *Store) PersonaRewriteCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM persona_versions`).Scan(&count)
+	return count, err
+}
+
+// LastPersonaTimestamp returns the timestamp of the most recent persona
+// version. Returns zero time if no versions exist yet.
+func (s *Store) LastPersonaTimestamp() (time.Time, error) {
+	var ts string
+	err := s.db.QueryRow(
+		`SELECT timestamp FROM persona_versions ORDER BY id DESC LIMIT 1`,
+	).Scan(&ts)
+	if err != nil {
+		return time.Time{}, nil // no versions yet, return zero time
+	}
+	t, _ := time.Parse("2006-01-02 15:04:05", ts)
+	return t, nil
+}
+
+// ReflectionsSince returns all reflections created after the given timestamp.
+// The return type is []Reflection — the dedicated struct, not Fact.
+func (s *Store) ReflectionsSince(since time.Time) ([]Reflection, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, content FROM reflections
+		 WHERE timestamp > ?
+		 ORDER BY timestamp ASC`,
+		since.Format("2006-01-02 15:04:05"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying reflections: %w", err)
+	}
+	defer rows.Close()
+
+	var reflections []Reflection
+	for rows.Next() {
+		var r Reflection
+		var ts string
+		if err := rows.Scan(&r.ID, &ts, &r.Content); err != nil {
+			return nil, fmt.Errorf("scanning reflection: %w", err)
+		}
+		r.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		reflections = append(reflections, r)
+	}
+	return reflections, nil
+}
+
+// --- Trait Tracking ---
+
+// Trait represents a single personality trait score, linked to a
+// persona version. Numeric traits (warmth, directness, etc.) store
+// float values as strings. Categorical traits (humor_style) store
+// the category label directly.
+type Trait struct {
+	ID               int64
+	TraitName        string
+	Value            string // "0.72" for numeric, "dry" for categorical
+	PersonaVersionID int64
+	Timestamp        time.Time
+}
+
+// SaveTraits bulk-inserts trait scores for a persona version.
+// Called after a persona rewrite to snapshot the current trait state.
+func (s *Store) SaveTraits(traits []Trait, personaVersionID int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("starting trait transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO traits (trait_name, value, persona_version_id) VALUES (?, ?, ?)`,
+	)
+	if err != nil {
+		return fmt.Errorf("preparing trait insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, t := range traits {
+		if _, err := stmt.Exec(t.TraitName, t.Value, personaVersionID); err != nil {
+			return fmt.Errorf("inserting trait %s: %w", t.TraitName, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetCurrentTraits returns the trait scores from the most recent
+// persona version. Returns nil (not an error) if no traits exist yet.
+func (s *Store) GetCurrentTraits() ([]Trait, error) {
+	rows, err := s.db.Query(
+		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
+		 FROM traits t
+		 INNER JOIN persona_versions pv ON t.persona_version_id = pv.id
+		 WHERE pv.id = (SELECT MAX(id) FROM persona_versions)
+		 ORDER BY t.trait_name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying current traits: %w", err)
+	}
+	defer rows.Close()
+
+	var traits []Trait
+	for rows.Next() {
+		var t Trait
+		var ts string
+		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
+			return nil, fmt.Errorf("scanning trait: %w", err)
+		}
+		t.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		traits = append(traits, t)
+	}
+	return traits, nil
+}
+
+// GetTraitHistory returns historical values for a single trait across
+// persona versions, newest first. Useful for showing how a trait has
+// drifted over time.
+func (s *Store) GetTraitHistory(traitName string, limit int) ([]Trait, error) {
+	rows, err := s.db.Query(
+		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
+		 FROM traits t
+		 ORDER BY t.persona_version_id DESC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying trait history: %w", err)
+	}
+	defer rows.Close()
+
+	var traits []Trait
+	for rows.Next() {
+		var t Trait
+		var ts string
+		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
+			return nil, fmt.Errorf("scanning trait history: %w", err)
+		}
+		t.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		traits = append(traits, t)
+	}
+	return traits, nil
+}
