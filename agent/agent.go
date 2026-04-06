@@ -1090,6 +1090,35 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		}
 	}
 
+	// Length guard. Telegram rejects messages over 4096 characters with
+	// MESSAGE_TOO_LONG, and historically that error was logged then
+	// silently swallowed — the user got nothing. Worse, the chat model
+	// occasionally generates 16k+ char runaway replies (the "pollen
+	// example leaked from prompt.md and triggered a verbose riff"
+	// incident on 2026-04-06). We catch that here, before any of the
+	// downstream side effects fire (DB save, Telegram send, TTS), and
+	// return a rejection string the agent can react to. The agent loop
+	// feeds this back into its tool result, the model sees "rejected:
+	// response too long" on its next iteration, and re-plans with a
+	// shorter instruction. Same pattern as save_fact's length rejection
+	// in tools/fact_helpers.go:169.
+	//
+	// 3500 leaves margin under Telegram's 4096 limit for deanonymization
+	// expansion (PII placeholders → real values may grow the string)
+	// and any markdown/emoji byte overhead.
+	const maxReplyChars = 3500
+	if len(resp.Content) > maxReplyChars {
+		log.Warn("reply: response too long, rejecting",
+			"chars", len(resp.Content),
+			"max", maxReplyChars,
+			"preview", truncateLog(resp.Content, 120))
+		return fmt.Sprintf(
+			"rejected: response was %d characters (max %d). The reply was NOT delivered to the user. "+
+				"Call reply again with an instruction that explicitly demands a SHORT response — "+
+				"1-3 sentences, under 500 characters. Do not let the chat model riff or expand.",
+			len(resp.Content), maxReplyChars)
+	}
+
 	// Save the response to the database.
 	respID, err := tctx.Store.SaveMessage("assistant", resp.Content, resp.Content, tctx.ConversationID)
 	if err != nil {
