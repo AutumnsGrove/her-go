@@ -118,22 +118,13 @@ func MaxFactLength() int {
 // gates, same embedding strategy, same classifier check.
 func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 	var args struct {
-		Fact       string `json:"fact"`
-		Category   string `json:"category"`
-		Importance int    `json:"importance"`
-		Tags       string `json:"tags"`
-		Context    string `json:"context"` // optional: why this fact matters
+		Fact     string `json:"fact"`
+		Category string `json:"category"`
+		Tags     string `json:"tags"`
+		Context  string `json:"context"` // optional: why this fact matters
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// Clamp importance to [1, 10].
-	if args.Importance < 1 {
-		args.Importance = 1
-	}
-	if args.Importance > 10 {
-		args.Importance = 10
 	}
 
 	// Quality gate for self-facts: block system-prompt restatements.
@@ -263,7 +254,7 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 		}
 	}
 
-	id, err := ctx.Store.SaveFact(args.Fact, args.Category, subject, 0, args.Importance, newVec, textVec, args.Tags, args.Context)
+	id, err := ctx.Store.SaveFact(args.Fact, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context)
 	if err != nil {
 		return fmt.Sprintf("error saving fact: %v", err)
 	}

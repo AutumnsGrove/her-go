@@ -209,13 +209,13 @@ func (s *Store) UpdateFactEmbedding(factID int64, embedding []float32, embedding
 }
 
 // RecentFacts retrieves the top-K active facts for a given subject,
-// ordered by importance (descending) then recency (descending).
+// ordered by recency (descending).
 func (s *Store) RecentFacts(subject string, limit int) ([]Fact, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM facts
 		 WHERE active = 1 AND COALESCE(subject, 'user') = ?
-		 ORDER BY importance DESC, timestamp DESC
+		 ORDER BY timestamp DESC
 		 LIMIT ?`,
 		subject, limit,
 	)
@@ -577,7 +577,7 @@ func (s *Store) AllActiveFacts() ([]Fact, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM facts WHERE active = 1
-		 ORDER BY subject ASC, importance DESC, timestamp DESC`,
+		 ORDER BY subject ASC, timestamp DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying all active facts: %w", err)
@@ -737,7 +737,7 @@ func (s *Store) FindFactsByKeyword(keyword string) ([]Fact, error) {
 		`SELECT id, timestamp, fact, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
 		 FROM facts
 		 WHERE active = 1 AND fact LIKE '%' || ? || '%'
-		 ORDER BY importance DESC
+		 ORDER BY timestamp DESC
 		 LIMIT 10`,
 		keyword,
 	)

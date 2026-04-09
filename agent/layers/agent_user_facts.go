@@ -33,7 +33,7 @@ func buildAgentUserFacts(ctx *LayerContext) LayerResult {
 		if f.Subject != "user" {
 			continue
 		}
-		fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d] %s\n", f.ID, f.Category, f.Importance, f.Fact)
+		fmt.Fprintf(&b, "- [ID=%d, %s] %s\n", f.ID, f.Category, f.Fact)
 		count++
 	}
 

@@ -941,9 +941,9 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		// Pass injected facts observability to the TUI.
 		if tctx.EventBus != nil {
 			for _, f := range lr.InjectedFacts {
-				args := fmt.Sprintf("#%d %s imp=%d", f.ID, f.Source, f.Importance)
-				if f.Source == "semantic" {
-					args = fmt.Sprintf("#%d %s imp=%d dist=%.2f", f.ID, f.Source, f.Importance, f.Distance)
+				args := fmt.Sprintf("#%d %s", f.ID, f.Source)
+				if f.Distance > 0 {
+					args = fmt.Sprintf("#%d %s dist=%.2f", f.ID, f.Source, f.Distance)
 				}
 				tctx.EventBus.Emit(tui.ToolCallEvent{
 					Time:     time.Now(),

@@ -30,23 +30,14 @@ func init() {
 // Applies the same style/length/classifier gates as save_fact.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		FactID     int64  `json:"fact_id"`
-		Fact       string `json:"fact"`
-		Category   string `json:"category"`
-		Importance int    `json:"importance"`
-		Tags       string `json:"tags"`
-		Context    string `json:"context"` // optional: why this fact matters
+		FactID   int64  `json:"fact_id"`
+		Fact     string `json:"fact"`
+		Category string `json:"category"`
+		Tags     string `json:"tags"`
+		Context  string `json:"context"` // optional: why this fact matters
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// Clamp importance to [1, 10].
-	if args.Importance < 1 {
-		args.Importance = 1
-	}
-	if args.Importance > 10 {
-		args.Importance = 10
 	}
 
 	// Apply the same style and length gates as save_fact.
@@ -130,7 +121,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// SaveFact handles embedding storage, vec_facts index, and auto-linking.
 	newID, err := ctx.Store.SaveFact(
 		args.Fact, args.Category, oldFact.Subject,
-		oldFact.SourceMessageID, args.Importance,
+		oldFact.SourceMessageID, 5,
 		tagVec, textVec, args.Tags, args.Context,
 	)
 	if err != nil {

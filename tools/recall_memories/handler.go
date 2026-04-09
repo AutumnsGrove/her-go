@@ -72,8 +72,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(facts))
 	for _, f := range facts {
 		similarity := 1 - f.Distance
-		fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d, similarity=%.0f%%] %s\n",
-			f.ID, f.Category, f.Importance, similarity*100, f.Fact)
+		fmt.Fprintf(&b, "- [ID=%d, %s, similarity=%.0f%%] %s\n",
+			f.ID, f.Category, similarity*100, f.Fact)
 	}
 
 	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
