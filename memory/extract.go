@@ -30,8 +30,6 @@ Facts worth remembering WEEKS or MONTHS later. Apply the "next month" test: woul
 For each fact, provide:
 - "fact": A single clear sentence capturing the information
 - "category": One of: identity, relationship, health, work, goal, event, preference, other
-- "importance": 1-10 (10 = life-changing event, 1 = trivial detail)
-
 SAVE facts about:
 - Personal details (name, identity, living situation, relationships)
 - Recurring emotional patterns (not one-off moods)
@@ -73,7 +71,7 @@ Only include mood if you can genuinely infer it from the conversation. If the co
 
 Respond with ONLY a JSON object. No markdown, no code fences, no explanation.
 
-{"facts": [{"fact": "User's name is Autumn", "category": "identity", "importance": 9}], "mood": {"rating": 4, "note": "Seems upbeat, excited about new project", "tags": {"energy": "high", "stress": "low"}}}
+{"facts": [{"fact": "User's name is Autumn", "category": "identity"}], "mood": {"rating": 4, "note": "Seems upbeat, excited about new project", "tags": {"energy": "high", "stress": "low"}}}
 
 If no facts to extract and no mood signal: {"facts": [], "mood": null}`
 
@@ -85,9 +83,8 @@ type extractionResponse struct {
 
 // extractedFact is the JSON structure for a single fact.
 type extractedFact struct {
-	Fact       string `json:"fact"`
-	Category   string `json:"category"`
-	Importance int    `json:"importance"`
+	Fact     string `json:"fact"`
+	Category string `json:"category"`
 }
 
 // extractedMood is the JSON structure for inferred mood.
@@ -165,20 +162,12 @@ func ExtractFacts(store *Store, llmClient *llm.Client, conversationID string, si
 	// so we know where extraction left off.
 	lastMsgID := messages[len(messages)-1].ID
 	for _, f := range extraction.Facts {
-		// Clamp importance to valid range.
-		if f.Importance < 1 {
-			f.Importance = 1
-		}
-		if f.Importance > 10 {
-			f.Importance = 10
-		}
-
-		_, err := store.SaveFact(f.Fact, f.Category, "user", lastMsgID, f.Importance, nil, nil, "", "")
+		_, err := store.SaveFact(f.Fact, f.Category, "user", lastMsgID, 5, nil, nil, "", "")
 		if err != nil {
 			log.Error("saving extracted fact", "err", err)
 			continue
 		}
-		log.Debug("extracted fact", "category", f.Category, "importance", f.Importance, "fact", f.Fact)
+		log.Debug("extracted fact", "category", f.Category, "fact", f.Fact)
 	}
 
 	// Store inferred mood if the LLM detected an emotional signal.

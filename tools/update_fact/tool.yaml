@@ -28,11 +28,6 @@ parameters:
         - preference
         - context
         - other
-    importance:
-      type: integer
-      description: "Updated importance score"
-      minimum: 1
-      maximum: 10
     tags:
       type: string
       description: "Updated comma-separated topic tags for semantic search."
@@ -46,11 +41,10 @@ parameters:
     - fact_id
     - fact
     - category
-    - importance
     - tags
 trace:
   emoji: "📝"
-  format: "#{{.fact_id}} → {{.fact | escape}}\n    category={{.category}}, importance={{.importance}}"
+  format: "#{{.fact_id}} → {{.fact | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"

@@ -139,7 +139,7 @@ func (b *Bot) handleFacts(c tele.Context) error {
 				msg.WriteString("\n<b>About me:</b>\n")
 			}
 		}
-		msg.WriteString(fmt.Sprintf("  #%d [%s, \u2605%d] %s\n", f.ID, f.Category, f.Importance, f.Fact))
+		msg.WriteString(fmt.Sprintf("  #%d [%s] %s\n", f.ID, f.Category, f.Fact))
 	}
 
 	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a fact.</i>")

@@ -193,8 +193,8 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 		_, err := b.store.SaveFact(
 			"User took their evening medication",
 			"health", "user",
-			0,   // no source message
-			8,   // high importance — health data
+			0, // no source message
+			5, // default importance
 			nil, // no tag embedding needed
 			nil, // no text embedding needed
 			"",  // no tags

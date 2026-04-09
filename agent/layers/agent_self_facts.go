@@ -2,8 +2,7 @@ package layers
 
 // Agent layer: Semantically relevant self facts.
 // The agent sees self-facts that are relevant to the current message
-// plus high-importance self-facts (backfilled for personality steering,
-// same logic as the chat model). For everything else, recall_memories.
+// (via KNN). For everything else, recall_memories.
 
 import (
 	"fmt"
@@ -32,7 +31,7 @@ func buildAgentSelfFacts(ctx *LayerContext) LayerResult {
 		if f.Subject != "self" {
 			continue
 		}
-		fmt.Fprintf(&b, "- [ID=%d, %s, importance=%d] %s\n", f.ID, f.Category, f.Importance, f.Fact)
+		fmt.Fprintf(&b, "- [ID=%d, %s] %s\n", f.ID, f.Category, f.Fact)
 		count++
 	}
 

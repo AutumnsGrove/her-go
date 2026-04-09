@@ -12,13 +12,12 @@ import (
 // and why. This is the observability data that lets you debug "why did she
 // mention pollen when I asked about code?"
 type InjectedFact struct {
-	ID         int64
-	Fact       string
-	Category   string
-	Subject    string
-	Importance int
-	Distance   float64 // cosine distance from query (0 = identical, only set for semantic)
-	Source     string  // "semantic" or "importance" — how this fact got selected
+	ID       int64
+	Fact     string
+	Category string
+	Subject  string
+	Distance float64 // cosine distance from query (0 = identical, only set for semantic)
+	Source   string  // "semantic" or "linked" — how this fact got selected
 }
 
 // conversationRedundancyThreshold controls how similar a fact must be to
@@ -118,19 +117,14 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 }
 
 // BuildMemoryContext assembles a memory context string to inject into
-// the system prompt. It blends two retrieval strategies:
+// the system prompt using semantic retrieval:
 //
-//  1. Semantic: top-K facts closest to the user's current message (via sqlite-vec KNN)
-//  2. Importance: high-importance facts that should always be present (name, identity, etc.)
-//
-// The blend ensures the bot always knows WHO it's talking to (importance) while also
-// recalling context RELEVANT to the current conversation (semantic).
+//   - Semantic: top-K facts closest to the user's current message (via sqlite-vec KNN)
 //
 // Returns the formatted context string AND a list of which facts were injected
 // (with their scores and selection source) for observability.
 //
-// relevantFacts can be nil if embeddings aren't available — falls back to
-// importance-only retrieval (the pre-v0.4 behavior).
+// relevantFacts can be nil if embeddings aren't available — returns empty context.
 // maxSemanticDist is the cosine distance cutoff — facts farther than this
 // from the query are filtered out even if they're the "nearest" neighbors.
 // Set to 0 to disable filtering (include all KNN results).
@@ -143,7 +137,7 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	// message. If nothing passes the distance filter, we inject nothing —
 	// Mira can use her recall tool if she needs more context.
 	// Importance-based backfill was flooding irrelevant facts into every turn.
-	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist, false)
+	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist)
 	if err != nil {
 		return "", nil, fmt.Errorf("retrieving user facts: %w", err)
 	}
@@ -157,9 +151,8 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	}
 
 	// --- Self facts ---
-	// Self facts always backfill by importance — they steer Mira's personality
-	// and voice, so they should be present even when nothing is semantically close.
-	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist, true)
+	// Self facts use the same semantic-only retrieval as user facts.
+	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist)
 	if err != nil {
 		return "", nil, fmt.Errorf("retrieving self facts: %w", err)
 	}
@@ -175,18 +168,12 @@ func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userNa
 	return strings.Join(parts, "\n\n"), allInjected, nil
 }
 
-// blendFacts merges semantic search results with importance-based results,
+// blendFacts filters semantic search results for a given subject,
 // deduplicating by fact ID. Returns both the facts and observability data
 // about how each was selected.
 //
-// If backfillImportance is true, remaining slots are filled with
-// high-importance facts even when nothing is semantically close. This is
-// useful for self-facts (personality steering) but not for user-facts,
-// where irrelevant backfill just overwhelms the chat model.
-//
-// If relevantFacts is nil (no embeddings), falls back to importance-only
-// when backfillImportance is true, or returns nothing when false.
-func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64, backfillImportance bool) ([]Fact, []InjectedFact, error) {
+// If relevantFacts is nil (no embeddings), returns nothing.
+func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64) ([]Fact, []InjectedFact, error) {
 	seen := make(map[int64]bool)
 	var result []Fact
 	var injected []InjectedFact
@@ -221,34 +208,8 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 				}
 				injected = append(injected, InjectedFact{
 					ID: f.ID, Fact: f.Fact, Category: f.Category,
-					Subject: f.Subject, Importance: f.Importance,
+					Subject: f.Subject,
 					Distance: f.Distance, Source: source,
-				})
-			}
-		}
-	}
-
-	// Second pass: importance-based (always-present context).
-	// Only runs when backfillImportance is true (self-facts).
-	// For user-facts this is skipped — Mira can use her recall tool
-	// if she needs more context beyond what semantic search found.
-	if backfillImportance {
-		importantFacts, err := store.RecentFacts(subject, maxFacts)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, f := range importantFacts {
-			if len(result) >= maxFacts {
-				break
-			}
-			if !seen[f.ID] {
-				seen[f.ID] = true
-				result = append(result, f)
-				injected = append(injected, InjectedFact{
-					ID: f.ID, Fact: f.Fact, Category: f.Category,
-					Subject: f.Subject, Importance: f.Importance,
-					Distance: -1, // not from semantic search
-					Source:   "importance",
 				})
 			}
 		}

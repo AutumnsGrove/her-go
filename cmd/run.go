@@ -419,7 +419,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		if cfg.Scheduler.ProactiveFollowups {
 			defaults = append(defaults, scheduler.DefaultTask{
 				Name: "proactive follow-ups", CronExpr: "0 9 * * *", TaskType: "run_prompt", Priority: "normal",
-				Payload: []byte(`{"prompt":"Scan facts from the last 48 hours with importance >= 7. If any warrant a follow-up (job interview, feeling rough, new medication, etc.), send a brief, warm check-in. If nothing stands out, do nothing — do NOT send a message just to say there's nothing to follow up on."}`),
+				Payload: []byte(`{"prompt":"Scan facts from the last 48 hours. If any warrant a follow-up (job interview, feeling rough, new medication, etc.), send a brief, warm check-in. If nothing stands out, do nothing — do NOT send a message just to say there's nothing to follow up on."}`),
 			})
 		}
 		if cfg.Scheduler.AutoJournal {

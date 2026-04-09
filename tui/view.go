@@ -391,7 +391,7 @@ func renderToolCallEvent(ev ToolCallEvent) string {
 	case "done":
 		icon = "✅"
 	case "fact→chat":
-		// Special rendering for injected facts — show the ID/source/importance
+		// Special rendering for injected facts — show the ID/source
 		// from Args alongside a truncated fact preview from Result.
 		icon = "📎"
 		meta := lipgloss.NewStyle().Foreground(colorCost).Render(ev.Args)

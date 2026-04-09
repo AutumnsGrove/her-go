@@ -4,8 +4,7 @@ package layers
 //
 // This is where the bot's long-term memory enters the chat prompt.
 // Unlike the agent (which sees ALL facts), the chat model only sees
-// facts that are semantically close to the current message (via KNN)
-// plus self-facts backfilled by importance (for personality steering).
+// facts that are semantically close to the current message (via KNN).
 //
 // Before injection, facts are filtered for redundancy against recent
 // conversation history — if a fact says the same thing as a message
@@ -53,21 +52,19 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 	}
 
 	// Count by source for the detail string.
-	semantic, linked, importance := 0, 0, 0
+	semantic, linked := 0, 0
 	for _, f := range injectedFacts {
 		switch f.Source {
 		case "semantic":
 			semantic++
 		case "linked":
 			linked++
-		case "importance":
-			importance++
 		}
 	}
 
 	detail := fmt.Sprintf("%d facts", len(injectedFacts))
 	if linked > 0 {
-		detail = fmt.Sprintf("%d semantic + %d linked + %d importance", semantic, linked, importance)
+		detail = fmt.Sprintf("%d semantic + %d linked", semantic, linked)
 	}
 
 	return LayerResult{

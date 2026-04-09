@@ -30,13 +30,6 @@ parameters:
         - event
         - preference
         - other
-    importance:
-      type: integer
-      description: >-
-        How important this is to remember (1=trivial, 10=life-changing).
-        Used for retrieval ranking, not filtering.
-      minimum: 1
-      maximum: 10
     tags:
       type: string
       description: >-
@@ -54,11 +47,10 @@ parameters:
   required:
     - fact
     - category
-    - importance
     - tags
 trace:
   emoji: "💾"
-  format: "{{.fact | escape}}\n    category={{.category}}, importance={{.importance}}"
+  format: "{{.fact | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"
