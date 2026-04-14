@@ -103,9 +103,16 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}
 
 	// From here, same pipeline as handleMessage: save, scrub, run agent.
+	// CRITICAL: If SaveMessage fails, we must NOT call runAgent with msgID=0.
+	// That creates orphaned TUI turns that attach to the wrong section.
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
+		return c.Send("I couldn't save that photo. Try sending it again?")
+	}
+	if msgID == 0 {
+		log.Error("SaveMessage returned msgID=0 without error")
+		return c.Send("Something went wrong saving that photo. Try again?")
 	}
 
 	// Store the Telegram file ID so we can re-download the image later.
@@ -239,11 +246,20 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Step 5: Save the transcribed text as the user message. From here,
 	// the transcript IS the user message — same as if they typed it,
 	// except we also store the voice memo path.
+	// CRITICAL: If SaveMessage fails, we must NOT call runAgent with msgID=0.
+	// Also must close stopTyping to avoid goroutine leak.
 	userText := transcript
 
 	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
 	if err != nil {
+		close(stopTyping)
 		log.Error("saving message", "err", err)
+		return c.Send("I couldn't save that voice memo. Try sending it again?")
+	}
+	if msgID == 0 {
+		close(stopTyping)
+		log.Error("SaveMessage returned msgID=0 without error")
+		return c.Send("Something went wrong saving that voice memo. Try again?")
 	}
 
 	// Store the voice memo path and Telegram file_id.

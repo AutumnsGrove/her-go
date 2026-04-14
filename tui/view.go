@@ -355,6 +355,19 @@ func renderAgentIterEvent(ev AgentIterEvent) string {
 }
 
 func renderToolCallEvent(ev ToolCallEvent) string {
+	// Handle errors first — override normal rendering with error styling
+	if ev.IsError {
+		name := toolNameStyle.Render(ev.ToolName)
+		result := ev.Result
+		if len(result) > 80 {
+			result = result[:80] + "…"
+		}
+		return fmt.Sprintf("❌ %s %s %s",
+			name,
+			toolArrowStyle.Render("→"),
+			logErrorStyle.Render(result))
+	}
+
 	// Different icons for different tool types
 	icon := "🔧"
 	switch ev.ToolName {

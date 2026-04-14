@@ -1,3 +1,6 @@
+# Debug mode: when true, logs full API request/response bodies to her.log
+debug: false
+
 identity:
   her: "Mira"      # the bot's name — injected into prompts as {{her}}
   user: "Autumn"    # your name — injected into prompts as {{user}}

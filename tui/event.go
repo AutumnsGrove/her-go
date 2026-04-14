@@ -128,6 +128,7 @@ type ToolCallEvent struct {
 	ToolName string
 	Args     string // truncated JSON arguments
 	Result   string // truncated result string
+	IsError  bool   // true if the tool execution failed
 }
 
 func (e ToolCallEvent) EventTime() time.Time { return e.Time }

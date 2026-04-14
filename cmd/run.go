@@ -30,6 +30,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // log is the package-level logger for the cmd package.
@@ -66,6 +67,12 @@ func runBot(cmd *cobra.Command, args []string) error {
 	// parent shell, no cleanup needed.
 	cfg.ExportEnv()
 
+	// Enable debug mode if configured — logs full API request/response bodies.
+	if cfg.Debug {
+		llm.SetDebugMode(true)
+		log.Info("debug mode enabled — full API context will be logged")
+	}
+
 	if cfg.Telegram.Token == "" {
 		log.Fatal("Telegram token is required — set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}
@@ -86,26 +93,56 @@ func runBot(cmd *cobra.Command, args []string) error {
 
 	bus := tui.NewBus()
 
-	// Open a log file for debugging when the TUI owns the terminal.
-	logFile, err := os.OpenFile("her.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		// Non-fatal — we can run without file logging
-		log.Warn("could not open her.log for writing", "err", err)
-		logger.Init(bus, nil)
-	} else {
-		defer logFile.Close()
-		// Only pass bus, not logFile — the StartFileLogger subscriber
-		// handles writing events to the file. Passing logFile to Init
-		// would cause double-writes (logger bridge + file subscriber
-		// both writing to the same file).
-		logger.Init(bus, nil)
-		tui.StartFileLogger(bus, logFile)
-		// Sidecar output goes to the log file in TUI mode so it doesn't
-		// corrupt the alt screen. In plain mode it stays on stderr.
-		sidecarOut = logFile
+	// Set up rotating log file via lumberjack. This replaces the simple
+	// os.OpenFile approach — lumberjack handles rotation automatically when
+	// the file exceeds MaxSize. The Logger struct implements io.Writer.
+	//
+	// Settings:
+	//   MaxSize=10:    rotate at 10MB
+	//   MaxBackups=0:  keep ALL old files (Autumn wants history preserved)
+	//   MaxAge=0:      no age-based deletion
+	//   LocalTime:     use local time in backup filenames
+	//   Compress:      false — keep uncompressed for grep
+	logFile := &lumberjack.Logger{
+		Filename:   "her.log",
+		MaxSize:    10,
+		MaxBackups: 0,
+		MaxAge:     0,
+		LocalTime:  true,
+		Compress:   false,
 	}
 
-	// Emit a startup event now that the bus is live
+	// Rotate on startup: archives the previous session's log and starts fresh.
+	// This gives us session-based log files (one per bot run) with MB-based
+	// rotation as a safety valve for runaway sessions.
+	// Rotated files get timestamped names like: her-2026-04-14T15-30-00.log
+	if err := logFile.Rotate(); err != nil {
+		// Non-fatal — worst case we append to the previous session's log
+		log.Warn("could not rotate log file", "err", err)
+	}
+
+	// Only pass bus, not logFile — the StartFileLogger subscriber
+	// handles writing events to the file. Passing logFile to Init
+	// would cause double-writes (logger bridge + file subscriber
+	// both writing to the same file).
+	logger.Init(bus, nil)
+	tui.StartFileLogger(bus, logFile)
+
+	// Sidecar output goes to the log file in TUI mode so it doesn't
+	// corrupt the alt screen. In plain mode it stays on stderr.
+	sidecarOut = logFile
+
+	// Emit structured SESSION_START for observability and future log splitting.
+	// The date= and time= fields make it trivial to grep and split logs by session.
+	log.Info("SESSION_START",
+		"date", time.Now().Format("2006-01-02"),
+		"time", time.Now().Format("15:04:05"),
+		"agent_model", cfg.Agent.Model,
+		"chat_model", cfg.LLM.Model,
+		"classifier_model", cfg.Classifier.Model,
+	)
+
+	// Emit startup event now that the bus is live
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "db", Status: "ready", Detail: cfg.Memory.DBPath})
 
 	// --- Decide: TUI or plain fallback ---
