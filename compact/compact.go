@@ -71,7 +71,7 @@ func EstimateHistoryTokens(summary string, messages []memory.Message) int {
 // summaryPrompt is sent to the LLM to summarize older messages.
 // It's designed to preserve conversational flow and emotional context
 // while being much shorter than the raw messages.
-// summaryPromptTmpl uses %s placeholders: userName, botName.
+// summaryPromptTmpl uses %s placeholders: userName, botName, userName, userName.
 const summaryPromptTmpl = `You are summarizing an earlier part of a conversation between %s and %s (an AI companion). Your goal is to capture what matters for continuing the conversation naturally.
 
 Preserve:
@@ -89,7 +89,9 @@ Don't preserve:
 
 Write the summary as a brief narrative, like you're catching up a friend who missed the first part of the conversation. Keep it concise. 2-4 sentences for a short exchange, 4-8 for a longer one.
 
-If there's an existing summary of even earlier conversation, incorporate it naturally into your new summary. Don't just append, weave it together.`
+If there's an existing summary of even earlier conversation, incorporate it naturally into your new summary. Don't just append, weave it together.
+
+Identity anchor: The user's name is %s. Always refer to them as %s in your summary — never as "the user" or "they".`
 
 // CompactResult holds the output of MaybeCompact so callers can tell
 // whether compaction actually ran (vs. just returning existing state).
@@ -123,75 +125,43 @@ func MaybeCompact(
 	botName, userName string,
 ) (*CompactResult, error) {
 	if maxHistoryTokens <= 0 {
-		maxHistoryTokens = 3000 // default — triggers compaction at 75% (~2250 tokens)
+		maxHistoryTokens = 8000 // default — triggers compaction at 75% (~6000 tokens)
 	}
 
 	// Load existing summary for this conversation.
-	existingSummary, _, err := store.LatestSummary(conversationID, "chat")
+	// summaryEndID is the ID of the last message that was already summarized.
+	// Messages with id <= summaryEndID are captured in the summary and must
+	// not be counted toward the token estimate — doing so causes runaway
+	// re-compaction (the estimator sees the full DB history every turn and
+	// thinks history is huge even after compaction).
+	existingSummary, summaryEndID, err := store.LatestSummary(conversationID, "chat")
 	if err != nil {
 		return nil, fmt.Errorf("loading summary: %w", err)
 	}
 
-	// Compaction trigger: prefer the real-history signal, fall back to
-	// estimation only when real data isn't available yet.
+	// Filter to only messages that haven't been summarized yet. These are
+	// the only messages that will actually appear in the chat model's prompt,
+	// so they're the only ones that count toward the token budget.
 	//
-	// Why this is mutually exclusive (and not "either signal can fire"):
-	// the two checks measure different things, and conflating them caused
-	// runaway re-compaction (incident on 2026-04-06).
-	//
-	// 1. Real history tokens: stored on the last user message by execReply
-	//    as (actual API prompt tokens) - (estimated chat scaffolding). This
-	//    is what the chat model actually received in its prompt last turn —
-	//    the only number that matches what compaction is trying to bound.
-	//
-	// 2. Estimation: walks recentMessages and adds up len/4 for each one.
-	//    The catch: after a successful compaction, the summarized messages
-	//    still live in the DB (we only stored a summary row pointing at
-	//    them via start_id/end_id, never deleted them). Store.RecentMessages
-	//    happily returns them, and the estimator naively counts them again
-	//    even though the chat model is no longer being shown them.
-	//
-	// Result of conflating: every turn after the first compaction, the
-	// estimator would say "still 2400 tokens!" and re-compact already-
-	// compacted content, burning summarization API calls forever. The real
-	// signal correctly said "242 tokens, fine" but was ignored because the
-	// estimator's vote was treated as additive.
-	//
-	// Fix: when real data exists, it's authoritative — skip estimation.
-	// Estimation is only used on the very first turn, after a restart with
-	// no historic TokenCount, or for migrations from older DBs. In those
-	// cases its over-counting is fine because it errs toward compacting
-	// eagerly when we genuinely don't know.
+	// This replaces the former "real signal wins over estimation" dual-signal
+	// logic. By filtering on end_id rather than on stored TokenCount values,
+	// the estimator is always accurate without any special-casing.
+	unsummarized := recentMessages
+	if summaryEndID > 0 {
+		filtered := recentMessages[:0]
+		for _, msg := range recentMessages {
+			if msg.ID > summaryEndID {
+				filtered = append(filtered, msg)
+			}
+		}
+		unsummarized = filtered
+	}
 
 	threshold := int(float64(maxHistoryTokens) * 0.75)
-	shouldCompact := false
-
-	var lastHistoryTokens int
-	for i := len(recentMessages) - 1; i >= 0; i-- {
-		if recentMessages[i].Role == "user" && recentMessages[i].TokenCount > 0 {
-			lastHistoryTokens = recentMessages[i].TokenCount
-			break
-		}
-	}
-
-	if lastHistoryTokens > 0 {
-		// Real data available — authoritative signal.
-		log.Infof("  compaction check (real history): %d/%d tokens (threshold: %d)",
-			lastHistoryTokens, maxHistoryTokens, threshold)
-		if lastHistoryTokens >= threshold {
-			shouldCompact = true
-		}
-	} else {
-		// No real data yet (fresh conversation, post-restart, migration).
-		// Estimation is approximate but it's all we have until the next
-		// chat turn produces real token data.
-		estTokens := EstimateHistoryTokens(existingSummary, recentMessages)
-		log.Infof("  compaction check (estimation fallback): %d msgs, %d tokens (threshold: %d, budget: %d)",
-			len(recentMessages), estTokens, threshold, maxHistoryTokens)
-		if estTokens >= threshold {
-			shouldCompact = true
-		}
-	}
+	estTokens := EstimateHistoryTokens(existingSummary, unsummarized)
+	log.Infof("  compaction check: %d un-summarized msgs, ~%d tokens (threshold: %d, budget: %d)",
+		len(unsummarized), estTokens, threshold, maxHistoryTokens)
+	shouldCompact := estTokens >= threshold
 
 	if !shouldCompact {
 		return &CompactResult{
@@ -207,26 +177,26 @@ func MaybeCompact(
 	// the second question.
 
 	// Estimate tokens before compaction (for logging and the result struct).
-	tokensBefore := EstimateHistoryTokens(existingSummary, recentMessages)
-	log.Infof("  compacting: %d messages, ~%d history tokens", len(recentMessages), tokensBefore)
+	tokensBefore := EstimateHistoryTokens(existingSummary, unsummarized)
+	log.Infof("  compacting: %d un-summarized messages, ~%d history tokens", len(unsummarized), tokensBefore)
 
-	// Split: keep only the most recent messages in full fidelity,
+	// Split: keep only the most recent un-summarized messages in full fidelity,
 	// summarize everything else. We keep 6 messages (3 exchanges) —
 	// enough for the model to resolve references like "it", "that
 	// thing", etc. Everything older goes into the running summary.
 	minKeep := 6
-	if len(recentMessages) <= minKeep {
-		// Not enough messages to compact.
+	if len(unsummarized) <= minKeep {
+		// Not enough un-summarized messages to compact.
 		return &CompactResult{
 			Summary:      existingSummary,
 			KeptMessages: recentMessages,
 			Triggered:    true,
 		}, nil
 	}
-	splitPoint := len(recentMessages) - minKeep
+	splitPoint := len(unsummarized) - minKeep
 
-	toSummarize := recentMessages[:splitPoint]
-	toKeep := recentMessages[splitPoint:]
+	toSummarize := unsummarized[:splitPoint]
+	toKeep := unsummarized[splitPoint:]
 
 	// Build the transcript of messages to summarize.
 	var transcript strings.Builder
@@ -247,7 +217,7 @@ func MaybeCompact(
 
 	// Ask the LLM to summarize.
 	llmMessages := []llm.ChatMessage{
-		{Role: "system", Content: fmt.Sprintf(summaryPromptTmpl, userName, botName)},
+		{Role: "system", Content: fmt.Sprintf(summaryPromptTmpl, userName, botName, userName, userName)},
 		{Role: "user", Content: transcript.String()},
 	}
 
