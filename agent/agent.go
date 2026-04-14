@@ -1055,19 +1055,6 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		log.Error("reply: saving response", "err", err)
 	}
 
-	// Store history-only token count on the user message. The API returns
-	// total prompt tokens (scaffolding + history + user message), but the
-	// compactor can only shrink history. Subtracting the scaffolding estimate
-	// (from the layer system) gives us a value that reflects what compaction
-	// actually controls. This prevents compaction from firing endlessly when
-	// scaffolding (facts, persona) is large but history is small.
-	if tctx.TriggerMsgID > 0 {
-		historyTokens := resp.PromptTokens - chatTotalTokens
-		if historyTokens < 0 {
-			historyTokens = 0
-		}
-		tctx.Store.UpdateMessageTokenCount(tctx.TriggerMsgID, historyTokens)
-	}
 	if respID > 0 {
 		tctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
 		tctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)

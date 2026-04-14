@@ -158,7 +158,7 @@ func TestMaybeCompact_OverThreshold(t *testing.T) {
 
 func TestMaybeCompact_ZeroBudget_UsesDefault(t *testing.T) {
 	// When maxHistoryTokens is 0 (not set in config), it should use
-	// the default of 3000. This is the case that was broken in production.
+	// the default of 8000. This is the case that was broken in production.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestMaybeCompact_ZeroBudget_UsesDefault(t *testing.T) {
 	defer store.Close()
 
 	// Pass maxHistoryTokens=0 (simulating unset config).
-	// 10 messages, 100 chars each = 350 tokens. Should be under default threshold (2250).
+	// 10 messages, 100 chars each = 350 tokens. Should be under default threshold (6000).
 	msgs := makeMessages(10, 100)
 	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 0, "Mira", "User")
 	if err != nil {
@@ -253,9 +253,19 @@ func TestMaybeCompact_RealisticSimMessages(t *testing.T) {
 	t.Logf("all %d messages: %d estimated tokens (threshold: %d)", len(msgs), allTokens, threshold)
 }
 
-func TestMaybeCompact_ContextAware(t *testing.T) {
-	// When user messages have real history-only token counts (set by
-	// execReply), compaction should trigger when history exceeds budget.
+func TestMaybeCompact_OnlyCountsUnsummarized(t *testing.T) {
+	// Regression test for runaway re-compaction.
+	//
+	// Scenario: 40 messages exist in the DB, but messages 1-34 were already
+	// summarized in a previous turn. The summary row records end_id=34.
+	// Only messages 35-40 (6 messages) are un-summarized.
+	//
+	// 6 messages × 35 tokens = 210 tokens — well under the 1050 threshold
+	// (75% of 1400). Without end_id filtering, the estimator would count all
+	// 40 messages (1400 tokens) and fire compaction every single turn forever.
+	//
+	// This test verifies that MaybeCompact reads summaryEndID from the DB
+	// and excludes already-summarized messages from the token estimate.
 	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -269,129 +279,29 @@ func TestMaybeCompact_ContextAware(t *testing.T) {
 	}
 	defer store.Close()
 
-	msgs := makeMessages(10, 100)
-	// Simulate: the most recent user message's TokenCount stores history-only
-	// tokens (total prompt minus scaffolding). 1200 > 75% of 1400 (1050) → trigger.
-	msgs[8].TokenCount = 1200 // user message, history tokens over threshold
+	// Store a summary that covers messages 1–34.
+	_, err = store.SaveSummary("test-conv", "Earlier conversation summary.", 1, 34, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create 40 messages with IDs 1–40. In a real DB these come from AUTOINCREMENT,
+	// but makeMessages gives them IDs 1..N via the loop index.
+	msgs := makeMessages(40, 100)
+	// msgs[i].ID is set to int64(i+1) by makeMessages — so msgs[34..39] have IDs 35-40.
 
 	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// chatLLM is nil so summarization will fail gracefully, but the key test
-	// is that we reached the compaction logic (didn't return early).
-	// With nil LLM, MaybeCompact returns unsummarized — check that it tried.
-	t.Logf("DidCompact=%v, KeptMessages=%d (context-aware trigger with 80%% utilization)",
-		cr.DidCompact, len(cr.KeptMessages))
-}
 
-func TestMaybeCompact_ContextAware_UnderThreshold(t *testing.T) {
-	// When history tokens are well under the budget threshold, no compaction.
-	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	store, err := memory.NewStore(tmpFile.Name(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	msgs := makeMessages(10, 100)
-	msgs[8].TokenCount = 500 // history tokens well under 75% of 1400 (1050) → no trigger
-
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cr.DidCompact {
-		t.Error("expected no compaction at 30% utilization, but DidCompact=true")
-	}
-	if len(cr.KeptMessages) != 10 {
-		t.Errorf("expected all 10 messages kept, got %d", len(cr.KeptMessages))
-	}
-}
-
-func TestMaybeCompact_RealSignalWinsOverEstimation(t *testing.T) {
-	// Regression test for the runaway re-compaction bug fixed on 2026-04-06.
-	//
-	// Scenario: a long conversation that has already been compacted once.
-	// The DB still contains 40 messages (compaction stores a summary row
-	// but doesn't delete the underlying messages), so the naive estimator
-	// counts them all and thinks the history is huge. But the chat model
-	// is actually only being shown summary + last 6 messages, so the real
-	// history-token count from the last API call is small.
-	//
-	// Before the fix: estimator (~2400 tokens) tripped the threshold and
-	// compaction ran on every turn forever, burning summarization API calls.
-	// After the fix: real signal (200 tokens) is authoritative and wins.
-	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	store, err := memory.NewStore(tmpFile.Name(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	// 40 messages × 200 chars ≈ 2400 tokens by estimation. Over 75% of
-	// the 2400 budget (threshold 1800), so the estimator alone would fire.
-	msgs := makeMessages(40, 200)
-
-	// But the LAST chat turn only saw a small history (summary + 6 recent),
-	// so the real history-token count stored on the most recent user
-	// message is small — well under the threshold. msgs[38] is the most
-	// recent user message (index 38 is even → user role).
-	msgs[38].TokenCount = 200
-
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 2400, "Mira", "User")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Assert on Triggered, not DidCompact. With nil chatLLM, DidCompact is
-	// always false (the nil-LLM short-circuit returns before summarization),
-	// so it can't distinguish "decided not to compact" from "decided to
-	// compact but couldn't." Triggered is the honest signal: it's true iff
-	// the threshold check fired.
+	// Only 6 un-summarized messages (IDs 35-40) should be counted: ~210 tokens.
+	// That's well under the 1050 threshold, so Triggered must be false.
 	if cr.Triggered {
-		t.Error("expected Triggered=false (real signal says 200 tokens, well under 1800 threshold), but the trigger fired — the estimator's lie won, regression of the 2026-04-06 fix")
+		t.Errorf("expected Triggered=false (only 6 un-summarized msgs, ~210 tokens, threshold=1050), "+
+			"but trigger fired — end_id filter not working (runaway compaction regression)")
 	}
 	if len(cr.KeptMessages) != 40 {
-		t.Errorf("expected all 40 messages kept, got %d", len(cr.KeptMessages))
-	}
-}
-
-func TestMaybeCompact_ContextAware_NoData(t *testing.T) {
-	// When no messages have token counts, should fall through to the
-	// estimation-based check.
-	tmpFile, err := os.CreateTemp("", "compact-test-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
-
-	store, err := memory.NewStore(tmpFile.Name(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	// Small messages, under estimation threshold. No TokenCount set.
-	msgs := makeMessages(10, 100)
-	cr, err := MaybeCompact(nil, store, "test-conv", msgs, 1400, "Mira", "User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cr.DidCompact {
-		t.Error("expected no compaction (fell through to estimation, under threshold)")
+		t.Errorf("expected all 40 messages returned for context, got %d", len(cr.KeptMessages))
 	}
 }
