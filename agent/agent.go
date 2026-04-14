@@ -17,48 +17,21 @@ import (
 	"her/persona"
 	"her/scrub"
 	"her/search"
-	"her/skills/loader"
 	"her/tools"
 	"her/tui"
-	"her/weather"
 
 	// Blank imports trigger init() registration for each tool's handler.
 	// Same pattern as database drivers: import _ "github.com/lib/pq"
 	// Each import causes the package's init() to run, which calls
 	// tools.Register("name", Handle) to add the handler to the registry.
-	_ "her/tools/create_reminder"
-	_ "her/tools/create_schedule"
-	_ "her/tools/delete_expense"
-	_ "her/tools/delete_schedule"
 	_ "her/tools/done"
-	_ "her/tools/find_skill"
-	_ "her/tools/github_create_issue"
-	_ "her/tools/github_list_issues"
-	_ "her/tools/get_current_time"
-	_ "her/tools/list_schedules"
-	_ "her/tools/log_mood"
-	_ "her/tools/nearby_search"
-	_ "her/tools/no_action"
-	_ "her/tools/query_expenses"
 	_ "her/tools/recall_memories"
 	_ "her/tools/remove_fact"
-	_ "her/tools/reply_confirm"
-	_ "her/tools/run_skill"
 	_ "her/tools/save_fact"
 	_ "her/tools/save_self_fact"
-	_ "her/tools/scan_receipt"
-	_ "her/tools/search_history"
-	_ "her/tools/set_location"
 	_ "her/tools/think"
-	_ "her/tools/todoist_complete"
-	_ "her/tools/todoist_create"
-	_ "her/tools/todoist_list"
-	_ "her/tools/todoist_update"
-	_ "her/tools/update_expense"
-	_ "her/tools/update_mood"
 	_ "her/tools/update_fact"
 	_ "her/tools/update_persona"
-	_ "her/tools/update_schedule"
 	_ "her/tools/use_tools"
 	_ "her/tools/view_image"
 )
@@ -130,7 +103,6 @@ type RunParams struct {
 	EmbedClient               *embed.Client
 	SimilarityThreshold       float64
 	TavilyClient              *search.TavilyClient
-	WeatherClient             *weather.Client
 	Cfg                       *config.Config
 	ScrubbedUserMessage       string
 	ScrubVault                *scrub.Vault
@@ -145,12 +117,11 @@ type RunParams struct {
 	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
 	ReflectionThreshold       int
 	RewriteEveryN             int
-	ImageBase64               string           // base64-encoded image data (empty if no image)
-	ImageMIME                 string           // MIME type of the image (e.g., "image/jpeg")
-	OCRText                   string           // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
-	EventBus                  *tui.Bus         // nil-safe — emits rich typed events for the TUI
-	ConfigPath                string           // path to config.yaml — needed for persisting location changes via set_location
-	SkillRegistry             *loader.Registry // nil-safe — skill discovery and execution
+	ImageBase64               string   // base64-encoded image data (empty if no image)
+	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
+	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
+	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
+	ConfigPath                string   // path to config.yaml — needed for persisting location changes via set_location
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -336,7 +307,6 @@ func Run(params RunParams) (*RunResult, error) {
 		Store:               params.Store,
 		Cfg:                 params.Cfg,
 		EmbedClient:         params.EmbedClient,
-		WeatherClient:       params.WeatherClient,
 		RelevantFacts:       relevantFacts,
 		ConversationSummary: conversationSummary,
 		AgentActionSummary:  agentActionSummary,
@@ -397,7 +367,6 @@ func Run(params RunParams) (*RunResult, error) {
 		VisionLLM:                 params.VisionLLM,
 		ClassifierLLM:             params.ClassifierLLM,
 		TavilyClient:              params.TavilyClient,
-		WeatherClient:             params.WeatherClient,
 		Cfg:                       params.Cfg,
 		ScrubVault:                params.ScrubVault,
 		ScrubbedUserMessage:       params.ScrubbedUserMessage,
@@ -411,7 +380,6 @@ func Run(params RunParams) (*RunResult, error) {
 		ActiveTools:               &toolDefs,
 		EventBus:                  params.EventBus,
 		ConfigPath:                params.ConfigPath,
-		SkillRegistry:             params.SkillRegistry,
 		// Inject classifier hooks so tool handlers in tools/ can call the
 		// classifier without importing agent (which would be circular).
 		// The ClassifyWriteFunc wraps classifyMemoryWrite, and
@@ -923,7 +891,6 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		Store:               tctx.Store,
 		Cfg:                 tctx.Cfg,
 		EmbedClient:         tctx.EmbedClient,
-		WeatherClient:       tctx.WeatherClient,
 		RelevantFacts:       tctx.RelevantFacts,
 		ConversationSummary: tctx.ConversationSummary,
 		ConversationID:      tctx.ConversationID,

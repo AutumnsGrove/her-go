@@ -295,12 +295,10 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
-		WeatherClient:       b.weatherClient,
 		Cfg:                 b.cfg,
 		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
 		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
-		SkillRegistry:       b.skillRegistry,
 	}
 }

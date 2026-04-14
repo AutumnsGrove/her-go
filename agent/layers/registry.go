@@ -19,7 +19,6 @@ import (
 	"her/config"
 	"her/embed"
 	"her/memory"
-	"her/weather"
 )
 
 // Stream identifies which model a layer belongs to.
@@ -70,10 +69,9 @@ type LayerResult struct {
 // and buildAgentContext. Not every layer uses every field — weather layers
 // ignore EmbedClient, time layers ignore Store, etc.
 type LayerContext struct {
-	Store         *memory.Store
-	Cfg           *config.Config
-	EmbedClient   *embed.Client
-	WeatherClient *weather.Client
+	Store       *memory.Store
+	Cfg         *config.Config
+	EmbedClient *embed.Client
 
 	// Runtime state — set by the agent before building the prompt.
 	RelevantFacts       []memory.Fact         // KNN results for semantic injection

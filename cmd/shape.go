@@ -9,7 +9,6 @@ import (
 	"her/embed"
 	"her/logger"
 	"her/memory"
-	"her/weather"
 
 	"github.com/spf13/cobra"
 )
@@ -78,18 +77,11 @@ func runShape(cmd *cobra.Command, args []string) error {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 	}
 
-	// Set up weather client if configured.
-	var weatherClient *weather.Client
-	if cfg.Weather.Latitude != 0 || cfg.Weather.Longitude != 0 {
-		weatherClient = weather.NewClient(cfg.Weather.Latitude, cfg.Weather.Longitude, cfg.Weather.TempUnit, cfg.Weather.WindSpeedUnit, cfg.Weather.CacheTTL)
-	}
-
 	// Build the layer context with whatever live data we have.
 	ctx := &layers.LayerContext{
-		Store:         store,
-		Cfg:           cfg,
-		EmbedClient:   embedClient,
-		WeatherClient: weatherClient,
+		Store:       store,
+		Cfg:         cfg,
+		EmbedClient: embedClient,
 	}
 
 	// If we have a store, populate with real data from the last conversation.

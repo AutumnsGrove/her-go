@@ -16,12 +16,9 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
-	"her/ocr"
 	"her/search"
-	"her/skills/loader"
 	"her/tui"
 	"her/voice"
-	"her/weather"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -37,11 +34,10 @@ type Bot struct {
 	tb            *tele.Bot
 	llm           *llm.Client          // conversational model (Deepseek)
 	agentLLM      *llm.Client          // tool-calling orchestrator
-	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
-	embedClient    *embed.Client        // local embedding model for similarity
+	visionLLM     *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM *llm.Client          // classifier for memory writes — nil if not configured
+	embedClient   *embed.Client        // local embedding model for similarity
 	tavilyClient  *search.TavilyClient // web search and URL extraction
-	weatherClient *weather.Client      // Open-Meteo weather — nil if not configured
 	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
 	ttsClient     *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store         *memory.Store
@@ -63,16 +59,6 @@ type Bot struct {
 
 	// eventBus emits structured events for the TUI. Nil-safe.
 	eventBus *tui.Bus
-
-	// ocrEnabled is true if the macos-vision-ocr binary is available.
-	// When true, handlePhoto runs pre-flight OCR on every photo before
-	// the agent decides what to do. The OCR is local and fast (sub-200ms).
-	ocrEnabled bool
-
-	// skillRegistry holds discovered skills for find_skill/run_skill.
-	// Set via SetSkillRegistry after construction. Nil-safe — if not set,
-	// the agent's skill tools return "no skills available."
-	skillRegistry *loader.Registry
 
 	// agentBusy is an atomic flag the scheduler checks to avoid firing
 	// tasks while a conversation turn is in progress. Set before
@@ -98,13 +84,6 @@ type Bot struct {
 	ownerChat int64
 }
 
-// SetSkillRegistry configures the skill registry for find_skill/run_skill.
-// Call after New() and before Start(). This is a setter rather than a
-// constructor param to avoid making the already-long New() signature worse.
-func (b *Bot) SetSkillRegistry(reg *loader.Registry) {
-	b.skillRegistry = reg
-}
-
 // SetOwnerChat sets the chat ID for event-triggered agent replies.
 // The owner chat is where scheduled tasks, skill failure notifications,
 // and other non-user-initiated messages get sent.
@@ -120,7 +99,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, weatherClient *weather.Client, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -161,11 +140,10 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		tb:            tb,
 		llm:           llmClient,
 		agentLLM:      agentLLM,
-		visionLLM:      visionLLM,
-		classifierLLM:  classifierLLM,
-		embedClient:    embedClient,
+		visionLLM:     visionLLM,
+		classifierLLM: classifierLLM,
+		embedClient:   embedClient,
 		tavilyClient:  tavilyClient,
-		weatherClient: weatherClient,
 		voiceClient:   voiceClient,
 		ttsClient:     ttsClient,
 		store:         store,
@@ -174,12 +152,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		systemPrompt:  string(promptBytes),
 		startTime:     time.Now(),
 		eventBus:      eventBus,
-		ocrEnabled:    ocr.IsAvailable(&cfg.OCR),
 		agentEvents:   make(chan agent.AgentEvent, 16),
-	}
-
-	if bot.ocrEnabled {
-		log.Info("OCR enabled", "engine", "apple-vision", "binary", cfg.OCR.VisionOCRPath)
 	}
 
 	// cmd wraps a handler to log the command to the command_log table.

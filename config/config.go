@@ -23,25 +23,19 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
-	Debug     bool            `yaml:"debug"` // when true, logs full API request/response bodies
-	Identity  IdentityConfig  `yaml:"identity"`
-	Telegram  TelegramConfig  `yaml:"telegram"`
-	LLM       LLMConfig       `yaml:"llm"`
-	Agent     AgentConfig     `yaml:"agent"`
+	Debug      bool             `yaml:"debug"` // when true, logs full API request/response bodies
+	Identity   IdentityConfig   `yaml:"identity"`
+	Telegram   TelegramConfig   `yaml:"telegram"`
+	LLM        LLMConfig        `yaml:"llm"`
+	Agent      AgentConfig      `yaml:"agent"`
 	Vision     VisionConfig     `yaml:"vision"`
 	Classifier ClassifierConfig `yaml:"classifier"`
 	Memory     MemoryConfig     `yaml:"memory"`
-	Embed     EmbedConfig     `yaml:"embed"`
-	Search    SearchConfig    `yaml:"search"`
-	Scrub     ScrubConfig     `yaml:"scrub"`
-	Persona   PersonaConfig   `yaml:"persona"`
-	Scheduler SchedulerConfig `yaml:"scheduler"`
-	Voice     VoiceConfig     `yaml:"voice"`
-	Weather   WeatherConfig   `yaml:"weather"`
-	Todoist   TodoistConfig   `yaml:"todoist"`
-	GitHub      GitHubConfig      `yaml:"github"`
-	Foursquare  FoursquareConfig  `yaml:"foursquare"`
-	OCR         OCRConfig         `yaml:"ocr"`
+	Embed      EmbedConfig      `yaml:"embed"`
+	Search     SearchConfig     `yaml:"search"`
+	Scrub      ScrubConfig      `yaml:"scrub"`
+	Persona    PersonaConfig    `yaml:"persona"`
+	Voice      VoiceConfig      `yaml:"voice"`
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into
@@ -197,81 +191,6 @@ type TTSConfig struct {
 	ReplyMode string  `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
 }
 
-// SchedulerConfig controls the task scheduler / cron system.
-type SchedulerConfig struct {
-	Timezone           string `yaml:"timezone"`              // IANA timezone for cron evaluation (e.g. "America/New_York")
-	QuietHoursStart    string `yaml:"quiet_hours_start"`     // no scheduled messages after this time (e.g. "23:00")
-	QuietHoursEnd      string `yaml:"quiet_hours_end"`       // resume scheduled messages after this time (e.g. "07:00")
-	MaxProactivePerDay int    `yaml:"max_proactive_per_day"` // cap on non-reminder messages per day (0 = unlimited)
-
-	// Default task flags — when true, the scheduler creates these tasks
-	// on startup if they don't already exist. All are idempotent.
-	MorningBriefing    bool `yaml:"morning_briefing"`    // daily briefing at 8am via run_prompt
-	MoodCheckin        bool `yaml:"mood_checkin"`        // daily mood check-in at 9pm
-	MedicationCheckin  bool `yaml:"medication_checkin"`  // daily medication check-in at 9pm (critical priority)
-	ProactiveFollowups bool `yaml:"proactive_followups"` // scan for follow-up opportunities at 9am
-	AutoJournal        bool `yaml:"auto_journal"`        // auto-journal entry at 10pm
-}
-
-// WeatherConfig controls the Open-Meteo weather integration.
-// Weather data is fetched periodically and injected into the system
-// prompt as environmental context. No API key needed — Open-Meteo is free.
-type WeatherConfig struct {
-	Latitude      float64 `yaml:"latitude"`        // WGS84 latitude (e.g., 40.7128 for New York)
-	Longitude     float64 `yaml:"longitude"`       // WGS84 longitude (e.g., -74.0060 for New York)
-	TempUnit      string  `yaml:"temp_unit"`       // "fahrenheit" (default) or "celsius"
-	WindSpeedUnit string  `yaml:"wind_speed_unit"` // "mph" (default) or "kmh"
-	CacheTTL      int     `yaml:"cache_ttl"`       // seconds between API calls (default: 3600 = 1 hour)
-}
-
-// TodoistConfig holds Todoist REST API settings.
-// The API key comes from https://app.todoist.com/app/settings/integrations/developer
-// Todoist integration lets the agent manage your task list — list, create,
-// complete, and update tasks. Reminders are still handled by Mira's own
-// scheduler, not Todoist.
-type TodoistConfig struct {
-	APIKey string `yaml:"api_key"` // Todoist API token
-}
-
-// GitHubConfig holds GitHub REST API settings for issue management.
-// The token needs "repo" scope (classic PAT) or Issues read/write
-// permission (fine-grained PAT). Repos is an allow-list — the agent
-// can only access repos explicitly listed here.
-type GitHubConfig struct {
-	Token string   `yaml:"token"` // GitHub personal access token
-	Repos []string `yaml:"repos"` // allowed repos in "owner/repo" format
-}
-
-// FoursquareConfig holds Foursquare Places API settings for nearby search.
-// Free tier: 10,000 calls/month. Get your API key from
-// https://foursquare.com/developers/signup
-type FoursquareConfig struct {
-	APIKey string `yaml:"api_key"` // Foursquare Places API key
-}
-
-// OCRConfig controls the local OCR pipeline used for pre-flight text
-// extraction on photos. The primary engine is Apple Vision (via the
-// macos-vision-ocr CLI binary) — it runs on the Neural Engine, sub-200ms,
-// zero dependencies. If confidence is low or the binary isn't available,
-// falls back to GLM-OCR via LM Studio (a purpose-built OCR model).
-//
-// This runs on EVERY incoming photo as a "pre-flight" check before the
-// agent decides what to do. Since it's local, it's essentially free.
-type OCRConfig struct {
-	VisionOCRPath       string      `yaml:"vision_ocr_path"`      // path to macos-vision-ocr binary (or just the name if it's on PATH)
-	ConfidenceThreshold float64     `yaml:"confidence_threshold"` // below this average confidence → fall back to GLM-OCR (0.0-1.0)
-	Fallback            OCRFallback `yaml:"fallback"`
-}
-
-// OCRFallback configures the secondary OCR engine (GLM-OCR via LM Studio).
-// Used when Apple Vision returns low confidence or empty results — e.g.,
-// receipts with unusual fonts, heavy glare, or non-Latin scripts.
-type OCRFallback struct {
-	Engine  string `yaml:"engine"`   // "glm-ocr" (only option for now)
-	BaseURL string `yaml:"base_url"` // LM Studio endpoint (e.g., "http://localhost:1234/v1")
-	Model   string `yaml:"model"`    // model name in LM Studio (e.g., "glm-ocr")
-}
-
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.
 // In Go, regexp.MustCompile panics if the pattern is invalid — but since
 // this is a compile-time constant, that's fine. It's a common Go pattern
@@ -308,9 +227,6 @@ func Load(path string) (*Config, error) {
 		// placeholders that we don't want as actual defaults.
 		cfg.Telegram.Token = ""
 		cfg.LLM.APIKey = ""
-		cfg.Todoist.APIKey = ""
-		cfg.GitHub.Token = ""
-		cfg.Foursquare.APIKey = ""
 	}
 
 	// Step 2: Load the user's config on top.
@@ -400,73 +316,6 @@ func (c *Config) SetTrace(configPath string, enabled bool) error {
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
-// SetLocation updates the weather latitude and longitude in both the
-// in-memory config and the config.yaml file on disk. Like SetTrace,
-// it does a surgical line edit — finds the latitude: and longitude:
-// lines under the weather: section and updates them in place, or
-// inserts them after the weather: line if they don't exist yet.
-//
-// This is the persistence half of set_location — the weather client
-// is updated in memory by its own SetLocation method, and this call
-// makes sure the new coordinates survive a restart.
-func (c *Config) SetLocation(configPath string, lat, lon float64) error {
-	c.Weather.Latitude = lat
-	c.Weather.Longitude = lon
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("reading config: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	inWeather := false
-	latFound := false
-	lonFound := false
-	weatherLineIdx := -1 // index of the "weather:" line itself, for fallback insertion
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Detect top-level YAML sections (no leading whitespace).
-		if len(trimmed) > 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") {
-			if strings.HasPrefix(trimmed, "weather:") {
-				inWeather = true
-				weatherLineIdx = i
-			} else if inWeather {
-				// Left the weather section — stop scanning.
-				break
-			}
-		}
-
-		if inWeather {
-			if strings.Contains(trimmed, "latitude:") {
-				prefix := line[:strings.Index(line, "latitude:")]
-				lines[i] = fmt.Sprintf("%slatitude: %g", prefix, lat)
-				latFound = true
-			}
-			if strings.Contains(trimmed, "longitude:") {
-				prefix := line[:strings.Index(line, "longitude:")]
-				lines[i] = fmt.Sprintf("%slongitude: %g", prefix, lon)
-				lonFound = true
-			}
-		}
-	}
-
-	// If either line was missing, insert both after the weather: line.
-	// We insert in reverse order so indices stay valid.
-	indent := "  " // match weather section indentation
-	if !lonFound {
-		newLine := fmt.Sprintf("%slongitude: %g", indent, lon)
-		lines = append(lines[:weatherLineIdx+1], append([]string{newLine}, lines[weatherLineIdx+1:]...)...)
-	}
-	if !latFound {
-		newLine := fmt.Sprintf("%slatitude: %g", indent, lat)
-		lines = append(lines[:weatherLineIdx+1], append([]string{newLine}, lines[weatherLineIdx+1:]...)...)
-	}
-
-	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
-}
-
 // ExportEnv sets process-level environment variables from config values
 // so that skill subprocesses can find them via os.Getenv(). This bridges
 // the gap between secrets stored in config.yaml and skills that check
@@ -483,9 +332,6 @@ func (c *Config) ExportEnv() {
 	// as skills declare new env requirements in their skill.md.
 	exports := map[string]string{
 		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
-		"TODOIST_API_KEY":    c.Todoist.APIKey,
-		"GITHUB_TOKEN":       c.GitHub.Token,
-		"FOURSQUARE_API_KEY": c.Foursquare.APIKey,
 		"OPENROUTER_API_KEY": c.LLM.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}
