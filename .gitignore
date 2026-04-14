@@ -44,9 +44,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-logs/stderr.log
-logs/stdout.log
+logs/
 her.log
+her-*.log
 
 # Skill sidecar databases (execution history)
 skills/**/*.db

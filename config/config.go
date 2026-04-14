@@ -23,6 +23,7 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
+	Debug     bool            `yaml:"debug"` // when true, logs full API request/response bodies
 	Identity  IdentityConfig  `yaml:"identity"`
 	Telegram  TelegramConfig  `yaml:"telegram"`
 	LLM       LLMConfig       `yaml:"llm"`

@@ -66,9 +66,14 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 				)
 
 			case ToolCallEvent:
+				prefix := "→"
+				if e.IsError {
+					prefix = "✗"
+				}
 				logger.WithPrefix("agent").Info(
-					fmt.Sprintf("→ %s: %s", e.ToolName, e.Result),
+					fmt.Sprintf("%s %s: %s", prefix, e.ToolName, e.Result),
 					"turn_id", e.TurnID,
+					"is_error", e.IsError,
 				)
 
 			case ContextEvent:

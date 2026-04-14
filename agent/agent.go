@@ -640,12 +640,15 @@ func Run(params RunParams) (*RunResult, error) {
 			turnIndex++
 
 			result := executeTool(tc, tctx)
+			isError := strings.HasPrefix(result, "error:")
 			log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
 			emit(tui.ToolCallEvent{
-				Time: time.Now(), TurnID: params.TriggerMsgID,
+				Time:     time.Now(),
+				TurnID:   params.TriggerMsgID,
 				ToolName: tc.Function.Name,
 				Args:     truncateLog(tc.Function.Arguments, 200),
 				Result:   truncateLog(result, 200),
+				IsError:  isError,
 			})
 
 			// Build the trace line for this tool call.

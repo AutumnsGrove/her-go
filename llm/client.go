@@ -19,6 +19,17 @@ import (
 // package in the project. Uses charmbracelet/log under the hood.
 var log = logger.WithPrefix("llm")
 
+// debugMode enables full API request/response logging. When true, the client
+// logs the entire messages array and response details to the file logger.
+// This is verbose but essential for debugging prompt issues.
+var debugMode bool
+
+// SetDebugMode enables or disables full API request/response logging.
+// Called from cmd/run.go based on the config.Debug setting.
+func SetDebugMode(enabled bool) {
+	debugMode = enabled
+}
+
 // Client talks to an OpenAI-compatible chat completions API.
 // If a fallback model is configured (via WithFallback), the client
 // automatically retries with the fallback on retriable errors —
@@ -340,6 +351,18 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
+	// Debug mode: log the full API request body. This is essential for
+	// debugging prompt issues but very verbose — only enable when needed.
+	if debugMode {
+		prettyJSON, _ := json.MarshalIndent(reqBody, "", "  ")
+		log.Debug("API_REQUEST",
+			"model", model,
+			"messages", len(messages),
+			"tools", len(tools),
+			"body", string(prettyJSON),
+		)
+	}
+
 	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -372,6 +395,19 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 
 	if len(apiResp.Choices) == 0 {
 		return nil, fmt.Errorf("LLM returned no choices")
+	}
+
+	// Debug mode: log response metadata. We don't log the full content
+	// (it's already visible in traces), just the usage stats.
+	if debugMode {
+		log.Debug("API_RESPONSE",
+			"model", apiResp.Model,
+			"finish_reason", apiResp.Choices[0].FinishReason,
+			"prompt_tokens", apiResp.Usage.PromptTokens,
+			"completion_tokens", apiResp.Usage.CompletionTokens,
+			"cost", apiResp.Usage.Cost,
+			"tool_calls", len(apiResp.Choices[0].Message.ToolCalls),
+		)
 	}
 
 	return &ChatResponse{
