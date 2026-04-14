@@ -1,0 +1,21 @@
+name: web_search
+description: >-
+  Search the web using Tavily. Returns relevant snippets and a synthesized
+  summary. Use when the user asks about current events, facts you don't know,
+  prices, schedules, or anything that needs up-to-date information.
+hot: false
+category: search
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: "Search query. Be specific — use keywords, not full sentences."
+    limit:
+      type: integer
+      description: "Max results to return (default 5, max 10)"
+  required:
+    - query
+trace:
+  emoji: "🔍"
+  format: "\"{{.query | escape}}\" → {{.Result | truncate 100 | escape}}"

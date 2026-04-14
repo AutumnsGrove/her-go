@@ -136,17 +136,20 @@ func init() {
 
 		var manifest toolManifest
 		if err := yaml.Unmarshal(data, &manifest); err != nil {
-			panic(fmt.Sprintf("tools: failed to parse %s: %v", yamlPath, err))
+			// Bad YAML in one tool shouldn't kill the whole bot — log and skip.
+			// The remaining tools still load. Infrastructure-level failures
+			// (embedded FS unreadable, categories.yaml broken) still panic below.
+			log.Warn("tools: failed to parse YAML, skipping tool", "path", yamlPath, "err", err)
+			continue
 		}
 
 		// Validate that the directory name matches the tool name.
 		// This catches copy-paste errors where someone copies a tool
 		// directory but forgets to update the name field.
 		if manifest.Name != entry.Name() {
-			panic(fmt.Sprintf(
-				"tools: directory %q contains tool named %q — these must match",
-				entry.Name(), manifest.Name,
-			))
+			log.Warn("tools: directory/name mismatch, skipping tool",
+				"dir", entry.Name(), "name", manifest.Name)
+			continue
 		}
 
 		// Convert the YAML manifest to an llm.ToolDef.
@@ -536,9 +539,7 @@ func UseToolsDef() llm.ToolDef {
 			Description: fmt.Sprintf(
 				"Load additional tools you need for this turn. Call BEFORE using a deferred tool. "+
 					"Pass category names or individual tool names. Loaded tools stay available for "+
-					"the rest of this turn.\n\nCategories: %s\n\n"+
-					"For web search, book lookup, and other external capabilities: use find_skill to "+
-					"discover skills, then run_skill to execute them.",
+					"the rest of this turn.\n\nCategories: %s",
 				catDesc,
 			),
 			Parameters: map[string]interface{}{

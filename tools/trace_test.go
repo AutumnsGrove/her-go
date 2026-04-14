@@ -56,11 +56,11 @@ func TestFormatTrace(t *testing.T) {
 			wantSub:  "🔧",
 		},
 		{
-			name:     "get_current_time shows result",
-			tool:     "get_current_time",
-			argsJSON: `{}`,
-			result:   "Monday, March 30, 2026 at 5:30 PM (BST)",
-			wantSub:  "🕐",
+			name:     "web_search shows query",
+			tool:     "web_search",
+			argsJSON: `{"query":"best coffee in Portland"}`,
+			result:   "**Summary:** Great coffee scene\n**Sources:**\n1. ...",
+			wantSub:  "🔍",
 		},
 	}
 
