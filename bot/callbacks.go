@@ -1,18 +1,8 @@
-// callbacks.go — Inline keyboard sending and callback handling.
+// callbacks.go — Inline keyboard callback handling.
 //
-// This file bridges the scheduler's Telegram-agnostic keyboard types
-// (scheduler.Button, scheduler.InlineKeyboard) to real telebot types,
-// and routes callback queries when users click buttons.
-//
-// The flow:
-//  1. Scheduler fires a task (e.g., mood_checkin)
-//  2. Task executor builds a KeyboardMessage with shared types
-//  3. Scheduler calls sendKeyboardFn (a closure wired in cmd/run.go)
-//  4. That closure calls SendKeyboardToChat here, which translates
-//     to telebot types and sends via the Telegram API
-//  5. User clicks a button → Telegram sends a callback query
-//  6. telebot routes it by the button's Unique field to the right handler
-//  7. Handler processes the action (save mood, log meds, etc.)
+// Routes callback queries when users click inline buttons (pagination,
+// confirmations, etc.). Each button's Unique field maps to a handler
+// registered in registerCallbackHandlers.
 package bot
 
 import (
@@ -24,50 +14,9 @@ import (
 
 	"her/agent"
 	"her/memory"
-	"her/scheduler"
 
 	tele "gopkg.in/telebot.v4"
 )
-
-// SendKeyboardToChat sends a message with an inline keyboard to a
-// specific chat. This is the concrete implementation behind
-// scheduler.SendKeyboardFunc — it translates the scheduler's
-// Telegram-free types into real telebot API calls.
-//
-// In telebot v4, inline keyboards use a builder pattern:
-//
-//	markup := &tele.ReplyMarkup{}
-//	btn := markup.Data("display text", "unique_key", "data_value")
-//	markup.Inline(markup.Row(btn1, btn2, ...))
-//
-// The "unique_key" is what routes callbacks to handlers (registered
-// via tb.Handle(&tele.InlineButton{Unique: "key"}, handler)).
-// The "data_value" is the payload the handler receives.
-func (b *Bot) SendKeyboardToChat(chatID int64, msg scheduler.KeyboardMessage) error {
-	markup := &tele.ReplyMarkup{}
-
-	var rows []tele.Row
-	for _, kbRow := range msg.Keyboard {
-		var btns []tele.Btn
-		for _, btn := range kbRow {
-			// markup.Data(text, unique, data...) creates an inline button.
-			// "unique" routes the callback, "data" is the payload.
-			btns = append(btns, markup.Data(btn.Text, btn.Action, btn.Value))
-		}
-		rows = append(rows, markup.Row(btns...))
-	}
-	markup.Inline(rows...)
-
-	_, err := b.tb.Send(
-		chatRecipient{chatID: fmt.Sprintf("%d", chatID)},
-		msg.Text,
-		&tele.SendOptions{
-			ParseMode:   tele.ModeHTML,
-			ReplyMarkup: markup,
-		},
-	)
-	return err
-}
 
 // registerCallbackHandlers sets up handlers for inline button callbacks.
 // Each Action value used in Button types needs a corresponding handler

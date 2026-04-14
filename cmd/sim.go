@@ -15,7 +15,6 @@ import (
 	"her/memory"
 	"her/scrub"
 	"her/search"
-	"her/skills/loader"
 
 	// Underscore import: registers the SQLite driver with database/sql.
 	// We need this for the sim.db connection (separate from memory.Store
@@ -449,31 +448,6 @@ func runSim(cmd *cobra.Command, args []string) error {
 		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
 	}
 
-	// Load skills registry for find_skill/run_skill.
-	skillsDir := filepath.Join(filepath.Dir(cfgFile), "skills")
-	skillReg := loader.NewRegistry(skillsDir, embedClient)
-	if count, err := skillReg.Load(); err != nil {
-		log.Warn("failed to load skills", "err", err)
-	} else if count > 0 {
-		log.Info("skills loaded", "count", count)
-	}
-	if embedClient != nil {
-		loader.SetEmbedClient(embedClient)
-	}
-
-	// Start DB proxy so skills with database permissions (like log_mood)
-	// can write to the sim's temp DB. Same as cmd/run.go but pointing at
-	// tmpDBPath instead of cfg.Memory.DBPath — skills write to the
-	// clean-room DB, not the real her.db.
-	dbProxy, dbProxyErr := loader.NewDBProxy(tmpDBPath, nil)
-	if dbProxyErr != nil {
-		log.Warn("db proxy failed to start — skills will not have database access", "err", dbProxyErr)
-	} else {
-		loader.SetDBProxy(dbProxy)
-		defer dbProxy.Close()
-		log.Info("db proxy started for sim", "port", dbProxy.Port())
-	}
-
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
@@ -565,7 +539,6 @@ func runSim(cmd *cobra.Command, args []string) error {
 			ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
 			RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
 			ConfigPath:          cfgFile,
-			SkillRegistry:       skillReg,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)

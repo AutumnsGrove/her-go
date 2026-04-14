@@ -16,10 +16,7 @@ func init() {
 }
 
 func buildChatTime(ctx *LayerContext) LayerResult {
-	loc, err := time.LoadLocation(ctx.Cfg.Scheduler.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
+	loc := time.Local
 	now := time.Now().In(loc)
 	content := "# Current Time\n" + now.Format("Monday, January 2, 2006 at 3:04 PM (MST)")
 	return LayerResult{Content: content}

@@ -20,9 +20,7 @@ import (
 	"her/memory"
 	"her/scrub"
 	"her/search"
-	"her/skills/loader"
 	"her/tui"
-	"her/weather"
 )
 
 // ---------------------------------------------------------------------------
@@ -102,17 +100,9 @@ type Context struct {
 	// EmbedClient generates embedding vectors for semantic search.
 	EmbedClient *embed.Client
 
-	// SkillRegistry holds discovered skills for find_skill/run_skill.
-	// Nil if no skills/ directory exists.
-	SkillRegistry *loader.Registry
-
 	// TavilyClient provides web search and URL extraction. Nil if not
 	// configured.
 	TavilyClient *search.TavilyClient
-
-	// WeatherClient fetches current weather from Open-Meteo. Nil if
-	// no lat/lon configured.
-	WeatherClient *weather.Client
 
 	// --- Callbacks (all nil-safe) ---
 

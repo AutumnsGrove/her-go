@@ -13,19 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"her/agent"
 	"her/bot"
 	"her/config"
 	"her/embed"
 	"her/llm"
 	"her/logger"
 	"her/memory"
-	"her/scheduler"
 	"her/search"
-	"her/skills/loader"
 	"her/tui"
 	"her/voice"
-	"her/weather"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -297,7 +293,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		}()
 	}
 
-	// --- Search + weather ---
+	// --- Search ---
 
 	var tavilyClient *search.TavilyClient
 	if cfg.Search.TavilyAPIKey != "" {
@@ -305,15 +301,6 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "ready"})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "skipped"})
-	}
-
-	weatherClient := weather.NewClient(
-		cfg.Weather.Latitude, cfg.Weather.Longitude,
-		cfg.Weather.TempUnit, cfg.Weather.WindSpeedUnit,
-		cfg.Weather.CacheTTL,
-	)
-	if weatherClient != nil {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "weather", Status: "ready"})
 	}
 
 	// --- Sidecars (STT/TTS) with pipe capture ---
@@ -334,151 +321,16 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "tts", Status: "skipped"})
 	}
 
-	// --- Skills registry ---
-	// Discover and load skills from the skills/ directory.
-	// The registry is optional — if no skills exist or the directory
-	// is missing, everything still works (find_skill returns "no skills").
-	skillsDir := filepath.Join(filepath.Dir(cfgFile), "skills")
-	skillReg := loader.NewRegistry(skillsDir, embedClient)
-	if count, err := skillReg.Load(); err != nil {
-		log.Warn("failed to load skills", "err", err)
-	} else if count > 0 {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "skills", Status: fmt.Sprintf("%d loaded", count)})
-	} else {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "skills", Status: "none found"})
-	}
-
-	// --- Skill network proxy ---
-	// Start the SSRF-preventing proxy for untrusted skills. Listens on a
-	// random localhost port. 3rd/4th party skills get HTTP_PROXY env vars
-	// pointing here; 2nd party skills connect directly.
-	skillProxy, proxyErr := loader.NewSkillProxy()
-	if proxyErr != nil {
-		log.Warn("skill proxy failed to start — untrusted skills will have direct network access", "err", proxyErr)
-	} else {
-		loader.SetSkillProxy(skillProxy)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "proxy", Status: "ready", Detail: fmt.Sprintf("port=%d", skillProxy.Port())})
-	}
-
-	// --- Skill database proxy ---
-	// Start the DB proxy for skills that need database access. Listens on a
-	// random localhost port. Skills get DB_PROXY_URL env vars pointing here.
-	// The proxy enforces table-level access control based on trust tier.
-	dbProxy, dbProxyErr := loader.NewDBProxy(cfg.Memory.DBPath, bus)
-	if dbProxyErr != nil {
-		log.Warn("db proxy failed to start — skills will not have database access", "err", dbProxyErr)
-	} else {
-		loader.SetDBProxy(dbProxy)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dbproxy", Status: "ready", Detail: fmt.Sprintf("port=%d", dbProxy.Port())})
-	}
-
-	// Pass the embed client to the skill runner for sidecar DB writes.
-	// Skills record their execution history with embedded results for
-	// semantic search via search_history.
-	if embedClient != nil {
-		loader.SetEmbedClient(embedClient)
-	}
-
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, classifierClient, embedClient, tavilyClient, weatherClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()
 		return
 	}
-	tgBot.SetSkillRegistry(skillReg)
 	tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
-
-	// --- Skill failure events ---
-	// When a skill fails, emit an event so the agent can proactively respond.
-	loader.SetSkillFailedCallback(func(skillName, errMsg string) {
-		tgBot.AgentEventChannel() <- agent.AgentEvent{
-			Type:      agent.EventSkillFailed,
-			SkillName: skillName,
-			Error:     errMsg,
-			Timestamp: time.Now(),
-		}
-	})
-
-	// --- DDL audit events ---
-	// When a 4th-party skill modifies its sidecar schema, the agent reviews
-	// the change and decides whether to notify, log, or quarantine.
-	if dbProxy != nil {
-		dbProxy.SetDDLCallback(func(skillName, statement string) {
-			tgBot.AgentEventChannel() <- agent.AgentEvent{
-				Type:         agent.EventDDLDetected,
-				SkillName:    skillName,
-				DDLStatement: statement,
-				Timestamp:    time.Now(),
-			}
-		})
-	}
-
-	// --- Scheduler ---
-
-	var sched *scheduler.Scheduler
-	if cfg.Telegram.OwnerChat != 0 {
-		ownerChat := cfg.Telegram.OwnerChat
-		sendFn := func(text string) error { return tgBot.SendToChat(ownerChat, text) }
-
-		// Scheduler emits agent events instead of calling agent.Run directly.
-		// The bot's event consumption loop handles the actual agent run.
-		agentEventFn := func(taskName, prompt string) {
-			tgBot.AgentEventChannel() <- agent.AgentEvent{
-				Type:      agent.EventSchedulerFired,
-				Prompt:    prompt,
-				TaskName:  taskName,
-				Timestamp: time.Now(),
-			}
-		}
-
-		var defaults []scheduler.DefaultTask
-		if cfg.Scheduler.MorningBriefing {
-			defaults = append(defaults, scheduler.DefaultTask{
-				Name: "morning briefing", CronExpr: "0 8 * * *", TaskType: "run_prompt", Priority: "normal",
-				Payload: []byte(`{"prompt":"Generate a morning briefing. Check your available tool categories for anything useful — tasks, weather, recent memories, whatever is relevant today. Keep it warm and concise, a few sentences, not a report. If nothing interesting is going on, just say good morning."}`),
-			})
-		}
-		if cfg.Scheduler.MoodCheckin {
-			defaults = append(defaults, scheduler.DefaultTask{
-				Name: "mood check-in", CronExpr: "0 21 * * *", TaskType: "mood_checkin", Priority: "normal",
-				Payload: []byte(`{"style":"gentle","follow_up":true}`),
-			})
-		}
-		if cfg.Scheduler.MedicationCheckin {
-			defaults = append(defaults, scheduler.DefaultTask{
-				Name: "medication check-in", CronExpr: "0 21 * * *", TaskType: "medication_checkin", Priority: "critical",
-				Payload: []byte(`{"time_of_day":"evening"}`),
-			})
-		}
-		if cfg.Scheduler.ProactiveFollowups {
-			defaults = append(defaults, scheduler.DefaultTask{
-				Name: "proactive follow-ups", CronExpr: "0 9 * * *", TaskType: "run_prompt", Priority: "normal",
-				Payload: []byte(`{"prompt":"Scan facts from the last 48 hours. If any warrant a follow-up (job interview, feeling rough, new medication, etc.), send a brief, warm check-in. If nothing stands out, do nothing — do NOT send a message just to say there's nothing to follow up on."}`),
-			})
-		}
-		if cfg.Scheduler.AutoJournal {
-			defaults = append(defaults, scheduler.DefaultTask{
-				Name: "auto-journal", CronExpr: "0 22 * * *", TaskType: "run_journal", Priority: "normal",
-				Payload: []byte(`{"style":"narrative"}`),
-			})
-		}
-
-		sendKeyboardFn := func(msg scheduler.KeyboardMessage) error {
-			return tgBot.SendKeyboardToChat(ownerChat, msg)
-		}
-
-		sched = scheduler.New(store, sendFn, sendKeyboardFn, agentEventFn, tgBot.IsAgentBusy, cfg.Scheduler.Timezone, scheduler.SchedulerOpts{
-			QuietHoursStart: cfg.Scheduler.QuietHoursStart, QuietHoursEnd: cfg.Scheduler.QuietHoursEnd,
-			MaxProactivePerDay: cfg.Scheduler.MaxProactivePerDay, Defaults: defaults,
-		})
-		sched.Start()
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "scheduler", Status: "ready"})
-	} else {
-		log.Warn("scheduler disabled — set telegram.owner_chat in config.yaml (use /status to find your chat ID)")
-	}
 
 	// --- Signal handling + bot start ---
 	// Listen for SIGINT/SIGTERM. When received, shut everything down
@@ -503,15 +355,6 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	}
 
 	// --- Cleanup ---
-	if sched != nil {
-		sched.Stop()
-	}
-	if skillProxy != nil {
-		skillProxy.Close()
-	}
-	if dbProxy != nil {
-		dbProxy.Close()
-	}
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
 		_ = syscall.Kill(-sttProcess.Process.Pid, syscall.SIGKILL)

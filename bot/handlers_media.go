@@ -10,8 +10,6 @@ import (
 	"os"
 	"time"
 
-	"her/ocr"
-
 	tele "gopkg.in/telebot.v4"
 )
 
@@ -77,24 +75,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	log.Infof("  photo: %dx%d, %s, %d bytes", photo.Width, photo.Height, imageMIME, len(imageBytes))
 
-	// Step 4: Pre-flight OCR — extract text from the image before the
-	// agent runs. This is free (Apple Vision Neural Engine, sub-200ms)
-	// and lets the agent triage photos without a VLM call. Receipts get
-	// routed to scan_receipt, other images fall through to view_image.
-	var ocrText string
-	if b.ocrEnabled {
-		ocrResult, ocrErr := ocr.Extract(imageBytes, &b.cfg.OCR)
-		if ocrErr != nil {
-			log.Warn("pre-flight OCR failed (non-fatal)", "err", ocrErr)
-		} else if ocrResult != nil && ocrResult.Text != "" {
-			ocrText = ocrResult.Text
-			log.Infof("  OCR: %d chars, %.2f confidence (%s)", len(ocrText), ocrResult.Confidence, ocrResult.Engine)
-		} else {
-			log.Info("  OCR: no text detected")
-		}
-	}
-
-	// Step 5: Build the user message text.
+	// Build the user message text.
 	// The agent sees this as the "user said" content. The image itself
 	// travels separately via RunParams.ImageBase64.
 	userText := "[User sent a photo]"
@@ -141,7 +122,6 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		TriggerMsgID:   msgID,
 		ImageBase64:    imageBase64,
 		ImageMIME:      imageMIME,
-		OCRText:        ocrText,
 	})
 }
 

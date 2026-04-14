@@ -236,11 +236,7 @@ func (b *Bot) handleSchedule(c tele.Context) error {
 		return c.Send("No scheduled tasks. Use /remind to create one!")
 	}
 
-	// Load timezone for display.
-	loc, err := time.LoadLocation(b.cfg.Scheduler.Timezone)
-	if err != nil {
-		loc = time.UTC
-	}
+	loc := time.Local
 
 	var sb strings.Builder
 	sb.WriteString("<b>📋 Scheduled Tasks</b>\n\n")

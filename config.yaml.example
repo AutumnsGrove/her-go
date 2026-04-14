@@ -57,14 +57,6 @@ search:
   tavily_api_key: "${TAVILY_API_KEY}"
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
 
-ocr:
-  vision_ocr_path: "macos-vision-ocr"    # path to macos-vision-ocr binary (or name if on PATH)
-  confidence_threshold: 0.5               # below this → fallback to GLM-OCR (0.0-1.0)
-  fallback:
-    engine: "glm-ocr"                     # purpose-built OCR model (0.9B, MIT licensed)
-    base_url: "http://localhost:1234/v1"  # LM Studio endpoint (same instance as embeddings)
-    model: "glm-ocr"                      # model name in LM Studio
-
 memory:
   db_path: "./her.db"
   recent_messages: 10            # sliding window size (compaction summaries cover older context)
@@ -88,36 +80,6 @@ persona:
   rewrite_every_n_reflections: 3
   reflection_memory_threshold: 8     # trigger reflection when N+ facts extracted from one conversation
   max_trait_shift: 0.1               # max trait score change per rewrite cycle
-
-scheduler:
-  timezone: "America/New_York"
-  quiet_hours_start: "23:00"
-  quiet_hours_end: "07:00"
-  max_proactive_per_day: 5
-  morning_briefing: false
-  mood_checkin: false
-  medication_checkin: false
-  proactive_followups: false
-  auto_journal: false
-
-todoist:
-  api_key: "${TODOIST_API_KEY}"  # from https://app.todoist.com/app/settings/integrations/developer
-
-github:
-  token: "${GITHUB_TOKEN}"  # personal access token with "repo" scope (or fine-grained with Issues permission)
-  repos:                     # allow-list of repos the agent can access
-    # - "YourUser/your-repo"
-    # - "YourOrg/another-repo"
-
-foursquare:
-  api_key: "${FOURSQUARE_API_KEY}"  # from https://foursquare.com/developers/signup (10k calls/month free)
-
-weather:
-  latitude: 0                    # your location — set via set_location tool or manually here
-  longitude: 0                   # Open-Meteo is free, no API key needed
-  temp_unit: "fahrenheit"        # "fahrenheit" or "celsius"
-  wind_speed_unit: "mph"         # "mph" or "kmh"
-  cache_ttl: 3600                # seconds between API refreshes (default: 1 hour)
 
 voice:
   enabled: false                                                  # set true to accept voice memos
