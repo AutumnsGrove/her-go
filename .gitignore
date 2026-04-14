@@ -21,6 +21,7 @@ her
 
 # Go
 vendor/
+.gocache/
 
 # Python
 __pycache__/
