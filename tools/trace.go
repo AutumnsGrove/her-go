@@ -107,9 +107,12 @@ func compileTraceSpec(name string, spec traceSpec) *compiledTrace {
 	if spec.Format != "" {
 		tmpl, err := template.New(name).Funcs(traceFuncs).Parse(spec.Format)
 		if err != nil {
-			panic(fmt.Sprintf("tools: bad trace template for %q: %v", name, err))
+			// Bad template in a per-tool YAML — log and degrade gracefully.
+			// FormatTrace will fall back to the generic "🔧 name → result" format.
+			log.Warn("tools: bad trace template, using generic fallback", "tool", name, "err", err)
+		} else {
+			ct.tmpl = tmpl
 		}
-		ct.tmpl = tmpl
 	}
 
 	if spec.OnReject != nil {
@@ -120,7 +123,10 @@ func compileTraceSpec(name string, spec traceSpec) *compiledTrace {
 		if spec.OnReject.Format != "" {
 			tmpl, err := template.New(name + "_reject").Funcs(traceFuncs).Parse(spec.OnReject.Format)
 			if err != nil {
-				panic(fmt.Sprintf("tools: bad reject trace template for %q: %v", name, err))
+				// Bad reject template — skip the reject spec entirely.
+				// The tool will still get its normal trace format on rejection.
+				log.Warn("tools: bad reject trace template, disabling reject format", "tool", name, "err", err)
+				return ct
 			}
 			cr.tmpl = tmpl
 		}

@@ -8,13 +8,15 @@ func TestYAMLLoader(t *testing.T) {
 	// These are loaded at init time from embedded YAML files.
 	// If this test runs, init() already succeeded.
 
-	// Check that all 26 tools loaded from YAML.
-	if len(toolDefs) != 26 {
-		t.Errorf("expected 26 tools, got %d", len(toolDefs))
+	// Check that all expected tools loaded from YAML.
+	// Update this count when tools are added or removed.
+	const expectedToolCount = 12
+	if len(toolDefs) != expectedToolCount {
+		t.Errorf("expected %d tools, got %d", expectedToolCount, len(toolDefs))
 	}
 
-	// Spot-check a few specific tools.
-	expectedTools := []string{"think", "done", "no_action", "get_current_time", "reply", "save_fact", "scan_receipt", "view_image"}
+	// Spot-check the core tool set (post-Phase-1 scope).
+	expectedTools := []string{"think", "done", "reply", "save_fact", "view_image", "web_search", "web_read"}
 	for _, name := range expectedTools {
 		def, ok := LookupDef(name)
 		if !ok {
@@ -37,7 +39,6 @@ func TestYAMLLoader(t *testing.T) {
 	hots := HotToolNames()
 	t.Logf("  hot tools: %v", hots)
 
-	// think, done, no_action should be hot; get_current_time should not.
 	hotSet := map[string]bool{}
 	for _, h := range hots {
 		hotSet[h] = true
@@ -48,25 +49,38 @@ func TestYAMLLoader(t *testing.T) {
 	if !hotSet["done"] {
 		t.Error("done should be hot")
 	}
-	if hotSet["get_current_time"] {
-		t.Error("get_current_time should NOT be hot")
+	// Deferred tools (loaded on demand) must NOT be hot.
+	if hotSet["web_search"] {
+		t.Error("web_search should NOT be hot (it's a deferred search tool)")
+	}
+	if hotSet["recall_memories"] {
+		t.Error("recall_memories should NOT be hot (it's in the memory category)")
 	}
 
 	// Check categories.
 	cats := Categories()
 	t.Logf("  categories: %v", cats)
-	if members, ok := cats["context"]; ok {
-		found := false
-		for _, m := range members {
-			if m == "get_current_time" {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("get_current_time should be in context category")
-		}
+
+	// search category must exist and contain web_search and web_read.
+	searchMembers, ok := cats["search"]
+	if !ok {
+		t.Error("search category not found")
 	} else {
-		t.Error("context category not found")
+		searchSet := map[string]bool{}
+		for _, m := range searchMembers {
+			searchSet[m] = true
+		}
+		if !searchSet["web_search"] {
+			t.Error("web_search should be in search category")
+		}
+		if !searchSet["web_read"] {
+			t.Error("web_read should be in search category")
+		}
+	}
+
+	// memory category must exist.
+	if _, ok := cats["memory"]; !ok {
+		t.Error("memory category not found")
 	}
 
 	// Check think's parameters have the thought property.

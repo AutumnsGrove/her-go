@@ -32,7 +32,11 @@ var toolHandlers = map[string]Handler{}
 // overwriting, which would be a nasty bug to track down.
 func Register(name string, h Handler) {
 	if _, exists := toolHandlers[name]; exists {
-		panic(fmt.Sprintf("tools: duplicate handler registration for %q", name))
+		// Duplicate registrations can happen if a tool's init() fires twice
+		// (e.g., imported via two paths). Log and skip rather than crashing —
+		// the first registration wins, which is the correct behavior anyway.
+		log.Warn("tools: duplicate handler registration, skipping", "tool", name)
+		return
 	}
 	toolHandlers[name] = h
 	log.Debug("registered tool handler", "tool", name)

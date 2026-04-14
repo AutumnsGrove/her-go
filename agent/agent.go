@@ -34,6 +34,8 @@ import (
 	_ "her/tools/update_persona"
 	_ "her/tools/use_tools"
 	_ "her/tools/view_image"
+	_ "her/tools/web_read"
+	_ "her/tools/web_search"
 )
 
 // log is the package-level logger for the agent package.
@@ -453,239 +455,197 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// nudgedToolUse tracks whether we've already retried with
-	// tool_choice="required". We only nudge once — if the model still
-	// doesn't call tools after the nudge, fall through to the text fallback.
-	nudgedToolUse := false
+	// Agent loop constants. The outer loop provides continuation windows —
+	// if the agent runs out of iterations without calling done, it gets
+	// a fresh window (up to maxContinuations times) with a summary of
+	// progress so far injected as context.
+	const (
+		iterationsPerWindow = 15
+		maxContinuations    = 3 // 4 windows total = 60 calls hard cap
+	)
 
-	for i := 0; i < 10; i++ {
-		resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs)
-		if err != nil {
-			// The LLM client handles fallback automatically on retriable
-			// errors (429, 500-503, timeout). If we still get an error here,
-			// both primary and fallback failed — bail out of the agent loop.
-			log.Error("LLM error (primary + fallback both failed)", "err", err)
+outer:
+	for window := 0; window <= maxContinuations; window++ {
+		if window > 0 {
+			// We exhausted the previous window without a done signal.
+			// Inject a continuation context so the agent knows where it
+			// left off and is prompted to update the user immediately.
+			summary := buildContinuationSummary(traceLines)
+			messages = append(messages, llm.ChatMessage{
+				Role: "system",
+				Content: fmt.Sprintf(
+					"You have used all %d iterations in the previous window without calling done. "+
+						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
+						"IMPORTANT: Call reply immediately to update the user on your progress, "+
+						"then continue your work and call done when finished.",
+					iterationsPerWindow, window, maxContinuations, summary,
+				),
+			})
+			log.Infof("  continuation window %d/%d", window, maxContinuations)
 			if tracing {
-				traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
+				traceLines = append(traceLines, fmt.Sprintf(
+					"🔄 <i>continuation window %d/%d</i>", window, maxContinuations))
 				sendTrace()
 			}
-			break
 		}
 
-		// Log agent metrics and accumulate cost for RunResult.
-		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
-		totalCost += resp.CostUSD
-		log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
-			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-		// Surface model fallback in traces so it's visible in Telegram.
-		if tracing && resp.UsedFallback {
-			traceLines = append(traceLines, fmt.Sprintf("⚡ <i>agent fallback: %s</i>", resp.Model))
-			sendTrace()
-		}
-		emit(tui.AgentIterEvent{
-			Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i,
-			PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
-			CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
-		})
-
-		// --- Check finish_reason to decide how to proceed ---
-		hasToolCalls := len(resp.ToolCalls) > 0
-
-		if !hasToolCalls {
-			if resp.Content != "" {
-				trimmed := strings.TrimSpace(strings.ToLower(resp.Content))
-				// If the agent just typed "done" as text instead of calling
-				// the done tool, treat it as a done signal. MiniMax does this.
-				if trimmed == "done" || trimmed == "done." {
-					log.Info("  agent typed 'done' as text (treating as done signal)")
-					break
+		for i := 0; i < iterationsPerWindow; i++ {
+			resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs)
+			if err != nil {
+				// The LLM client handles fallback automatically on retriable
+				// errors (429, 500-503, timeout). If we still get an error here,
+				// both primary and fallback failed — bail out of the agent loop.
+				log.Error("LLM error (primary + fallback both failed)", "err", err)
+				if tracing {
+					traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
+					sendTrace()
 				}
-
-				// --- Nudge: retry with tool_choice="required" ---
-				// Diffusion models (Mercury 2) sometimes skip tool-calling
-				// on simple messages (greetings, short replies), returning
-				// plain text instead. Rather than always forcing "required"
-				// (which can cause garbage tool calls), we detect the miss
-				// and retry once with "required" as a gentle nudge.
-				if !nudgedToolUse {
-					nudgedToolUse = true
-					log.Warn("  agent skipped tools — retrying with tool_choice=required")
-					if tracing {
-						traceLines = append(traceLines, "🔄 <i>nudge: retrying with tool_choice=required</i>")
-						sendTrace()
-					}
-					// Feed the agent's text back as context so it doesn't
-					// lose its train of thought on the retry.
-					messages = append(messages, llm.ChatMessage{
-						Role:    "assistant",
-						Content: resp.Content,
-					})
-					messages = append(messages, llm.ChatMessage{
-						Role:    "user",
-						Content: "You must use your tools to respond. Call the reply tool with an instruction for how to respond, then call done. Do not respond with plain text.",
-					})
-					resp, err = params.AgentLLM.ChatCompletionWithTools(messages, toolDefs, "required")
-					if err != nil {
-						log.Error("nudge LLM error", "err", err)
-						break
-					}
-					params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
-					totalCost += resp.CostUSD
-					log.Infof("  nudge: %d prompt + %d completion | $%.6f | finish=%s",
-						resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-					// Surface model fallback on the nudge call too.
-					if tracing && resp.UsedFallback {
-						traceLines = append(traceLines, fmt.Sprintf("⚡ <i>nudge fallback: %s</i>", resp.Model))
-						sendTrace()
-					}
-
-					// Check if the nudge worked.
-					hasToolCalls = len(resp.ToolCalls) > 0
-					if tracing {
-						if hasToolCalls {
-							traceLines = append(traceLines, "✅ <i>nudge succeeded</i>")
-						} else {
-							traceLines = append(traceLines,
-								fmt.Sprintf("❌ <i>nudge failed — model returned text: %s</i>",
-									escapeHTML(truncateLog(resp.Content, 120))))
-						}
-						sendTrace()
-					}
-					if !hasToolCalls {
-						log.Warn("  nudge failed — model still returned text, falling back")
-						agentFinalText = resp.Content
-						break
-					}
-					// Fall through to tool execution below.
-				} else {
-					log.Warnf("  agent returned text (nudge already attempted): %s", truncateLog(resp.Content, 200))
-					agentFinalText = resp.Content
-					break
-				}
-			} else {
-				log.Info("  done (no actions)")
-				break
+				break outer
 			}
-		}
 
-		// --- Loop detection ---
-		if len(resp.ToolCalls) == 1 && resp.ToolCalls[0].Function.Name == "think" {
-			if resp.ToolCalls[0].Function.Arguments == lastThinkContent {
-				repeatCount++
-				if repeatCount >= 2 {
-					log.Warn("think loop detected, forcing exit", "repeats", repeatCount+1)
-					if tracing {
-						traceLines = append(traceLines, "⚠️ <i>loop detected — forcing exit</i>")
-						sendTrace()
+			// Log agent metrics and accumulate cost for RunResult.
+			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
+			totalCost += resp.CostUSD
+			log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
+				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
+
+			// Surface model fallback in traces so it's visible in Telegram.
+			if tracing && resp.UsedFallback {
+				traceLines = append(traceLines, fmt.Sprintf("⚡ <i>agent fallback: %s</i>", resp.Model))
+				sendTrace()
+			}
+			emit(tui.AgentIterEvent{
+				Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
+				PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+				CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
+			})
+
+			// --- Check finish_reason to decide how to proceed ---
+			hasToolCalls := len(resp.ToolCalls) > 0
+
+			if !hasToolCalls {
+				if resp.Content != "" {
+					trimmed := strings.TrimSpace(strings.ToLower(resp.Content))
+					// If the agent just typed "done" as text instead of calling
+					// the done tool, treat it as a done signal. Some models do this.
+					if trimmed == "done" || trimmed == "done." {
+						log.Info("  agent typed 'done' as text (treating as done signal)")
+						break outer
 					}
-					break
+					// Model returned plain text instead of a tool call. Kimi K2.5
+					// and Trinity are thinking models — if they skip tool calls it's
+					// a prompting problem, not a model capability problem. Save the
+					// text as a fallback instruction and exit gracefully.
+					log.Warnf("  agent returned text instead of tool calls: %s", truncateLog(resp.Content, 200))
+					agentFinalText = resp.Content
+					break outer
+				}
+				log.Info("  done (no actions)")
+				break outer
+			}
+
+			// --- Loop detection ---
+			if len(resp.ToolCalls) == 1 && resp.ToolCalls[0].Function.Name == "think" {
+				if resp.ToolCalls[0].Function.Arguments == lastThinkContent {
+					repeatCount++
+					if repeatCount >= 2 {
+						log.Warn("think loop detected, forcing exit", "repeats", repeatCount+1)
+						if tracing {
+							traceLines = append(traceLines, "⚠️ <i>loop detected — forcing exit</i>")
+							sendTrace()
+						}
+						break outer
+					}
+				} else {
+					lastThinkContent = resp.ToolCalls[0].Function.Arguments
+					repeatCount = 0
 				}
 			} else {
-				lastThinkContent = resp.ToolCalls[0].Function.Arguments
+				lastThinkContent = ""
 				repeatCount = 0
 			}
-		} else {
-			lastThinkContent = ""
-			repeatCount = 0
-		}
 
-		log.Infof("  %d tool call(s):", len(resp.ToolCalls))
+			log.Infof("  %d tool call(s):", len(resp.ToolCalls))
 
-		// Append the assistant message with tool calls to the conversation.
-		messages = append(messages, llm.ChatMessage{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
-		})
-
-		// Execute each tool call, feed results back to the model,
-		// and build trace lines for observability.
-		for _, tc := range resp.ToolCalls {
-			totalToolCalls++
-			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
-			turnIndex++
-
-			result := executeTool(tc, tctx)
-			isError := strings.HasPrefix(result, "error:")
-			log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
-			emit(tui.ToolCallEvent{
-				Time:     time.Now(),
-				TurnID:   params.TriggerMsgID,
-				ToolName: tc.Function.Name,
-				Args:     truncateLog(tc.Function.Arguments, 200),
-				Result:   truncateLog(result, 200),
-				IsError:  isError,
+			// Append the assistant message with tool calls to the conversation.
+			messages = append(messages, llm.ChatMessage{
+				Role:      "assistant",
+				Content:   resp.Content,
+				ToolCalls: resp.ToolCalls,
 			})
 
-			// Build the trace line for this tool call.
-			if tracing {
-				line := formatTraceLine(tc.Function.Name, tc.Function.Arguments, result)
-				// If the chat model fell back during a reply, annotate the trace
-				// so it's obvious which model generated the user-facing response.
-				if tc.Function.Name == "reply" && tctx.ReplyUsedFallback {
-					var rArgs struct {
-						Instruction string `json:"instruction"`
+			// Execute each tool call, feed results back to the model,
+			// and build trace lines for observability.
+			for _, tc := range resp.ToolCalls {
+				totalToolCalls++
+				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
+				turnIndex++
+
+				result := executeTool(tc, tctx)
+				isError := strings.HasPrefix(result, "error:")
+				log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
+				emit(tui.ToolCallEvent{
+					Time:     time.Now(),
+					TurnID:   params.TriggerMsgID,
+					ToolName: tc.Function.Name,
+					Args:     truncateLog(tc.Function.Arguments, 200),
+					Result:   truncateLog(result, 200),
+					IsError:  isError,
+				})
+
+				// Build the trace line for this tool call.
+				if tracing {
+					line := formatTraceLine(tc.Function.Name, tc.Function.Arguments, result)
+					// If the chat model fell back during a reply, annotate the trace
+					// so it's obvious which model generated the user-facing response.
+					if tc.Function.Name == "reply" && tctx.ReplyUsedFallback {
+						var rArgs struct {
+							Instruction string `json:"instruction"`
+						}
+						json.Unmarshal([]byte(tc.Function.Arguments), &rArgs)
+						line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
+							tctx.ReplyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
 					}
-					json.Unmarshal([]byte(tc.Function.Arguments), &rArgs)
-					line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
-						tctx.ReplyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
+					traceLines = append(traceLines, line)
+					sendTrace()
 				}
-				traceLines = append(traceLines, line)
+
+				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
+				turnIndex++
+
+				messages = append(messages, llm.ChatMessage{
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID,
+				})
+			}
+
+			// Exit when the agent explicitly signals it's done.
+			// (The "done" trace line is already added by formatTraceLine above.)
+			if tctx.DoneCalled {
+				log.Info("  done signal received")
+				break outer
+			}
+
+			// Also exit if finish_reason was "stop" even though tools were
+			// present — some providers do this (the OpenCode #14972 bug).
+			if resp.FinishReason == "stop" {
+				log.Info("  finish_reason=stop after tool execution")
+				break outer
+			}
+		}
+
+		// Inner loop exhausted without a done signal. If we're at the hard
+		// cap, give up. Otherwise the outer loop increments and injects
+		// a continuation context for the next window.
+		if window == maxContinuations {
+			log.Warn("hit max continuations without done signal",
+				"total_calls", iterationsPerWindow*(window+1))
+			if tracing {
+				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
 				sendTrace()
 			}
-
-			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
-			turnIndex++
-
-			messages = append(messages, llm.ChatMessage{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
-		}
-
-		// --- Post-search think nudge ---
-		// Diffusion LLMs (Mercury) skip the think step after receiving
-		// search results, going straight to reply without evaluating.
-		// This causes bad answers — e.g. trusting a wrong search summary
-		// without checking the actual results. Autoregressive models
-		// (Trinity) naturally paused to think ~70% of the time.
-		//
-		// If this batch contained search results and the model didn't
-		// include a think call, inject a prompt telling it to evaluate
-		// before proceeding.
-		hasSearchResult := false
-		hasThinkCall := false
-		for _, tc := range resp.ToolCalls {
-			if tc.Function.Name == "web_search" || tc.Function.Name == "book_search" {
-				hasSearchResult = true
-			}
-			if tc.Function.Name == "think" {
-				hasThinkCall = true
-			}
-		}
-		if hasSearchResult && !hasThinkCall && !tctx.DoneCalled {
-			log.Info("  injecting post-search think nudge")
-			messages = append(messages, llm.ChatMessage{
-				Role:    "user",
-				Content: "You just received search results. Before calling reply, call think to evaluate: are the results relevant? Do they actually answer the question? Is the AI-generated summary accurate compared to the source snippets? Only then call reply with the correct information.",
-			})
-		}
-
-		// Exit when the agent explicitly signals it's done.
-		// (The "done" trace line is already added by formatTraceLine above.)
-		if tctx.DoneCalled {
-			log.Info("  done signal received")
-			break
-		}
-
-		// Also exit if finish_reason was "stop" even though tools were
-		// present — some providers do this (the OpenCode #14972 bug).
-		if resp.FinishReason == "stop" {
-			log.Info("  finish_reason=stop after tool execution")
-			break
+			break outer
 		}
 	}
 
@@ -1216,6 +1176,35 @@ func truncateLog(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// buildContinuationSummary converts trace lines into a plain-text summary
+// for injection into the continuation window context. Strips the HTML tags
+// used for Telegram formatting so the model sees clean readable text.
+// Capped at ~500 chars so it doesn't consume much of the agent's context.
+func buildContinuationSummary(traceLines []string) string {
+	// Strip HTML tags used for Telegram (b, i, and their closing forms).
+	htmlReplacer := strings.NewReplacer(
+		"<b>", "", "</b>", "",
+		"<i>", "", "</i>", "",
+		"&amp;", "&", "&lt;", "<", "&gt;", ">",
+	)
+
+	var parts []string
+	for _, line := range traceLines {
+		clean := htmlReplacer.Replace(line)
+		clean = strings.TrimSpace(clean)
+		if clean != "" {
+			parts = append(parts, clean)
+		}
+	}
+
+	summary := strings.Join(parts, "\n")
+	const maxSummaryLen = 500
+	if len(summary) > maxSummaryLen {
+		summary = summary[:maxSummaryLen] + "..."
+	}
+	return summary
 }
 
 // formatTraceLine builds an HTML-formatted trace line for a single tool call.
