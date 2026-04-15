@@ -345,6 +345,20 @@ func (s *Store) initTables() error {
 			source TEXT NOT NULL,
 			conversation_id TEXT
 		)`,
+
+		// persona_state is a single-row table (CHECK id = 1 enforces this) that
+		// tracks the dreaming system's timing state. The dreamer goroutine reads
+		// this to decide if catch-up is needed at startup, and writes it after
+		// each reflection/rewrite so the gates work correctly across restarts.
+		//
+		// Why a single-row table instead of a key-value store? Type safety.
+		// Two DATETIME columns are harder to accidentally mis-use than a bag
+		// of string key-value pairs. The CHECK constraint makes the intent clear.
+		`CREATE TABLE IF NOT EXISTS persona_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			last_reflection_at DATETIME,
+			last_rewrite_at    DATETIME
+		)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's

@@ -24,7 +24,8 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/persona traits — personality trait scores\n" +
 		"/persona rewrite — manually trigger a persona rewrite\n" +
 		"/reflect — trigger a reflection\n" +
-		"/reflections — view past reflections\n\n" +
+		"/reflections — view past reflections\n" +
+		"/dream — run a full dream cycle now (reflection + persona rewrite)\n\n" +
 		"<b>Reminders</b>\n" +
 		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
 		"/schedule — list upcoming reminders\n\n" +

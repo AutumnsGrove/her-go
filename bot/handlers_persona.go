@@ -201,6 +201,51 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
+// handleDream manually triggers a full dream cycle — nightly reflection +
+// gated persona rewrite — bypassing all cooldown gates. Equivalent to what
+// the dreamer goroutine does at 04:00, but on demand. Useful after a
+// particularly significant conversation or for testing the dreaming pipeline.
+func (b *Bot) handleDream(c tele.Context) error {
+	_ = c.Notify(tele.Typing)
+
+	// Run nightly reflection immediately (no timing gate on manual trigger).
+	if err := persona.NightlyReflect(b.llm, b.store, b.cfg, b.cfg.Identity.Her, b.cfg.Identity.User); err != nil {
+		log.Error("dream reflection", "err", err)
+		return c.Send(fmt.Sprintf("Reflection failed: %v", err))
+	}
+
+	// Run rewrite with bypass=true — skip both the 7-day and 3-reflection gates.
+	minDays := b.cfg.Persona.MinRewriteDays
+	if minDays == 0 {
+		minDays = 7
+	}
+	minRefl := b.cfg.Persona.MinReflections
+	if minRefl == 0 {
+		minRefl = 3
+	}
+	rewritten, err := persona.GatedRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
+	if err != nil {
+		log.Error("dream rewrite", "err", err)
+		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))
+	}
+
+	// Show the fresh reflection (saved in the last 30 seconds) and rewrite status.
+	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-30 * time.Second))
+	var msg strings.Builder
+	msg.WriteString("\U0001F4AD <b>Dream complete</b>\n\n")
+	if len(reflections) > 0 {
+		msg.WriteString(fmt.Sprintf("<i>%s</i>\n\n", reflections[len(reflections)-1].Content))
+	} else {
+		msg.WriteString("<i>Nothing notable to reflect on right now.</i>\n\n")
+	}
+	if rewritten {
+		msg.WriteString("✨ Persona rewritten. Use /persona to see the update.")
+	} else {
+		msg.WriteString("<i>No persona changes — not enough has shifted yet.</i>")
+	}
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
 // handlePersonaRewrite manually triggers a persona rewrite + trait extraction.
 // Bypasses the normal threshold checks — useful for testing or when you
 // want to force an evolution after a meaningful conversation.

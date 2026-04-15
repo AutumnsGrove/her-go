@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/persona"
 	"her/search"
 	"her/tui"
 	"her/voice"
@@ -369,6 +371,38 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 
+	// --- Dreamer ---
+	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
+	// It needs a context so it shuts down cleanly when the bot exits.
+	// We use the memory agent LLM (Kimi K2.5) for dreaming — same model, same
+	// purpose (nuanced language processing), no need for a separate config entry.
+	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
+	if memoryAgentClient != nil {
+		dreamHour := cfg.Persona.DreamHour
+		if dreamHour == 0 {
+			dreamHour = 4
+		}
+		minDays := cfg.Persona.MinRewriteDays
+		if minDays == 0 {
+			minDays = 7
+		}
+		minRefl := cfg.Persona.MinReflections
+		if minRefl == 0 {
+			minRefl = 3
+		}
+		go persona.StartDreamer(dreamerCtx, persona.DreamerParams{
+			LLM:       memoryAgentClient,
+			Store:     store,
+			Cfg:       cfg,
+			EventBus:  bus,
+			DreamHour: dreamHour,
+			MinDays:   minDays,
+			MinRefl:   minRefl,
+		})
+	} else {
+		log.Warn("dreamer disabled — memory_agent.model not configured")
+	}
+
 	// --- Signal handling + bot start ---
 	// Listen for SIGINT/SIGTERM. When received, shut everything down
 	// and close the bus (which makes the TUI exit).
@@ -392,6 +426,8 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	}
 
 	// --- Cleanup ---
+	dreamerCancel() // tell the dreamer goroutine to stop at its next wake-up
+
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
 		_ = syscall.Kill(-sttProcess.Process.Pid, syscall.SIGKILL)

@@ -186,6 +186,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
 	tb.Handle("/mood", cmd("/mood", bot.handleMood))
 	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
+	tb.Handle("/dream", cmd("/dream", bot.handleDream))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)

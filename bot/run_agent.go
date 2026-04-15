@@ -297,8 +297,6 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
 		Cfg:                 b.cfg,
-		ReflectionThreshold: b.cfg.Persona.ReflectionMemoryThreshold,
-		RewriteEveryN:       b.cfg.Persona.RewriteEveryNReflections,
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
 	}

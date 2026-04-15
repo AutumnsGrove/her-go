@@ -172,6 +172,17 @@ type PersonaConfig struct {
 	RewriteEveryNReflections  int     `yaml:"rewrite_every_n_reflections"`
 	ReflectionMemoryThreshold int     `yaml:"reflection_memory_threshold"`
 	MaxTraitShift             float64 `yaml:"max_trait_shift"`
+
+	// Dreaming system — nightly persona evolution.
+	// DreamHour is the local hour (0-23) to run the nightly reflection.
+	// 0 uses the default of 4 (04:00).
+	DreamHour int `yaml:"dream_hour"`
+	// MinRewriteDays is the minimum number of days between persona rewrites.
+	// 0 uses the default of 7.
+	MinRewriteDays int `yaml:"min_rewrite_days"`
+	// MinReflections is the minimum number of unconsumed reflections required
+	// before a rewrite is allowed. 0 uses the default of 3.
+	MinReflections int `yaml:"min_reflections"`
 }
 
 // VoiceConfig controls voice memo processing (STT in v0.3, TTS in v0.5).
