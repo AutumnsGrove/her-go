@@ -75,103 +75,64 @@ func (b *Bot) getConversationID(chatID int64) string {
 	return newID
 }
 
-// makeTraceCallback creates a closure that sends/edits the agent trace
-// message in Telegram. First call sends a new message; subsequent calls
-// edit it with the accumulated trace text. The message uses HTML parse
-// mode for formatting (bold tool names, italic thinking, etc.).
+// makeTraceCallbacks creates both the Trinity and Kimi trace callbacks sharing
+// a SINGLE Telegram message. Trinity's tool calls appear first, then a clear
+// separator, then Kimi's memory tool calls. One message, two labeled sections,
+// always above the reply.
 //
-// This is the same closure pattern as statusCallback and sendCallback —
-// the returned function "closes over" the traceMsg variable so it
-// always knows which message to edit.
-func (b *Bot) makeTraceCallback(c tele.Context) tools.TraceCallback {
-	// Pre-send a placeholder so the trace message is ABOVE the reply
-	// in chat order. It gets replaced on the first real trace update.
-	// Uses a short-timeout client so a Telegram blip doesn't stall the
-	// entire agent pipeline (the 60s default caused an 85s stall).
+// If Kimi has nothing to save, the message just shows Trinity's traces — no
+// orphan placeholder emojis, no extra messages.
+func (b *Bot) makeTraceCallbacks(c tele.Context) (mainTrace, memTrace tools.TraceCallback) {
 	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
 	if err != nil {
 		log.Warn("trace: failed to send placeholder", "err", err)
 		traceMsg = nil
 	}
 
-	// All trace operations run in a goroutine so they NEVER block the
-	// agent loop. Traces are observability — not critical path. A mutex
-	// preserves ordering so rapid tool calls don't race.
 	var mu sync.Mutex
-	return func(text string) error {
+	var mainContent string // Trinity's accumulated trace text
+
+	editMsg := func(text string) {
+		if traceMsg == nil {
+			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil {
+				msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
+				if err != nil {
+					return
+				}
+			}
+			traceMsg = msg
+		} else {
+			_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil && !strings.Contains(err.Error(), "not modified") {
+				_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
+			}
+		}
+	}
+
+	// Trinity's callback — updates the shared message with its content.
+	mainTrace = func(text string) error {
 		go func() {
 			mu.Lock()
 			defer mu.Unlock()
-
-			if traceMsg == nil {
-				msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					log.Warn("trace: send failed", "err", err)
-					msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
-					if err != nil {
-						log.Warn("trace: plain send also failed", "err", err)
-						return
-					}
-				}
-				traceMsg = msg
-			} else {
-				_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					if strings.Contains(err.Error(), "not modified") {
-						return
-					}
-					log.Warn("trace: edit failed, retrying plain", "err", err)
-					_, err = c.Bot().Edit(traceMsg, stripHTML(text))
-					if err != nil && !strings.Contains(err.Error(), "not modified") {
-						log.Warn("trace: plain edit also failed", "err", err)
-					}
-				}
-			}
+			mainContent = text
+			editMsg(text)
 		}()
 		return nil
 	}
-}
 
-// makeMemoryTraceCallback creates a trace callback for Kimi (memory agent).
-// The placeholder is sent IMMEDIATELY — same pattern as makeTraceCallback —
-// so it appears ABOVE the reply placeholder in chat order. When Kimi runs
-// (in a background goroutine after the reply is sent), it edits the already-
-// placed message rather than appending a new one below the reply.
-func (b *Bot) makeMemoryTraceCallback(c tele.Context) tools.TraceCallback {
-	traceMsg, err := c.Bot().Send(c.Recipient(), "🔮")
-	if err != nil {
-		log.Warn("memory trace: failed to send placeholder", "err", err)
-		traceMsg = nil
-	}
-
-	var mu sync.Mutex
-	return func(text string) error {
+	// Kimi's callback — appends below Trinity's content with a separator.
+	memTrace = func(text string) error {
 		go func() {
 			mu.Lock()
 			defer mu.Unlock()
-			if traceMsg == nil {
-				msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					log.Warn("memory trace: send failed", "err", err)
-					msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
-					if err != nil {
-						log.Warn("memory trace: plain send also failed", "err", err)
-						return
-					}
-				}
-				traceMsg = msg
-			} else {
-				_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					if strings.Contains(err.Error(), "not modified") {
-						return
-					}
-					_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
-				}
-			}
+			combined := mainContent + "\n\n─────────────\n" + text
+			editMsg(combined)
 		}()
 		return nil
 	}
+
+	return mainTrace, memTrace
 }
 
 // handleTraces toggles agent thinking traces on/off.

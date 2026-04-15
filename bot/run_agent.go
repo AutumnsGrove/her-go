@@ -129,15 +129,13 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	}()
 
 	// --- Trace callbacks ---
-	// Trinity's callback is built FIRST — its placeholder (🧠) needs to appear
-	// ABOVE the reply placeholder in chat order. The memory agent callback is
-	// built here but only sends lazily (after Trinity's reply), so it appears
-	// below the reply — which is the natural reading order.
+	// Both callbacks share a SINGLE Telegram message (🧠 placeholder).
+	// Trinity's tool calls appear first; Kimi's memory tool calls are appended
+	// below a separator after Trinity finishes. One message, always above the reply.
 	var traceCallback tools.TraceCallback
 	var memoryTraceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
-		traceCallback = b.makeTraceCallback(c)
-		memoryTraceCallback = b.makeMemoryTraceCallback(c)
+		traceCallback, memoryTraceCallback = b.makeTraceCallbacks(c)
 	}
 
 	// --- Reply placeholder ---
