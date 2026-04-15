@@ -744,6 +744,7 @@ outer:
 					EmbedClient:   params.EmbedClient,
 					Cfg:           params.Cfg,
 					TraceCallback: params.MemoryTraceCallback,
+					EventBus:      params.EventBus,
 				},
 			)
 		}

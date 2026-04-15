@@ -18,12 +18,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"her/config"
 	"her/embed"
 	"her/llm"
 	"her/memory"
 	"her/tools"
+	"her/tui"
 
 	// Blank imports register the memory tool handlers in tools.Execute's
 	// dispatch table. Same pattern as agent.go's blank imports — the init()
@@ -47,7 +49,7 @@ type MemoryAgentInput struct {
 }
 
 // MemoryAgentParams bundles the dependencies the memory agent needs.
-// Smaller than RunParams — no callbacks, no TUI, no Telegram.
+// Smaller than RunParams — no callbacks, no Telegram.
 type MemoryAgentParams struct {
 	LLM           *llm.Client    // nil = memory agent disabled
 	ClassifierLLM *llm.Client    // nil = classifier disabled (writes pass through)
@@ -55,6 +57,7 @@ type MemoryAgentParams struct {
 	EmbedClient   *embed.Client
 	Cfg           *config.Config
 	TraceCallback tools.TraceCallback // nil = tracing disabled for memory agent
+	EventBus      *tui.Bus            // nil-safe — emits tool call events for the TUI
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
@@ -88,6 +91,28 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	}
 
 	log.Info("─── memory agent ───")
+
+	turnStart := time.Now()
+	if params.EventBus != nil {
+		params.EventBus.Emit(tui.TurnStartEvent{
+			Time:           turnStart,
+			TurnID:         input.TriggerMsgID + 1, // +1 distinguishes from Trinity's turn in the TUI
+			UserMessage:    "🧠 Kimi (memory)",
+			ConversationID: input.ConversationID,
+		})
+	}
+
+	emitEnd := func(factsSaved int, cost float64) {
+		if params.EventBus != nil {
+			params.EventBus.Emit(tui.TurnEndEvent{
+				Time:       time.Now(),
+				TurnID:     input.TriggerMsgID + 1,
+				ElapsedMs:  time.Since(turnStart).Milliseconds(),
+				TotalCost:  cost,
+				FactsSaved: factsSaved,
+			})
+		}
+	}
 
 	// Load the memory agent prompt (hot-reloadable like other prompt files).
 	promptContent := loadMemoryAgentPrompt(params.Cfg)
@@ -183,15 +208,27 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call and emit trace lines.
+		// Execute each tool call, emit trace lines, and emit TUI events.
 		for _, tc := range resp.ToolCalls {
 			result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+			isError := strings.HasPrefix(result, "error:") || strings.HasPrefix(result, "rejected:")
 			log.Infof("    [memory] %s → %s", tc.Function.Name, truncateLog(result, 150))
 			messages = append(messages, llm.ChatMessage{
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
 			})
+
+			if params.EventBus != nil {
+				params.EventBus.Emit(tui.ToolCallEvent{
+					Time:     time.Now(),
+					TurnID:   input.TriggerMsgID + 1,
+					ToolName: tc.Function.Name,
+					Args:     truncateLog(tc.Function.Arguments, 200),
+					Result:   truncateLog(result, 200),
+					IsError:  isError,
+				})
+			}
 
 			if tracing {
 				line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
@@ -206,6 +243,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	}
 
 	log.Infof("  memory agent: %d facts saved | $%.6f", len(tctx.SavedFacts), totalCost)
+	emitEnd(len(tctx.SavedFacts), totalCost)
 }
 
 // loadMemoryAgentPrompt reads memory_agent_prompt.md from the same directory
