@@ -82,6 +82,34 @@ func (c *Client) GetDimension() int {
 	return c.Dimension
 }
 
+// IsAvailable checks whether the embedding server is reachable and responding.
+// Uses a short 2-second timeout so startup checks don't block — the main
+// httpClient has a 30-second timeout which is fine for real embed calls but
+// too slow for a health probe.
+func (c *Client) IsAvailable() bool {
+	// Build a minimal embed request — same shape as a real call but with
+	// a tiny throw-away input. We don't use the response, just the status.
+	body := []byte(`{"model":"` + c.model + `","input":"health"}`)
+	req, err := http.NewRequest("POST", c.baseURL+"/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	// Short-lived client — don't reuse c.httpClient since its 30s timeout
+	// would make a failed health check take a full half-minute to report.
+	probe := &http.Client{Timeout: 2 * time.Second}
+	resp, err := probe.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
 // Embed returns the embedding vector for a single text string as float32.
 // The vector length depends on the model — nomic-embed-text-v1.5
 // returns 768-dimensional vectors. We use float32 because that's what

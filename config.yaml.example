@@ -57,6 +57,7 @@ embed:
   dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
   max_semantic_distance: 0.45                                   # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter.
+  # start_command: "lms load text-embedding-nomic-embed-text-v1.5@q8_0"  # optional: auto-start the embed server on startup if not already running
 
 search:
   tavily_api_key: "${TAVILY_API_KEY}"
