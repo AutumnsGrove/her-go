@@ -1080,7 +1080,15 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		}
 	}
 
-	return fmt.Sprintf("reply sent (%d chars)", len(replyText))
+	// Feed the actual reply text back to the agent so it knows what was
+	// said. Without this, the agent has no visibility into the chat model's
+	// output and may call reply again with the same instruction. The
+	// truncation keeps the tool result from bloating the context.
+	preview := replyText
+	if len(preview) > 300 {
+		preview = preview[:300] + "..."
+	}
+	return fmt.Sprintf("reply delivered to user: %q\n\nYour message has been sent. Call done to end your turn unless you have pending work (e.g., a search in progress).", preview)
 }
 
 // isDegenerate detects garbage LLM outputs that would poison conversation
