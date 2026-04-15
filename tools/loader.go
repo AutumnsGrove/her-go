@@ -318,7 +318,7 @@ func CategoryDescription() string {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt rendering — generates markdown sections for agent_prompt.md
+// Prompt rendering — generates markdown sections for main_agent_prompt.md
 // ---------------------------------------------------------------------------
 
 // RenderHotToolsList returns a markdown bullet list of hot tools for the

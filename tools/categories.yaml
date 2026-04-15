@@ -1,6 +1,6 @@
-# Category hints for the deferred-tools table in agent_prompt.md.
+# Category hints for the deferred-tools table in main_agent_prompt.md.
 # Each category has a "hint" that tells the agent when to load it.
-# This is the single source of truth — the table in agent_prompt.md
+# This is the single source of truth — the table in main_agent_prompt.md
 # is auto-generated from this file at prompt load time.
 
 vision:

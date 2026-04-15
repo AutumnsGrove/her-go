@@ -81,7 +81,7 @@ scrub:
 persona:
   prompt_file: "./prompt.md"
   persona_file: "./persona.md"
-  agent_prompt_file: "./agent_prompt.md"
+  agent_prompt_file: "./main_agent_prompt.md"
   rewrite_every_n_reflections: 3     # legacy — unused once dreamer is running, kept for /reflect command
   reflection_memory_threshold: 8     # legacy — unused once dreamer is running
   max_trait_shift: 0.1               # max trait score change per rewrite cycle

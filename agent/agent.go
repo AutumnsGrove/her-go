@@ -40,7 +40,7 @@ var log = logger.WithPrefix("agent")
 // (tools/context.go). The agent imports them as tools.Context,
 // tools.StatusCallback, etc. See tools/context.go for documentation.
 
-// defaultAgentPrompt is used as a fallback if agent_prompt.md can't be loaded.
+// defaultAgentPrompt is used as a fallback if main_agent_prompt.md can't be loaded.
 // Uses {{her}} placeholder so it still works with the template expansion.
 const defaultAgentPrompt = `You are {{her}}'s brain. You orchestrate every response. Call think to reason, reply to respond, memory tools to remember, and done when finished. Every turn must include reply and done.`
 
