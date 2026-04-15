@@ -35,14 +35,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	if len(args.Tools) == 0 {
-		return "no tools requested. Available categories: " + tools.CategoryDescription() +
-			". For search/web/books/mood, use find_skill instead."
+		return "no tools requested. Available categories: " + tools.CategoryDescription()
 	}
 
 	newTools := tools.LookupToolDefs(args.Tools, ctx.Cfg)
 	if len(newTools) == 0 {
-		return "no matching tools found. Available categories: " + tools.CategoryDescription() +
-			". For search/web/books/mood, use find_skill to discover skills, then run_skill to execute them."
+		return "no matching tools found. Available categories: " + tools.CategoryDescription()
 	}
 
 	// Deduplicate — don't add tools already in the active set.

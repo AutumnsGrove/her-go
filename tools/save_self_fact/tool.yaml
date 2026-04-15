@@ -1,8 +1,13 @@
 name: save_self_fact
 description: >-
-  Save a fact about {{her}} herself — her own observations, communication
-  patterns, identity, or things she's learned about the relationship dynamic.
-  NOT for facts about {{user}}.
+  Save an observation about {{her}}'s own behavior or communication patterns —
+  things she has learned through conversation, not things already in her system
+  prompt. These feed into the dreaming system for persona evolution.
+
+  GOOD: "Used dry humor when {{user}} was frustrated — it broke the tension"
+  GOOD: "{{user}} opens up more when asked follow-up questions about her projects"
+  BAD: "{{user}} is excited about X" — that is a user fact, use save_fact instead
+  BAD: "I am {{her}}" — already in system prompt, not a learned observation
 hot: false
 parameters:
   type: object
