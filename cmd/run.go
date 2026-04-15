@@ -112,7 +112,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	//   LocalTime:     use local time in backup filenames
 	//   Compress:      false — keep uncompressed for grep
 	logFile := &lumberjack.Logger{
-		Filename:   "her.log",
+		Filename:   "logs/her.log",
 		MaxSize:    10,
 		MaxBackups: 0,
 		MaxAge:     0,
