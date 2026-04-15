@@ -132,13 +132,19 @@ func (b *Bot) makeTraceCallback(c tele.Context) tools.TraceCallback {
 	}
 }
 
-// makeMemoryTraceCallback creates a separate trace callback for the memory agent
-// (Kimi). It works exactly like makeTraceCallback but sends a distinct new
-// Telegram message so Kimi's fact-saving is clearly separated from Trinity's
-// reasoning traces. The message is sent lazily on first trace update.
+// makeMemoryTraceCallback creates a trace callback for Kimi (memory agent).
+// The placeholder is sent IMMEDIATELY — same pattern as makeTraceCallback —
+// so it appears ABOVE the reply placeholder in chat order. When Kimi runs
+// (in a background goroutine after the reply is sent), it edits the already-
+// placed message rather than appending a new one below the reply.
 func (b *Bot) makeMemoryTraceCallback(c tele.Context) tools.TraceCallback {
+	traceMsg, err := c.Bot().Send(c.Recipient(), "🔮")
+	if err != nil {
+		log.Warn("memory trace: failed to send placeholder", "err", err)
+		traceMsg = nil
+	}
+
 	var mu sync.Mutex
-	var traceMsg *tele.Message
 	return func(text string) error {
 		go func() {
 			mu.Lock()
