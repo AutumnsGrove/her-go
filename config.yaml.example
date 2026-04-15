@@ -37,6 +37,11 @@ classifier:
   temperature: 0                        # deterministic — consistent REAL/FICTIONAL verdicts
   max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
 
+memory_agent:
+  model: "moonshotai/kimi-k2.5"  # post-turn background agent that extracts and saves facts
+  temperature: 0.3               # moderate temp for varied but controlled fact extraction
+  max_tokens: 4096               # generous headroom for tool call sequences
+
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
   temperature: 0.3                         # low temp for accurate descriptions
@@ -64,7 +69,6 @@ memory:
   extraction_interval: 10        # extract facts every N messages
   max_history_tokens: 8000       # message history token budget — compaction fires at 75% of this (6000 tokens). System prompt excluded.
   agent_context_budget: 16000    # agent model (Kimi K2.5) action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
-  max_fact_retries: 2            # per-fact retry limit per turn — after N rejections of the same fact, agent is told to move on. 0 = unlimited.
   auto_link_count: 3             # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
 

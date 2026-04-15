@@ -23,14 +23,15 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
-	Debug      bool             `yaml:"debug"` // when true, logs full API request/response bodies
-	Identity   IdentityConfig   `yaml:"identity"`
-	Telegram   TelegramConfig   `yaml:"telegram"`
-	LLM        LLMConfig        `yaml:"llm"`
-	Agent      AgentConfig      `yaml:"agent"`
-	Vision     VisionConfig     `yaml:"vision"`
-	Classifier ClassifierConfig `yaml:"classifier"`
-	Memory     MemoryConfig     `yaml:"memory"`
+	Debug         bool                `yaml:"debug"` // when true, logs full API request/response bodies
+	Identity      IdentityConfig      `yaml:"identity"`
+	Telegram      TelegramConfig      `yaml:"telegram"`
+	LLM           LLMConfig           `yaml:"llm"`
+	Agent         AgentConfig         `yaml:"agent"`
+	Vision        VisionConfig        `yaml:"vision"`
+	Classifier    ClassifierConfig    `yaml:"classifier"`
+	MemoryAgent   MemoryAgentConfig   `yaml:"memory_agent"`
+	Memory        MemoryConfig        `yaml:"memory"`
 	Embed      EmbedConfig      `yaml:"embed"`
 	Search     SearchConfig     `yaml:"search"`
 	Scrub      ScrubConfig      `yaml:"scrub"`
@@ -117,15 +118,25 @@ type ClassifierConfig struct {
 	MaxTokens   int     `yaml:"max_tokens"`  // ~64 is enough for REAL/FICTIONAL
 }
 
+// MemoryAgentConfig holds settings for the post-turn background memory agent.
+// This model runs after the main agent delivers its reply — it reviews the
+// conversation turn and extracts facts to save. Runs in a goroutine so it
+// never blocks the user. Kimi K2.5 is recommended for nuanced fact extraction.
+type MemoryAgentConfig struct {
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
 // MemoryConfig controls the SQLite-backed memory system.
 type MemoryConfig struct {
 	DBPath             string  `yaml:"db_path"`
 	RecentMessages     int     `yaml:"recent_messages"`
 	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
 	ExtractionInterval int     `yaml:"extraction_interval"`
-	MaxHistoryTokens    int     `yaml:"max_history_tokens"`     // history token budget for compaction — both triggers fire at 75% of this
-	AgentContextBudget  int     `yaml:"agent_context_budget"`   // agent model total prompt budget for action history compaction; 0 = use 6000 default
-	MaxFactRetries     int     `yaml:"max_fact_retries"`      // per-fact retry limit per turn before "move on" (0 = unlimited)
+	MaxHistoryTokens    int     `yaml:"max_history_tokens"`    // history token budget for compaction — both triggers fire at 75% of this
+	AgentContextBudget  int     `yaml:"agent_context_budget"`  // agent model total prompt budget for action history compaction; 0 = use 6000 default
 	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
 	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
 }

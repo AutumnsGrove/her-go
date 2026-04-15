@@ -1,10 +1,9 @@
 name: update_fact
-hint: "update an existing fact"
 description: >-
   Update an existing fact when new information changes or refines what we
   knew. Use this instead of save_fact when a fact already exists but needs
   correction or expansion.
-hot: true
+hot: false
 parameters:
   type: object
   properties:

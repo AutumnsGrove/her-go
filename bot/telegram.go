@@ -31,12 +31,13 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb            *tele.Bot
-	llm           *llm.Client          // conversational model (Deepseek)
-	agentLLM      *llm.Client          // tool-calling orchestrator
-	visionLLM     *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM *llm.Client          // classifier for memory writes — nil if not configured
-	embedClient   *embed.Client        // local embedding model for similarity
+	tb               *tele.Bot
+	llm              *llm.Client          // conversational model (Deepseek)
+	agentLLM         *llm.Client          // tool-calling orchestrator
+	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
+	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
+	embedClient      *embed.Client        // local embedding model for similarity
 	tavilyClient  *search.TavilyClient // web search and URL extraction
 	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
 	ttsClient     *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
@@ -99,7 +100,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, memoryAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -137,22 +138,23 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	}
 
 	bot := &Bot{
-		tb:            tb,
-		llm:           llmClient,
-		agentLLM:      agentLLM,
-		visionLLM:     visionLLM,
-		classifierLLM: classifierLLM,
-		embedClient:   embedClient,
-		tavilyClient:  tavilyClient,
-		voiceClient:   voiceClient,
-		ttsClient:     ttsClient,
-		store:         store,
-		cfg:           cfg,
-		configPath:    configPath,
-		systemPrompt:  string(promptBytes),
-		startTime:     time.Now(),
-		eventBus:      eventBus,
-		agentEvents:   make(chan agent.AgentEvent, 16),
+		tb:             tb,
+		llm:            llmClient,
+		agentLLM:       agentLLM,
+		memoryAgentLLM: memoryAgentLLM,
+		visionLLM:      visionLLM,
+		classifierLLM:  classifierLLM,
+		embedClient:    embedClient,
+		tavilyClient:   tavilyClient,
+		voiceClient:    voiceClient,
+		ttsClient:      ttsClient,
+		store:          store,
+		cfg:            cfg,
+		configPath:     configPath,
+		systemPrompt:   string(promptBytes),
+		startTime:      time.Now(),
+		eventBus:       eventBus,
+		agentEvents:    make(chan agent.AgentEvent, 16),
 	}
 
 	// cmd wraps a handler to log the command to the command_log table.

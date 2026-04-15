@@ -26,11 +26,7 @@ import (
 	// tools.Register("name", Handle) to add the handler to the registry.
 	_ "her/tools/done"
 	_ "her/tools/recall_memories"
-	_ "her/tools/remove_fact"
-	_ "her/tools/save_fact"
-	_ "her/tools/save_self_fact"
 	_ "her/tools/think"
-	_ "her/tools/update_fact"
 	_ "her/tools/update_persona"
 	_ "her/tools/use_tools"
 	_ "her/tools/view_image"
@@ -98,6 +94,7 @@ func replaceBetweenMarkers(content, tag, replacement string) string {
 // is the idiomatic way to handle functions with many inputs.
 type RunParams struct {
 	AgentLLM                  *llm.Client
+	MemoryAgentLLM            *llm.Client // post-turn background memory agent — nil if not configured
 	ChatLLM                   *llm.Client
 	VisionLLM                 *llm.Client // vision language model — nil if not configured
 	ClassifierLLM             *llm.Client // classifier for memory writes — nil if not configured
@@ -437,6 +434,12 @@ func Run(params RunParams) (*RunResult, error) {
 	var totalCost float64
 	var totalToolCalls int
 
+	// --- Think trace collector ---
+	// Captures the raw content of every think() call for the memory agent.
+	// Separate from traceLines (which is formatted HTML for Telegram) —
+	// the memory agent needs the raw thought text, not the Telegram markup.
+	var thinkTraces []string
+
 	// --- Trace builder ---
 	// Accumulates formatted trace lines as the agent executes. If tracing
 	// is enabled, the trace message gets sent/updated after each tool call
@@ -581,6 +584,18 @@ outer:
 				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
 				turnIndex++
 
+				// Capture think() content for the memory agent's transcript.
+				// The memory agent uses raw thought text (not the Telegram-formatted
+				// trace lines) to understand the agent's reasoning this turn.
+				if tc.Function.Name == "think" {
+					var thinkArgs struct {
+						Thought string `json:"thought"`
+					}
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &thinkArgs); err == nil && thinkArgs.Thought != "" {
+						thinkTraces = append(thinkTraces, thinkArgs.Thought)
+					}
+				}
+
 				result := executeTool(tc, tctx)
 				isError := strings.HasPrefix(result, "error:")
 				log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
@@ -703,7 +718,7 @@ outer:
 		FactsSaved: len(tctx.SavedFacts),
 	}
 
-	// --- Persona Evolution Triggers ---
+	// --- Persona Evolution Triggers + Memory Agent ---
 	// These run AFTER the response has been sent to the user.
 	// They go in a goroutine because they don't affect the current turn.
 	//
@@ -711,6 +726,29 @@ outer:
 	//            reflections accumulate → triggers persona rewrite
 	// No concept of "conversations" needed — just fact and reflection counts.
 	go func() {
+		// --- Memory agent ---
+		// Runs first — we want facts saved before the reflection trigger
+		// checks the fact count. This way a fact-rich turn can trigger
+		// reflection in the same goroutine run.
+		if params.MemoryAgentLLM != nil {
+			RunMemoryAgent(
+				MemoryAgentInput{
+					UserMessage:    params.ScrubbedUserMessage,
+					ThinkTraces:    thinkTraces,
+					ReplyText:      result.ReplyText,
+					TriggerMsgID:   params.TriggerMsgID,
+					ConversationID: params.ConversationID,
+				},
+				MemoryAgentParams{
+					LLM:           params.MemoryAgentLLM,
+					ClassifierLLM: params.ClassifierLLM,
+					Store:         params.Store,
+					EmbedClient:   params.EmbedClient,
+					Cfg:           params.Cfg,
+				},
+			)
+		}
+
 		// Trigger: Reflection — have enough new facts accumulated since the last reflection?
 		if params.ReflectionThreshold > 0 {
 			factCount, err := params.Store.FactCountSinceLastReflection()

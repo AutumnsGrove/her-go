@@ -4,7 +4,6 @@ description: >-
   patterns, identity, or things she's learned about the relationship dynamic.
   NOT for facts about {{user}}.
 hot: false
-category: memory
 parameters:
   type: object
   properties:

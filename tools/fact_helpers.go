@@ -22,27 +22,6 @@ import (
 // factLog is a logger for fact-saving operations.
 var factLog = logger.WithPrefix("tools/fact")
 
-// selfFactBlocklist contains phrases that indicate the agent is just
-// restating its system prompt capabilities rather than saving a genuine
-// learned observation. These get rejected before hitting the database.
-var selfFactBlocklist = []string{
-	"i can recall",
-	"i am able to",
-	"i have the ability",
-	"my role is",
-	"i am an ai",
-	// Note: "i am <name>" and "my name is <name>" are checked dynamically
-	// using cfg.Identity.Her — see ExecSaveFact.
-	"i should be",
-	"i try to be",
-	"i am designed to",
-	"i was created to",
-	"my purpose is",
-	"i am here to",
-	"i can remember",
-	"i can help",
-}
-
 // styleBlocklist catches AI writing tics that poison the voice over time.
 // Facts with these patterns get rejected so they don't leak into the
 // system prompt and infect the conversational model's tone.
@@ -127,24 +106,6 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// Quality gate for self-facts: block system-prompt restatements.
-	if subject == "self" {
-		lower := strings.ToLower(args.Fact)
-		for _, blocked := range selfFactBlocklist {
-			if strings.Contains(lower, blocked) {
-				factLog.Warn("blocked self-fact (matches blocklist)", "blocklist_entry", blocked, "fact", args.Fact)
-				return "rejected: this is a system capability, not a learned observation. Self-facts should only capture things learned through interaction."
-			}
-		}
-		// Dynamic name check — "i am <name>" and "my name is <name>"
-		// are identity restatements from the system prompt, not learned facts.
-		nameLower := strings.ToLower(ctx.Cfg.Identity.Her)
-		if strings.Contains(lower, "i am "+nameLower) || strings.Contains(lower, "my name is "+nameLower) {
-			factLog.Warn("blocked self-fact (identity restatement)", "fact", args.Fact)
-			return "rejected: this is an identity restatement from the system prompt, not a learned observation."
-		}
-	}
-
 	// Style gate for ALL facts: reject AI writing tics.
 	lower := strings.ToLower(args.Fact)
 	for _, blocked := range styleBlocklist {
@@ -158,24 +119,6 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 	if len(args.Fact) > maxFactLength {
 		factLog.Warn("blocked fact (too long)", "len", len(args.Fact), "fact", args.Fact[:100])
 		return fmt.Sprintf("rejected: fact is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), maxFactLength)
-	}
-
-	// Strip temporal references (dates, "today", "last Tuesday", etc.) before
-	// embedding or saving. The DB timestamp handles "when" — fact text should
-	// be timeless so it stays accurate as time passes.
-	args.Fact = StripTimestamps(args.Fact)
-
-	// --- Retry budget check ---
-	// If the agent has already tried saving this fact N times this turn and
-	// been rejected each time, tell it to move on. Uses embedding similarity
-	// to catch rephrased retries ("User likes X" → "User enjoys X").
-	var retryVec []float32
-	if maxRetries := ctx.Cfg.Memory.MaxFactRetries; maxRetries > 0 {
-		var block string
-		block, retryVec = CheckRetryBudget(args.Fact, maxRetries, ctx)
-		if block != "" {
-			return block
-		}
 	}
 
 	// Embed by TAGS (not by fact text) so the vector space organizes by
@@ -219,7 +162,6 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 
 			if duplicate, existingID, existingFact, sim, source := checkFactDuplicate(newVec, textVec, subject, threshold, ctx); duplicate {
 				factLog.Info("blocked duplicate fact", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "fact", args.Fact)
-				RecordFactRejection(retryVec, ctx)
 				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing fact ID=%d (%q) [matched on %s]. Use update_fact to refine it instead.",
 					sim*100, existingID, existingFact, source)
 			}
@@ -245,13 +187,16 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
 			verdict := ctx.ClassifyWriteFunc(writeType, args.Fact, snippet)
 			if !verdict.Allowed {
-				RecordFactRejection(retryVec, ctx)
 				if ctx.RejectionMessageFunc != nil {
 					return ctx.RejectionMessageFunc(verdict)
 				}
 				return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
 			}
 		}
+	}
+
+	if ctx.Store == nil {
+		return "error: no store configured"
 	}
 
 	id, err := ctx.Store.SaveFact(args.Fact, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context)
@@ -343,63 +288,3 @@ func checkFactDuplicate(newTagVec, newTextVec []float32, subject string, thresho
 	return false, 0, "", 0, ""
 }
 
-// retrySimilarityThreshold is the cosine similarity above which two rejected
-// fact texts are considered "the same fact, different wording." Lower than
-// the dedup threshold (0.85) because we're catching rephrases, not exact
-// duplicates — "User likes Elden Ring" vs "User enjoys Elden Ring."
-const retrySimilarityThreshold = 0.75
-
-// CheckRetryBudget checks whether the agent has already exhausted its retry
-// budget for this fact. Returns a "move on" message if over the limit, or
-// empty string if the attempt should proceed. Also returns the fact's
-// embedding for later use by RecordFactRejection.
-func CheckRetryBudget(factText string, maxRetries int, ctx *Context) (block string, factVec []float32) {
-	if maxRetries <= 0 || ctx.EmbedClient == nil {
-		return "", nil
-	}
-
-	var err error
-	factVec, err = ctx.EmbedClient.Embed(factText)
-	if err != nil {
-		factLog.Warn("retry budget: embedding failed, skipping check", "err", err)
-		return "", nil
-	}
-
-	// Compare against previous rejections in this turn.
-	for _, entry := range ctx.FactRetries {
-		sim := embed.CosineSimilarity(factVec, entry.Embedding)
-		if sim >= retrySimilarityThreshold && entry.Count >= maxRetries {
-			factLog.Info("retry budget exhausted",
-				"attempts", entry.Count, "max", maxRetries,
-				"similarity", sim, "fact", factText)
-			return "retry limit reached — move on. This fact has been rejected multiple times this turn. It can be saved in a future conversation if it comes up again.", factVec
-		}
-	}
-
-	return "", factVec
-}
-
-// RecordFactRejection registers a rejected fact attempt in the per-turn
-// retry tracker. If a similar fact was already rejected, increments its
-// count. Otherwise adds a new entry. Call this after any rejection
-// (dedup, classifier, or style gate).
-func RecordFactRejection(factVec []float32, ctx *Context) {
-	if len(factVec) == 0 {
-		return
-	}
-
-	// Find an existing entry for this fact.
-	for i := range ctx.FactRetries {
-		sim := embed.CosineSimilarity(factVec, ctx.FactRetries[i].Embedding)
-		if sim >= retrySimilarityThreshold {
-			ctx.FactRetries[i].Count++
-			return
-		}
-	}
-
-	// New fact — first rejection.
-	ctx.FactRetries = append(ctx.FactRetries, FactRetryEntry{
-		Embedding: factVec,
-		Count:     1,
-	})
-}

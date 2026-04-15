@@ -4,7 +4,6 @@ description: >-
   another fact. The fact is soft-deleted (kept for audit but excluded from
   memory).
 hot: false
-category: memory
 parameters:
   type: object
   properties:

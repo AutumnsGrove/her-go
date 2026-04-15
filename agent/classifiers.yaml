@@ -65,30 +65,6 @@ classifiers:
             the user feels in the moment. Facts should be durable truths,
             not snapshots of today's mood.
 
-      - name: INFERRED
-        soft: true
-        description: >-
-          Did the user actually say this, or is the chatbot inferring,
-          diagnosing, or editorializing? Only reject genuine leaps — not
-          reasonable summarization of things the user stated.
-        examples:
-          - '"User is very self-critical about coping mechanisms" (therapist-style assessment)'
-          - '"User tends to share emotional states early in conversations" (behavioral analysis the user never stated)'
-          - '"User has a toxic relationship with [person]" (judgment call, not stated)'
-        note: >-
-          Reasonable summarization is SAVE. Combining details from multiple
-          messages in the same conversation is carrying forward, not
-          inferring. "User plays Cyberpunk as female V and finds the romance
-          options frustrating" is SAVE if the user said both things — even
-          in different messages.
-          If the fact contains a saveable kernel buried under inference,
-          extract what the user actually said and return a REWRITE suggestion.
-        rejection:
-          default_detail: the user didn't actually state this — the agent is inferring or editorializing
-          suffix: >-
-            Only save things the user explicitly said or clearly implied.
-            Don't add interpretations, diagnoses, or pattern analysis.
-
       - name: LOW_VALUE
         description: >-
           Is the fact too vague, generic, or obvious to be worth permanent
@@ -115,10 +91,9 @@ classifiers:
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
       Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable"
 
-      For FICTIONAL and INFERRED only: if the fact contains a saveable kernel (a real preference or directly stated detail buried in fiction/inference), suggest a cleaned-up version using this format:
+      For FICTIONAL only: if the fact contains a saveable kernel (a real preference or directly stated detail buried in fiction), suggest a cleaned-up version using this format:
         FICTIONAL REWRITE: "User prefers playing as female V in Cyberpunk 2077"
-        INFERRED REWRITE: "User adopted their cat Bean from a Portland shelter"
-      The rewrite should contain ONLY what the user actually said or clearly implied — strip fictional events, editorial, and inference. If there's nothing saveable, just return the verdict without REWRITE.
+      The rewrite should contain ONLY what the user actually said or clearly implied — strip fictional events. If there's nothing saveable, just return the verdict without REWRITE.
 
   mood:
     preamble: >-

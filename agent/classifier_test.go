@@ -38,11 +38,13 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantRewrite: "User prefers playing as female V in Cyberpunk 2077",
 		},
 		{
-			name:        "soft reject INFERRED with rewrite",
+			// INFERRED was removed in Phase 4 — memory agent reads raw conversation
+			// text so reasonable summarization is always acceptable. The parser
+			// no longer recognizes INFERRED and falls through to the fail-open path.
+			name:        "INFERRED no longer known — fails open",
 			response:    `INFERRED REWRITE: "User adopted their cat Bean from a Portland shelter"`,
-			wantAllowed: false,
-			wantType:    "INFERRED",
-			wantRewrite: "User adopted their cat Bean from a Portland shelter",
+			wantAllowed: true,
+			wantType:    "SAVE",
 		},
 		{
 			name:        "MOOD_NOT_FACT is always hard reject",
@@ -106,7 +108,11 @@ func TestExtractRewrite(t *testing.T) {
 			want:    "User prefers bleed builds",
 		},
 		{
-			name:    "unquoted rewrite",
+			// extractRewrite is a string utility — it works for any verdict name,
+			// even removed ones. The full classifier pipeline won't apply INFERRED
+			// rewrites (it fails open on unknown verdicts), but the extraction
+			// function itself is still valid code worth testing.
+			name:    "unquoted rewrite (INFERRED removed but extractor still works)",
 			line:    `INFERRED REWRITE: User adopted cat Bean`,
 			verdict: "INFERRED",
 			want:    "User adopted cat Bean",
