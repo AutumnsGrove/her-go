@@ -4,7 +4,6 @@ description: >-
   self-facts suggest a meaningful evolution in how {{her}} sees herself. The
   persona should evolve gradually.
 hot: false
-category: memory
 parameters:
   type: object
   properties:

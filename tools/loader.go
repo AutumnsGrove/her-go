@@ -548,7 +548,7 @@ func UseToolsDef() llm.ToolDef {
 					"tools": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Tool names or category names to load. E.g., [\"vision\", \"scheduling\"], [\"memory\", \"expenses\"]",
+						"description": "Category names to load. E.g., [\"search\"] or [\"vision\"].",
 					},
 				},
 				"required": []string{"tools"},

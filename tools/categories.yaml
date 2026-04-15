@@ -6,8 +6,5 @@
 vision:
   hint: "User sent a photo"
 
-memory:
-  hint: "Need to delete/search memories, save self-observations, or rewrite persona"
-
 search:
   hint: "User asks about current events, facts you don't know, or shares a link to read"

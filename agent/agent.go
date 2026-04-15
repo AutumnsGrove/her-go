@@ -110,6 +110,7 @@ type RunParams struct {
 	SendCallback              tools.SendCallback
 	TTSCallback               tools.TTSCallback
 	TraceCallback             tools.TraceCallback             // nil if traces disabled
+	MemoryTraceCallback       tools.TraceCallback             // nil if memory agent tracing disabled; separate message from TraceCallback
 	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
 	DeletePlaceholderCallback tools.DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
 	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
@@ -742,6 +743,7 @@ outer:
 					Store:         params.Store,
 					EmbedClient:   params.EmbedClient,
 					Cfg:           params.Cfg,
+					TraceCallback: params.MemoryTraceCallback,
 				},
 			)
 		}

@@ -38,7 +38,21 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "no tools requested. Available categories: " + tools.CategoryDescription()
 	}
 
-	newTools := tools.LookupToolDefs(args.Tools, ctx.Cfg)
+	// Only allow loading by category name — not by individual tool name.
+	// This prevents the main agent from loading memory-only tools (save_fact, etc.)
+	// by bypassing the active-tool gate with use_tools(["save_fact"]).
+	validCats := tools.Categories()
+	var catNames []string
+	for _, name := range args.Tools {
+		if _, ok := validCats[name]; ok {
+			catNames = append(catNames, name)
+		}
+	}
+	if len(catNames) == 0 {
+		return "no matching categories found. Available categories: " + tools.CategoryDescription()
+	}
+
+	newTools := tools.LookupToolDefs(catNames, ctx.Cfg)
 	if len(newTools) == 0 {
 		return "no matching tools found. Available categories: " + tools.CategoryDescription()
 	}
