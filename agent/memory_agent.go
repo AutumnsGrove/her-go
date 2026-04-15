@@ -54,6 +54,7 @@ type MemoryAgentParams struct {
 	Store         *memory.Store
 	EmbedClient   *embed.Client
 	Cfg           *config.Config
+	TraceCallback tools.TraceCallback // nil = tracing disabled for memory agent
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
@@ -144,6 +145,19 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	var totalCost float64
 	const maxIterations = 10
 
+	// tracing tracks whether we have a live trace callback and accumulates
+	// the formatted trace lines for the memory agent's separate trace message.
+	tracing := params.TraceCallback != nil
+	const memTraceHeader = "🧠 <b>Kimi</b> (memory)\n"
+	var traceLines []string
+
+	emitMemTrace := func() {
+		if !tracing || len(traceLines) == 0 {
+			return
+		}
+		_ = params.TraceCallback(memTraceHeader + strings.Join(traceLines, "\n"))
+	}
+
 	for i := 0; i < maxIterations; i++ {
 		resp, err := params.LLM.ChatCompletionWithTools(messages, memToolDefs)
 		if err != nil {
@@ -169,7 +183,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 			ToolCalls: resp.ToolCalls,
 		})
 
-		// Execute each tool call.
+		// Execute each tool call and emit trace lines.
 		for _, tc := range resp.ToolCalls {
 			result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
 			log.Infof("    [memory] %s → %s", tc.Function.Name, truncateLog(result, 150))
@@ -178,6 +192,12 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 				Content:    result,
 				ToolCallID: tc.ID,
 			})
+
+			if tracing {
+				line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
+				traceLines = append(traceLines, line)
+				emitMemTrace()
+			}
 		}
 
 		if tctx.DoneCalled {

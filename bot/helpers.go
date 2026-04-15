@@ -132,6 +132,42 @@ func (b *Bot) makeTraceCallback(c tele.Context) tools.TraceCallback {
 	}
 }
 
+// makeMemoryTraceCallback creates a separate trace callback for the memory agent
+// (Kimi). It works exactly like makeTraceCallback but sends a distinct new
+// Telegram message so Kimi's fact-saving is clearly separated from Trinity's
+// reasoning traces. The message is sent lazily on first trace update.
+func (b *Bot) makeMemoryTraceCallback(c tele.Context) tools.TraceCallback {
+	var mu sync.Mutex
+	var traceMsg *tele.Message
+	return func(text string) error {
+		go func() {
+			mu.Lock()
+			defer mu.Unlock()
+			if traceMsg == nil {
+				msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if err != nil {
+					log.Warn("memory trace: send failed", "err", err)
+					msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
+					if err != nil {
+						log.Warn("memory trace: plain send also failed", "err", err)
+						return
+					}
+				}
+				traceMsg = msg
+			} else {
+				_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if err != nil {
+					if strings.Contains(err.Error(), "not modified") {
+						return
+					}
+					_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
+				}
+			}
+		}()
+		return nil
+	}
+}
+
 // handleTraces toggles agent thinking traces on/off.
 // When enabled, Mira sends a separate message before each reply showing
 // the agent's tool calls, thinking, and decision-making process.

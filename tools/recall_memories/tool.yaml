@@ -4,8 +4,7 @@ description: >-
   user asks 'do you remember...', references something from a past
   conversation, or when you need specific context that isn't in the current
   memory window.
-hot: false
-category: memory
+hot: true
 parameters:
   type: object
   properties:
