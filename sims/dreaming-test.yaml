@@ -1,0 +1,31 @@
+name: "Dreaming Test"
+description: >
+  End-to-end test of the dreaming pipeline. Sends a handful of varied messages
+  to give the memory agent material to work with — facts, emotional texture,
+  a bit of self-discovery — then triggers a full dream cycle via run_dream: true.
+
+  Expected behavior:
+  - Memory agent saves 3-6 facts across the 5 turns
+  - Nightly reflection produces a non-NOTHING_NOTABLE observation
+  - GatedRewrite (bypass=true) attempts a rewrite based on that reflection
+  - Rewrite may return UNCHANGED if the persona is still a blank slate — that's valid.
+    On subsequent runs after persona.md has content, expect a genuine rewrite.
+
+  After the run, verify:
+    - sims/results/dreaming-test-runN.md exists
+    - "[dream] Reflection:" line shows real content (not NOTHING_NOTABLE)
+    - "[dream] Persona rewritten:" or "[dream] Rewrite: UNCHANGED" appears
+
+tags: ["dreaming", "persona", "reflection", "integration"]
+run_dream: true
+
+messages:
+  - "hey! i've been really into photography lately. shooting portraits mostly — there's something about capturing a person's expression in a candid moment."
+
+  - "i've been feeling pretty burned out honestly. work has been a lot. i keep telling myself it'll slow down but it hasn't."
+
+  - "oh, i also started journaling every morning. fifteen minutes before i look at my phone. it's been really grounding — i didn't expect it to make such a difference."
+
+  - "actually the burnout is starting to ease. i think the journaling is helping me process things before they pile up. also just... talking to you helps."
+
+  - "weird self-discovery: i process things better by talking them out than writing them down. journaling works for the routine stuff but for the real stuff i need to hear myself say it."
