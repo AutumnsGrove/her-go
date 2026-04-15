@@ -216,6 +216,79 @@ func (s *Store) GetCurrentTraits() ([]Trait, error) {
 	return traits, nil
 }
 
+// --- Dreaming State ---
+
+// PersonaState holds the dreaming system's timing state. Read at startup
+// to check if a catch-up dream is needed; updated after each reflection
+// and rewrite so the gates work correctly across restarts.
+type PersonaState struct {
+	LastReflectionAt time.Time // zero = never reflected
+	LastRewriteAt    time.Time // zero = never rewritten
+}
+
+// GetPersonaState returns the current dreaming state. Returns a zero-value
+// PersonaState (both times zero) if the persona_state row doesn't exist yet
+// — i.e., on a fresh install before the first dream runs.
+func (s *Store) GetPersonaState() (PersonaState, error) {
+	var lastReflStr, lastRewriteStr string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(last_reflection_at, ''), COALESCE(last_rewrite_at, '') FROM persona_state WHERE id = 1`,
+	).Scan(&lastReflStr, &lastRewriteStr)
+	if err != nil {
+		// No row yet — return zero state.
+		return PersonaState{}, nil
+	}
+
+	var state PersonaState
+	if lastReflStr != "" {
+		state.LastReflectionAt, _ = time.Parse("2006-01-02 15:04:05", lastReflStr)
+	}
+	if lastRewriteStr != "" {
+		state.LastRewriteAt, _ = time.Parse("2006-01-02 15:04:05", lastRewriteStr)
+	}
+	return state, nil
+}
+
+// SetLastReflectionAt records when the most recent nightly reflection ran.
+// Uses INSERT OR REPLACE to upsert the single row while preserving the
+// last_rewrite_at column — SQLite's INSERT OR REPLACE deletes then inserts,
+// so we must COALESCE to carry the existing value forward.
+func (s *Store) SetLastReflectionAt(t time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
+		 VALUES (1, ?, (SELECT last_rewrite_at FROM persona_state WHERE id = 1))`,
+		t.Format("2006-01-02 15:04:05"),
+	)
+	return err
+}
+
+// SetLastRewriteAt records when the most recent persona rewrite ran.
+// Same COALESCE trick as SetLastReflectionAt to preserve last_reflection_at.
+func (s *Store) SetLastRewriteAt(t time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
+		 VALUES (1, (SELECT last_reflection_at FROM persona_state WHERE id = 1), ?)`,
+		t.Format("2006-01-02 15:04:05"),
+	)
+	return err
+}
+
+// UnconsumedReflectionCount returns how many reflections have been saved
+// since the last persona rewrite. The dreaming gate requires at least N
+// unconsumed reflections before a rewrite is allowed.
+// If no rewrite has ever happened, counts ALL reflections.
+func (s *Store) UnconsumedReflectionCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM reflections
+		 WHERE timestamp > COALESCE(
+		   (SELECT last_rewrite_at FROM persona_state WHERE id = 1),
+		   '1970-01-01 00:00:00'
+		 )`,
+	).Scan(&count)
+	return count, err
+}
+
 // GetTraitHistory returns historical values for a single trait across
 // persona versions, newest first. Useful for showing how a trait has
 // drifted over time.

@@ -13,6 +13,7 @@ import (
 	"her/embed"
 	"her/llm"
 	"her/memory"
+	"her/persona"
 	"her/scrub"
 	"her/search"
 
@@ -112,6 +113,7 @@ type suite struct {
 	Description string   `yaml:"description"`
 	Tags        []string `yaml:"tags"`
 	Messages    []string `yaml:"messages"`
+	RunDream    bool     `yaml:"run_dream"` // if true, run a full dream cycle after all messages complete
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -448,6 +450,22 @@ func runSim(cmd *cobra.Command, args []string) error {
 		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
 	}
 
+	// --- Memory agent client (needed for run_dream support) ---
+	// The dreaming functions use the memory agent LLM (typically Kimi K2.5)
+	// because it's the same kind of task: nuanced language about the self.
+	var memoryAgentClient *llm.Client
+	if cfg.MemoryAgent.Model != "" {
+		maTemp := cfg.MemoryAgent.Temperature
+		if maTemp == 0 {
+			maTemp = 0.3
+		}
+		maTokens := cfg.MemoryAgent.MaxTokens
+		if maTokens == 0 {
+			maTokens = 4096
+		}
+		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
+	}
+
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
@@ -535,10 +553,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TriggerMsgID:        msgID,
 			StatusCallback:      statusCallback,
 			TraceCallback:       traceCallback,
-			TTSCallback:         nil, // no TTS in sim
-			ReflectionThreshold: cfg.Persona.ReflectionMemoryThreshold,
-			RewriteEveryN:       cfg.Persona.RewriteEveryNReflections,
-			ConfigPath:          cfgFile,
+			TTSCallback: nil, // no TTS in sim
+			ConfigPath:  cfgFile,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
@@ -627,6 +643,48 @@ func runSim(cmd *cobra.Command, args []string) error {
 	)
 	if err != nil {
 		log.Error("failed to update sim run totals", "err", err)
+	}
+
+	// ------------------------------------------------------------------
+	// 8b. Optional: run a full dream cycle (run_dream: true in suite YAML)
+	// ------------------------------------------------------------------
+	// This lets you test the dreaming pipeline without running hundreds of
+	// real conversations. The dream uses bypass=true so both gates are skipped —
+	// same behaviour as /dream in the Telegram bot.
+	if s.RunDream && memoryAgentClient != nil {
+		fmt.Printf("\n[dream] Running nightly reflection...\n")
+		if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
+			fmt.Printf("[dream] Reflection error: %v\n", err)
+		} else {
+			reflections, _ := store.ReflectionsSince(time.Now().Add(-30 * time.Second))
+			if len(reflections) > 0 {
+				fmt.Printf("[dream] Reflection: %s\n", reflections[len(reflections)-1].Content)
+			} else {
+				fmt.Printf("[dream] Reflection: NOTHING_NOTABLE\n")
+			}
+		}
+
+		minDays := cfg.Persona.MinRewriteDays
+		if minDays == 0 {
+			minDays = 7
+		}
+		minRefl := cfg.Persona.MinReflections
+		if minRefl == 0 {
+			minRefl = 3
+		}
+
+		fmt.Printf("[dream] Running gated persona rewrite (bypass=true)...\n")
+		rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
+		if err != nil {
+			fmt.Printf("[dream] Rewrite error: %v\n", err)
+		} else if rewritten {
+			data, _ := os.ReadFile(cfg.Persona.PersonaFile)
+			fmt.Printf("[dream] Persona rewritten:\n%s\n", string(data))
+		} else {
+			fmt.Printf("[dream] Rewrite: UNCHANGED\n")
+		}
+	} else if s.RunDream && memoryAgentClient == nil {
+		fmt.Printf("\n[dream] Skipped — memory_agent.model not configured in config.yaml\n")
 	}
 
 	// ------------------------------------------------------------------

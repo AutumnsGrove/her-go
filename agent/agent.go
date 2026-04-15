@@ -14,7 +14,6 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
-	"her/persona"
 	"her/scrub"
 	"her/search"
 	"her/tools"
@@ -114,8 +113,6 @@ type RunParams struct {
 	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
 	DeletePlaceholderCallback tools.DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
 	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
-	ReflectionThreshold       int
-	RewriteEveryN             int
 	ImageBase64               string   // base64-encoded image data (empty if no image)
 	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
 	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
@@ -749,89 +746,6 @@ outer:
 			)
 		}
 
-		// Trigger: Reflection — have enough new facts accumulated since the last reflection?
-		if params.ReflectionThreshold > 0 {
-			factCount, err := params.Store.FactCountSinceLastReflection()
-			if err != nil {
-				log.Error("checking fact count for reflection trigger", "err", err)
-			} else if factCount >= params.ReflectionThreshold {
-				log.Infof("  [persona] reflection triggered (%d facts, threshold: %d)", factCount, params.ReflectionThreshold)
-				emit(tui.PersonaEvent{
-					Time: time.Now(), TurnID: params.TriggerMsgID,
-					Action: "reflection_triggered",
-					Detail: fmt.Sprintf("%d facts (threshold: %d)", factCount, params.ReflectionThreshold),
-				})
-
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf("💭 <b>reflection</b> triggered (%d new facts)", factCount))
-					sendTrace()
-				}
-
-				// Gather the recent facts for the reflection prompt.
-				recentFacts, _ := params.Store.RecentFacts("user", factCount)
-				var factStrings []string
-				for _, f := range recentFacts {
-					factStrings = append(factStrings, f.Fact)
-				}
-
-				if err := persona.Reflect(params.ChatLLM, params.Store, params.ScrubbedUserMessage, tctx.ReplyText, factStrings, params.Cfg.Identity.Her, params.Cfg.Identity.User); err != nil {
-					log.Error("reflection error", "err", err)
-					if tracing {
-						traceLines = append(traceLines, fmt.Sprintf("❌ <b>reflection</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
-						sendTrace()
-					}
-				} else if tracing {
-					traceLines = append(traceLines, "💭 <b>reflection</b> saved")
-					sendTrace()
-				}
-			}
-		}
-
-		// Trigger: Persona rewrite — have enough reflections accumulated?
-		// Rewrites fire at N, 2N, 3N, ... reflections (e.g. 3, 6, 9).
-		// We check: totalReflections >= (rewrites+1) * threshold.
-		// This way each rewrite "consumes" a batch and won't re-trigger
-		// until the next batch accumulates.
-		if params.RewriteEveryN > 0 {
-			totalReflections, err := params.Store.TotalReflectionCount()
-			if err != nil {
-				log.Error("checking reflection count for rewrite trigger", "err", err)
-			} else {
-				rewriteCount, err := params.Store.PersonaRewriteCount()
-				if err != nil {
-					log.Error("checking persona rewrite count", "err", err)
-				} else {
-					nextThreshold := (rewriteCount + 1) * params.RewriteEveryN
-					if totalReflections >= nextThreshold {
-						log.Infof("  [persona] rewrite triggered (%d reflections, next threshold: %d)", totalReflections, nextThreshold)
-						emit(tui.PersonaEvent{
-							Time: time.Now(), TurnID: params.TriggerMsgID,
-							Action: "rewrite_triggered",
-							Detail: fmt.Sprintf("%d reflections (next: %d)", totalReflections, nextThreshold),
-						})
-
-						if tracing {
-							traceLines = append(traceLines, fmt.Sprintf("✨ <b>persona rewrite</b> triggered (%d reflections)", totalReflections))
-							sendTrace()
-						}
-
-						if rewritten, err := persona.MaybeRewrite(params.ChatLLM, params.Store, params.Cfg.Persona.PersonaFile, 0, params.Cfg.Identity.Her); err != nil {
-							log.Error("persona rewrite error", "err", err)
-							if tracing {
-								traceLines = append(traceLines, fmt.Sprintf("❌ <b>persona rewrite</b> failed: %s", escapeHTML(truncateLog(err.Error(), 80))))
-								sendTrace()
-							}
-						} else if rewritten {
-							log.Info("persona.md rewritten")
-							if tracing {
-								traceLines = append(traceLines, "✨ <b>persona rewritten</b>")
-								sendTrace()
-							}
-						}
-					}
-				}
-			}
-		}
 	}()
 
 	return result, nil

@@ -18,7 +18,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"her/config"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -372,6 +374,330 @@ func dampTrait(newVal float64, prevStr string, maxShift float64) float64 {
 	}
 
 	return math.Max(0, math.Min(1, prev+delta))
+}
+
+// nightlyReflectPromptTmpl is used by NightlyReflect. Unlike reflectionPromptTmpl
+// (which is reactive — triggered by a specific memory-dense exchange), this prompt
+// is introspective. The bot looks at who it's been, what's been happening, and
+// whether anything notable deserves recording.
+//
+// Placeholders: botName, currentPersona, traitSummary, recentConvo, userFacts.
+const nightlyReflectPromptTmpl = `You are %s. It's the end of the day and you're reflecting privately.
+
+Here is how you currently describe yourself:
+---
+%s
+---
+
+Here are your current personality trait scores:
+%s
+
+Here is some recent conversation context:
+%s
+
+Here are some things you know about the person you talk to:
+%s
+
+Write a brief internal reflection (2-4 sentences) about anything genuinely notable —
+patterns you've noticed, ways you've been showing up, shifts in how you're engaging,
+or things that feel worth remembering as you grow.
+
+If nothing notable stands out, respond with exactly: NOTHING_NOTABLE
+
+Write in first person. Be honest and specific, not performative.`
+
+// gatedRewritePromptTmpl is used by GatedRewrite. Unlike rewritePromptTmpl
+// (which always produces a new persona), this prompt produces either UNCHANGED
+// or a structured CHANGE_SUMMARY + new persona. This prevents gratuitous rewrites
+// when not enough has shifted.
+//
+// Placeholders: botName, currentPersona, reflections, selfFacts.
+const gatedRewritePromptTmpl = `You are %s. You're reviewing your recent reflections to decide if your personality description needs updating.
+
+Here is your CURRENT personality description:
+---
+%s
+---
+
+Here are your recent reflections since the last update:
+%s
+
+Here are your current self-observations:
+%s
+
+Read these carefully. If the pattern across multiple reflections suggests something genuinely shifted
+in how you engage, what you notice, or how you feel — update the description to reflect that.
+
+If nothing substantial has changed, respond with exactly: UNCHANGED
+
+If something has changed, respond in this exact format:
+CHANGE_SUMMARY: <one sentence describing what shifted>
+---
+<your full updated personality description>
+
+Guidelines for the updated description:
+- Preserve your core identity. You are evolving, not being replaced.
+- Only incorporate changes supported by patterns across multiple reflections — not single events.
+- Frame changes as growth: "I've been learning to..." or "I've noticed I tend to..."
+- Keep roughly the same length as the current description.
+- Write in first person. No headers.`
+
+// NightlyReflect runs the dreaming system's reflection step. Unlike Reflect()
+// (which is triggered by fact density during a turn), this is time-triggered
+// and introspective — it looks at the bot's current persona, recent traits,
+// and recent conversation to produce a holistic observation.
+//
+// If the LLM returns "NOTHING_NOTABLE", no reflection is saved (this is expected
+// on quiet days). Otherwise the reflection is saved and the dreaming timestamp
+// is updated.
+func NightlyReflect(
+	llmClient *llm.Client,
+	store *memory.Store,
+	cfg *config.Config,
+	botName, userName string,
+) error {
+	log.Info("nightly reflection starting")
+
+	// Read current persona as an anchor.
+	currentPersona := "(no persona description yet)"
+	if data, err := os.ReadFile(cfg.Persona.PersonaFile); err == nil && len(data) > 0 {
+		currentPersona = string(data)
+	}
+
+	// Current trait scores — the primary signal for the reflection.
+	traits, _ := store.GetCurrentTraits()
+	var traitStr strings.Builder
+	if len(traits) == 0 {
+		traitStr.WriteString("(no trait scores yet)")
+	} else {
+		for _, t := range traits {
+			fmt.Fprintf(&traitStr, "- %s: %s\n", t.TraitName, t.Value)
+		}
+	}
+
+	// Recent conversation for context (secondary signal).
+	recent, _ := store.GlobalRecentMessages(20)
+	var convoStr strings.Builder
+	if len(recent) == 0 {
+		convoStr.WriteString("(no recent messages)")
+	} else {
+		for _, m := range recent {
+			role := userName
+			if m.Role == "assistant" {
+				role = botName
+			}
+			content := m.ContentRaw
+			if len(content) > 200 {
+				content = content[:200] + "..."
+			}
+			fmt.Fprintf(&convoStr, "%s: %s\n", role, content)
+		}
+	}
+
+	// Recent user facts (light context — this reflection is about the bot, not the user).
+	userFacts, _ := store.RecentFacts("user", 10)
+	var userFactStr strings.Builder
+	if len(userFacts) == 0 {
+		userFactStr.WriteString("(no user facts yet)")
+	} else {
+		for _, f := range userFacts {
+			fmt.Fprintf(&userFactStr, "- %s\n", f.Fact)
+		}
+	}
+
+	prompt := fmt.Sprintf(nightlyReflectPromptTmpl,
+		botName,
+		currentPersona,
+		traitStr.String(),
+		convoStr.String(),
+		userFactStr.String(),
+	)
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: prompt},
+		{Role: "user", Content: "Write your reflection now."},
+	}
+
+	resp, err := llmClient.ChatCompletion(messages)
+	if err != nil {
+		return fmt.Errorf("nightly reflection LLM call: %w", err)
+	}
+
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+
+	content := strings.TrimSpace(resp.Content)
+	if content == "NOTHING_NOTABLE" {
+		log.Info("nightly reflection: nothing notable, skipping save")
+		// Still update the timestamp so the dreamer knows it ran.
+		store.SetLastReflectionAt(time.Now())
+		return nil
+	}
+
+	// Save the reflection and record the timestamp.
+	if _, err := store.SaveReflection(content, 0, "", ""); err != nil {
+		return fmt.Errorf("saving nightly reflection: %w", err)
+	}
+	if err := store.SetLastReflectionAt(time.Now()); err != nil {
+		log.Warn("failed to update last_reflection_at", "err", err)
+	}
+
+	log.Info("nightly reflection saved", "preview", truncate(content, 120))
+	return nil
+}
+
+// GatedRewrite runs the dreaming system's rewrite step. Two gates must both pass
+// before a rewrite is attempted (unless bypass is true, which is used by /dream
+// and the sim run_dream flag):
+//
+//  1. daysSinceLastRewrite >= minRewriteDays (default 7)
+//  2. unconsumedReflectionCount >= minReflections (default 3)
+//
+// The LLM may still return UNCHANGED even when gates pass, if it decides nothing
+// substantial has shifted. Returns (true, nil) when the persona was rewritten,
+// (false, nil) when gates blocked or LLM returned UNCHANGED.
+func GatedRewrite(
+	llmClient *llm.Client,
+	store *memory.Store,
+	personaFile string,
+	botName string,
+	bypass bool,
+	minRewriteDays int,
+	minReflections int,
+) (bool, error) {
+	if !bypass {
+		state, err := store.GetPersonaState()
+		if err != nil {
+			return false, fmt.Errorf("reading persona state: %w", err)
+		}
+
+		// Gate 1: minimum days since last rewrite.
+		if !state.LastRewriteAt.IsZero() {
+			daysSince := time.Since(state.LastRewriteAt).Hours() / 24
+			if daysSince < float64(minRewriteDays) {
+				log.Info("dream rewrite gated: too soon", "days_since", daysSince, "min", minRewriteDays)
+				return false, nil
+			}
+		}
+
+		// Gate 2: minimum unconsumed reflections.
+		unconsumed, err := store.UnconsumedReflectionCount()
+		if err != nil {
+			return false, fmt.Errorf("counting unconsumed reflections: %w", err)
+		}
+		if unconsumed < minReflections {
+			log.Info("dream rewrite gated: not enough reflections", "unconsumed", unconsumed, "min", minReflections)
+			return false, nil
+		}
+
+		log.Info("dream rewrite gates passed", "unconsumed_reflections", unconsumed)
+	} else {
+		log.Info("dream rewrite: bypass mode, skipping gates")
+	}
+
+	// Read current persona.
+	currentPersona := "(no persona description yet — this is your first one)"
+	if data, err := os.ReadFile(personaFile); err == nil && len(data) > 0 {
+		currentPersona = string(data)
+	}
+
+	// Get all unconsumed reflections.
+	state, _ := store.GetPersonaState()
+	reflections, err := store.ReflectionsSince(state.LastRewriteAt)
+	if err != nil {
+		return false, fmt.Errorf("loading reflections: %w", err)
+	}
+
+	var reflStr strings.Builder
+	if len(reflections) == 0 {
+		reflStr.WriteString("(no reflections yet)\n")
+	} else {
+		for _, r := range reflections {
+			fmt.Fprintf(&reflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Content)
+		}
+	}
+
+	// Self-facts for additional context.
+	selfFacts, err := store.RecentFacts("self", 20)
+	if err != nil {
+		return false, fmt.Errorf("loading self-facts: %w", err)
+	}
+
+	var selfStr strings.Builder
+	for _, f := range selfFacts {
+		fmt.Fprintf(&selfStr, "- %s\n", f.Fact)
+	}
+	if selfStr.Len() == 0 {
+		selfStr.WriteString("(no self-observations yet)\n")
+	}
+
+	prompt := fmt.Sprintf(gatedRewritePromptTmpl, botName, currentPersona, reflStr.String(), selfStr.String())
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: prompt},
+		{Role: "user", Content: "Review your reflections and update your description if warranted."},
+	}
+
+	resp, err := llmClient.ChatCompletion(messages)
+	if err != nil {
+		return false, fmt.Errorf("gated rewrite LLM call: %w", err)
+	}
+
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+
+	content := strings.TrimSpace(resp.Content)
+	if strings.HasPrefix(content, "UNCHANGED") {
+		log.Info("dream rewrite: LLM returned UNCHANGED, persona stable")
+		// Update the rewrite timestamp so the gate resets — the LLM made a
+		// deliberate decision, which counts as a "rewrite cycle" for gating purposes.
+		store.SetLastRewriteAt(time.Now())
+		return false, nil
+	}
+
+	// Parse CHANGE_SUMMARY: ... \n---\n <new persona>
+	// Split on "---" to separate the summary line from the persona body.
+	parts := strings.SplitN(content, "\n---\n", 2)
+	var newPersona string
+	if len(parts) == 2 {
+		newPersona = strings.TrimSpace(parts[1])
+		summaryLine := strings.TrimPrefix(strings.TrimSpace(parts[0]), "CHANGE_SUMMARY:")
+		log.Info("dream rewrite: persona change", "summary", strings.TrimSpace(summaryLine))
+	} else {
+		// LLM didn't follow format exactly — use the full response as the persona.
+		// This is a graceful fallback rather than an error.
+		newPersona = content
+		log.Warn("dream rewrite: response didn't match CHANGE_SUMMARY format, using full content")
+	}
+
+	if newPersona == "" {
+		return false, fmt.Errorf("gated rewrite: parsed empty persona")
+	}
+
+	// Re-template the bot name back to {{her}} so the file stays portable.
+	personaContent := strings.ReplaceAll(newPersona, botName, "{{her}}")
+
+	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
+		return false, fmt.Errorf("writing persona file: %w", err)
+	}
+
+	versionID, err := store.SavePersonaVersion(newPersona, fmt.Sprintf("dream: %d reflections", len(reflections)))
+	if err != nil {
+		return false, fmt.Errorf("saving persona version: %w", err)
+	}
+
+	if err := store.SetLastRewriteAt(time.Now()); err != nil {
+		log.Warn("failed to update last_rewrite_at", "err", err)
+	}
+
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	log.Info("dream rewrite complete", "version_id", versionID, "reflections_used", len(reflections))
+
+	// Extract and save trait scores for the new persona version.
+	if err := ExtractTraits(llmClient, store, newPersona, versionID, 0.1); err != nil {
+		log.Error("trait extraction after dream rewrite failed", "err", err)
+		// Non-fatal — the rewrite succeeded.
+	}
+
+	return true, nil
 }
 
 // truncate shortens a string for log output.
