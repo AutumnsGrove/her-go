@@ -78,6 +78,16 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Fatal("LLM API key is required — set OPENROUTER_API_KEY env var or fill in config.yaml")
 	}
 
+	// Kill any stale her process from a previous run before we start.
+	// This prevents two instances racing for the same Telegram token.
+	const herPIDFile = "her.pid"
+	killStaleSelf(herPIDFile)
+	if err := os.WriteFile(herPIDFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		log.Warn("failed to write PID file", "err", err)
+	} else {
+		defer os.Remove(herPIDFile)
+	}
+
 	store, err := memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
 		log.Fatal("Failed to initialize database", "err", err)
@@ -492,6 +502,40 @@ func killStaleProcess(port string) {
 
 	// Brief pause to let the OS release the port
 	time.Sleep(200 * time.Millisecond)
+}
+
+// killStaleSelf reads her.pid and kills any previous her run instance that
+// didn't exit cleanly. Same idea as killStaleProcess, but using a PID file
+// instead of a port scan — her doesn't bind a TCP port so lsof can't find it.
+//
+// This prevents the "two bots competing for the same Telegram token" problem
+// where messages go to the old instance and the new TUI sees nothing.
+func killStaleSelf(pidFile string) {
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return // no PID file — clean slate
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		_ = os.Remove(pidFile)
+		return
+	}
+
+	// Signal 0 checks existence without actually sending a signal.
+	// On Unix, FindProcess always succeeds — the signal is the real check.
+	if err := syscall.Kill(pid, 0); err != nil {
+		// Process is gone — just clean up the file.
+		_ = os.Remove(pidFile)
+		return
+	}
+
+	log.Warn("killing stale her process from previous run", "pid", pid)
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+	time.Sleep(300 * time.Millisecond)
+	// Force-kill if SIGTERM wasn't enough (e.g., process was stuck in I/O).
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	_ = os.Remove(pidFile)
 }
 
 // startSTTSidecar launches the parakeet-server process.
