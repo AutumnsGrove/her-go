@@ -64,7 +64,7 @@ search:
 
 memory:
   db_path: "./her.db"
-  recent_messages: 10            # sliding window size (compaction summaries cover older context)
+  recent_messages: 6             # sliding window size (compaction summaries cover older context)
   max_facts_in_context: 10       # top-K facts to inject
   extraction_interval: 10        # extract facts every N messages
   max_history_tokens: 8000       # message history token budget — compaction fires at 75% of this (6000 tokens). System prompt excluded.
