@@ -155,6 +155,7 @@ type EmbedConfig struct {
 	Dimension           int     `yaml:"dimension"`             // vector dimension (768 for nomic-embed-text-v1.5, 1536 for OpenAI, etc.)
 	SimilarityThreshold float64 `yaml:"similarity_threshold"`  // above this = duplicate (0.0-1.0)
 	MaxSemanticDistance float64 `yaml:"max_semantic_distance"` // facts farther than this are filtered from context (cosine distance, 0=identical)
+	StartCommand        string  `yaml:"start_command"`         // optional: shell command to launch the embed server if it's not already running
 }
 
 // SearchConfig controls web search and book search integrations.

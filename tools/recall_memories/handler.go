@@ -53,7 +53,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// vector; SemanticSearch runs KNN against sqlite-vec.
 	queryVec, err := ctx.EmbedClient.Embed(args.Query)
 	if err != nil {
-		return fmt.Sprintf("error embedding query: %v", err)
+		// Embedding failed — server may be down. Fall back to keyword search
+		// so recall still works, just less precise. Agent sees the degraded flag.
+		log.Warn("embed unavailable, falling back to keyword search", "err", err)
+		facts, ftsErr := ctx.Store.FindFactsByKeyword(args.Query)
+		if ftsErr != nil || len(facts) == 0 {
+			return "memory search temporarily unavailable (embed server down)"
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Found %d memories (degraded: embed server unavailable — keyword search only):\n\n", len(facts))
+		for _, f := range facts {
+			fmt.Fprintf(&b, "- [ID=%d, %s] %s\n", f.ID, f.Category, f.Fact)
+		}
+		return b.String()
 	}
 
 	facts, err := ctx.Store.SemanticSearch(queryVec, args.Limit)

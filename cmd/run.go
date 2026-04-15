@@ -272,11 +272,12 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	}
 
 	// --- Embedding client ---
+	// Client is always created here if configured. Health check + optional
+	// auto-start happens in the sidecars section below alongside stt/tts.
 
 	var embedClient *embed.Client
 	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "ready", Detail: cfg.Embed.Model})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "skipped"})
 	}
@@ -345,6 +346,18 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "tts", Status: "skipped"})
 	}
 
+	var embedProcess *exec.Cmd
+	if embedClient != nil {
+		if embedClient.IsAvailable() {
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "ready", Detail: cfg.Embed.Model})
+		} else if cfg.Embed.StartCommand != "" {
+			embedProcess = startEmbedSidecar(cfg, bus, embedClient)
+		} else {
+			log.Warn("embed server not responding — semantic recall degraded to keyword fallback")
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "failed", Detail: "not responding"})
+		}
+	}
+
 	// --- Telegram bot ---
 
 	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, memoryAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
@@ -388,6 +401,11 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		log.Info("stopping piper TTS server", "pid", ttsProcess.Process.Pid)
 		_ = syscall.Kill(-ttsProcess.Process.Pid, syscall.SIGKILL)
 		_, _ = ttsProcess.Process.Wait()
+	}
+	if embedProcess != nil && embedProcess.Process != nil {
+		log.Info("stopping embed sidecar", "pid", embedProcess.Process.Pid)
+		_ = syscall.Kill(-embedProcess.Process.Pid, syscall.SIGKILL)
+		_, _ = embedProcess.Process.Wait()
 	}
 	tgBot.Stop()
 	<-botDone // wait for tgBot.Start() to return
@@ -537,4 +555,59 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 	}()
 
 	return ttsProcess
+}
+
+// startEmbedSidecar launches a user-configured embedding server command.
+// Unlike the STT/TTS sidecars whose commands are hardcoded, embed is flexible —
+// start_command could be "lms load <model>", "ollama serve", or anything else.
+// Because of this flexibility we skip killStaleProcess: a command like
+// "lms load" operates on an already-running server process, and killing the
+// port would take down the entire LM Studio app.
+func startEmbedSidecar(cfg *config.Config, bus *tui.Bus, embedClient *embed.Client) *exec.Cmd {
+	// Split "lms load nomic-embed-text-v1.5" → ["lms", "load", "nomic-embed-text-v1.5"]
+	// strings.Fields handles any amount of whitespace between tokens.
+	parts := strings.Fields(cfg.Embed.StartCommand)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	cmdPath, err := exec.LookPath(parts[0])
+	if err != nil {
+		log.Warn("embed start_command not found in PATH", "cmd", parts[0])
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "failed", Detail: "command not found: " + parts[0]})
+		return nil
+	}
+
+	embedProcess := exec.Command(cmdPath, parts[1:]...)
+	embedProcess.Stdout = sidecarOut
+	embedProcess.Stderr = sidecarOut
+	// Setpgid: true puts the child in its own process group so we can
+	// SIGKILL the whole group on shutdown (negative PID kills the group).
+	embedProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := embedProcess.Start(); err != nil {
+		log.Error("failed to start embed sidecar", "err", err)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "failed", Detail: err.Error()})
+		return nil
+	}
+
+	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "starting", Detail: "pid=" + fmt.Sprint(embedProcess.Process.Pid)})
+
+	// Poll until the server is ready or 30 seconds have elapsed.
+	// Runs in the background — never blocks the user from continuing startup.
+	go func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(1 * time.Second)
+			if embedClient.IsAvailable() {
+				log.Info("embed server is ready")
+				bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "ready", Detail: cfg.Embed.Model})
+				return
+			}
+		}
+		log.Warn("embed server did not respond within 30s — semantic recall degraded to keyword fallback")
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "embed", Status: "failed", Detail: "timeout"})
+	}()
+
+	return embedProcess
 }
