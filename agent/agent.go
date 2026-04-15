@@ -414,8 +414,9 @@ func Run(params RunParams) (*RunResult, error) {
 	// Modeled after Crush (charmbracelet/fantasy): loop while the model
 	// keeps returning tool calls (finish_reason == "tool_calls"). When the
 	// model stops calling tools (finish_reason == "stop"), the loop ends.
-	// No tool_choice forcing — the model decides, and we handle gracefully
-	// when it doesn't cooperate.
+	// First iteration uses tool_choice="required" to nudge the model
+	// into the tool-calling flow. After that, "auto" lets it drive.
+	// The fallback handler still exists for resilience.
 	//
 	// Loop detection: track think content to catch the agent repeating
 	// itself. Crush uses SHA-256 signatures; we keep it simpler since
@@ -491,7 +492,16 @@ outer:
 		}
 
 		for i := 0; i < iterationsPerWindow; i++ {
-			resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs)
+			// Nudge on the first iteration only: tool_choice="required"
+			// forces the model into the tool-calling flow. Without this,
+			// Trinity occasionally skips tools entirely and outputs plain
+			// text on iter 0. After the first call, "auto" lets the model
+			// drive naturally (it exits via the done tool).
+			var toolChoice interface{}
+			if i == 0 && window == 0 {
+				toolChoice = "required"
+			}
+			resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs, toolChoice)
 			if err != nil {
 				// The LLM client handles fallback automatically on retriable
 				// errors (429, 500-503, timeout). If we still get an error here,
