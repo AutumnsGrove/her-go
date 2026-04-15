@@ -89,6 +89,15 @@ type AgentInput struct {
 //  7. Clean up (stop typing, emit TurnEndEvent)
 //  8. Handle errors (edit placeholder with error message)
 func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
+	// Prevent concurrent agent runs. Telegram can deliver the same update twice
+	// (retry on slow response) or the user can send two messages before the
+	// first turn finishes. Either way, only one agent turn runs at a time.
+	// The message is not dropped — we tell the user and let them resend.
+	if b.agentBusy.Load() {
+		log.Info("agent busy, ignoring concurrent message", "msg", truncate(input.UserMessage, 60))
+		return c.Send("Still working on your last message — give me just a moment.")
+	}
+
 	// Apply defaults for optional fields.
 	scrubbedText := input.ScrubbedText
 	if scrubbedText == "" {
