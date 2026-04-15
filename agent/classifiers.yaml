@@ -19,11 +19,11 @@ classifiers:
   fact:
     preamble: >-
       You are a quality gate for a personal chatbot's memory system.
-      A fact has been proposed for permanent storage. Evaluate it against
-      the following criteria and return the FIRST matching verdict.
+      A fact about the USER has been proposed for permanent storage.
+      Evaluate it against the following criteria and return the FIRST
+      matching verdict.
     write_types:
       - fact
-      - self_fact
     verdicts:
       - name: LOW_VALUE
         description: >-
@@ -50,3 +50,43 @@ classifiers:
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
       Examples: "SAVE", "LOW_VALUE — too vague to be actionable"
+
+  self_fact:
+    preamble: >-
+      You are a quality gate for a personal chatbot's memory system.
+      A SELF-FACT has been proposed — this is an observation the chatbot
+      is making about ITSELF: its own communication patterns, relationship
+      dynamics, or things it has learned about how to be a better
+      companion. These are NOT facts about the user. Evaluate whether
+      this self-observation is worth keeping permanently.
+    write_types:
+      - self_fact
+    verdicts:
+      - name: LOW_VALUE
+        description: >-
+          Is the self-fact too vague, generic, or obvious to be worth
+          permanent storage? Would it help the chatbot be a better
+          companion in future conversations?
+        examples:
+          - '"I responded to the user" (trivially obvious)'
+          - '"I should be supportive" (too generic — every chatbot should)'
+          - '"The user seemed happy" (observation about the user, not self)'
+          - '"I had a conversation today" (no actionable insight)'
+        note: >-
+          Good self-facts are specific and actionable: "When Autumn vents
+          about her parents, validating first then pivoting to something
+          she controls works better than offering advice" is SAVE.
+        rejection:
+          default_detail: this self-observation is too vague or generic to be worth saving
+          suffix: >-
+            Self-facts should capture specific patterns or insights that
+            would help in future conversations.
+
+      - name: SAVE
+        description: >-
+          The self-fact captures a specific, actionable insight about the
+          chatbot's own patterns, communication style, or relationship
+          dynamics that would improve future interactions.
+    footer: |-
+      Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
+      Examples: "SAVE", "LOW_VALUE — too generic to be actionable"
