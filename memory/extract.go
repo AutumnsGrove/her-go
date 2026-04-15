@@ -21,7 +21,7 @@ var log = logger.WithPrefix("memory")
 // future "memory pruning" feature where Mira can revisit old conversations
 // and re-extract only the facts that held up over time. The agent's save_fact
 // tool handles real-time extraction. Keep this prompt in sync with the
-// agent_prompt.md rules so the two paths agree on what's worth saving.
+// main_agent_prompt.md rules so the two paths agree on what's worth saving.
 const extractionPrompt = `You are a memory extraction system. Your job is to read a conversation and extract two things:
 
 ## 1. Facts

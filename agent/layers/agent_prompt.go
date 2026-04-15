@@ -1,6 +1,6 @@
 package layers
 
-// Agent layer: System prompt (agent_prompt.md).
+// Agent layer: System prompt (main_agent_prompt.md).
 // The foundational rules for the agent orchestrator. Hot-reloaded
 // from disk on every turn.
 //
@@ -13,7 +13,7 @@ import "os"
 
 func init() {
 	Register(PromptLayer{
-		Name:    "agent_prompt.md (system)",
+		Name:    "main_agent_prompt.md (system)",
 		Order:   10,
 		Stream:  StreamAgent,
 		Builder: buildAgentPrompt,
