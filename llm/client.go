@@ -181,6 +181,13 @@ type chatRequest struct {
 	// allows an object like {"type":"function","function":{"name":"X"}}
 	// to force a specific tool.
 	ToolChoice interface{} `json:"tool_choice,omitempty"`
+
+	// ParallelToolCalls controls whether the model can batch multiple tool
+	// calls into a single response. We set this to false so tool calls run
+	// sequentially — each call sees the result of the previous one before
+	// deciding what to do next. Without this, think() + reply() could fire
+	// in the same batch, making the thinking step pointless.
+	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
 }
 
 // chatAPIResponse mirrors the JSON structure returned by the API.
@@ -344,6 +351,13 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 	}
 	if toolChoice != nil {
 		reqBody.ToolChoice = toolChoice
+	}
+	// Disable parallel tool calls so the model returns one tool call per
+	// response. This ensures each call sees the result of the previous one
+	// (e.g., think→reply→done runs sequentially, not batched).
+	if len(tools) > 0 {
+		f := false
+		reqBody.ParallelToolCalls = &f
 	}
 
 	jsonData, err := json.Marshal(reqBody)

@@ -1,70 +1,30 @@
 # Classifier verdict definitions.
 #
-# Each classifier (fact, mood, receipt) has a preamble, an ordered list
-# of verdicts, and a footer. YAML order = check priority order.
+# Each classifier has a preamble, an ordered list of verdicts, and a footer.
+# YAML order = check priority order.
 #
 # To add a new verdict: add a block under the right classifier's verdicts
 # list, rebuild, and restart. The prompt, parser, and rejection message
 # are all generated from this file automatically.
+#
+# Removed verdicts (and why):
+# - FICTIONAL: ~40-50% false positive rate. Rejected real past events as
+#   "hypothetical." The agent model's own judgment handles this better.
+# - MOOD_NOT_FACT: mood tracking system removed (in junk drawer).
+# - EXTERNAL: overlapped with FICTIONAL, removed with it.
+# - INFERRED: memory agent reads raw conversation, so reasonable
+#   summarization is always acceptable.
 
 classifiers:
   fact:
     preamble: >-
       You are a quality gate for a personal chatbot's memory system.
       A fact has been proposed for permanent storage. Evaluate it against
-      ALL of the following criteria and return the FIRST matching verdict.
+      the following criteria and return the FIRST matching verdict.
     write_types:
       - fact
       - self_fact
     verdicts:
-      - name: FICTIONAL
-        soft: true
-        description: >-
-          Does the fact describe an IN-GAME EVENT or STORY BEAT as if it
-          really happened? Only reject actual fictional events — things a
-          character did in a game world. The user's real preferences, play
-          choices, and opinions about fiction are NOT fictional.
-        examples:
-          - '"User got a new apartment in Night City" (in-game event)'
-          - '"User pulled out a katana at a festival" (game action)'
-          - '"User beat Malenia after 40 tries" (game achievement)'
-          - '"User built a greenhouse in Stardew Valley" (in-game action)'
-        note: >-
-          The user's preferences ABOUT fiction are real facts — SAVE these:
-          "User prefers bleed builds in Elden Ring" (real playstyle),
-          "User plays as female V in Cyberpunk" (real choice),
-          "User's favorite genre is FromSoft games" (real preference),
-          "User loves the character Takemura" (real opinion).
-          Only reject events that happened IN the fiction, not choices
-          or preferences the real human made.
-          If the fact MIXES real and fictional, extract the real part and
-          return a REWRITE suggestion.
-        rejection:
-          default_detail: this describes an in-game event or story beat, not the real user
-          suffix: >-
-            Only save facts about the real user. Preferences ABOUT games
-            (playstyle, favorite characters, genre taste) are real — save those.
-
-      - name: MOOD_NOT_FACT
-        description: >-
-          Is this a transient emotional state being stored as a permanent
-          fact? Moods belong in the mood tracker, not the fact database.
-        examples:
-          - '"User feels low and frustrated after conflict with parents"'
-          - '"User is feeling kind of nothing today"'
-          - '"User feels overwhelmed and may need a break"'
-          - '"Feeling lonely seeing couples at coffee shop"'
-        note: >-
-          a DURABLE emotional pattern IS a fact. "User experiences recurring
-          episodes of emotional flatness" is SAVE — that's a lasting pattern,
-          not today's mood.
-        rejection:
-          default_detail: this is a transient emotional state, not a permanent fact
-          suffix: >-
-            Use the log_mood skill instead — it's designed for tracking how
-            the user feels in the moment. Facts should be durable truths,
-            not snapshots of today's mood.
-
       - name: LOW_VALUE
         description: >-
           Is the fact too vague, generic, or obvious to be worth permanent
@@ -89,56 +49,4 @@ classifiers:
           clearly implied by the user.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-      Examples: "SAVE", "FICTIONAL — game event from Cyberpunk", "MOOD_NOT_FACT — transient frustration", "LOW_VALUE — too vague to be actionable"
-
-      For FICTIONAL only: if the fact contains a saveable kernel (a real preference or directly stated detail buried in fiction), suggest a cleaned-up version using this format:
-        FICTIONAL REWRITE: "User prefers playing as female V in Cyberpunk 2077"
-      The rewrite should contain ONLY what the user actually said or clearly implied — strip fictional events. If there's nothing saveable, just return the verdict without REWRITE.
-
-  mood:
-    preamble: >-
-      You are a quality gate for a personal chatbot's mood tracker.
-      A mood entry has been proposed. Evaluate it:
-    write_types:
-      - mood
-    verdicts:
-      - name: EXTERNAL
-        description: >-
-          The mood describes how a fictional character feels (in a game,
-          book, movie, show), not the real user.
-        examples:
-          - '"excited about katana build" (game character''s excitement)'
-          - '"anticipatory after talking with Wakako" (Wakako is an NPC)'
-        note: >-
-          the user's real emotional REACTION to fiction is SAVE. "Feeling
-          sad about a character's death" is the user's real emotion.
-        rejection:
-          default_detail: this mood is about a fictional character, not the real user
-          suffix: Only log the real user's emotional state.
-
-      - name: SAVE
-        description: The mood reflects the real user's actual emotional state.
-    footer: 'Respond with exactly one verdict on a single line: SAVE or EXTERNAL'
-
-  receipt:
-    preamble: >-
-      You are a quality gate for a personal chatbot's expense tracker.
-      A receipt/expense has been proposed. Evaluate it:
-    write_types:
-      - receipt
-    verdicts:
-      - name: FICTIONAL
-        description: >-
-          An in-game purchase, fictional vendor, virtual currency, or
-          game economy event.
-        examples:
-          - buying weapons in a game shop
-          - paying an NPC for services
-          - virtual currency transactions
-        rejection:
-          default_detail: this describes fictional/in-game content, not the real user
-          suffix: Only save facts about the real user's actual life.
-
-      - name: SAVE
-        description: A real-world purchase at a real store or service.
-    footer: 'Respond with exactly one verdict on a single line: SAVE or FICTIONAL'
+      Examples: "SAVE", "LOW_VALUE — too vague to be actionable"

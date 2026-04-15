@@ -24,18 +24,13 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantType:    "SAVE",
 		},
 		{
-			name:        "hard reject FICTIONAL",
+			// FICTIONAL was removed — too many false positives on real past events.
+			// The agent model's own judgment handles fiction-filtering well enough.
+			// Like INFERRED, the parser no longer recognizes it → fail-open.
+			name:        "FICTIONAL removed — fails open",
 			response:    "FICTIONAL — in-game event from Elden Ring",
-			wantAllowed: false,
-			wantType:    "FICTIONAL",
-			wantReason:  "in-game event from Elden Ring",
-		},
-		{
-			name:        "soft reject FICTIONAL with rewrite",
-			response:    `FICTIONAL REWRITE: "User prefers playing as female V in Cyberpunk 2077"`,
-			wantAllowed: false,
-			wantType:    "FICTIONAL",
-			wantRewrite: "User prefers playing as female V in Cyberpunk 2077",
+			wantAllowed: true,
+			wantType:    "SAVE",
 		},
 		{
 			// INFERRED was removed in Phase 4 — memory agent reads raw conversation
@@ -47,11 +42,11 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantType:    "SAVE",
 		},
 		{
-			name:        "MOOD_NOT_FACT is always hard reject",
+			// MOOD_NOT_FACT removed — mood tracking moved to junk drawer.
+			name:        "MOOD_NOT_FACT removed — fails open",
 			response:    "MOOD_NOT_FACT — transient frustration",
-			wantAllowed: false,
-			wantType:    "MOOD_NOT_FACT",
-			wantReason:  "transient frustration",
+			wantAllowed: true,
+			wantType:    "SAVE",
 		},
 		{
 			name:        "LOW_VALUE hard reject",
@@ -67,11 +62,10 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantType:    "SAVE",
 		},
 		{
-			name:        "multiline takes first line only",
+			name:        "multiline FICTIONAL removed — fails open",
 			response:    "FICTIONAL — game event\nThe fact describes beating a boss",
-			wantAllowed: false,
-			wantType:    "FICTIONAL",
-			wantReason:  "game event",
+			wantAllowed: true,
+			wantType:    "SAVE",
 		},
 	}
 
@@ -102,32 +96,31 @@ func TestExtractRewrite(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "quoted rewrite",
+			// extractRewrite is a pure string utility — it works for any verdict
+			// name, even removed ones. Testing it with removed verdicts confirms
+			// the extractor itself still works.
+			name:    "quoted rewrite (utility test)",
 			line:    `FICTIONAL REWRITE: "User prefers bleed builds"`,
 			verdict: "FICTIONAL",
 			want:    "User prefers bleed builds",
 		},
 		{
-			// extractRewrite is a string utility — it works for any verdict name,
-			// even removed ones. The full classifier pipeline won't apply INFERRED
-			// rewrites (it fails open on unknown verdicts), but the extraction
-			// function itself is still valid code worth testing.
-			name:    "unquoted rewrite (INFERRED removed but extractor still works)",
+			name:    "unquoted rewrite",
 			line:    `INFERRED REWRITE: User adopted cat Bean`,
 			verdict: "INFERRED",
 			want:    "User adopted cat Bean",
 		},
 		{
 			name:    "no rewrite present",
-			line:    "FICTIONAL — game event",
-			verdict: "FICTIONAL",
+			line:    "LOW_VALUE — too vague",
+			verdict: "LOW_VALUE",
 			want:    "",
 		},
 		{
 			name:    "rewrite with mixed case",
-			line:    `FICTIONAL Rewrite: "User likes FromSoft games"`,
-			verdict: "FICTIONAL",
-			want:    "User likes FromSoft games",
+			line:    `LOW_VALUE Rewrite: "User enjoys surreal fiction like Piranesi"`,
+			verdict: "LOW_VALUE",
+			want:    "User enjoys surreal fiction like Piranesi",
 		},
 	}
 

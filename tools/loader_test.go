@@ -53,8 +53,8 @@ func TestYAMLLoader(t *testing.T) {
 	if hotSet["web_search"] {
 		t.Error("web_search should NOT be hot (it's a deferred search tool)")
 	}
-	if hotSet["recall_memories"] {
-		t.Error("recall_memories should NOT be hot (it's in the memory category)")
+	if !hotSet["recall_memories"] {
+		t.Error("recall_memories should be hot")
 	}
 
 	// Check categories.
@@ -78,9 +78,10 @@ func TestYAMLLoader(t *testing.T) {
 		}
 	}
 
-	// memory category must exist.
-	if _, ok := cats["memory"]; !ok {
-		t.Error("memory category not found")
+	// memory category was removed in Phase 8 — memory tools are now
+	// exclusively used by Kimi (memory agent), not loaded via use_tools.
+	if _, ok := cats["memory"]; ok {
+		t.Error("memory category should not exist (removed — memory tools are Kimi-only)")
 	}
 
 	// Check think's parameters have the thought property.
