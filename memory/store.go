@@ -316,8 +316,8 @@ func (s *Store) initTables() error {
 
 		// Classifier decision log — records every classifier verdict
 		// (both SAVE and rejections) for observability and prompt tuning.
-		// write_type: "fact", "self_fact", "mood", "receipt"
-		// verdict: "SAVE", "FICTIONAL", "MOOD_NOT_FACT", etc.
+		// write_type: "fact", "self_fact"
+		// verdict: "SAVE", "LOW_VALUE", etc.
 		// rewrite/accepted: reserved for future rewrite suggestions (#42)
 		`CREATE TABLE IF NOT EXISTS classifier_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
