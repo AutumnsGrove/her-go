@@ -770,10 +770,22 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 		// agent-internal functions (buildReplyMessages, sendReply, etc.).
 		return execReply(tc.Function.Arguments, tctx)
 	default:
-		// All other tools are registered in tools/ subdirectories and
-		// dispatched via the central registry. tools.Execute validates JSON
-		// and returns a clear error for unknown tools.
-		return tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+		// Guard: only dispatch tools that are in the current active tool set.
+		//
+		// Because memory_agent.go imports save_fact/save_self_fact/etc. in the
+		// same package, those handlers are registered in the global tools.Execute
+		// registry. Without this check, the main agent (Trinity) can call them by
+		// hallucinating tool calls for tools not in its schema — the handlers exist
+		// so Execute succeeds, but the action is wrong (memory writes belong to Kimi).
+		//
+		// ActiveTools is the authoritative list of what's available this turn.
+		// It starts as the hot tools and grows when use_tools loads a category.
+		for _, t := range *tctx.ActiveTools {
+			if t.Function.Name == tc.Function.Name {
+				return tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+			}
+		}
+		return fmt.Sprintf("error: tool '%s' is not available. Use use_tools to load additional categories if needed.", tc.Function.Name)
 	}
 }
 

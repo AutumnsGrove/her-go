@@ -70,7 +70,7 @@ var styleBlocklist = []string{
 // maxFactLength is the hard limit on fact text length. Facts are supposed
 // to be 1-2 sentences. Multi-paragraph reflections belong in the
 // persona evolution system, not in individual facts.
-const maxFactLength = 200
+const maxFactLength = 250
 
 // sameDayContextThreshold is a tighter duplicate threshold for "context"
 // category facts. Multiple snapshots of the same day ("at Bolivar feeling
