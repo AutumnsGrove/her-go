@@ -288,6 +288,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 func (b *Bot) baseRunParams() agent.RunParams {
 	return agent.RunParams{
 		AgentLLM:            b.agentLLM,
+		MemoryAgentLLM:      b.memoryAgentLLM,
 		ChatLLM:             b.llm,
 		VisionLLM:           b.visionLLM,
 		ClassifierLLM:       b.classifierLLM,

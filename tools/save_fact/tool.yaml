@@ -6,7 +6,7 @@ description: >-
   skip it. User preferences ABOUT fiction are real facts (favorite genre,
   playstyle, characters they love). In-game events are NOT (beat a boss,
   found a location). Transient moods belong in log_mood, not here.
-hot: true
+hot: false
 parameters:
   type: object
   properties:

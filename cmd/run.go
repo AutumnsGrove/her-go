@@ -247,6 +247,30 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "skipped"})
 	}
 
+	// --- Memory agent client (optional) ---
+	// Post-turn background agent that reviews conversation turns and extracts
+	// facts. Runs in a goroutine after the reply is sent — never blocks the user.
+	var memoryAgentClient *llm.Client
+	if cfg.MemoryAgent.Model != "" {
+		maMaxTokens := cfg.MemoryAgent.MaxTokens
+		if maMaxTokens == 0 {
+			maMaxTokens = 4096
+		}
+		maTemp := cfg.MemoryAgent.Temperature
+		if maTemp == 0 {
+			maTemp = 0.3
+		}
+		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maMaxTokens)
+		if cfg.MemoryAgent.Fallback != nil {
+			memoryAgentClient.WithFallback(cfg.MemoryAgent.Fallback.Model, cfg.MemoryAgent.Fallback.Temperature, cfg.MemoryAgent.Fallback.MaxTokens)
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model + " (fallback: " + cfg.MemoryAgent.Fallback.Model + ")"})
+		} else {
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model})
+		}
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "skipped"})
+	}
+
 	// --- Embedding client ---
 
 	var embedClient *embed.Client
@@ -323,7 +347,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, memoryAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()
