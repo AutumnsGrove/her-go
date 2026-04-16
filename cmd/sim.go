@@ -557,6 +557,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
 			AgentLLM:            agentClient,
+			MemoryAgentLLM:      memoryAgentClient, // nil if not configured — memory agent skips
 			ChatLLM:             chatClient,
 			VisionLLM:           nil, // no image support in sim
 			ClassifierLLM:       classifierClient, // nil if not configured, active if classifier section in config
