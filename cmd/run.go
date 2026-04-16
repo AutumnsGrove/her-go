@@ -279,6 +279,13 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		if cfg.MemoryAgent.Timeout > 0 {
 			memoryAgentClient.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
 		}
+		if cfg.MemoryAgent.Provider != nil {
+			memoryAgentClient.WithProvider(&llm.ProviderRouting{
+				Order: cfg.MemoryAgent.Provider.Order,
+				Only:  cfg.MemoryAgent.Provider.Only,
+				Sort:  cfg.MemoryAgent.Provider.Sort,
+			})
+		}
 		if cfg.MemoryAgent.Fallback != nil {
 			memoryAgentClient.WithFallback(cfg.MemoryAgent.Fallback.Model, cfg.MemoryAgent.Fallback.Temperature, cfg.MemoryAgent.Fallback.MaxTokens)
 			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model + " (fallback: " + cfg.MemoryAgent.Fallback.Model + ")"})

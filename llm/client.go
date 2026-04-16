@@ -47,6 +47,21 @@ type Client struct {
 	fallbackModel       string
 	fallbackTemperature float64
 	fallbackMaxTokens   int
+
+	// Provider routing — OpenRouter-specific. Controls which providers
+	// serve this model (e.g., pin Kimi K2 to Groq for speed).
+	provider *ProviderRouting
+}
+
+// ProviderRouting controls OpenRouter's provider selection for a model.
+// Order tries providers in sequence; Only hard-restricts; Sort overrides
+// the default price-priority routing with "latency", "throughput", or "price".
+type ProviderRouting struct {
+	Order          []string `json:"order,omitempty"`           // try these providers first, in order
+	Only           []string `json:"only,omitempty"`            // restrict to ONLY these providers
+	Ignore         []string `json:"ignore,omitempty"`          // exclude these providers
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"` // false = no fallback beyond your list
+	Sort           string   `json:"sort,omitempty"`            // "latency", "throughput", or "price"
 }
 
 // ChatMessage represents a single message in the conversation.
@@ -188,6 +203,10 @@ type chatRequest struct {
 	// deciding what to do next. Without this, think() + reply() could fire
 	// in the same batch, making the thinking step pointless.
 	ParallelToolCalls *bool `json:"parallel_tool_calls,omitempty"`
+
+	// Provider controls OpenRouter's provider routing — which infrastructure
+	// serves the model. Pin to fast providers (Groq) or exclude slow ones.
+	Provider *ProviderRouting `json:"provider,omitempty"`
 }
 
 // chatAPIResponse mirrors the JSON structure returned by the API.
@@ -227,6 +246,14 @@ func NewClient(baseURL, apiKey, model string, temperature float64, maxTokens int
 // the memory agent processes long transcripts and may need 120s+).
 func (c *Client) WithTimeout(d time.Duration) *Client {
 	c.httpClient.Timeout = d
+	return c
+}
+
+// WithProvider configures OpenRouter provider routing. Controls which
+// infrastructure serves requests for this model — pin to fast providers
+// like Groq, or exclude unreliable ones.
+func (c *Client) WithProvider(p *ProviderRouting) *Client {
+	c.provider = p
 	return c
 }
 
@@ -366,6 +393,10 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 	if len(tools) > 0 {
 		f := false
 		reqBody.ParallelToolCalls = &f
+	}
+	// Include provider routing if configured (OpenRouter-specific).
+	if c.provider != nil {
+		reqBody.Provider = c.provider
 	}
 
 	jsonData, err := json.Marshal(reqBody)

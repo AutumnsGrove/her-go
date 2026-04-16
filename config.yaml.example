@@ -39,10 +39,12 @@ classifier:
   max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "qwen/qwen3-235b-a22b-2507"  # post-turn background agent that extracts and saves facts
+  model: "moonshotai/kimi-k2-0905"     # 1T instruct model — best fact extraction, no thinking/vision overhead
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
-  timeout: 120                        # 120s — memory agent processes long transcripts, needs more time than default 60s
+  timeout: 120                        # 120s — memory agent processes long transcripts
+  # provider:                         # optional: pin to a specific OpenRouter provider for speed
+  #   order: ["Groq"]                 # try Groq first (fastest for Kimi K2)
 
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)

@@ -128,7 +128,16 @@ type MemoryAgentConfig struct {
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
 	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
+	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
+// ProviderConfig controls OpenRouter provider routing from config.yaml.
+// Maps to the "provider" field in the API request body.
+type ProviderConfig struct {
+	Order []string `yaml:"order,omitempty"` // try these providers first, in order
+	Only  []string `yaml:"only,omitempty"`  // restrict to ONLY these providers
+	Sort  string   `yaml:"sort,omitempty"`  // "latency", "throughput", or "price"
 }
 
 // MemoryConfig controls the SQLite-backed memory system.
