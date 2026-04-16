@@ -9,8 +9,8 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **Config:** config.yaml (copy from config.yaml.example, gitignored)
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
-- **Agent prompt:** agent_prompt.md (agent orchestration rules, hot-reloadable)
-- **Agent model:** Kimi K2.5 (moonshotai/kimi-k2.5) via OpenRouter
+- **Agent prompt:** main_agent_prompt.md (agent orchestration rules, hot-reloadable)
+- **Agent model:** Qwen3 235B (qwen/qwen3-235b-a22b-2507) via OpenRouter
 - **Chat model:** Deepseek V3.2 via OpenRouter
 - **Vision model:** Gemini 3 Flash via OpenRouter
 - **Classifier model:** Claude Haiku 4.5 via OpenRouter (validates memory writes)
@@ -32,7 +32,7 @@ go build -o her && ./her run
 ## Key Design Decisions
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
-- **Agent architecture:** Two-tier system. A tool-calling agent (Mercury 2) orchestrates memory, search, and planning. A separate chat model (Deepseek) generates the actual response. The user only sees the chat model's output.
+- **Agent architecture:** Three-model system. Qwen3 (agent) orchestrates the turn via tool calls (think, reply, done, search). Deepseek V3.2 (chat) generates the actual user-facing response. Kimi K2.5 (memory) extracts facts in a background goroutine after the reply is sent. The user only sees the chat model's output.
 - **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Live-updates as the agent works.
 - **Persona evolution:** Bot rewrites its own persona.md every ~3 reflections. Reflections triggered by memory-dense conversations. Changes are gradual (damped).
 - **Memory quality:** Multi-layer quality system. Style gates reject AI writing tics. A classifier LLM (Haiku-class) validates every memory write before it hits the DB — catches fictional content (game events saved as real facts), low-value facts, inferred-not-stated information, and transient moods incorrectly stored as permanent facts. Fail-open design: if the classifier is down, writes proceed.
