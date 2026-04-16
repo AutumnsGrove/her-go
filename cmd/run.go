@@ -217,6 +217,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		agentMaxTokens = 512
 	}
 	agentClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, agentModel, agentTemp, agentMaxTokens)
+	if cfg.Agent.Timeout > 0 {
+		agentClient.WithTimeout(time.Duration(cfg.Agent.Timeout) * time.Second)
+	}
 	if cfg.Agent.Fallback != nil {
 		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: agentModel + " (fallback: " + cfg.Agent.Fallback.Model + ")"})
@@ -273,6 +276,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 			maTemp = 0.3
 		}
 		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maMaxTokens)
+		if cfg.MemoryAgent.Timeout > 0 {
+			memoryAgentClient.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
+		}
 		if cfg.MemoryAgent.Fallback != nil {
 			memoryAgentClient.WithFallback(cfg.MemoryAgent.Fallback.Model, cfg.MemoryAgent.Fallback.Temperature, cfg.MemoryAgent.Fallback.MaxTokens)
 			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model + " (fallback: " + cfg.MemoryAgent.Fallback.Model + ")"})

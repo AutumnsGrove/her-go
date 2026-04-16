@@ -222,6 +222,14 @@ func NewClient(baseURL, apiKey, model string, temperature float64, maxTokens int
 	}
 }
 
+// WithTimeout overrides the default 60s HTTP timeout. Returns the same
+// *Client for chaining. Use this for models that need more time (e.g.,
+// the memory agent processes long transcripts and may need 120s+).
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	c.httpClient.Timeout = d
+	return c
+}
+
 // WithFallback configures an alternative model to try when the primary
 // fails with a retriable error. Returns the same *Client for chaining.
 //

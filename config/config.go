@@ -92,8 +92,9 @@ type AgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Trace       bool            `yaml:"trace"`    // show agent thinking traces in chat
-	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
+	Timeout     int             `yaml:"timeout"`   // HTTP timeout in seconds (0 = 60s default)
+	Trace       bool            `yaml:"trace"`     // show agent thinking traces in chat
+	Fallback    *FallbackConfig `yaml:"fallback"`  // optional fallback model for when primary is unavailable
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
@@ -126,6 +127,7 @@ type MemoryAgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
 

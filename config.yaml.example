@@ -26,6 +26,7 @@ agent:
   model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
+  timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   fallback:
     model: "anthropic/claude-haiku-4.5"
@@ -38,9 +39,10 @@ classifier:
   max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "moonshotai/kimi-k2.5"  # post-turn background agent that extracts and saves facts
-  temperature: 0.3               # moderate temp for varied but controlled fact extraction
-  max_tokens: 4096               # generous headroom for tool call sequences
+  model: "qwen/qwen3-235b-a22b-2507"  # post-turn background agent that extracts and saves facts
+  temperature: 0.3                    # moderate temp for varied but controlled fact extraction
+  max_tokens: 4096                    # generous headroom for tool call sequences
+  timeout: 120                        # 120s — memory agent processes long transcripts, needs more time than default 60s
 
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
