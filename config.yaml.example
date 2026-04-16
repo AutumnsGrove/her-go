@@ -23,7 +23,7 @@ llm:
     max_tokens: 4096
 
 agent:
-  model: "moonshotai/kimi-k2.5"                   # tool-calling model for agent orchestration — best protocol compliance and fact quality in sim testing
+  model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
