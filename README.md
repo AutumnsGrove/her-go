@@ -38,7 +38,7 @@ You (Telegram) → her binary → Qwen3 (agent, orchestrates the turn)
                                  └── done
 ```
 
-Every message goes through the **Qwen3** agent first — it decides whether to think, search, recall memories, or reply. The conversational model (Deepseek V3.2) generates the actual natural language response when the agent calls `reply`. After the reply is sent, a separate **Kimi K2.5** memory agent reviews the turn in the background and extracts facts worth keeping. The user never waits for memory processing.
+Every message goes through the **Qwen3** agent first — it decides whether to think, search, recall memories, or reply. The conversational model (Deepseek V3.2) generates the actual natural language response when the agent calls `reply`. After the reply is sent, a separate **Kimi K2** memory agent reviews the turn in the background and extracts facts worth keeping. The user never waits for memory processing.
 
 For a deep dive into all model calls, data flow, and the dual compaction system, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -48,7 +48,7 @@ For a deep dive into all model calls, data flow, and the dual compaction system,
 |---|---|---|
 | Agent (orchestration) | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter |
 | Chat (responses) | Deepseek V3.2 (`deepseek/deepseek-v3.2`) | OpenRouter |
-| Memory (post-turn facts) | Kimi K2.5 (`moonshotai/kimi-k2.5`) | OpenRouter |
+| Memory (post-turn facts) | Kimi K2 (`moonshotai/kimi-k2-0905`) | OpenRouter → Groq |
 | Vision (images) | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter |
 | Classifier (memory quality) | Claude Haiku 4.5 (`anthropic/claude-haiku-4.5`) | OpenRouter |
 | Embeddings | Nomic Embed Text v1.5 | Local (LM Studio/Ollama) |
