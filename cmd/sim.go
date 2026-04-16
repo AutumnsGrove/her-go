@@ -68,6 +68,14 @@ var embedAPIKeyFlag string
 // at creation time.
 var embedDimensionFlag int
 
+// memoryModelFlag overrides the memory agent model for this run.
+// Example: --memory-model "qwen/qwen3-235b-a22b-2507"
+var memoryModelFlag string
+
+// chatModelFlag overrides the chat (reply) model for this run.
+// Example: --chat-model "anthropic/claude-haiku-4.5"
+var chatModelFlag string
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -96,6 +104,8 @@ func init() {
 	simCmd.Flags().StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL (e.g., https://openrouter.ai/api/v1)")
 	simCmd.Flags().StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs (defaults to LLM API key if empty)")
 	simCmd.Flags().IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension (must match --embed-model output size)")
+	simCmd.Flags().StringVar(&memoryModelFlag, "memory-model", "", "override memory agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
+	simCmd.Flags().StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model for this run (e.g., anthropic/claude-haiku-4.5)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -279,6 +289,14 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if agentModelFlag != "" {
 		log.Info("Agent model overridden via --agent-model", "model", agentModelFlag)
 		cfg.Agent.Model = agentModelFlag
+	}
+	if memoryModelFlag != "" {
+		log.Info("Memory agent model overridden via --memory-model", "model", memoryModelFlag)
+		cfg.MemoryAgent.Model = memoryModelFlag
+	}
+	if chatModelFlag != "" {
+		log.Info("Chat model overridden via --chat-model", "model", chatModelFlag)
+		cfg.LLM.Model = chatModelFlag
 	}
 
 	// --embed-* flags override the embedding config. This lets you test
