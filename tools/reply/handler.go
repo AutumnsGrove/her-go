@@ -305,17 +305,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Save the response to the database.
-	respID, err := ctx.Store.SaveMessage("assistant", resp.Content, resp.Content, ctx.ConversationID)
-	if err != nil {
-		log.Error("reply: saving response", "err", err)
-	}
-
-	if respID > 0 {
-		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
-	}
-
 	// Deanonymize PII tokens before sending to the user.
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
@@ -329,25 +318,41 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "reply skipped (duplicate of previous reply)"
 	}
 
-	// Deliver the response to Telegram.
+	// Deliver the response to Telegram BEFORE saving to the database.
+	// This ordering matters: if we save first and then fail to deliver,
+	// the message exists in history but the user never saw it — a phantom
+	// that poisons the conversation context. Delivery is the fallible part;
+	// the DB save is cheap and reliable by comparison.
+	//
 	// First reply: edit the placeholder message (statusCallback).
 	// Follow-up replies: send as a new message (sendCallback) so both
 	// are visible — e.g., "let me look that up" → "here's what I found".
+	var sendErr error
 	if ctx.ReplyCalled && ctx.SendCallback != nil {
-		// Follow-up reply — send as a new message.
-		if err := ctx.SendCallback(replyText); err != nil {
-			log.Error("reply: sending follow-up to Telegram", "err", err)
-		}
+		sendErr = ctx.SendCallback(replyText)
 	} else if ctx.StatusCallback != nil {
-		// First reply — edit the placeholder.
-		if err := ctx.StatusCallback(replyText); err != nil {
-			log.Error("reply: sending to Telegram", "err", err)
-		}
+		sendErr = ctx.StatusCallback(replyText)
 	}
 
-	// Fire TTS immediately — don't wait for the agent loop to finish.
-	// This runs in a goroutine so the agent can keep thinking/acting
-	// while the voice memo is being synthesized and sent.
+	if sendErr != nil {
+		// Surface the error to the agent so it can see delivery failed.
+		// Do NOT save to DB or fire TTS — the message wasn't delivered.
+		log.Error("reply: Telegram send failed", "err", sendErr)
+		return fmt.Sprintf("error: send failed: %v", sendErr)
+	}
+
+	// Save to DB only after confirmed delivery.
+	respID, err := ctx.Store.SaveMessage("assistant", resp.Content, resp.Content, ctx.ConversationID)
+	if err != nil {
+		log.Error("reply: saving response", "err", err)
+	}
+	if respID > 0 {
+		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
+	}
+
+	// TTS fires only for delivered messages — no point synthesizing audio
+	// for a reply the user never received.
 	if ctx.TTSCallback != nil {
 		go ctx.TTSCallback(replyText)
 	}
