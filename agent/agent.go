@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"her/agent/layers"
+	"her/layers"
 	"her/compact"
 	"her/config"
 	"her/embed"
@@ -25,6 +25,7 @@ import (
 	// tools.Register("name", Handle) to add the handler to the registry.
 	_ "her/tools/done"
 	_ "her/tools/recall_memories"
+	_ "her/tools/reply"
 	_ "her/tools/think"
 	_ "her/tools/update_persona"
 	_ "her/tools/use_tools"
@@ -694,14 +695,14 @@ outer:
 		if agentFinalText != "" {
 			log.Warn("reply was never called, using agent text as instruction")
 			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
-			fallbackResult := execReply(instruction, tctx)
+			fallbackResult := tools.Execute("reply", instruction, tctx)
 			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
 			}
 		} else {
 			log.Warn("reply was never called, generating generic fallback")
-			fallbackResult := execReply(`{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
+			fallbackResult := tools.Execute("reply", `{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
 			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")
@@ -778,10 +779,6 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 	}
 
 	switch tc.Function.Name {
-	case "reply":
-		// reply remains in agent — it builds the full chat prompt using
-		// agent-internal functions (buildReplyMessages, sendReply, etc.).
-		return execReply(tc.Function.Arguments, tctx)
 	default:
 		// Guard: only dispatch tools that are in the current active tool set.
 		//
@@ -802,344 +799,6 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 	}
 }
 
-// --- Reply tool ---
-
-// execReply is the most important tool. It builds the full conversational
-// prompt (prompt.md + persona + memory + search context + history) and
-// calls the chatLLM to generate the actual response the user sees.
-func execReply(argsJSON string, tctx *tools.Context) string {
-	// Reset fallback tracking from any previous reply call in this turn.
-	// Without this, a fallback on reply #1 would incorrectly flag reply #2.
-	tctx.ReplyUsedFallback = false
-	tctx.ReplyModel = ""
-
-	var args struct {
-		Instruction string   `json:"instruction"`
-		Context     string   `json:"context"`
-		Facts       []string `json:"facts"` // facts retrieved via recall_memories to inject into chat context
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// If the agent passed facts, store them on tctx so the chat layer can use them.
-	// These override the auto-searched RelevantFacts for this reply.
-	if len(args.Facts) > 0 {
-		tctx.AgentPassedFacts = args.Facts
-	}
-
-	// Build the system prompt using the layer registry.
-	// Each layer (persona, traits, memory, mood, etc.) lives in its own
-	// file under agent/layers/ and auto-registers via init().
-	chatLayerCtx := &layers.LayerContext{
-		Store:               tctx.Store,
-		Cfg:                 tctx.Cfg,
-		EmbedClient:         tctx.EmbedClient,
-		RelevantFacts:       tctx.RelevantFacts,
-		AgentPassedFacts:    tctx.AgentPassedFacts,
-		ConversationSummary: tctx.ConversationSummary,
-		ConversationID:      tctx.ConversationID,
-		ScrubbedUserMessage: tctx.ScrubbedUserMessage,
-		ExpenseContext:      tctx.ExpenseContext,
-	}
-	systemPrompt, chatLayerResults := layers.BuildAll(layers.StreamChat, chatLayerCtx)
-
-	// Log chat prompt shape for observability.
-	var chatTotalTokens int
-	for _, lr := range chatLayerResults {
-		chatTotalTokens += lr.Tokens
-		if lr.Detail != "" {
-			log.Infof("  [chat layer] %s: ~%d tokens (%s)", lr.Name, lr.Tokens, lr.Detail)
-		} else {
-			log.Infof("  [chat layer] %s: ~%d tokens", lr.Name, lr.Tokens)
-		}
-		// Pass injected facts observability to the TUI.
-		if tctx.EventBus != nil {
-			for _, f := range lr.InjectedFacts {
-				args := fmt.Sprintf("#%d %s", f.ID, f.Source)
-				if f.Distance > 0 {
-					args = fmt.Sprintf("#%d %s dist=%.2f", f.ID, f.Source, f.Distance)
-				}
-				tctx.EventBus.Emit(tui.ToolCallEvent{
-					Time:     time.Now(),
-					TurnID:   tctx.TriggerMsgID,
-					ToolName: "fact→chat",
-					Args:     args,
-					Result:   truncateLog(f.Fact, 80),
-				})
-			}
-		}
-	}
-	log.Infof("  chat system prompt total: ~%d tokens", chatTotalTokens)
-
-	// Combine any accumulated search context with the explicit context parameter.
-	fullContext := tctx.SearchContext
-	if args.Context != "" {
-		if fullContext != "" {
-			fullContext += "\n\n"
-		}
-		fullContext += args.Context
-	}
-
-	// Build the message list for the conversational model.
-	var llmMessages []llm.ChatMessage
-	llmMessages = append(llmMessages, llm.ChatMessage{
-		Role:    "system",
-		Content: systemPrompt,
-	})
-
-	// Add conversation history so the model has context of the ongoing chat.
-	recentMsgs, err := tctx.Store.RecentMessages(tctx.ConversationID, tctx.Cfg.Memory.RecentMessages)
-	if err != nil {
-		log.Error("reply: loading history", "err", err)
-	} else {
-		// prevDay tracks the calendar date of the last message we appended.
-		// When consecutive messages cross a midnight boundary, we inject a
-		// system message so the chat model knows the earlier context is
-		// from a different day (prevents perseveration on stale topics).
-		var prevDay time.Time
-
-		for _, msg := range recentMsgs {
-			// For continuation replies (2nd, 3rd, etc.), strip out this
-			// turn's messages — the trigger message and any replies we
-			// already sent. Without this, the model sees its own first
-			// reply in history plus the same user message appended below,
-			// thinks it already answered, and generates identical output.
-			// We keep everything BEFORE this turn so the model still has
-			// the broader conversation context.
-			if tctx.ReplyCount > 0 && msg.ID >= tctx.TriggerMsgID {
-				continue
-			}
-
-			// Day boundary detection — inject a separator when messages
-			// cross midnight so the model treats earlier context as
-			// "yesterday" rather than the active conversation topic.
-			msgDate := time.Date(msg.Timestamp.Year(), msg.Timestamp.Month(), msg.Timestamp.Day(), 0, 0, 0, 0, msg.Timestamp.Location())
-			if !prevDay.IsZero() && !msgDate.Equal(prevDay) {
-				llmMessages = append(llmMessages, llm.ChatMessage{
-					Role:    "system",
-					Content: "--- the above messages are from a previous day ---",
-				})
-			}
-			prevDay = msgDate
-
-			content := msg.ContentScrubbed
-			if content == "" {
-				content = msg.ContentRaw
-			}
-			llmMessages = append(llmMessages, llm.ChatMessage{
-				Role:    msg.Role,
-				Content: content,
-			})
-		}
-	}
-
-	// Build the user message. Search context and the agent's instruction
-	// go into a lightweight system note so they don't masquerade as user
-	// speech (which confused some models and caused degenerate outputs).
-	if args.Instruction != "" || fullContext != "" {
-		var note strings.Builder
-		if fullContext != "" {
-			note.WriteString("The following reference material may be useful for your response — use it naturally, don't quote verbatim or mention that you searched unless appropriate:\n\n")
-			note.WriteString(fullContext)
-			note.WriteString("\n\n")
-		}
-		if args.Instruction != "" {
-			note.WriteString("Guidance from the assistant's planning layer: ")
-			note.WriteString(args.Instruction)
-		}
-		llmMessages = append(llmMessages, llm.ChatMessage{
-			Role:    "system",
-			Content: note.String(),
-		})
-	}
-	llmMessages = append(llmMessages, llm.ChatMessage{
-		Role:    "user",
-		Content: tctx.ScrubbedUserMessage,
-	})
-
-	// Call the conversational model.
-	start := time.Now()
-	resp, err := tctx.ChatLLM.ChatCompletion(llmMessages)
-	latencyMs := int(time.Since(start).Milliseconds())
-
-	if err != nil {
-		log.Error("reply: LLM error", "err", err)
-		return fmt.Sprintf("error generating response: %v", err)
-	}
-
-	tctx.ReplyCost += resp.CostUSD
-	tctx.ReplyUsedFallback = resp.UsedFallback
-	tctx.ReplyModel = resp.Model
-	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
-		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
-	if tctx.EventBus != nil {
-		tctx.EventBus.Emit(tui.ReplyEvent{
-			Time: time.Now(), TurnID: tctx.TriggerMsgID,
-			Text:             truncateLog(resp.Content, 200),
-			PromptTokens:     resp.PromptTokens,
-			CompletionTokens: resp.CompletionTokens,
-			TotalTokens:      resp.TotalTokens,
-			CostUSD:          resp.CostUSD,
-			LatencyMs:        latencyMs,
-		})
-	}
-
-	// Guard against degenerate responses. If the chat model returned
-	// something suspiciously short (< 5 chars) or repetitive, it was
-	// likely rate-limited or glitching. These garbage responses poison
-	// the conversation history if saved, causing a feedback loop where
-	// every subsequent turn degenerates further (the "ohohoh" incident).
-	if isDegenerate(resp.Content) {
-		log.Warn("reply: degenerate response detected, retrying once", "content", truncateLog(resp.Content, 80))
-		// One retry — if the model is genuinely down, the fallback
-		// in the agent loop will catch it.
-		resp, err = tctx.ChatLLM.ChatCompletion(llmMessages)
-		if err != nil {
-			log.Error("reply: retry LLM error", "err", err)
-			return fmt.Sprintf("error generating response: %v", err)
-		}
-		if isDegenerate(resp.Content) {
-			log.Error("reply: degenerate response on retry too", "content", truncateLog(resp.Content, 80))
-			return "error: model returned a degenerate response. Try again in a moment."
-		}
-	}
-
-	// Length guard. Telegram rejects messages over 4096 characters with
-	// MESSAGE_TOO_LONG, and historically that error was logged then
-	// silently swallowed — the user got nothing. Worse, the chat model
-	// occasionally generates 16k+ char runaway replies (the "pollen
-	// example leaked from prompt.md and triggered a verbose riff"
-	// incident on 2026-04-06). We catch that here, before any of the
-	// downstream side effects fire (DB save, Telegram send, TTS), and
-	// return a rejection string the agent can react to. The agent loop
-	// feeds this back into its tool result, the model sees "rejected:
-	// response too long" on its next iteration, and re-plans with a
-	// shorter instruction. Same pattern as save_fact's length rejection
-	// in tools/fact_helpers.go:169.
-	//
-	// 3500 leaves margin under Telegram's 4096 limit for deanonymization
-	// expansion (PII placeholders → real values may grow the string)
-	// and any markdown/emoji byte overhead.
-	const maxReplyChars = 3500
-	if len(resp.Content) > maxReplyChars {
-		log.Warn("reply: response too long, rejecting",
-			"chars", len(resp.Content),
-			"max", maxReplyChars,
-			"preview", truncateLog(resp.Content, 120))
-		return fmt.Sprintf(
-			"rejected: response was %d characters (max %d). The reply was NOT delivered to the user. "+
-				"Call reply again with an instruction that explicitly demands a SHORT response — "+
-				"1-3 sentences, under 500 characters. Do not let the chat model riff or expand.",
-			len(resp.Content), maxReplyChars)
-	}
-
-	// Save the response to the database.
-	respID, err := tctx.Store.SaveMessage("assistant", resp.Content, resp.Content, tctx.ConversationID)
-	if err != nil {
-		log.Error("reply: saving response", "err", err)
-	}
-
-	if respID > 0 {
-		tctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		tctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
-	}
-
-	// Deanonymize PII tokens before sending to the user.
-	// The LLM might have used placeholders like [PHONE_1] in its response —
-	// we swap those back to the real values before the user sees it.
-	replyText := scrub.Deanonymize(resp.Content, tctx.ScrubVault)
-
-	// Duplicate reply guard — if the agent calls reply twice with the
-	// same (or very similar) text, skip the second one. Trinity sometimes
-	// loops think→reply→think→reply with identical content.
-	if tctx.ReplyCalled && replyText == tctx.ReplyText {
-		log.Warn("reply: duplicate detected, skipping")
-		return "reply skipped (duplicate of previous reply)"
-	}
-
-	// Deliver the response to Telegram.
-	// First reply: edit the placeholder message (statusCallback).
-	// Follow-up replies: send as a new message (sendCallback) so both
-	// are visible — e.g., "let me look that up" → "here's what I found".
-	if tctx.ReplyCalled && tctx.SendCallback != nil {
-		// Follow-up reply — send as a new message.
-		if err := tctx.SendCallback(replyText); err != nil {
-			log.Error("reply: sending follow-up to Telegram", "err", err)
-		}
-	} else if tctx.StatusCallback != nil {
-		// First reply — edit the placeholder.
-		if err := tctx.StatusCallback(replyText); err != nil {
-			log.Error("reply: sending to Telegram", "err", err)
-		}
-	}
-
-	// Fire TTS immediately — don't wait for the agent loop to finish.
-	// This runs in a goroutine so the agent can keep thinking/acting
-	// while the voice memo is being synthesized and sent.
-	if tctx.TTSCallback != nil {
-		go tctx.TTSCallback(replyText)
-	}
-
-	tctx.ReplyCalled = true
-	tctx.ReplyCount++
-	tctx.ReplyText = replyText
-
-	// Stage reset: send a new Telegram placeholder so that any follow-up
-	// work (search status updates, additional replies) doesn't overwrite
-	// the reply we just sent. After the reset, statusCallback targets the
-	// new placeholder and replyCalled is cleared so the next reply edits
-	// it instead of using sendCallback.
-	if tctx.StageResetCallback != nil {
-		if err := tctx.StageResetCallback(); err != nil {
-			log.Warn("reply: stage reset failed", "err", err)
-		} else {
-			tctx.ReplyCalled = false
-		}
-	}
-
-	// Feed the actual reply text back to the agent so it knows what was
-	// said. Without this, the agent has no visibility into the chat model's
-	// output and may call reply again with the same instruction. The
-	// truncation keeps the tool result from bloating the context.
-	preview := replyText
-	if len(preview) > 300 {
-		preview = preview[:300] + "..."
-	}
-	return fmt.Sprintf("reply delivered to user: %q\n\nYour message has been sent. Call done to end your turn unless you have pending work (e.g., a search in progress).", preview)
-}
-
-// isDegenerate detects garbage LLM outputs that would poison conversation
-// history if saved. Catches single-character responses, excessive repetition
-// (like "ohohohohoh..."), and empty responses. These typically happen when
-// the model is rate-limited, overloaded, or in a degenerate loop.
-func isDegenerate(text string) bool {
-	trimmed := strings.TrimSpace(text)
-
-	// Empty or extremely short — a real reply should be at least a
-	// short sentence. Single words like "you", "ok", "hi" indicate
-	// the chatLLM choked (rate limit, timeout, degenerate output).
-	if len(trimmed) < 10 {
-		return true
-	}
-
-	// Repetition detector: if any 2-4 character substring repeats to
-	// fill most of the response, it's degenerate. We check by taking
-	// a small prefix and seeing if repeating it reconstructs the text.
-	if len(trimmed) > 20 {
-		for patLen := 1; patLen <= 4; patLen++ {
-			pat := trimmed[:patLen]
-			repeated := strings.Repeat(pat, len(trimmed)/patLen+1)
-			// If the repeated pattern matches at least 90% of the text,
-			// it's a repetition loop.
-			if len(repeated) >= len(trimmed) && repeated[:len(trimmed)] == trimmed {
-				return true
-			}
-		}
-	}
-
-	return false
-}
 
 // truncateLog shortens a string for log output, adding "..." if it was cut.
 // mustJSON marshals a string to a JSON string literal (with quotes and
