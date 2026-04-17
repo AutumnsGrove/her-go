@@ -92,6 +92,13 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 
 	log.Info("─── memory agent ───")
 
+	// Capture the conversation snapshot NOW — before any subsequent turn can
+	// write new messages to the DB. If we query lazily inside each tool call,
+	// the next turn's messages may already be present and the classifier will
+	// see the wrong context (it would reject "user built a grocery tool" because
+	// the snippet shows "user asked about cortisol research" from the next turn).
+	contextSnippet, _ := params.Store.RecentMessages(input.ConversationID, 2)
+
 	turnStart := time.Now()
 	if params.EventBus != nil {
 		params.EventBus.Emit(tui.TurnStartEvent{
@@ -137,8 +144,11 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		PreApprovedRewrites: preApproved,
 		// ClassifyWriteFunc and RejectionMessageFunc are injected below
 		// to avoid circular imports — same pattern as the main agent.
-		ClassifyWriteFunc: func(writeType, content string, snippet []memory.Message) tools.ClassifyVerdict {
-			verdict := classifyMemoryWrite(params.ClassifierLLM, writeType, content, snippet)
+		ClassifyWriteFunc: func(writeType, content string, _ []memory.Message) tools.ClassifyVerdict {
+			// Use contextSnippet (captured at goroutine launch) rather than the
+			// snippet parameter queried lazily by fact_helpers.go — the lazy query
+			// may return messages from a later turn if the main loop has moved on.
+			verdict := classifyMemoryWrite(params.ClassifierLLM, writeType, content, contextSnippet)
 			// Log to classifier_log for observability.
 			if err := params.Store.SaveClassifierLog(
 				input.ConversationID, writeType, verdict.Type, content, verdict.Reason, verdict.Rewrite,
