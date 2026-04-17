@@ -146,7 +146,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 		"date", time.Now().Format("2006-01-02"),
 		"time", time.Now().Format("15:04:05"),
 		"agent_model", cfg.Agent.Model,
-		"chat_model", cfg.LLM.Model,
+		"chat_model", cfg.Chat.Model,
 		"classifier_model", cfg.Classifier.Model,
 	)
 
@@ -196,12 +196,15 @@ var sidecarOut io.Writer = os.Stderr
 func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
 	// --- Create LLM clients ---
 
-	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.Temperature, cfg.LLM.MaxTokens)
-	if cfg.LLM.Fallback != nil {
-		llmClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.LLM.Model + " (fallback: " + cfg.LLM.Fallback.Model + ")"})
+	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
+	if cfg.Chat.Provider != nil {
+		llmClient.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
+	}
+	if cfg.Chat.Fallback != nil {
+		llmClient.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.Chat.Model + " (fallback: " + cfg.Chat.Fallback.Model + ")"})
 	} else {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.LLM.Model})
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.Chat.Model})
 	}
 
 	agentModel := cfg.Agent.Model

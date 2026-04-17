@@ -14,9 +14,13 @@ telegram:
 llm:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
-  model: "deepseek/deepseek-v3.2"
+
+chat:
+  model: "moonshotai/kimi-k2-0905"  # reply model — Kimi K2 via Groq: fast, consistent, no AI-isms
   temperature: 0.85
   max_tokens: 4096
+  provider:
+    order: ["Groq"]                  # pin to Groq for speed and consistency
   fallback:
     model: "anthropic/claude-haiku-4.5"
     temperature: 0.85

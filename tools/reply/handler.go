@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"her/classifier"
 	"her/layers"
 	"her/llm"
 	"her/logger"
@@ -262,7 +263,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Style gate — optional soft check for AI writing patterns.
-	// Only runs when a classifier is configured (ctx.ClassifyReplyFunc != nil).
+	// Only runs when a classifier is configured (ctx.ClassifierLLM != nil).
 	// Retries once with a direct hint if a pattern is detected.
 	// Fail-open: if the retry still has issues, we deliver anyway — the style
 	// gate should never block a reply from reaching the user.
@@ -270,8 +271,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// styleGateNote is included in the return string so it appears in the
 	// agent trace (and sim report) — both PASS and STYLE_ISSUE are visible.
 	styleGateNote := ""
-	if ctx.ClassifyReplyFunc != nil {
-		styleVerdict := ctx.ClassifyReplyFunc(resp.Content)
+	if ctx.ClassifierLLM != nil {
+		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
 		if styleVerdict.Allowed {
 			log.Info("reply: style gate passed")
 			styleGateNote = "[style: PASS]"

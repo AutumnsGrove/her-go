@@ -27,6 +27,7 @@ type Config struct {
 	Identity      IdentityConfig      `yaml:"identity"`
 	Telegram      TelegramConfig      `yaml:"telegram"`
 	LLM           LLMConfig           `yaml:"llm"`
+	Chat          ChatConfig          `yaml:"chat"`
 	Agent         AgentConfig         `yaml:"agent"`
 	Vision        VisionConfig        `yaml:"vision"`
 	Classifier    ClassifierConfig    `yaml:"classifier"`
@@ -75,14 +76,24 @@ type FallbackConfig struct {
 	MaxTokens   int     `yaml:"max_tokens"`
 }
 
-// LLMConfig holds OpenRouter / OpenAI-compatible API settings.
+// LLMConfig holds shared OpenRouter / OpenAI-compatible API credentials.
+// Model settings live in the per-model sections (chat:, agent:, etc.)
+// so each model can be tuned independently without touching the API config.
 type LLMConfig struct {
-	BaseURL     string          `yaml:"base_url"`
-	APIKey      string          `yaml:"api_key"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+}
+
+// ChatConfig holds settings for the chat (reply) model — the model that
+// generates the actual user-facing response. Separate from LLMConfig so
+// credentials and model tuning are not tangled together.
+// Shares the same base_url and api_key as the main LLM section.
+type ChatConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
+	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
 
 // AgentConfig holds settings for the background tool-calling agent.

@@ -133,6 +133,9 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 
 	// Build a minimal tools.Context — only the fields memory tools actually use.
 	// No callbacks, no TUI bus, no scrub vault.
+	// ClassifierSnippet carries the pre-captured context snapshot so
+	// fact_helpers doesn't re-query the DB (which may have newer messages
+	// from subsequent turns by the time classification runs).
 	tctx := &tools.Context{
 		Store:               params.Store,
 		EmbedClient:         params.EmbedClient,
@@ -142,27 +145,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		ConversationID:      input.ConversationID,
 		TriggerMsgID:        input.TriggerMsgID,
 		PreApprovedRewrites: preApproved,
-		// ClassifyWriteFunc and RejectionMessageFunc are injected below
-		// to avoid circular imports — same pattern as the main agent.
-		ClassifyWriteFunc: func(writeType, content string, _ []memory.Message) tools.ClassifyVerdict {
-			// Use contextSnippet (captured at goroutine launch) rather than the
-			// snippet parameter queried lazily by fact_helpers.go — the lazy query
-			// may return messages from a later turn if the main loop has moved on.
-			verdict := classifyMemoryWrite(params.ClassifierLLM, writeType, content, contextSnippet)
-			// Log to classifier_log for observability.
-			if err := params.Store.SaveClassifierLog(
-				input.ConversationID, writeType, verdict.Type, content, verdict.Reason, verdict.Rewrite,
-			); err != nil {
-				log.Error("memory agent: saving classifier log", "err", err)
-			}
-			if verdict.Rewrite != "" {
-				preApproved[strings.ToLower(verdict.Rewrite)] = true
-			}
-			return verdict
-		},
-		RejectionMessageFunc: func(verdict tools.ClassifyVerdict) string {
-			return rejectionMessage(verdict)
-		},
+		ClassifierSnippet:   contextSnippet,
 	}
 
 	// Tool definitions for the memory agent — the 4 memory tools plus done.

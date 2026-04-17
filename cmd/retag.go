@@ -66,10 +66,10 @@ func runRetag(cmd *cobra.Command, args []string) error {
 	// Create LLM client for tag generation.
 	llmClient := llm.NewClient(
 		cfg.LLM.BaseURL, cfg.LLM.APIKey,
-		cfg.LLM.Model, 0.3, 256, // low temp, short output
+		cfg.Chat.Model, 0.3, 256, // low temp, short output
 	)
-	if cfg.LLM.Fallback != nil {
-		llmClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
+	if cfg.Chat.Fallback != nil {
+		llmClient.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
 	}
 
 	// Create embedding client for re-embedding.

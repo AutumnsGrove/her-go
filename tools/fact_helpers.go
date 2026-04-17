@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 
+	"her/classifier"
 	"her/embed"
 	"her/logger"
 )
@@ -180,13 +181,12 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 
 	// --- Classifier gate ---
 	// Runs AFTER style/length/dedup gates — no point classifying something
-	// that would be rejected anyway. Fail-open if classifier is nil or
-	// if the agent didn't inject a classify function.
+	// that would be rejected anyway. Fail-open if classifier is nil.
 	//
 	// Pre-approved bypass: if the classifier previously suggested this exact
 	// text as a rewrite, skip re-classification. This prevents the self-
 	// contradiction bug where the classifier rejects its own suggestion.
-	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
+	if ctx.ClassifierLLM != nil {
 		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
 			log.Info("classifier bypass: fact matches pre-approved rewrite", "fact", args.Fact)
 		} else {
@@ -194,13 +194,22 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 			if subject == "self" {
 				writeType = "self_fact"
 			}
-			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 1)
-			verdict := ctx.ClassifyWriteFunc(writeType, args.Fact, snippet)
+			// Use pre-captured snippet when available (memory agent sets this to
+			// avoid the timing bug where later turns pollute the DB before the
+			// goroutine reaches the classifier). Fall back to lazy query otherwise.
+			snippet := ctx.ClassifierSnippet
+			if snippet == nil {
+				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
+			}
+			verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.Fact, snippet)
+			_ = ctx.Store.SaveClassifierLog(
+				ctx.ConversationID, writeType, verdict.Type, args.Fact, verdict.Reason, verdict.Rewrite,
+			)
+			if verdict.Rewrite != "" && ctx.PreApprovedRewrites != nil {
+				ctx.PreApprovedRewrites[strings.ToLower(verdict.Rewrite)] = true
+			}
 			if !verdict.Allowed {
-				if ctx.RejectionMessageFunc != nil {
-					return ctx.RejectionMessageFunc(verdict)
-				}
-				return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
+				return classifier.RejectionMessage(verdict)
 			}
 		}
 	}
