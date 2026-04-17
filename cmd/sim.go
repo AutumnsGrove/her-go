@@ -137,6 +137,19 @@ type simTurnResult struct {
 	elapsed  time.Duration
 }
 
+// simDreamResult captures the output of the dream cycle (run_dream: true)
+// so it can be included in the markdown report. Fields are empty strings
+// when the dream step didn't run or returned nothing notable.
+type simDreamResult struct {
+	Ran           bool   // true if the dream cycle executed
+	Reflection    string // NightlyReflect output (or "NOTHING_NOTABLE")
+	ReflectError  string // non-empty if NightlyReflect failed
+	PersonaText   string // new persona.md content after rewrite
+	ChangeSummary string // CHANGE_SUMMARY line from GatedRewrite
+	Rewritten     bool   // true if persona was actually rewritten
+	RewriteError  string // non-empty if GatedRewrite failed
+}
+
 // --------------------------------------------------------------------------
 // sim.db schema — separate from the production her.db
 // --------------------------------------------------------------------------
@@ -590,12 +603,29 @@ func runSim(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
-		// TraceCallback surfaces agent internals (compaction, persona
-		// reflection, etc.) in the sim output. In production this edits
-		// a Telegram message; here we log to stdout so it appears in
-		// the sim trace alongside tool calls and replies.
+		// TraceCallback surfaces agent internals in the sim output.
+		// In production this edits a single Telegram message (so sending
+		// the full accumulated trace is fine — it just overwrites).
+		// In sim mode we only want the NEW line each call, not the full
+		// trace re-dumped every time. We track the last text we printed
+		// and only output the lines that were appended since then.
+		var lastTraceText string
 		traceCallback := func(html string) error {
-			fmt.Printf("       [trace] %s\n", html)
+			if html == lastTraceText {
+				return nil // nothing new
+			}
+			// Find the new suffix: everything after what we already printed.
+			newPart := html
+			if lastTraceText != "" && strings.HasPrefix(html, lastTraceText) {
+				newPart = strings.TrimPrefix(html, lastTraceText)
+				newPart = strings.TrimLeft(newPart, "\n")
+			}
+			lastTraceText = html
+			for _, line := range strings.Split(strings.TrimSpace(newPart), "\n") {
+				if line != "" {
+					fmt.Printf("       [trace] %s\n", line)
+				}
+			}
 			return nil
 		}
 
@@ -715,15 +745,20 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// This lets you test the dreaming pipeline without running hundreds of
 	// real conversations. The dream uses bypass=true so both gates are skipped —
 	// same behaviour as /dream in the Telegram bot.
+	var dreamResult simDreamResult
 	if s.RunDream && memoryAgentClient != nil {
+		dreamResult.Ran = true
 		fmt.Printf("\n[dream] Running nightly reflection...\n")
 		if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
 			fmt.Printf("[dream] Reflection error: %v\n", err)
+			dreamResult.ReflectError = err.Error()
 		} else {
 			reflections, _ := store.ReflectionsSince(time.Now().Add(-30 * time.Second))
 			if len(reflections) > 0 {
-				fmt.Printf("[dream] Reflection: %s\n", reflections[len(reflections)-1].Content)
+				dreamResult.Reflection = reflections[len(reflections)-1].Content
+				fmt.Printf("[dream] Reflection: %s\n", dreamResult.Reflection)
 			} else {
+				dreamResult.Reflection = "NOTHING_NOTABLE"
 				fmt.Printf("[dream] Reflection: NOTHING_NOTABLE\n")
 			}
 		}
@@ -741,9 +776,12 @@ func runSim(cmd *cobra.Command, args []string) error {
 		rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
 		if err != nil {
 			fmt.Printf("[dream] Rewrite error: %v\n", err)
+			dreamResult.RewriteError = err.Error()
 		} else if rewritten {
+			dreamResult.Rewritten = true
 			data, _ := os.ReadFile(cfg.Persona.PersonaFile)
-			fmt.Printf("[dream] Persona rewritten:\n%s\n", string(data))
+			dreamResult.PersonaText = string(data)
+			fmt.Printf("[dream] Persona rewritten:\n%s\n", dreamResult.PersonaText)
 		} else {
 			fmt.Printf("[dream] Rewrite: UNCHANGED\n")
 		}
@@ -755,7 +793,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// 9. Generate markdown report
 	// ------------------------------------------------------------------
 
-	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration)
+	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult)
 	if err != nil {
 		log.Error("failed to generate report", "err", err)
 	} else {
@@ -1032,6 +1070,7 @@ func generateReport(
 	turns []simTurnResult,
 	totalCost float64,
 	totalDuration time.Duration,
+	dream simDreamResult,
 ) (string, error) {
 	// strings.Builder is Go's equivalent of Python's io.StringIO or
 	// just building a string with a list of parts and joining them.
@@ -1081,10 +1120,49 @@ func generateReport(
 	// Compaction summaries section
 	writeSummariesSection(&b, simDB, runID)
 
+	// Dream section (only present when run_dream: true)
+	writeDreamSection(&b, dream)
+
 	// Cost summary
 	writeCostSection(&b, simDB, runID)
 
 	return b.String(), nil
+}
+
+// writeDreamSection writes the nightly reflection and persona rewrite output
+// to the report. Only called when run_dream: true in the suite YAML.
+func writeDreamSection(b *strings.Builder, dream simDreamResult) {
+	if !dream.Ran {
+		return
+	}
+
+	b.WriteString("## Dream Cycle\n\n")
+
+	// Reflection
+	b.WriteString("### Nightly Reflection\n\n")
+	if dream.ReflectError != "" {
+		fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
+	} else if dream.Reflection == "NOTHING_NOTABLE" {
+		b.WriteString("_NOTHING_NOTABLE — reflection found no patterns worth recording._\n\n")
+	} else {
+		fmt.Fprintf(b, "%s\n\n", dream.Reflection)
+	}
+
+	// Persona rewrite
+	b.WriteString("### Persona Rewrite\n\n")
+	if dream.RewriteError != "" {
+		fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
+	} else if !dream.Rewritten {
+		b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
+	} else {
+		if dream.ChangeSummary != "" {
+			fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+		}
+		b.WriteString("**New persona:**\n\n")
+		b.WriteString("```\n")
+		b.WriteString(dream.PersonaText)
+		b.WriteString("\n```\n\n")
+	}
 }
 
 // writeAgentTrace writes a collapsible <details> block with the agent's
