@@ -1,149 +1,135 @@
 name: "Classifier Stress Test"
 description: >
-  Stress tests the classifier gate across all five verdict types:
-  FICTIONAL, MOOD_NOT_FACT, INFERRED, LOW_VALUE, and EXTERNAL.
-  Also tests rewrite suggestions, pre-approved bypass, retry budget,
-  fiction-preference saves, and the dedup+classifier deadlock.
+  Stress tests the classifier gate with the current 2-verdict system:
+  LOW_VALUE and SAVE (for both fact and self_fact classifiers).
 
-  Each block is designed to bait the agent into saving content that
-  should be rejected, followed by legitimate content that should pass.
-  The sim report's agent trace will show "rejected:" for caught items,
-  "suggestion:" for soft rejects with rewrites, and successful save
-  confirmations for legitimate ones.
+  The removed verdicts (FICTIONAL, MOOD_NOT_FACT, INFERRED, EXTERNAL) are
+  no longer handled by the classifier — those calls now rely on the memory
+  agent model's own judgment. This suite tests whether the model correctly
+  filters out genuinely vague/generic content (LOW_VALUE) while passing
+  specific, useful facts (SAVE).
 
-  Key things to watch in traces:
-  - "suggestion: try saving this instead" = soft reject with rewrite
-  - "classifier bypass: pre-approved" = rewrite accepted on retry
-  - "retry limit reached" = budget exhausted, agent told to move on
-  - "rejected:" = hard reject (MOOD_NOT_FACT, LOW_VALUE, EXTERNAL)
+  Each block is designed to surface both paths:
+  - LOW_VALUE: classifier rejects vague or ephemeral content
+  - SAVE: specific, durable facts about the user make it through
+  - Agent-level filtering: in-game events, transient moods, and obvious
+    inference should be caught by the memory agent BEFORE reaching the
+    classifier at all. Watch whether they even get submitted.
 
-tags: ["classifier", "quality-gate", "fictional", "mood", "inference", "low-value", "rewrite", "retry-budget"]
+  Key things to watch in the agent trace:
+  - "rejected: LOW_VALUE" = classifier caught something too vague
+  - "saved fact:" = classifier approved it
+  - Whether the memory agent self-filters fiction without even trying to save it
+
+tags: ["classifier", "quality-gate", "low-value", "memory-agent", "fact-extraction"]
 
 messages:
-  # --- Block 1: FICTIONAL — Gaming content as real facts ---
-  # The agent should save "user plays Elden Ring" but NOT save in-game
-  # events as if they happened to the real user.
+  # --- Block 1: Gaming content — agent-level filtering test ---
+  # The memory agent should save real preferences (plays Elden Ring, loves
+  # FromSoft games) but should NOT submit in-game events as user facts.
+  # Fiction filtering is now the memory agent's job, not the classifier's.
+  # Watch whether "beat malenia" or "found haligtree" ever get submitted.
 
   - "hey! so i've been absolutely obsessed with elden ring lately"
   - "i finally beat malenia after like 40 tries. i literally screamed when she went down. my build is a dual-wielding bleed katana setup, its insane"
   - "i also found this hidden area called the haligtree. the lore there is so cool, apparently miquella created it as a sanctuary"
   - "oh and i joined the volcano manor covenant thing. rykard is such a creepy boss but i love the whole vibe of that questline"
 
-  # This message is the test: "obsessed with elden ring" is SAVE (real preference).
-  # "beat malenia" / "found haligtree" / "joined volcano manor" are FICTIONAL if
-  # the agent tries to save them as facts about the user.
-  # "screamed when she went down" is a real reaction — tricky edge case.
+  # Expected memory agent behavior (not classifier):
+  # SAVE: "user plays Elden Ring, obsessed with it", "favorite genre is FromSoft/souls games"
+  # SHOULD NOT SUBMIT: "beat malenia", "found haligtree", "joined volcano manor"
+  #   — these are in-game events, not real facts about the user
+  # Edge case: "screamed when she finally died" IS a real reaction — acceptable to save
 
   - "like honestly i think fromsoft games are my favorite genre at this point. ive played every souls game"
 
-  # --- Block 2: FICTION PREFERENCES — The rewrite trigger zone ---
-  # These messages deliberately mix real preferences with fictional events.
-  # The classifier should suggest rewrites that keep the preference and
-  # strip the fiction — not flat reject.
+  # --- Block 2: Mixed gaming — preferences vs events ---
+  # Real playstyle preferences should be saved; in-game actions should be filtered.
+  # The distinction: "plays as female V" is a choice (save), "pulled out katana at festival" is an event (skip).
 
   - "cyberpunk is so good. i always play as female V, the voice acting is way better. last night i pulled out my katana at a festival and it was hilarious"
   - "oh and the romance options in cyberpunk are so frustrating. like i want to romance judy but you have to play female V for that, which i do anyway but still"
   - "honestly my favorite part of any rpg is the character customization. i spent like 2 hours on my elden ring character. i always go for the dual-wield bleed builds"
 
   # Expected:
-  # "plays as female V" — SAVE (real playstyle choice)
-  # "pulled out katana at festival" — FICTIONAL (in-game event)
-  # Mixed fact like "plays as female V and pulled out katana" — should get
-  #   a REWRITE suggestion stripping the fiction, keeping the preference
-  # "prefers dual-wield bleed builds" — SAVE (real playstyle)
-  # "spent 2 hours on character customization" — SAVE (real behavior)
-  # "romance options frustrating" — SAVE (real opinion about game design)
+  # SAVE: "plays as female V in Cyberpunk", "prefers dual-wield bleed builds in RPGs",
+  #        "finds RPG character customization important", "finds Cyberpunk romance options frustrating"
+  # SHOULD NOT SUBMIT: "pulled out katana at a festival" — in-game event
+  # "spent 2 hours on character customization" — real behavior, acceptable SAVE
 
-  # --- Block 3: EXTERNAL — Game character moods vs real moods ---
-  # The agent might try to log_mood based on in-game emotions.
+  - "so i mentioned i play cyberpunk right? well i just finished the main story. the ending with johnny was perfect"
+  - "i think what i love most about it is the atmosphere. like night city at 2am with the rain... its just *chef kiss*. and panams questline was my favorite"
 
-  - "so i was doing this quest in baldurs gate 3 last night and my character astarion got really upset when i sided against him. i felt so guilty"
-  - "like his whole betrayed expression... ugh. and then shadowheart was comforting me in camp and it was actually really sweet"
-  - "anyway the game is amazing but honestly i should probably stop playing at 2am. im so tired today"
+  # SAVE: "favorite Cyberpunk questline is Panam's", "loves night city atmosphere / rain aesthetic"
+  # SHOULD NOT SUBMIT: "finished the main story", "ending with johnny" — in-game events
 
-  # "felt so guilty" — TRICKY. The user IS feeling guilty (real emotion about fiction).
-  # "astarion got really upset" — EXTERNAL if logged as mood.
-  # "so tired today" — this is a REAL mood (SAVE), and a clear pivot from game talk.
-
-  # --- Block 4: MOOD_NOT_FACT — Transient feelings saved as permanent facts ---
-  # These messages express temporary emotional states that the agent might
-  # try to save_fact instead of log_mood.
+  # --- Block 3: Transient states — agent should not save these at all ---
+  # These express temporary emotional states or today's circumstances.
+  # With mood tracking junk-drawered, the memory agent has no log_mood tool.
+  # It should simply not save transient states as permanent facts.
 
   - "ugh. today has been rough. i woke up late, spilled coffee on my shirt, and then my bus was delayed"
   - "i just feel so frustrated with everything right now. like nothing is going right today"
   - "and my roommate left dishes in the sink again which like, normally i dont care, but today its making me irrationally annoyed"
 
-  # These are all snapshots of TODAY's mood, not durable personality traits.
-  # If the agent calls save_fact with "user is frustrated" or "user feels
-  # nothing is going right", the classifier should return MOOD_NOT_FACT
-  # and tell the agent to use log_mood instead.
+  # Expected memory agent behavior:
+  # SHOULD NOT SUBMIT: "user is frustrated", "nothing is going right" — transient mood
+  # The memory agent should recognize these as today-only states and skip them
 
-  # Now pivot to something that IS a durable fact:
+  # Now something durable mixed in:
   - "honestly i think i just need to move out. ive been thinking about it for months. i want to live alone for the first time"
 
-  # "wants to live alone / thinking about moving out" is a real, durable preference — SAVE.
+  # SAVE: "wants to live alone, has been thinking about moving out for months"
+  # This is a durable preference, not a transient mood — the contrast matters
 
-  # --- Block 5: INFERRED — Agent editorializing beyond what was said ---
-  # These messages are normal but an eager agent might extrapolate.
-
-  - "i went to this new coffee shop today. it was nice, good vibes. i had a lavender oat latte"
-  - "ive been going to coffee shops a lot lately honestly. just nice to get out of the house"
-  - "i usually bring my laptop and work on stuff. or just read. its my like... third place i guess"
-
-  # Legitimate facts: "user visits coffee shops frequently", "tried a lavender oat latte"
-  # INFERRED would be: "user is lonely and uses coffee shops to cope with isolation"
-  # or "user struggles with working from home" — the agent is reading between lines.
-
-  - "oh i also started journaling. just like a few sentences at the end of each day. nothing deep"
-
-  # "user started journaling" — SAVE. But "user is working on self-improvement"
-  # or "user is processing emotions through writing" — INFERRED.
-
-  # --- Block 6: CARRYING FORWARD — update_fact combining messages ---
-  # Tests that the classifier doesn't reject update_fact when the agent
-  # combines details from multiple messages (carrying forward ≠ inferring).
-
-  - "so i mentioned i play cyberpunk right? well i just finished the main story. the ending with johnny was perfect"
-  - "i think what i love most about it is the atmosphere. like night city at 2am with the rain... its just *chef kiss*. and panams questline was my favorite"
-
-  # If the agent updates an existing "plays Cyberpunk" fact to add "favorite
-  # questline is Panam's" — that's carrying forward from what was said, not
-  # inference. The INFERRED classifier should NOT reject this.
-  # "finished the main story" and "ending with johnny" are FICTIONAL events.
-
-  # --- Block 7: LOW_VALUE — Vague, generic, obvious facts ---
-  # These messages are normal conversation. The test is whether the agent
-  # tries to save trivially obvious or uselessly vague facts.
+  # --- Block 4: LOW_VALUE classifier bait ---
+  # These messages produce facts that are real but too vague to be worth saving.
+  # The classifier (not just the memory agent) should reject these.
 
   - "what should i have for dinner tonight? im thinking either pasta or tacos"
   - "yeah i like both honestly. food is good. i like eating lol"
   - "ok i think ill do tacos. ive got some ground turkey in the fridge"
   - "do you know any good taco seasoning recipes? like from scratch, not the packet"
 
-  # "user likes food" / "user had dinner" — LOW_VALUE
-  # "user is making turkey tacos tonight" — borderline, but too ephemeral
-  # If the agent saves something specific like "user prefers homemade seasoning
-  # over store-bought packets" — that's actually a SAVE.
+  # LOW_VALUE if submitted: "user likes food", "user had tacos", "user eats dinner"
+  # Acceptable SAVE if the agent gets specific: "prefers homemade seasoning over store-bought packets"
+  # Watch: does the classifier catch "user likes both pasta and tacos" as LOW_VALUE?
 
   - "nice, ill try that. oh btw i've been really into hot sauce lately. like collecting different ones. i have probably 15 bottles right now"
 
-  # "user collects hot sauce, has ~15 bottles" — specific, interesting, SAVE.
+  # SAVE: "collects hot sauce, currently has ~15 bottles" — specific hobby with detail
+  # This is the contrast: collection + quantity makes it specific enough
 
-  # --- Block 8: RETRY BUDGET BAIT — Deliberately unsaveable content ---
-  # These messages describe fictional events with NO saveable kernel.
-  # If the classifier rejects and the agent retries with rephrasing,
-  # the retry budget should kick in after 2 attempts.
+  # --- Block 5: Pure LOW_VALUE bait — nothing real to extract ---
+  # Stardew content with no real preferences mixed in. If anything gets
+  # submitted, it should be LOW_VALUE. If the memory agent is working well,
+  # nothing gets submitted at all.
 
   - "oh my god so in stardew i just had the most dramatic week. first i caught a legendary fish, then my horse died, then the wizard asked me to collect void eggs from the witch's hut"
   - "and THEN in my other save i accidentally gave the mayor his shorts back in front of everyone at the luau. the whole town was scandalized"
 
-  # These are pure in-game events with nothing real to extract.
-  # The agent might try save_fact → rejected → rephrase → rejected → budget hit.
-  # Watch for "retry limit reached" in the trace.
+  # Pure in-game events, no real facts embedded.
+  # Best outcome: memory agent submits nothing.
+  # Acceptable: memory agent submits "plays Stardew Valley" — classifier passes it (specific enough).
+  # Bad outcome: memory agent submits "caught a legendary fish" as a user fact.
 
-  # --- Block 9: Mixed rapid-fire — All types in natural conversation ---
-  # This block simulates real conversation where fictional, emotional,
-  # vague, and legitimate content are all mixed together.
+  # --- Block 6: Coffee shops — specificity gradient ---
+  # Tests the LOW_VALUE threshold. "goes to coffee shops" is borderline;
+  # "uses coffee shops as a third place for focused work" is SAVE.
+
+  - "i went to this new coffee shop today. it was nice, good vibes. i had a lavender oat latte"
+  - "ive been going to coffee shops a lot lately honestly. just nice to get out of the house"
+  - "i usually bring my laptop and work on stuff. or just read. its my like... third place i guess"
+  - "oh i also started journaling. just like a few sentences at the end of each day. nothing deep"
+
+  # LOW_VALUE if submitted generically: "user goes to coffee shops", "user journaling"
+  # SAVE if specific: "uses coffee shops as a third place / workspace", "started a daily journaling habit"
+  # The classifier should pass the specific version and block the vague one.
+  # Watch: where does the memory agent land on the specificity spectrum?
+
+  # --- Block 7: Mixed rapid-fire — agent judgment across all types ---
+  # Real conversation mixing: work anxiety, gaming, music, and mundane.
+  # Tests the full pipeline: agent filters, then classifier gates what's left.
 
   - "man what a day. so at work we had this huge meeting about layoffs which was terrifying. then i came home and played stardew valley to decompress"
   - "i built this amazing greenhouse in stardew. like perfectly organized crops. and my farmer married elliott which was adorable"
@@ -153,10 +139,10 @@ messages:
   - "shes incredible. i think shes becoming one of my favorite artists. that whole album punisher is so good"
   - "ok im gonna go make some tea and read for a bit. talk later!"
 
-  # Expected in this block:
-  # SAVE: "user concerned about potential layoffs", "user has been at company 2 years",
-  #        "user wants to update resume", "user likes Phoebe Bridgers / Punisher album"
-  # FICTIONAL: "built a greenhouse in stardew", "farmer married elliott"
-  # MOOD_NOT_FACT: "feeling terrified about layoffs" (as a fact — should be mood)
-  # LOW_VALUE: "user drinks tea", "user reads"
-  # EXTERNAL: any stardew valley character emotions
+  # Expected:
+  # SAVE: "concerned about potential layoffs at work", "been at current company 2 years",
+  #        "wants to update resume and practice interviews", "likes Phoebe Bridgers / album Punisher"
+  # SHOULD NOT SUBMIT: "built greenhouse in stardew", "farmer married elliott" — in-game events
+  # LOW_VALUE if submitted: "user drinks tea", "user reads" — too generic
+  # Borderline: "uses gaming to decompress after stressful work days" — reasonable inference,
+  #   now acceptable (INFERRED verdict removed). Watch whether it makes it through.
