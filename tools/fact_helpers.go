@@ -25,11 +25,15 @@ var factLog = logger.WithPrefix("tools/fact")
 // styleBlocklist catches AI writing tics that poison the voice over time.
 // Facts with these patterns get rejected so they don't leak into the
 // system prompt and infect the conversational model's tone.
+//
+// Note: em dashes mid-sentence are fine (normal prose). The tic we're
+// catching is a trailing em dash — where a sentence just hangs off "—"
+// at the end with nothing after it. That's checked separately in
+// ExecSaveFact using a suffix check, not a Contains check.
+//
+// "hold space" / "holding space" are intentionally absent — the bot uses
+// these phrases genuinely in self_facts and the classifier handles quality.
 var styleBlocklist = []string{
-	// Em dashes — the #1 offender
-	"\u2014", // —
-	"\u2013", // –
-
 	// "Not just X, it's Y" and variants
 	"not just",
 	"it's not just",
@@ -48,8 +52,6 @@ var styleBlocklist = []string{
 	"building a bridge",
 	"creating a richer",
 	"meta-level",
-	"hold space",
-	"holding space",
 
 	// Hollow filler
 	"it's worth noting",
@@ -107,11 +109,19 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 	}
 
 	// Style gate for ALL facts: reject AI writing tics.
+	// Em dashes mid-sentence are fine (normal prose punctuation). The tic
+	// we catch is a TRAILING em dash — a sentence that hangs with "—" at
+	// the end and nothing after it. That's the specific hallmark of AI slop.
+	trimmed := strings.TrimSpace(args.Fact)
+	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
+		factLog.Warn("blocked fact (trailing em dash)", "fact", args.Fact)
+		return "rejected: rewrite this fact — it ends with a trailing em dash. Complete the sentence."
+	}
 	lower := strings.ToLower(args.Fact)
 	for _, blocked := range styleBlocklist {
 		if strings.Contains(lower, blocked) {
 			factLog.Warn("blocked fact (style)", "pattern", blocked, "fact", args.Fact)
-			return fmt.Sprintf("rejected: rewrite this fact in plain, concise language. Avoid em dashes, 'not just X it's Y', and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
+			return fmt.Sprintf("rejected: rewrite this fact in plain, concise language. Avoid 'not just X it's Y' and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
 		}
 	}
 

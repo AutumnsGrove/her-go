@@ -133,7 +133,15 @@ type Context struct {
 	ConversationSummary string
 
 	// RelevantFacts are facts semantically similar to the user's message.
+	// Used as fallback injection for the chat model when the agent didn't
+	// explicitly pass facts via the reply tool's facts parameter.
 	RelevantFacts []memory.Fact
+
+	// AgentPassedFacts holds facts the agent explicitly chose to pass to the
+	// reply tool via its facts parameter. When non-empty, the chat model uses
+	// these instead of RelevantFacts — they represent the agent's curated
+	// judgment of what's contextually relevant, not just message-hash similarity.
+	AgentPassedFacts []string
 
 	// SearchContext accumulates search results, book data, and URL
 	// content across tool calls. Included in the reply prompt.

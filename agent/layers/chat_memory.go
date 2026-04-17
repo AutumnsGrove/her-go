@@ -1,18 +1,22 @@
 package layers
 
-// Layer 4: Memory context — semantically relevant facts.
+// Layer 4: Memory context — facts injected into the chat model's prompt.
 //
-// This is where the bot's long-term memory enters the chat prompt.
-// Unlike the agent (which sees ALL facts), the chat model only sees
-// facts that are semantically close to the current message (via KNN).
+// Two sources, in priority order:
 //
-// Before injection, facts are filtered for redundancy against recent
-// conversation history — if a fact says the same thing as a message
-// the model already sees in history, it's dropped to prevent "context
-// echo" (the model fixating on repeated information).
+//  1. Agent-passed facts (ctx.AgentPassedFacts): the agent called recall_memories,
+//     evaluated the results, and explicitly passed the relevant ones through the
+//     reply tool's facts parameter. These represent the agent's curated judgment.
+//     When present, they're injected verbatim — no redundancy filtering needed
+//     since the agent already chose them deliberately.
+//
+//  2. Auto-searched facts (ctx.RelevantFacts): the KNN results from the turn-start
+//     semantic search, used as a fallback when the agent passed nothing. Filtered
+//     for redundancy against conversation history before injection.
 
 import (
 	"fmt"
+	"strings"
 
 	"her/memory"
 )
@@ -31,7 +35,23 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 		return LayerResult{}
 	}
 
-	// Filter out facts already represented in conversation history.
+	// Path 1: agent explicitly passed facts via reply(facts=[...]).
+	// Inject these directly — the agent already did the relevance judgment.
+	if len(ctx.AgentPassedFacts) > 0 {
+		var b strings.Builder
+		b.WriteString("## What I Remember\n\n")
+		for _, f := range ctx.AgentPassedFacts {
+			fmt.Fprintf(&b, "- %s\n", f)
+		}
+		return LayerResult{
+			Content: b.String(),
+			Detail:  fmt.Sprintf("%d agent-passed facts", len(ctx.AgentPassedFacts)),
+		}
+	}
+
+	// Path 2: fallback to auto-searched facts from turn-start KNN.
+	// Filter out facts already represented in conversation history to
+	// avoid "context echo" (model fixating on repeated information).
 	filteredFacts := ctx.RelevantFacts
 	if ctx.EmbedClient != nil {
 		recentMsgs, err := ctx.Store.RecentMessages(ctx.ConversationID, ctx.Cfg.Memory.RecentMessages)
@@ -62,14 +82,14 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 		}
 	}
 
-	detail := fmt.Sprintf("%d facts", len(injectedFacts))
+	detail := fmt.Sprintf("%d facts (auto)", len(injectedFacts))
 	if linked > 0 {
-		detail = fmt.Sprintf("%d semantic + %d linked", semantic, linked)
+		detail = fmt.Sprintf("%d semantic + %d linked (auto)", semantic, linked)
 	}
 
 	return LayerResult{
-		Content:      memCtx,
-		Detail:       detail,
+		Content:       memCtx,
+		Detail:        detail,
 		InjectedFacts: injectedFacts,
 	}
 }
