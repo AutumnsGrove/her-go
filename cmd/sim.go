@@ -141,9 +141,13 @@ type simTurnResult struct {
 // sim.db schema — separate from the production her.db
 // --------------------------------------------------------------------------
 
-// simDBSchema contains the CREATE TABLE statements for the simulation
-// results database. This is a different database from her.db — it stores
-// results across many sim runs so you can compare them.
+// simDBSchema contains the CREATE TABLE and CREATE VIEW statements for the
+// simulation results database. This is a different database from her.db — it
+// stores results across many sim runs so you can compare them.
+//
+// Schema design: every child table has run_id as a foreign key, so all data
+// is already isolated per run. The views below are query shortcuts — they
+// don't move data, they just make common queries easier to write.
 const simDBSchema = `
 CREATE TABLE IF NOT EXISTS sim_runs (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -221,6 +225,47 @@ CREATE TABLE IF NOT EXISTS sim_summaries (
 	summary TEXT NOT NULL,
 	messages_summarized INTEGER
 );
+
+-- Labels let you tag any run with a human-readable name for easy reference.
+-- Example: INSERT INTO sim_run_labels (run_id, label) VALUES (38, 'baseline-post-refactor');
+-- Then query: SELECT * FROM sim_facts WHERE run_id = (SELECT run_id FROM sim_run_labels WHERE label = 'baseline-post-refactor');
+CREATE TABLE IF NOT EXISTS sim_run_labels (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
+	label TEXT NOT NULL UNIQUE,
+	note TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- latest_runs: the most recent run for each suite name.
+-- Usage: SELECT * FROM latest_runs;
+-- Usage: SELECT * FROM sim_facts WHERE run_id = (SELECT id FROM latest_runs WHERE suite_name = 'Getting to Know You');
+CREATE VIEW IF NOT EXISTS latest_runs AS
+SELECT r.*
+FROM sim_runs r
+INNER JOIN (
+	SELECT suite_name, MAX(id) AS max_id
+	FROM sim_runs
+	GROUP BY suite_name
+) latest ON r.id = latest.max_id;
+
+-- run_summary: one row per run with fact count, message count, and cost.
+-- Usage: SELECT * FROM run_summary ORDER BY id DESC LIMIT 20;
+CREATE VIEW IF NOT EXISTS run_summary AS
+SELECT
+	r.id,
+	r.timestamp,
+	r.suite_name,
+	r.agent_model,
+	r.chat_model,
+	r.total_cost_usd,
+	r.duration_ms,
+	COUNT(DISTINCT f.id) AS facts_saved,
+	COUNT(DISTINCT m.id) / 2 AS turns
+FROM sim_runs r
+LEFT JOIN sim_facts f ON f.run_id = r.id
+LEFT JOIN sim_messages m ON m.run_id = r.id AND m.role = 'user'
+GROUP BY r.id;
 `
 
 // --------------------------------------------------------------------------

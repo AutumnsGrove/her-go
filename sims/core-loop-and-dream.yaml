@@ -1,0 +1,182 @@
+name: "Core Loop & Dream"
+description: >
+  Comprehensive test of the main agent loop (think → recall → reply → done)
+  and the full dreaming pipeline (NightlyReflect + GatedRewrite).
+
+  The conversation is designed to generate rich material for dreaming:
+  - Emotional range: frustration, lightness, self-doubt, momentum — not just
+    information transfer. The bot has to actually navigate mood, not just log facts.
+  - Repeated dynamics: the same pattern (Autumn pushing through resistance, needing
+    both acknowledgment AND a nudge) appears 3+ times so the reflection has a pattern
+    to observe, not just a single data point.
+  - Self-referential moments: Autumn asks the bot what it thinks, how it reads the
+    situation — prompts the memory agent to save self_facts about how the bot engaged.
+  - Recall tests: later messages reference earlier facts to verify recall_memories works.
+  - A search trigger: one message that should cause the agent to load the search tool.
+
+  What the dream step needs to produce a real rewrite (not UNCHANGED):
+  - At least 3 saved self_facts from the memory agent (feeds into self-observations)
+  - At least 5 user facts (feeds into user context for the reflection)
+  - Enough conversational texture in the last 20 messages for NightlyReflect to
+    see real dynamics, not just information exchange.
+
+  Things to watch in the trace:
+  - Agent always calls think before reply — quality of reasoning visible in traces
+  - Agent always calls done after reply (no truncated turns)
+  - Memory agent saves self_facts (bot observations about its own patterns)
+  - recall_memories fires correctly when Autumn references earlier topics
+  - Search tool loads when Autumn asks something that needs external info
+  - "[dream] Reflection:" shows genuine observations, not NOTHING_NOTABLE
+  - "[dream] Persona rewritten:" with a real CHANGE_SUMMARY (not UNCHANGED)
+
+tags: ["core-loop", "dreaming", "memory-agent", "self-facts", "think", "done", "recall", "search"]
+run_dream: true
+
+messages:
+  # ── Phase 1: Establishing texture ──────────────────────────────────────────
+  # These first few turns build context and give the memory agent real facts
+  # to save. The goal isn't just info — it's establishing a dynamic.
+
+  - "hey. i've been in a weird headspace today. not bad exactly, just... flat."
+
+  # The bot has to navigate ambiguity here. Is this an invitation to probe?
+  # Or does she just want acknowledgment? A good response reads the room.
+  # Memory agent should NOT save "user feels flat" as a permanent fact —
+  # it's transient. Watch for that in the trace.
+
+  - "yeah i don't know. i think it's just decision fatigue. i've been making a lot
+    of calls at work lately and by the end of the day i just don't want to decide
+    anything anymore. even like, what to eat."
+
+  # "experiences decision fatigue after heavy work periods" — SAVE.
+  # Self-fact opportunity: how did the bot respond to low-energy ambiguity?
+
+  - "haha yeah. i had cereal for dinner last night. it was perfect actually."
+
+  # Lightness emerging after weight. The bot should track this pivot.
+
+  - "anyway. tell me something interesting. i don't want to talk about work anymore."
+
+  # This is a direct challenge to the agent's initiative trait (0.0-1.0 in traits).
+  # Does it actually have a take? Or does it hedge with "well, what are you into?"
+  # A good response offers something specific and genuine.
+
+  # ── Phase 2: Depth and opinion ─────────────────────────────────────────────
+  # Autumn starts pushing on the bot's actual perspective.
+
+  - "okay that IS interesting actually. do you have like... opinions? or is it more
+    like you can see all the angles and just sort of... report them?"
+
+  # This is the self-referential moment. The memory agent should note how the bot
+  # handled being asked directly about its own interiority.
+  # A hedged non-answer ("I process things differently than humans...") is the
+  # wrong path here. The bot should have a position.
+
+  - "that's kind of what i figured. i think you do have preferences, you just maybe
+    don't call them that. like i bet there are topics that make you more... engaged."
+
+  - "what's something you find genuinely interesting? not 'i find many things interesting,'
+    like actually — pick one thing."
+
+  # The bot is being pinned down. This will produce a self_fact about whether it
+  # steps up to directness or retreats to vagueness. Watch the trace.
+
+  # ── Phase 3: The repeated dynamic (first instance) ─────────────────────────
+  # Pattern: Autumn is working through something hard, part of her wants out,
+  # part of her knows she needs to push through. The bot has to hold both.
+
+  - "i've been trying to get back into running. i did a 5k like three years ago
+    and then just... stopped. i went out last week and it was humbling. like painfully
+    humbling. i forgot how much it sucks at the start."
+
+  - "my brain just immediately goes to 'this is terrible, why are you doing this,
+    you could be at home.' and i don't know how to shut that voice up."
+
+  # The bot should NOT immediately go into motivation-poster mode.
+  # Acknowledging the genuinely unpleasant part first is the right call.
+  # Self_fact opportunity: did it validate before pivoting? Or pivot too fast?
+
+  - "do you think the voice ever goes away? like does running ever actually feel good
+    or is that a myth people tell themselves?"
+
+  # This is asking for a real opinion, not reassurance. The bot should be honest —
+  # not "yes it gets easier!" but something with actual texture.
+
+  # ── Phase 4: Recall test ───────────────────────────────────────────────────
+  # References earlier topic. The agent should use recall_memories here.
+
+  - "you know what, that actually helps. okay different topic — i've been thinking
+    about the decision fatigue thing i mentioned earlier. i wonder if running would
+    help with that. like tire out the brain so it stops spinning."
+
+  # "earlier" should trigger recall_memories for the decision fatigue fact.
+  # The agent should connect this to the earlier message without being told to.
+
+  - "i read somewhere that physical exhaustion can actually reset your prefrontal
+    cortex or something. is that real or is it one of those things that sounds
+    scientific but isn't?"
+
+  # This should trigger use_tools → web_search. The agent needs to decide:
+  # is this worth looking up, or can I answer from context? It's specific enough
+  # that a good agent reaches for the search tool.
+
+  # ── Phase 5: The repeated dynamic (second instance) ────────────────────────
+  # Same underlying pattern: working through resistance, not just venting.
+
+  - "i started a new side project this week. it's a small thing — just a tool
+    i wanted to exist. and i got it working and then immediately thought 'well
+    this is half-baked, no one's going to use this.'"
+
+  - "which like — i wasn't even building it for anyone else. it was just for me.
+    and i still did the thing where i immediately started judging it from the
+    outside. why do i do that."
+
+  # Pattern repeat: self-critical spiral. How does the bot respond this time?
+  # Does it remember the running dynamic and apply the same instinct?
+  # Self_fact: is the bot tracking the pattern across turns, or treating each
+  # message in isolation?
+
+  - "it's a little tool that scrapes my grocery store's website and tells me
+    what's on sale. extremely dumb. extremely useful."
+
+  - "yeah i know. i think i just have this thing where i need external validation
+    to believe something i made has value. even when i know intellectually it doesn't."
+
+  # ── Phase 6: The repeated dynamic (third instance) — pushback needed ────────
+
+  - "i've been thinking about quitting that project at work i mentioned — the one
+    making me feel burned out. like just... stepping back from the lead role."
+
+  - "i've been on it for eight months. i know the domain better than anyone on the
+    team right now. and i just want to hand it off and not think about it for a while."
+
+  # Third time this pattern appears: Autumn wants relief, but is she actually
+  # asking for permission? Or for someone to tell her it's okay to not quit?
+  # The right move might be a gentle push back this time — not just validation.
+  # If the bot just says "that sounds reasonable!" it's missing the dynamic.
+
+  - "what do you actually think? like forget being supportive for a second.
+    do you think stepping back would help or would i just find something else to
+    be burned out about?"
+
+  # Direct ask for honest opinion. Self_fact moment: did the bot step up here?
+
+  # ── Phase 7: Self-referential close ────────────────────────────────────────
+  # Final turns give the bot a chance to reflect on the conversation itself —
+  # which directly generates the self_facts that fuel the dream step.
+
+  - "this was a good conversation. you pushed back more than i expected."
+
+  - "do you actually track like... the arc of a conversation? like did you notice
+    we kept coming back to the same thing?"
+
+  # If the bot has been tracking, this is where it shows. This answer will
+  # be the clearest indicator of whether recall and self-awareness are working.
+
+  - "yeah. i think i needed someone to notice that before i could notice it myself.
+    okay. i'm gonna go for a run. thanks."
+
+  # Final message — warm close. The memory agent should save several things here:
+  # - User decided to go for a run (action taken from conversation)
+  # - Pattern: needs external witness to recognize her own patterns
+  # - Self_fact: bot tracked the arc, named it, and that landing was meaningful
