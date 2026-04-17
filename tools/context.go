@@ -232,6 +232,14 @@ type Context struct {
 	// ClassifyVerdict. The detail text comes from classifiers.yaml.
 	RejectionMessageFunc func(verdict ClassifyVerdict) string
 
+	// ClassifyReplyFunc checks an outgoing reply for AI writing patterns
+	// (hollow openers/closers, formulaic pivots, coaching-app language).
+	// Nil when no classifier is configured. Returns PASS if clean,
+	// STYLE_ISSUE with a reason if a pattern was detected.
+	// Soft gate — the reply handler retries once with the reason as a hint,
+	// then delivers regardless of the second check.
+	ClassifyReplyFunc func(replyText string) ClassifyVerdict
+
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
 	// This prevents the self-contradiction bug where the classifier
