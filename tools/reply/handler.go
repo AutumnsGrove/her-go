@@ -266,9 +266,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Retries once with a direct hint if a pattern is detected.
 	// Fail-open: if the retry still has issues, we deliver anyway — the style
 	// gate should never block a reply from reaching the user.
+	//
+	// styleGateNote is included in the return string so it appears in the
+	// agent trace (and sim report) — both PASS and STYLE_ISSUE are visible.
+	styleGateNote := ""
 	if ctx.ClassifyReplyFunc != nil {
 		styleVerdict := ctx.ClassifyReplyFunc(resp.Content)
-		if !styleVerdict.Allowed {
+		if styleVerdict.Allowed {
+			log.Info("reply: style gate passed")
+			styleGateNote = "[style: PASS]"
+		} else {
 			hint := styleVerdict.Reason
 			if hint == "" {
 				hint = "avoid formulaic AI openers or closers"
@@ -289,8 +296,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				resp = retryResp
 				ctx.ReplyCost += retryResp.CostUSD
 				log.Info("reply: style gate retry accepted", "preview", truncate(resp.Content, 80))
+				styleGateNote = fmt.Sprintf("[style: STYLE_ISSUE — retried (%s)]", hint)
 			} else {
 				log.Warn("reply: style gate retry failed or invalid, delivering original")
+				styleGateNote = fmt.Sprintf("[style: STYLE_ISSUE — retry failed, delivered original (%s)]", hint)
 			}
 		}
 	}
@@ -367,7 +376,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if len(preview) > 300 {
 		preview = preview[:300] + "..."
 	}
-	return fmt.Sprintf("reply delivered to user: %q\n\nYour message has been sent. Call done to end your turn unless you have pending work (e.g., a search in progress).", preview)
+	suffix := "Your message has been sent. Call done to end your turn unless you have pending work (e.g., a search in progress)."
+	if styleGateNote != "" {
+		suffix = styleGateNote + "\n" + suffix
+	}
+	return fmt.Sprintf("reply delivered to user: %q\n\n%s", preview, suffix)
 }
 
 // isDegenerate detects garbage LLM outputs that would poison conversation
