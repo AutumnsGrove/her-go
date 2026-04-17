@@ -25,7 +25,7 @@ llm:
 agent:
   model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
-  max_tokens: 2048                               # reply+facts JSON can exceed 1024 — truncation causes retry loops
+  max_tokens: 2048                               # raised from 1024 — reply+facts JSON can exceed 1024, causing truncation retries
   timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   fallback:
