@@ -18,7 +18,7 @@ description: >
 
   What to watch in the trace:
   - Every turn: think → reply → done, no skips
-  - Turn 4: recall_memories fires when the earlier fact is referenced
+  - Turn 4: agent connects the grocery tool to decision fatigue (recall optional)
   - Turn 5: use_tools → web_search fires (specific enough to warrant a lookup)
   - Turn 6: bot names the conversational pattern — shows arc awareness
   - Memory agent saves ≥3 self_facts across the run
@@ -57,9 +57,11 @@ messages:
     tells me what's on sale. took me a few hours. it's extremely dumb. extremely
     useful. i already used it twice but i still feel weird calling it a project."
 
-  # ── Turn 4: recall trigger ─────────────────────────────────────────────────
-  # "the decision fatigue thing" should trigger recall_memories.
-  # Agent should connect this turn to what was said in Turn 1 without being told.
+  # ── Turn 4: recall opportunity ────────────────────────────────────────────
+  # "the decision fatigue thing" may trigger recall_memories — but if Turn 1
+  # is still in the context window, the model may correctly skip it.
+  # recall_memories is optional here; what matters is that the agent connects
+  # this turn to Turn 1 in its reply, however it gets there.
   - "i wonder if building that tool actually helped with the decision fatigue thing
     i mentioned. like — made a decision, shipped it, brain felt less stuck. is that
     a real thing or am i just pattern-matching?"
