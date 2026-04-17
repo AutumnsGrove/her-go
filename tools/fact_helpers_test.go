@@ -33,10 +33,11 @@ func minimalCtx() *Context {
 func TestStyleGate(t *testing.T) {
 	t.Run("em_dash_blocked", func(t *testing.T) {
 		ctx := minimalCtx()
-		// "—" is the em dash character, first entry in styleBlocklist.
-		result := ExecSaveFact(`{"fact":"User loves hiking — especially mountain trails","category":"preference","tags":"outdoors, hiking"}`, "user", ctx)
+		// Trailing em-dash — sentence hangs with "—" at the end.
+		// Mid-sentence em-dashes are fine; only trailing ones are blocked.
+		result := ExecSaveFact(`{"fact":"User loves hiking —","category":"preference","tags":"outdoors, hiking"}`, "user", ctx)
 		if !strings.HasPrefix(result, "rejected:") {
-			t.Errorf("expected rejection for em-dash fact, got: %s", result)
+			t.Errorf("expected rejection for trailing em-dash fact, got: %s", result)
 		}
 	})
 

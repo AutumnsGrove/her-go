@@ -1,8 +1,11 @@
-package agent
+package classifier
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestParseClassifierResponse(t *testing.T) {
+func TestParseResponse(t *testing.T) {
 	tests := []struct {
 		name        string
 		response    string
@@ -33,9 +36,8 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantType:    "SAVE",
 		},
 		{
-			// INFERRED was removed in Phase 4 — memory agent reads raw conversation
-			// text so reasonable summarization is always acceptable. The parser
-			// no longer recognizes INFERRED and falls through to the fail-open path.
+			// INFERRED was removed — memory agent reads raw conversation text so
+			// reasonable summarization is always acceptable.
 			name:        "INFERRED no longer known — fails open",
 			response:    `INFERRED REWRITE: "User adopted their cat Bean from a Portland shelter"`,
 			wantAllowed: true,
@@ -56,22 +58,36 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantReason:  "too vague to be actionable",
 		},
 		{
+			name:        "PASS allowed",
+			response:    "PASS",
+			wantAllowed: true,
+			wantType:    "PASS",
+		},
+		{
+			name:        "STYLE_ISSUE rejected",
+			response:    "STYLE_ISSUE — opens with hollow affirmation",
+			wantAllowed: false,
+			wantType:    "STYLE_ISSUE",
+			wantReason:  "opens with hollow affirmation",
+		},
+		{
 			name:        "unparseable response fails open",
 			response:    "I think this fact is fine to save",
 			wantAllowed: true,
 			wantType:    "SAVE",
 		},
 		{
-			name:        "multiline FICTIONAL removed — fails open",
-			response:    "FICTIONAL — game event\nThe fact describes beating a boss",
-			wantAllowed: true,
-			wantType:    "SAVE",
+			name:        "multiline — only first line checked",
+			response:    "LOW_VALUE — too vague\nThe fact doesn't tell us anything useful",
+			wantAllowed: false,
+			wantType:    "LOW_VALUE",
+			wantReason:  "too vague",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v := parseClassifierResponse(tt.response)
+			v := parseResponse(tt.response)
 			if v.Allowed != tt.wantAllowed {
 				t.Errorf("Allowed = %v, want %v", v.Allowed, tt.wantAllowed)
 			}
@@ -96,10 +112,7 @@ func TestExtractRewrite(t *testing.T) {
 		want    string
 	}{
 		{
-			// extractRewrite is a pure string utility — it works for any verdict
-			// name, even removed ones. Testing it with removed verdicts confirms
-			// the extractor itself still works.
-			name:    "quoted rewrite (utility test)",
+			name:    "quoted rewrite",
 			line:    `FICTIONAL REWRITE: "User prefers bleed builds"`,
 			verdict: "FICTIONAL",
 			want:    "User prefers bleed builds",
@@ -117,7 +130,7 @@ func TestExtractRewrite(t *testing.T) {
 			want:    "",
 		},
 		{
-			name:    "rewrite with mixed case",
+			name:    "rewrite with mixed case keyword",
 			line:    `LOW_VALUE Rewrite: "User enjoys surreal fiction like Piranesi"`,
 			verdict: "LOW_VALUE",
 			want:    "User enjoys surreal fiction like Piranesi",
@@ -132,4 +145,25 @@ func TestExtractRewrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRejectionMessage(t *testing.T) {
+	t.Run("soft verdict with rewrite suggests text", func(t *testing.T) {
+		v := Verdict{Allowed: false, Type: "FICTIONAL", Rewrite: "User prefers bleed builds in Elden Ring"}
+		msg := RejectionMessage(v)
+		if msg == "" {
+			t.Error("expected non-empty rejection message")
+		}
+		if !strings.Contains(msg, "User prefers bleed builds") {
+			t.Errorf("expected rewrite text in message, got: %s", msg)
+		}
+	})
+
+	t.Run("unknown verdict type falls back to reason", func(t *testing.T) {
+		v := Verdict{Allowed: false, Type: "UNKNOWN_VERDICT", Reason: "some reason"}
+		msg := RejectionMessage(v)
+		if !strings.Contains(msg, "some reason") {
+			t.Errorf("expected reason in fallback message, got: %s", msg)
+		}
+	})
 }
