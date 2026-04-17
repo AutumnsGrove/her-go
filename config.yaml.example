@@ -25,13 +25,13 @@ llm:
 agent:
   model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
-  max_tokens: 1024                               # needs headroom for tool call JSON — 512 risks truncation
+  max_tokens: 2048                               # reply+facts JSON can exceed 1024 — truncation causes retry loops
   timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   fallback:
     model: "anthropic/claude-haiku-4.5"
     temperature: 0.1
-    max_tokens: 1024
+    max_tokens: 2048
 
 classifier:
   model: "anthropic/claude-haiku-4.5"  # small, fast model that validates memory writes against fiction
