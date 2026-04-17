@@ -92,6 +92,7 @@ type ChatConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). Groq/Kimi should respond in <5s — 20s is a reasonable ceiling.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
