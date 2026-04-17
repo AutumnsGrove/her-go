@@ -197,6 +197,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// --- Create LLM clients ---
 
 	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
+	if cfg.Chat.Timeout > 0 {
+		llmClient.WithTimeout(time.Duration(cfg.Chat.Timeout) * time.Second)
+	}
 	if cfg.Chat.Provider != nil {
 		llmClient.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
 	}

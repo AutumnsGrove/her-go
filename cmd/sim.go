@@ -490,6 +490,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		cfg.Chat.Temperature,
 		cfg.Chat.MaxTokens,
 	)
+	if cfg.Chat.Timeout > 0 {
+		chatClient.WithTimeout(time.Duration(cfg.Chat.Timeout) * time.Second)
+	}
 	if cfg.Chat.Provider != nil {
 		chatClient.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
 	}

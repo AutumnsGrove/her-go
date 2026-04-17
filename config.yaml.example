@@ -19,6 +19,7 @@ chat:
   model: "moonshotai/kimi-k2-0905"  # reply model — Kimi K2 via Groq: fast, consistent, no AI-isms
   temperature: 0.85
   max_tokens: 4096
+  timeout: 20                        # Groq/Kimi responds in <5s — 20s catches real hangs without waiting 60s for fallback
   provider:
     order: ["Groq"]                  # pin to Groq for speed and consistency
   fallback:
