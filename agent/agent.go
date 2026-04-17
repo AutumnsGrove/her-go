@@ -401,6 +401,14 @@ func Run(params RunParams) (*RunResult, error) {
 			return rejectionMessage(verdict)
 		},
 		PreApprovedRewrites: preApproved,
+		// ClassifyReplyFunc checks outgoing responses for AI writing patterns.
+		// Nil when no classifier is configured — reply handler skips the check.
+		ClassifyReplyFunc: func(replyText string) tools.ClassifyVerdict {
+			if params.ClassifierLLM == nil {
+				return tools.ClassifyVerdict{Allowed: true, Type: "PASS"}
+			}
+			return classifyMemoryWrite(params.ClassifierLLM, "reply", replyText, nil)
+		},
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,

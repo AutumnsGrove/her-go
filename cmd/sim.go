@@ -77,6 +77,13 @@ var memoryModelFlag string
 // Example: --chat-model "anthropic/claude-haiku-4.5"
 var chatModelFlag string
 
+// chatProviderFlag pins the chat model to a specific OpenRouter inference
+// provider. Comma-separated list tried in order — first available wins.
+// Useful when a model is hosted by multiple providers at different speeds:
+// e.g., Kimi K2 on Groq is much faster than on OpenRouter's default routing.
+// Example: --chat-provider "Groq" or --chat-provider "Groq,Together"
+var chatProviderFlag string
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -107,6 +114,7 @@ func init() {
 	simCmd.Flags().IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension (must match --embed-model output size)")
 	simCmd.Flags().StringVar(&memoryModelFlag, "memory-model", "", "override memory agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
 	simCmd.Flags().StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model for this run (e.g., anthropic/claude-haiku-4.5)")
+	simCmd.Flags().StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated (e.g., \"Groq\" or \"Groq,Together\")")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -484,6 +492,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 	)
 	if cfg.LLM.Fallback != nil {
 		chatClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
+	}
+	if chatProviderFlag != "" {
+		// Split "Groq,Together" → ["Groq", "Together"] for the provider order list.
+		// strings.Split on a single value produces a one-element slice, which is fine.
+		providers := strings.Split(chatProviderFlag, ",")
+		chatClient.WithProvider(&llm.ProviderRouting{Order: providers})
+		log.Info("chat model provider pinned via --chat-provider", "providers", providers)
 	}
 
 	agentTemp := cfg.Agent.Temperature

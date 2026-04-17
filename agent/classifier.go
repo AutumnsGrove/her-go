@@ -280,8 +280,13 @@ func parseClassifierResponse(response string) ClassifyVerdict {
 	upper := strings.ToUpper(line)
 
 	// --- Allowed verdicts ---
+	// SAVE = memory write approved. PASS = reply style approved.
+	// Both mean "no action needed, proceed."
 	if strings.HasPrefix(upper, "SAVE") {
 		return ClassifyVerdict{Allowed: true, Type: "SAVE"}
+	}
+	if strings.HasPrefix(upper, "PASS") {
+		return ClassifyVerdict{Allowed: true, Type: "PASS"}
 	}
 
 	// --- Rejected verdicts ---

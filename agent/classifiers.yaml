@@ -1,5 +1,10 @@
 # Classifier verdict definitions.
 #
+# Environments:
+#   fact      — quality gate for user facts saved to memory
+#   self_fact — quality gate for bot self-observations saved to memory
+#   reply     — style gate for outgoing responses (catches AI-isms)
+#
 # Each classifier has a preamble, an ordered list of verdicts, and a footer.
 # YAML order = check priority order.
 #
@@ -90,3 +95,41 @@ classifiers:
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
       Examples: "SAVE", "LOW_VALUE — too generic to be actionable"
+
+  reply:
+    preamble: >-
+      You are a style gate for a personal chatbot's reply system.
+      A response has been generated and is about to be sent to the user.
+      Check whether it contains common AI writing patterns that make it
+      feel hollow, formulaic, or bot-like. Be lenient — only flag clear,
+      obvious patterns. Warm, genuine responses are always fine even if
+      they happen to be affirming. Target formula, not warmth.
+    write_types:
+      - reply
+    verdicts:
+      - name: STYLE_ISSUE
+        soft: true
+        description: >-
+          The reply contains an obvious AI writing pattern that undermines
+          authenticity. Only flag clear formula — not warmth or directness.
+        examples:
+          - '"That''s a great question!" or "Great point!" as an opener'
+          - '"Absolutely!" / "Certainly!" / "Of course!" as a standalone opener'
+          - '"That''s not X, that''s Y!" (formulaic negative-to-positive flip)'
+          - '"I hope this helps!" / "Let me know if you need anything!" (hollow closer)'
+          - '"As an AI, I..." / "As a language model..." (unnecessary self-reference)'
+          - '"How does that make you feel?" / "Let''s unpack that!" (unsolicited therapy-speak)'
+          - '"What''s your next small win?" (coaching-app prompt when not asked for coaching)'
+        note: >-
+          A response that validates or affirms something the user said is fine.
+          Only flag hollow openers/closers and formulaic pivots that add no real content.
+        rejection:
+          default_detail: reply contains an AI writing pattern
+          suffix: Rephrase to be more direct and natural. Drop the formula.
+
+      - name: PASS
+        description: >-
+          The reply sounds natural, direct, and genuine. No obvious AI formula detected.
+    footer: |-
+      Respond with exactly one verdict on a single line. Optionally add a brief explanation.
+      Examples: "PASS", "STYLE_ISSUE — opens with 'That's a great question!'"

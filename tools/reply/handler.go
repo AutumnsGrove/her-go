@@ -261,6 +261,40 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			len(resp.Content), maxReplyChars)
 	}
 
+	// Style gate — optional soft check for AI writing patterns.
+	// Only runs when a classifier is configured (ctx.ClassifyReplyFunc != nil).
+	// Retries once with a direct hint if a pattern is detected.
+	// Fail-open: if the retry still has issues, we deliver anyway — the style
+	// gate should never block a reply from reaching the user.
+	if ctx.ClassifyReplyFunc != nil {
+		styleVerdict := ctx.ClassifyReplyFunc(resp.Content)
+		if !styleVerdict.Allowed {
+			hint := styleVerdict.Reason
+			if hint == "" {
+				hint = "avoid formulaic AI openers or closers"
+			}
+			log.Info("reply: style gate flagged response, retrying once",
+				"verdict", styleVerdict.Type, "reason", hint,
+				"preview", truncate(resp.Content, 80))
+
+			// Retry with the hint injected as a final system nudge.
+			// We append rather than replace so the original instruction
+			// context is still there — just with a correction on top.
+			hintMessages := append(llmMessages, llm.ChatMessage{
+				Role:    "system",
+				Content: "Style note: " + hint + ". Rephrase to be more natural and direct.",
+			})
+			retryResp, retryErr := ctx.ChatLLM.ChatCompletion(hintMessages)
+			if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
+				resp = retryResp
+				ctx.ReplyCost += retryResp.CostUSD
+				log.Info("reply: style gate retry accepted", "preview", truncate(resp.Content, 80))
+			} else {
+				log.Warn("reply: style gate retry failed or invalid, delivering original")
+			}
+		}
+	}
+
 	// Save the response to the database.
 	respID, err := ctx.Store.SaveMessage("assistant", resp.Content, resp.Content, ctx.ConversationID)
 	if err != nil {
