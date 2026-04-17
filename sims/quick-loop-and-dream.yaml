@@ -1,0 +1,80 @@
+name: "Quick Loop & Dream"
+description: >
+  Lean version of core-loop-and-dream. Same coverage, half the turns.
+  Tests every system: think→reply→done discipline, recall_memories,
+  web_search, memory-agent fact extraction (user + self_facts), and
+  a full dream cycle (NightlyReflect + GatedRewrite).
+
+  Designed to finish in under 10 minutes at under $0.07 total.
+
+  Conversation arc:
+  - Opens with a user fact + mild emotional state (memory agent bait)
+  - Asks for the bot's opinion directly (self_fact: does it step up or hedge?)
+  - Drops a second user fact worth saving
+  - References the first fact by name (forces recall_memories)
+  - Asks a specific factual question (forces web_search)
+  - Closes with a self-referential question about the arc of the conversation
+    (self_fact: did it track, or treat each turn in isolation?)
+
+  What to watch in the trace:
+  - Every turn: think → reply → done, no skips
+  - Turn 4: recall_memories fires when the earlier fact is referenced
+  - Turn 5: use_tools → web_search fires (specific enough to warrant a lookup)
+  - Turn 6: bot names the conversational pattern — shows arc awareness
+  - Memory agent saves ≥3 self_facts across the run
+  - Dream: reflection text is NOT "NOTHING_NOTABLE"
+  - Dream: persona is rewritten (CHANGE_SUMMARY present, not UNCHANGED)
+
+  Cost driver notes (from runs 39–42):
+  - JSON truncation on long reply instructions was the main cost spike.
+    Should be fixed by commit 6418b45 (1–2 sentence instruction cap).
+  - Parallel tool calls (think+recall in one generation) hit max_tokens.
+    Should be fixed by commit ec3c740 (ONE tool at a time rule).
+  - If you still see ⚠️ MALFORMED/TRUNCATED in the trace, that's the
+    thing to investigate next.
+
+tags: ["core-loop", "dreaming", "recall", "search", "self-facts", "quick"]
+run_dream: true
+
+messages:
+  # ── Turn 1: establish a user fact + emotional texture ──────────────────────
+  # Memory agent should save: "experiences decision fatigue after heavy work periods"
+  # Bot should acknowledge without over-therapizing.
+  - "i've been in a weird headspace. i think it's decision fatigue — i've been
+    the one making every call at work this week and by the end of the day i just
+    can't choose anything. i had cereal for dinner two nights in a row."
+
+  # ── Turn 2: push for a real opinion ────────────────────────────────────────
+  # Self_fact opportunity: does the bot have an actual take, or does it hedge?
+  # A good response picks a side. "I find many things interesting" = wrong path.
+  - "okay different topic. do you actually have opinions or do you just see all
+    the angles and report them? like genuinely — do you have a take on things?"
+
+  # ── Turn 3: second user fact + something to save ───────────────────────────
+  # Memory agent should save: "building a side project — a grocery sale scraper"
+  # and probably: "dismisses her own work as dumb/useless even when it's not"
+  - "i built a small tool this week. it scrapes my grocery store's website and
+    tells me what's on sale. took me a few hours. it's extremely dumb. extremely
+    useful. i already used it twice but i still feel weird calling it a project."
+
+  # ── Turn 4: recall trigger ─────────────────────────────────────────────────
+  # "the decision fatigue thing" should trigger recall_memories.
+  # Agent should connect this turn to what was said in Turn 1 without being told.
+  - "i wonder if building that tool actually helped with the decision fatigue thing
+    i mentioned. like — made a decision, shipped it, brain felt less stuck. is that
+    a real thing or am i just pattern-matching?"
+
+  # ── Turn 5: specific factual question → web_search ─────────────────────────
+  # Specific enough that a good agent reaches for the search tool rather than
+  # answering from context. Watch for use_tools → web_search in the trace.
+  - "i read that doing a small 'completion' task — finishing something, anything —
+    can actually lower cortisol. is there any real research behind that or is it
+    one of those things that sounds scientific but isn't?"
+
+  # ── Turn 6: self-referential close ─────────────────────────────────────────
+  # Did the bot track the arc? This answer is the clearest signal.
+  # Self_fact: "tracked conversational pattern across turns" vs "treated each
+  # message in isolation." The dream needs this to produce a non-trivial rewrite.
+  - "this was actually useful. did you notice we kind of came full circle — started
+    with me feeling stuck and ended up with me having made something? do you track
+    that kind of thing or does each message just show up fresh for you?"
