@@ -212,33 +212,12 @@ type Context struct {
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
 
-	// --- Classifier hooks (set by agent, called by tool handlers) ---
-	//
-	// Storing classifier logic as function fields on Context avoids a
-	// circular import: tools/ can't import agent/, but it CAN call functions
-	// that agent/ injects at runtime. In Python you'd use a passed-in lambda;
-	// in Go it's a function field on a struct — same idea, different syntax.
-	//
-	// Both fields are nil-safe: handlers check ctx.ClassifierLLM != nil
-	// before calling them (ClassifierLLM being non-nil is also the signal
-	// that classification is enabled).
-
-	// ClassifyWriteFunc evaluates a proposed memory write (fact, mood, receipt)
-	// for quality: is it real, useful, actually stated, not transient?
-	// Returns a ClassifyVerdict — call RejectionMessageFunc if !Allowed.
-	ClassifyWriteFunc func(writeType, content string, snippet []memory.Message) ClassifyVerdict
-
-	// RejectionMessageFunc builds the agent-facing rejection string from a
-	// ClassifyVerdict. The detail text comes from classifiers.yaml.
-	RejectionMessageFunc func(verdict ClassifyVerdict) string
-
-	// ClassifyReplyFunc checks an outgoing reply for AI writing patterns
-	// (hollow openers/closers, formulaic pivots, coaching-app language).
-	// Nil when no classifier is configured. Returns PASS if clean,
-	// STYLE_ISSUE with a reason if a pattern was detected.
-	// Soft gate — the reply handler retries once with the reason as a hint,
-	// then delivers regardless of the second check.
-	ClassifyReplyFunc func(replyText string) ClassifyVerdict
+	// ClassifierSnippet is the conversation snapshot used when running the
+	// classifier. When set, fact_helpers uses it instead of querying the DB
+	// lazily — this matters for the memory agent, which captures the snippet
+	// at goroutine launch time before subsequent turns can dirty the DB.
+	// Nil in the main agent path (lazy query is fine there).
+	ClassifierSnippet []memory.Message
 
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
@@ -246,15 +225,4 @@ type Context struct {
 	// suggests text and then rejects that exact text on retry.
 	// Key: the rewrite text (lowercased for case-insensitive matching).
 	PreApprovedRewrites map[string]bool
-
-}
-
-// ClassifyVerdict is the result of a classifier check on a proposed memory
-// write. Defined here (in tools/) so fact_helpers.go and other handlers can
-// reference it without importing agent (which would be circular).
-type ClassifyVerdict struct {
-	Allowed bool   // true = write should proceed to DB
-	Type    string // verdict type: "SAVE", "FICTIONAL", "LOW_VALUE", etc.
-	Reason  string // human-readable explanation from the classifier
-	Rewrite string // suggested rewrite for soft verdicts (FICTIONAL, INFERRED) — empty for hard rejects
 }

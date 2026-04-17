@@ -363,7 +363,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 	if chatModelFlag != "" {
 		log.Info("Chat model overridden via --chat-model", "model", chatModelFlag)
-		cfg.LLM.Model = chatModelFlag
+		cfg.Chat.Model = chatModelFlag
 	}
 
 	// --embed-* flags override the embedding config. This lets you test
@@ -442,7 +442,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	res, err := simDB.Exec(
 		`INSERT INTO sim_runs (suite_name, suite_path, chat_model, agent_model, embed_model, total_messages)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		s.Name, suiteFlag, cfg.LLM.Model, agentModel, embedModel, len(s.Messages),
+		s.Name, suiteFlag, cfg.Chat.Model, agentModel, embedModel, len(s.Messages),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting sim run: %w", err)
@@ -486,16 +486,20 @@ func runSim(cmd *cobra.Command, args []string) error {
 	chatClient := llm.NewClient(
 		cfg.LLM.BaseURL,
 		cfg.LLM.APIKey,
-		cfg.LLM.Model,
-		cfg.LLM.Temperature,
-		cfg.LLM.MaxTokens,
+		cfg.Chat.Model,
+		cfg.Chat.Temperature,
+		cfg.Chat.MaxTokens,
 	)
-	if cfg.LLM.Fallback != nil {
-		chatClient.WithFallback(cfg.LLM.Fallback.Model, cfg.LLM.Fallback.Temperature, cfg.LLM.Fallback.MaxTokens)
+	if cfg.Chat.Provider != nil {
+		chatClient.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
+	}
+	if cfg.Chat.Fallback != nil {
+		chatClient.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
 	}
 	if chatProviderFlag != "" {
 		// Split "Groq,Together" → ["Groq", "Together"] for the provider order list.
 		// strings.Split on a single value produces a one-element slice, which is fine.
+		// --chat-provider overrides the config's provider routing for this run.
 		providers := strings.Split(chatProviderFlag, ",")
 		chatClient.WithProvider(&llm.ProviderRouting{Order: providers})
 		log.Info("chat model provider pinned via --chat-provider", "providers", providers)
@@ -1108,7 +1112,7 @@ func generateReport(
 	fmt.Fprintf(&b, "**Run:** #%d | **Date:** %s | **Chat model:** %s | **Agent model:** %s | **Embed model:** %s | **Cost:** $%.4f\n\n",
 		runID,
 		time.Now().Format("2006-01-02 15:04"), // Go's time format uses a reference date, not %Y-%m-%d
-		cfg.LLM.Model,
+		cfg.Chat.Model,
 		agentModel,
 		reportEmbedModel,
 		totalCost,

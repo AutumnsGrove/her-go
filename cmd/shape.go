@@ -132,7 +132,7 @@ func runShape(cmd *cobra.Command, args []string) error {
 	}
 
 	if showChat {
-		printStreamShape("Chat", cfg.LLM.Model, layers.StreamChat, ctx, cfg)
+		printStreamShape("Chat", cfg.Chat.Model, layers.StreamChat, ctx, cfg)
 	}
 
 	return nil

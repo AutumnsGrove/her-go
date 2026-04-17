@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 
+	"her/classifier"
 	"her/logger"
 	"her/tools"
 )
@@ -77,18 +78,24 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	//
 	// Pre-approved bypass: if the classifier previously suggested this exact
 	// text as a rewrite, skip re-classification.
-	if ctx.ClassifierLLM != nil && ctx.ClassifyWriteFunc != nil {
+	if ctx.ClassifierLLM != nil {
 		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
 			log.Info("classifier bypass: update matches pre-approved rewrite", "fact", args.Fact)
 		} else {
-			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 1)
+			snippet := ctx.ClassifierSnippet
+			if snippet == nil {
+				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
+			}
 			classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
-			verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
+			verdict := classifier.Check(ctx.ClassifierLLM, "fact", classifyContent, snippet)
+			_ = ctx.Store.SaveClassifierLog(
+				ctx.ConversationID, "fact", verdict.Type, classifyContent, verdict.Reason, verdict.Rewrite,
+			)
+			if verdict.Rewrite != "" && ctx.PreApprovedRewrites != nil {
+				ctx.PreApprovedRewrites[strings.ToLower(verdict.Rewrite)] = true
+			}
 			if !verdict.Allowed {
-				if ctx.RejectionMessageFunc != nil {
-					return ctx.RejectionMessageFunc(verdict)
-				}
-				return fmt.Sprintf("rejected by classifier: %s", verdict.Reason)
+				return classifier.RejectionMessage(verdict)
 			}
 		}
 	}
