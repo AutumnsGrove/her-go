@@ -194,7 +194,7 @@ func ExecSaveFact(argsJSON, subject string, ctx *Context) string {
 			if subject == "self" {
 				writeType = "self_fact"
 			}
-			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
+			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 1)
 			verdict := ctx.ClassifyWriteFunc(writeType, args.Fact, snippet)
 			if !verdict.Allowed {
 				if ctx.RejectionMessageFunc != nil {

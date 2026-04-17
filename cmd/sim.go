@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1243,12 +1244,18 @@ func writeAgentTrace(b *strings.Builder, simDB *sql.DB, runID int64, turnNum int
 		if step.role == "assistant" && step.toolName.Valid {
 			// This is the agent deciding to call a tool.
 			toolName := step.toolName.String
-			args := step.toolArgs.String
+			args := strings.TrimSpace(step.toolArgs.String)
 			if args == "" || args == "{}" {
 				fmt.Fprintf(b, "**→ `%s`**\n\n", toolName)
 			} else {
-				// Pretty-print the args. Don't truncate — the whole
-				// point of the report is to see everything.
+				// Label malformed/truncated args rather than writing raw whitespace-bloated
+				// JSON to the report. This happens when the agent hits max_tokens mid-JSON.
+				if !json.Valid([]byte(args)) {
+					if len(args) > 300 {
+						args = args[:300]
+					}
+					args = "⚠️ MALFORMED/TRUNCATED: " + args
+				}
 				fmt.Fprintf(b, "**→ `%s`**\n```json\n%s\n```\n\n", toolName, args)
 			}
 		} else if step.role == "tool" {

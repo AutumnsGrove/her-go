@@ -81,7 +81,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
 			log.Info("classifier bypass: update matches pre-approved rewrite", "fact", args.Fact)
 		} else {
-			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 3)
+			snippet, _ := ctx.Store.RecentMessages(ctx.ConversationID, 1)
 			classifyContent := fmt.Sprintf("Original fact: %s\nUpdated fact: %s", oldFact.Fact, args.Fact)
 			verdict := ctx.ClassifyWriteFunc("fact", classifyContent, snippet)
 			if !verdict.Allowed {
