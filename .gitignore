@@ -66,3 +66,4 @@ sims/results/
 scripts/kokoro-v1.0.onnx
 scripts/voices-v1.0.bin
 scripts/piper-voices/
+her.pid
