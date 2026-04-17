@@ -13,9 +13,6 @@ parameters:
       description: >-
         What to search for in memory. Be specific — 'user's dog' works
         better than 'pet'.
-    limit:
-      type: integer
-      description: "Max results to return (default 5, max 10)"
   required:
     - query
 trace:
