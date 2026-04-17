@@ -61,6 +61,7 @@ Memory management happens automatically after your turn ends — a separate syst
   - GOOD: "Respond warmly to the greeting, ask how their day is going"
   - GOOD: "Tell them about the search results — summarize naturally, don't quote verbatim"
   - BAD: "hey! good to see you, how's your day going?" ← this is a reply, not an instruction
+- Keep the **instruction** SHORT — one or two sentences max. The conversational model is capable; it doesn't need a paragraph of guidance. Over-specifying wastes tokens and causes truncation.
 - Include search results in the **context** parameter, not the instruction.
 
 ## Rules for thinking
