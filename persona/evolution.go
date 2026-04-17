@@ -430,7 +430,7 @@ in how you engage, what you notice, or how you feel — update the description t
 
 If nothing substantial has changed, respond with exactly: UNCHANGED
 
-If something has changed, respond in this exact format:
+If something has changed, respond in this exact format (the --- separator line is required):
 CHANGE_SUMMARY: <one sentence describing what shifted>
 ---
 <your full updated personality description>
@@ -654,16 +654,36 @@ func GatedRewrite(
 	}
 
 	// Parse CHANGE_SUMMARY: ... \n---\n <new persona>
-	// Split on "---" to separate the summary line from the persona body.
+	// The expected format is:
+	//   CHANGE_SUMMARY: <one sentence>
+	//   ---
+	//   <new persona text>
+	//
+	// LLMs sometimes skip the "---" separator and just use a blank line, so we
+	// handle both: split on "\n---\n" first, then fall back to stripping the
+	// CHANGE_SUMMARY line directly. Either way, the summary line must never
+	// end up inside persona.md.
 	parts := strings.SplitN(content, "\n---\n", 2)
 	var newPersona string
 	if len(parts) == 2 {
+		// Happy path: model followed the exact format.
+		summaryLine := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(parts[0]), "CHANGE_SUMMARY:"))
 		newPersona = strings.TrimSpace(parts[1])
-		summaryLine := strings.TrimPrefix(strings.TrimSpace(parts[0]), "CHANGE_SUMMARY:")
-		log.Info("dream rewrite: persona change", "summary", strings.TrimSpace(summaryLine))
+		log.Info("dream rewrite: persona change", "summary", summaryLine)
+	} else if strings.HasPrefix(content, "CHANGE_SUMMARY:") {
+		// Model included the summary line but omitted the "---" separator.
+		// Strip the first line and use the rest as the persona body.
+		firstNewline := strings.Index(content, "\n")
+		if firstNewline != -1 {
+			summaryLine := strings.TrimSpace(strings.TrimPrefix(content[:firstNewline], "CHANGE_SUMMARY:"))
+			newPersona = strings.TrimSpace(content[firstNewline+1:])
+			log.Warn("dream rewrite: missing '---' separator, stripped CHANGE_SUMMARY line", "summary", summaryLine)
+		} else {
+			// Entire response is just the CHANGE_SUMMARY line with no body — unusable.
+			return false, fmt.Errorf("gated rewrite: response has CHANGE_SUMMARY but no persona body")
+		}
 	} else {
-		// LLM didn't follow format exactly — use the full response as the persona.
-		// This is a graceful fallback rather than an error.
+		// No recognisable structure — use the full response as-is and warn loudly.
 		newPersona = content
 		log.Warn("dream rewrite: response didn't match CHANGE_SUMMARY format, using full content")
 	}
