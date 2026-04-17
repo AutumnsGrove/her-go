@@ -814,11 +814,18 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 	tctx.ReplyModel = ""
 
 	var args struct {
-		Instruction string `json:"instruction"`
-		Context     string `json:"context"`
+		Instruction string   `json:"instruction"`
+		Context     string   `json:"context"`
+		Facts       []string `json:"facts"` // facts retrieved via recall_memories to inject into chat context
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// If the agent passed facts, store them on tctx so the chat layer can use them.
+	// These override the auto-searched RelevantFacts for this reply.
+	if len(args.Facts) > 0 {
+		tctx.AgentPassedFacts = args.Facts
 	}
 
 	// Build the system prompt using the layer registry.
@@ -829,6 +836,7 @@ func execReply(argsJSON string, tctx *tools.Context) string {
 		Cfg:                 tctx.Cfg,
 		EmbedClient:         tctx.EmbedClient,
 		RelevantFacts:       tctx.RelevantFacts,
+		AgentPassedFacts:    tctx.AgentPassedFacts,
 		ConversationSummary: tctx.ConversationSummary,
 		ConversationID:      tctx.ConversationID,
 		ScrubbedUserMessage: tctx.ScrubbedUserMessage,

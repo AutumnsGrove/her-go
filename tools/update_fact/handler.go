@@ -41,6 +41,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Apply the same style and length gates as save_fact.
+	// Trailing em dash check: catches the AI tic of sentences that hang with
+	// "—" at the end. Mid-sentence em dashes are fine — only trailing ones blocked.
+	trimmed := strings.TrimSpace(args.Fact)
+	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
+		log.Warn("blocked fact update (trailing em dash)", "fact", args.Fact)
+		return "rejected: rewrite this fact — it ends with a trailing em dash. Complete the sentence."
+	}
 	lower := strings.ToLower(args.Fact)
 	for _, blocked := range tools.StyleBlocklist() {
 		if strings.Contains(lower, blocked) {

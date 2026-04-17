@@ -88,6 +88,11 @@ type LayerContext struct {
 	// Instruction and search context from the agent (for chat stream messages).
 	Instruction   string
 	SearchContext string
+
+	// AgentPassedFacts holds facts the agent explicitly chose via recall_memories
+	// and passed through the reply tool's facts parameter. When set, chat_memory.go
+	// injects these instead of the auto-searched RelevantFacts.
+	AgentPassedFacts []string
 }
 
 // PromptLayer defines a single layer in the prompt assembly pipeline.
