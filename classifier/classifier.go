@@ -14,6 +14,7 @@ package classifier
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
@@ -28,9 +29,10 @@ import (
 // or outgoing reply. Allowed=true means the write/reply is approved.
 type Verdict struct {
 	Allowed bool
-	Type    string // "SAVE", "PASS", "LOW_VALUE", "FICTIONAL", etc.
-	Reason  string // explanation from the classifier (may be empty)
-	Rewrite string // suggested rewrite for soft verdicts (may be empty)
+	Type    string   // "SAVE", "PASS", "SPLIT", "LOW_VALUE", etc.
+	Reason  string   // explanation from the classifier (may be empty)
+	Rewrite string   // suggested rewrite for soft verdicts (may be empty)
+	Splits  []string // sub-memory texts for SPLIT verdict (may be nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -247,9 +249,15 @@ func RejectionMessage(v Verdict) string {
 // ---------------------------------------------------------------------------
 
 func parseResponse(response string) Verdict {
-	line := strings.TrimSpace(response)
-	if idx := strings.IndexAny(line, "\n\r"); idx >= 0 {
-		line = strings.TrimSpace(line[:idx])
+	// Split into first line and everything after it.
+	// Most verdicts live on the first line only. SPLIT is the exception —
+	// it carries a JSON array of sub-memories on subsequent lines.
+	response = strings.TrimSpace(response)
+	line := response
+	remainder := ""
+	if idx := strings.IndexAny(response, "\n\r"); idx >= 0 {
+		line = strings.TrimSpace(response[:idx])
+		remainder = strings.TrimSpace(response[idx:])
 	}
 	upper := strings.ToUpper(line)
 
@@ -258,6 +266,20 @@ func parseResponse(response string) Verdict {
 	}
 	if strings.HasPrefix(upper, "PASS") {
 		return Verdict{Allowed: true, Type: "PASS"}
+	}
+
+	// SPLIT: allowed (we're saving, just atomizing). Parse the JSON array
+	// of sub-memories from the remainder. If parsing fails or returns fewer
+	// than 2 items, the caller falls through to save the original.
+	if strings.HasPrefix(upper, "SPLIT") {
+		v := Verdict{Allowed: true, Type: "SPLIT", Reason: extractReason(line)}
+		if remainder != "" {
+			var splits []string
+			if err := json.Unmarshal([]byte(remainder), &splits); err == nil && len(splits) >= 2 {
+				v.Splits = splits
+			}
+		}
+		return v
 	}
 
 	for _, name := range state.verdictNames {

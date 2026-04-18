@@ -349,6 +349,7 @@ func Run(params RunParams) (*RunResult, error) {
 		Store:                     params.Store,
 		EmbedClient:               params.EmbedClient,
 		SimilarityThreshold:       params.SimilarityThreshold,
+		MaxMemoryLength:           params.Cfg.Memory.MaxMemoryLength,
 		PersonaFile:               params.Cfg.Persona.PersonaFile,
 		StatusCallback:            params.StatusCallback,
 		SendCallback:              params.SendCallback,
