@@ -55,9 +55,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// If the agent passed facts, store them on ctx so the chat layer can use them.
-	// These override the auto-searched RelevantFacts for this reply.
+	// These override the auto-searched RelevantMemories for this reply.
 	if len(args.Facts) > 0 {
-		ctx.AgentPassedFacts = args.Facts
+		ctx.AgentPassedMemories = args.Facts
 	}
 
 	// Build the system prompt using the layer registry.
@@ -68,8 +68,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Store:               ctx.Store,
 		Cfg:                 ctx.Cfg,
 		EmbedClient:         ctx.EmbedClient,
-		RelevantFacts:       ctx.RelevantFacts,
-		AgentPassedFacts:    ctx.AgentPassedFacts,
+		RelevantMemories:    ctx.RelevantMemories,
+		AgentPassedMemories: ctx.AgentPassedMemories,
 		ConversationSummary: ctx.ConversationSummary,
 		ConversationID:      ctx.ConversationID,
 		ScrubbedUserMessage: ctx.ScrubbedUserMessage,
@@ -86,19 +86,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		} else {
 			log.Infof("  [chat layer] %s: ~%d tokens", lr.Name, lr.Tokens)
 		}
-		// Pass injected facts observability to the TUI.
+		// Pass injected memories observability to the TUI.
 		if ctx.EventBus != nil {
-			for _, f := range lr.InjectedFacts {
-				factArgs := fmt.Sprintf("#%d %s", f.ID, f.Source)
-				if f.Distance > 0 {
-					factArgs = fmt.Sprintf("#%d %s dist=%.2f", f.ID, f.Source, f.Distance)
+			for _, m := range lr.InjectedMemories {
+				memArgs := fmt.Sprintf("#%d %s", m.ID, m.Source)
+				if m.Distance > 0 {
+					memArgs = fmt.Sprintf("#%d %s dist=%.2f", m.ID, m.Source, m.Distance)
 				}
 				ctx.EventBus.Emit(tui.ToolCallEvent{
 					Time:     time.Now(),
 					TurnID:   ctx.TriggerMsgID,
-					ToolName: "fact→chat",
-					Args:     factArgs,
-					Result:   truncate(f.Fact, 80),
+					ToolName: "memory→chat",
+					Args:     memArgs,
+					Result:   truncate(m.Content, 80),
 				})
 			}
 		}
@@ -272,47 +272,67 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			len(resp.Content), maxReplyChars)
 	}
 
-	// Style gate — optional soft check for AI writing patterns.
-	// Only runs when a classifier is configured (ctx.ClassifierLLM != nil).
-	// Retries once with a direct hint if a pattern is detected.
-	// Fail-open: if the retry still has issues, we deliver anyway — the style
-	// gate should never block a reply from reaching the user.
+	// Style gate — two layers, one retry.
 	//
-	// styleGateNote is included in the return string so it appears in the
-	// agent trace (and sim report) — both PASS and STYLE_ISSUE are visible.
+	// Layer 1: deterministic pattern check (hasStyleIssue) — free, fast,
+	//   catches mechanical AI tics like "not just X, it's Y" and em dashes.
+	// Layer 2: LLM classifier (if configured) — catches nuanced patterns
+	//   that string matching can't detect.
+	//
+	// Only the FIRST layer to flag something triggers a retry. This means
+	// at most ONE extra generation per turn. Both layers fail-open — the
+	// style gate never blocks a reply from reaching the user.
+	//
+	// styleGateNote appears in the agent trace (and sim report).
 	styleGateNote := ""
-	if ctx.ClassifierLLM != nil {
+	var styleHint string
+	var styleSource string
+
+	// Layer 1: deterministic check.
+	if issue, hint := hasStyleIssue(resp.Content); issue {
+		styleHint = hint
+		styleSource = "pattern"
+	}
+
+	// Layer 2: classifier — only runs if the deterministic check passed
+	// AND a classifier is configured. Skipping it when layer 1 already
+	// caught something saves the LLM call.
+	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
 		if styleVerdict.Allowed {
 			log.Info("reply: style gate passed")
 			styleGateNote = "[style: PASS]"
 		} else {
-			hint := styleVerdict.Reason
-			if hint == "" {
-				hint = "avoid formulaic AI openers or closers"
+			styleHint = styleVerdict.Reason
+			if styleHint == "" {
+				styleHint = "avoid formulaic AI openers or closers"
 			}
-			log.Info("reply: style gate flagged response, retrying once",
-				"verdict", styleVerdict.Type, "reason", hint,
-				"preview", truncate(resp.Content, 80))
-
-			// Retry with the hint injected as a final system nudge.
-			// We append rather than replace so the original instruction
-			// context is still there — just with a correction on top.
-			hintMessages := append(llmMessages, llm.ChatMessage{
-				Role:    "system",
-				Content: "Style note: " + hint + ". Rephrase to be more natural and direct.",
-			})
-			retryResp, retryErr := ctx.ChatLLM.ChatCompletion(hintMessages)
-			if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
-				resp = retryResp
-				ctx.ReplyCost += retryResp.CostUSD
-				log.Info("reply: style gate retry accepted", "preview", truncate(resp.Content, 80))
-				styleGateNote = fmt.Sprintf("[style: STYLE_ISSUE — retried (%s)]", hint)
-			} else {
-				log.Warn("reply: style gate retry failed or invalid, delivering original")
-				styleGateNote = fmt.Sprintf("[style: STYLE_ISSUE — retry failed, delivered original (%s)]", hint)
-			}
+			styleSource = "classifier"
 		}
+	}
+
+	// Single retry path — shared by both layers.
+	if styleHint != "" {
+		log.Info("reply: style issue detected, retrying once",
+			"source", styleSource, "hint", styleHint,
+			"preview", truncate(resp.Content, 80))
+
+		hintMessages := append(llmMessages, llm.ChatMessage{
+			Role:    "system",
+			Content: "Style note: " + styleHint + ". Rephrase naturally.",
+		})
+		retryResp, retryErr := ctx.ChatLLM.ChatCompletion(hintMessages)
+		if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
+			resp = retryResp
+			ctx.ReplyCost += retryResp.CostUSD
+			log.Info("reply: style retry accepted", "preview", truncate(resp.Content, 80))
+			styleGateNote = fmt.Sprintf("[style: %s — retried (%s)]", styleSource, styleHint)
+		} else {
+			log.Warn("reply: style retry failed or invalid, delivering original")
+			styleGateNote = fmt.Sprintf("[style: %s — retry failed, delivered original (%s)]", styleSource, styleHint)
+		}
+	} else if styleGateNote == "" {
+		styleGateNote = "[style: clean]"
 	}
 
 	// Deanonymize PII tokens before sending to the user.
