@@ -142,16 +142,16 @@ type Context struct {
 	// Injected into the system prompt for context.
 	ConversationSummary string
 
-	// RelevantFacts are facts semantically similar to the user's message.
+	// RelevantMemories are memories semantically similar to the user's message.
 	// Used as fallback injection for the chat model when the agent didn't
-	// explicitly pass facts via the reply tool's facts parameter.
-	RelevantFacts []memory.Fact
+	// explicitly pass memories via the reply tool's facts parameter.
+	RelevantMemories []memory.Memory
 
-	// AgentPassedFacts holds facts the agent explicitly chose to pass to the
+	// AgentPassedMemories holds memories the agent explicitly chose to pass to the
 	// reply tool via its facts parameter. When non-empty, the chat model uses
-	// these instead of RelevantFacts — they represent the agent's curated
+	// these instead of RelevantMemories — they represent the agent's curated
 	// judgment of what's contextually relevant, not just message-hash similarity.
-	AgentPassedFacts []string
+	AgentPassedMemories []string
 
 	// SearchContext accumulates search results, book data, and URL
 	// content across tool calls. Included in the reply prompt.
@@ -183,8 +183,8 @@ type Context struct {
 	// DoneCalled signals the agent is finished with this turn.
 	DoneCalled bool
 
-	// SavedFacts tracks facts saved this turn (for reflection trigger).
-	SavedFacts []string
+	// SavedMemories tracks memories saved this turn (for reflection trigger).
+	SavedMemories []string
 
 	// ReplyCost accumulates cost from chat model calls.
 	ReplyCost float64
@@ -223,7 +223,7 @@ type Context struct {
 	EventBus *tui.Bus
 
 	// ClassifierSnippet is the conversation snapshot used when running the
-	// classifier. When set, fact_helpers uses it instead of querying the DB
+	// classifier. When set, the memory helpers use it instead of querying the DB
 	// lazily — this matters for the memory agent, which captures the snippet
 	// at goroutine launch time before subsequent turns can dirty the DB.
 	// Nil in the main agent path (lazy query is fine there).

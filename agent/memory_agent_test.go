@@ -58,12 +58,12 @@ func jsonQuote(s string) string {
 	return fmt.Sprintf("%q", s)
 }
 
-// TestRunMemoryAgent_SavesFactAndCallsDone is the main integration test.
+// TestRunMemoryAgent_SavesMemoryAndCallsDone is the main integration test.
 // It verifies that RunMemoryAgent:
-//   - calls save_fact when the LLM requests it
-//   - the fact lands in the DB (visible via AllActiveFacts)
+//   - calls save_memory when the LLM requests it
+//   - the memory lands in the DB (visible via AllActiveMemories)
 //   - the loop terminates on done
-func TestRunMemoryAgent_SavesFactAndCallsDone(t *testing.T) {
+func TestRunMemoryAgent_SavesMemoryAndCallsDone(t *testing.T) {
 	// callCount lets the handler serve different responses per request.
 	// atomic.Int32 is used here instead of a mutex because the increment
 	// and read happen in the same goroutine (the test server), but
@@ -74,8 +74,8 @@ func TestRunMemoryAgent_SavesFactAndCallsDone(t *testing.T) {
 		n := callCount.Add(1)
 		switch n {
 		case 1:
-			// First request: ask the agent to save a fact.
-			writeMockSSEToolCall(w, "save_fact",
+			// First request: ask the agent to save a memory.
+			writeMockSSEToolCall(w, "save_memory",
 				`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, stealth"}`)
 		default:
 			// Second request (and any beyond): call done to end the loop.
@@ -110,29 +110,29 @@ func TestRunMemoryAgent_SavesFactAndCallsDone(t *testing.T) {
 
 	RunMemoryAgent(input, params)
 
-	// Verify the fact was written to SQLite.
-	facts, err := store.AllActiveFacts()
+	// Verify the memory was written to SQLite.
+	memories, err := store.AllActiveMemories()
 	if err != nil {
-		t.Fatalf("AllActiveFacts: %v", err)
+		t.Fatalf("AllActiveMemories: %v", err)
 	}
-	if len(facts) == 0 {
-		t.Fatal("expected at least one fact to be saved, got none")
+	if len(memories) == 0 {
+		t.Fatal("expected at least one memory to be saved, got none")
 	}
 
 	found := false
-	for _, f := range facts {
-		if f.Fact == "User prefers stealth builds in FromSoft games" {
+	for _, m := range memories {
+		if m.Content == "User prefers stealth builds in FromSoft games" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("fact not found in DB; saved facts: %v", facts)
+		t.Errorf("memory not found in DB; saved memories: %v", memories)
 	}
 
-	// Verify the loop made at least 2 LLM calls: one for save_fact, one for done.
+	// Verify the loop made at least 2 LLM calls: one for save_memory, one for done.
 	if got := int(callCount.Load()); got < 2 {
-		t.Errorf("expected ≥2 LLM calls (save_fact + done), got %d", got)
+		t.Errorf("expected ≥2 LLM calls (save_memory + done), got %d", got)
 	}
 }
 

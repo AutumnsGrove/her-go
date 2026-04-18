@@ -1,0 +1,24 @@
+name: remove_memory
+description: >-
+  Remove a memory that is no longer true, was incorrect, or is redundant with
+  another memory. The memory is soft-deleted (kept for audit but excluded from
+  retrieval).
+hot: false
+parameters:
+  type: object
+  properties:
+    memory_id:
+      type: integer
+      description: "ID of the memory to remove"
+    reason:
+      type: string
+      description: "Brief reason for removal (for logging)"
+    replaced_by:
+      type: integer
+      description: "ID of the newer memory that replaces this one (if applicable). Creates a supersession chain so we can trace knowledge evolution."
+  required:
+    - memory_id
+    - reason
+trace:
+  emoji: "🗑"
+  format: "#{{.memory_id}} — {{.reason | escape}}"

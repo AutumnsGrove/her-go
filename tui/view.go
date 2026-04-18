@@ -341,7 +341,7 @@ func renderStartupEvent(ev StartupEvent) string {
 
 func renderContextEvent(ev ContextEvent) string {
 	return subHeaderStyle.Render(
-		fmt.Sprintf("semantic: %d relevant facts", ev.RelevantFacts),
+		fmt.Sprintf("semantic: %d relevant memories", ev.RelevantMemories),
 	)
 }
 

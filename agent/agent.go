@@ -128,10 +128,10 @@ type RunParams struct {
 // (it's just a struct return), and avoids the bot having to query the
 // DB or re-derive data the agent already has in memory.
 type RunResult struct {
-	ReplyText  string
-	TotalCost  float64 // accumulated cost across all LLM calls (agent + chat)
-	ToolCalls  int     // number of tool calls the agent made
-	FactsSaved int     // number of facts saved/updated during this turn
+	ReplyText     string
+	TotalCost     float64 // accumulated cost across all LLM calls (agent + chat)
+	ToolCalls     int     // number of tool calls the agent made
+	MemoriesSaved int     // number of memories saved/updated during this turn
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -262,7 +262,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// captures conversational intent, not just the latest message. Without
 	// this, "vet says it might be his kidneys" embeds as health/medical —
 	// with "my dog max has been sick" prepended, it correctly pulls pet facts too.
-	var relevantFacts []memory.Fact
+	var relevantMemories []memory.Memory
 	if params.EmbedClient != nil && params.Store.EmbedDimension > 0 {
 		queryText := params.ScrubbedUserMessage
 		if len(recentMsgs) > 0 {
@@ -284,11 +284,11 @@ func Run(params RunParams) (*RunResult, error) {
 		if err != nil {
 			log.Warn("semantic search: embedding failed, falling back to importance-only", "err", err)
 		} else {
-			relevantFacts, err = params.Store.SemanticSearch(queryVec, params.Cfg.Memory.MaxFactsInContext)
+			relevantMemories, err = params.Store.SemanticSearch(queryVec, params.Cfg.Memory.MaxFactsInContext)
 			if err != nil {
 				log.Warn("semantic search: query failed, falling back to importance-only", "err", err)
 			} else {
-				log.Infof("  semantic search: %d relevant facts", len(relevantFacts))
+				log.Infof("  semantic search: %d relevant memories", len(relevantMemories))
 			}
 		}
 	}
@@ -296,7 +296,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// Emit context event for the TUI
 	emit(tui.ContextEvent{
 		Time: time.Now(), TurnID: params.TriggerMsgID,
-		RelevantFacts: len(relevantFacts),
+		RelevantMemories: len(relevantMemories),
 	})
 
 	// Build the context message for the agent using the layer registry.
@@ -306,7 +306,7 @@ func Run(params RunParams) (*RunResult, error) {
 		Store:               params.Store,
 		Cfg:                 params.Cfg,
 		EmbedClient:         params.EmbedClient,
-		RelevantFacts:       relevantFacts,
+		RelevantMemories:    relevantMemories,
 		ConversationSummary: conversationSummary,
 		AgentActionSummary:  agentActionSummary,
 		RecentAgentActions:  recentAgentActions,
@@ -368,7 +368,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ConversationID:            params.ConversationID,
 		TriggerMsgID:              params.TriggerMsgID,
 		ConversationSummary:       conversationSummary,
-		RelevantFacts:             relevantFacts,
+		RelevantMemories:          relevantMemories,
 		ImageBase64:               params.ImageBase64,
 		ImageMIME:                 params.ImageMIME,
 		OCRText:                   params.OCRText,
@@ -696,10 +696,10 @@ outer:
 	}
 
 	result := &RunResult{
-		ReplyText:  tctx.ReplyText,
-		TotalCost:  totalCost + tctx.ReplyCost,
-		ToolCalls:  totalToolCalls,
-		FactsSaved: len(tctx.SavedFacts),
+		ReplyText:     tctx.ReplyText,
+		TotalCost:     totalCost + tctx.ReplyCost,
+		ToolCalls:     totalToolCalls,
+		MemoriesSaved: len(tctx.SavedMemories),
 	}
 
 	// --- Persona Evolution Triggers + Memory Agent ---

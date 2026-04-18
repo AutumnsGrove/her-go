@@ -139,7 +139,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 	case "yes":
 		// Log as a fact — medication adherence tracked through the
 		// existing fact system rather than a separate table.
-		_, err := b.store.SaveFact(
+		_, err := b.store.SaveMemory(
 			"User took their evening medication",
 			"health", "user",
 			0, // no source message
@@ -150,19 +150,19 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 			"",  // no context
 		)
 		if err != nil {
-			log.Error("saving med fact", "err", err)
+			log.Error("saving med memory", "err", err)
 		}
 		_ = c.Respond(&tele.CallbackResponse{Text: "Logged!"})
 		_ = c.Edit("💊 meds taken ✅ — nice job!")
 
 	case "no":
-		_, err := b.store.SaveFact(
+		_, err := b.store.SaveMemory(
 			"User did not take their evening medication",
 			"health", "user",
 			0, 8, nil, nil, "", "",
 		)
 		if err != nil {
-			log.Error("saving med fact", "err", err)
+			log.Error("saving med memory", "err", err)
 		}
 		_ = c.Respond(&tele.CallbackResponse{Text: "Got it"})
 		// Gentle — no judgment. The bot is tracking, not nagging.
@@ -349,10 +349,10 @@ func (b *Bot) executeConfirmedAction(pending *memory.PendingConfirmation) (strin
 		if payload.FactID <= 0 {
 			return "", fmt.Errorf("invalid fact ID: %d", payload.FactID)
 		}
-		if err := b.store.DeactivateFact(payload.FactID); err != nil {
+		if err := b.store.DeactivateMemory(payload.FactID); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Fact #%d removed", payload.FactID), nil
+		return fmt.Sprintf("Memory #%d removed", payload.FactID), nil
 
 	case "delete_schedule":
 		var payload struct {

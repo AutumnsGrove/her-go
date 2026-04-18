@@ -8,43 +8,43 @@ import (
 	"her/embed"
 )
 
-// InjectedFact records which fact was included in the chat model's prompt
+// InjectedMemory records which memory was included in the chat model's prompt
 // and why. This is the observability data that lets you debug "why did she
 // mention pollen when I asked about code?"
-type InjectedFact struct {
+type InjectedMemory struct {
 	ID       int64
-	Fact     string
+	Content  string
 	Category string
 	Subject  string
 	Distance float64 // cosine distance from query (0 = identical, only set for semantic)
-	Source   string  // "semantic" or "linked" — how this fact got selected
+	Source   string  // "semantic" or "linked" — how this memory got selected
 }
 
-// conversationRedundancyThreshold controls how similar a fact must be to
+// conversationRedundancyThreshold controls how similar a memory must be to
 // a recent message before it's considered redundant. This is cosine
 // SIMILARITY (not distance) — 1.0 = identical, 0.0 = unrelated.
-// 0.60 is intentionally lower than the fact-vs-fact dedup threshold
-// (0.85) because we're comparing structured facts against freeform
+// 0.60 is intentionally lower than the memory-vs-memory dedup threshold
+// (0.85) because we're comparing structured memories against freeform
 // conversation text, which naturally score lower on cosine similarity
 // even when they convey the same information.
 const conversationRedundancyThreshold = 0.60
 
-// FilterRedundantFacts removes facts whose content is already present in
+// FilterRedundantMemories removes memories whose content is already present in
 // the recent conversation history. This prevents "context echo" — where
-// a fact and a recent message both say the same thing, causing the chat
+// a memory and a recent message both say the same thing, causing the chat
 // model to fixate on that content and regurgitate it even when the
 // current turn is about something different.
 //
 // How it works: each recent message is embedded, and each candidate
-// fact's text is compared (via cosine similarity) against every message
-// embedding. If a fact is too similar to any message, it's dropped.
+// memory's text is compared (via cosine similarity) against every message
+// embedding. If a memory is too similar to any message, it's dropped.
 //
 // embedClient may be nil — if so, no filtering is performed.
 // recentMessages is the same slice used to build the conversation
 // history in the chat prompt.
-func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *embed.Client) []Fact {
-	if embedClient == nil || len(recentMessages) == 0 || len(facts) == 0 {
-		return facts
+func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedClient *embed.Client) []Memory {
+	if embedClient == nil || len(recentMessages) == 0 || len(memories) == 0 {
+		return memories
 	}
 
 	// Embed each recent message. We use the scrubbed content (same as
@@ -56,7 +56,7 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 			content = msg.ContentRaw
 		}
 		// Skip very short messages — greetings and "ok" don't carry
-		// enough signal to meaningfully match against facts.
+		// enough signal to meaningfully match against memories.
 		if len(content) < 20 {
 			continue
 		}
@@ -68,23 +68,23 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 	}
 
 	if len(msgVecs) == 0 {
-		return facts
+		return memories
 	}
 
-	var filtered []Fact
-	for _, f := range facts {
-		// Use the cached text embedding when available (populated by SaveFact
-		// and UpdateFactEmbedding). Fall back to computing on-the-fly for
-		// older facts that predate the embedding_text column.
-		// We compare fact TEXT (not tags) against messages — we want semantic
-		// overlap between what the fact *says* and what the conversation contains.
-		factVec := f.EmbeddingText
-		if len(factVec) == 0 {
+	var filtered []Memory
+	for _, m := range memories {
+		// Use the cached text embedding when available (populated by SaveMemory
+		// and UpdateMemoryEmbedding). Fall back to computing on-the-fly for
+		// older memories that predate the embedding_text column.
+		// We compare memory TEXT (not tags) against messages — we want semantic
+		// overlap between what the memory *says* and what the conversation contains.
+		memVec := m.EmbeddingText
+		if len(memVec) == 0 {
 			var err error
-			factVec, err = embedClient.Embed(f.Fact)
+			memVec, err = embedClient.Embed(m.Content)
 			if err != nil {
-				// Can't check — keep the fact to be safe.
-				filtered = append(filtered, f)
+				// Can't check — keep the memory to be safe.
+				filtered = append(filtered, m)
 				continue
 			}
 		}
@@ -92,7 +92,7 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 		redundant := false
 		var bestSim float64
 		for _, msgVec := range msgVecs {
-			sim := embed.CosineSimilarity(factVec, msgVec)
+			sim := embed.CosineSimilarity(memVec, msgVec)
 			if sim > bestSim {
 				bestSim = sim
 			}
@@ -103,13 +103,13 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 		}
 
 		if redundant {
-			factPreview := f.Fact
-			if len(factPreview) > 60 {
-				factPreview = factPreview[:60] + "..."
+			memPreview := m.Content
+			if len(memPreview) > 60 {
+				memPreview = memPreview[:60] + "..."
 			}
-			log.Infof("  [fact filtered: conversation redundancy] #%d sim=%.3f — %s", f.ID, bestSim, factPreview)
+			log.Infof("  [memory filtered: conversation redundancy] #%d sim=%.3f — %s", m.ID, bestSim, memPreview)
 		} else {
-			filtered = append(filtered, f)
+			filtered = append(filtered, m)
 		}
 	}
 
@@ -119,97 +119,97 @@ func FilterRedundantFacts(facts []Fact, recentMessages []Message, embedClient *e
 // BuildMemoryContext assembles a memory context string to inject into
 // the system prompt using semantic retrieval:
 //
-//   - Semantic: top-K facts closest to the user's current message (via sqlite-vec KNN)
+//   - Semantic: top-K memories closest to the user's current message (via sqlite-vec KNN)
 //
-// Returns the formatted context string AND a list of which facts were injected
+// Returns the formatted context string AND a list of which memories were injected
 // (with their scores and selection source) for observability.
 //
-// relevantFacts can be nil if embeddings aren't available — returns empty context.
-// maxSemanticDist is the cosine distance cutoff — facts farther than this
+// relevantMemories can be nil if embeddings aren't available — returns empty context.
+// maxSemanticDist is the cosine distance cutoff — memories farther than this
 // from the query are filtered out even if they're the "nearest" neighbors.
 // Set to 0 to disable filtering (include all KNN results).
-func BuildMemoryContext(store *Store, maxFacts int, relevantFacts []Fact, userName string, maxSemanticDist float64) (string, []InjectedFact, error) {
+func BuildMemoryContext(store *Store, maxMemories int, relevantMemories []Memory, userName string, maxSemanticDist float64) (string, []InjectedMemory, error) {
 	var parts []string
-	var allInjected []InjectedFact
+	var allInjected []InjectedMemory
 
-	// --- User facts ---
-	// User facts are ONLY injected when semantically relevant to the current
+	// --- User memories ---
+	// User memories are ONLY injected when semantically relevant to the current
 	// message. If nothing passes the distance filter, we inject nothing —
 	// Mira can use her recall tool if she needs more context.
-	// Importance-based backfill was flooding irrelevant facts into every turn.
-	userFacts, userInjected, err := blendFacts(store, "user", maxFacts, relevantFacts, maxSemanticDist)
+	// Importance-based backfill was flooding irrelevant memories into every turn.
+	userMemories, userInjected, err := blendMemories(store, "user", maxMemories, relevantMemories, maxSemanticDist)
 	if err != nil {
-		return "", nil, fmt.Errorf("retrieving user facts: %w", err)
+		return "", nil, fmt.Errorf("retrieving user memories: %w", err)
 	}
 	allInjected = append(allInjected, userInjected...)
-	if len(userFacts) > 0 {
-		parts = append(parts, formatFactSection(
+	if len(userMemories) > 0 {
+		parts = append(parts, formatMemorySection(
 			fmt.Sprintf("Things I Know About %s", userName),
 			fmt.Sprintf("These are facts about %s, gathered from our past conversations. These are THEIR experiences, THEIR life, THEIR details — not mine. Use them to be a better friend, not to adopt their identity.", userName),
-			userFacts,
+			userMemories,
 		))
 	}
 
-	// --- Self facts ---
-	// Self facts use the same semantic-only retrieval as user facts.
-	selfFacts, selfInjected, err := blendFacts(store, "self", maxFacts, relevantFacts, maxSemanticDist)
+	// --- Self memories ---
+	// Self memories use the same semantic-only retrieval as user memories.
+	selfMemories, selfInjected, err := blendMemories(store, "self", maxMemories, relevantMemories, maxSemanticDist)
 	if err != nil {
-		return "", nil, fmt.Errorf("retrieving self facts: %w", err)
+		return "", nil, fmt.Errorf("retrieving self memories: %w", err)
 	}
 	allInjected = append(allInjected, selfInjected...)
-	if len(selfFacts) > 0 {
-		parts = append(parts, formatFactSection(
+	if len(selfMemories) > 0 {
+		parts = append(parts, formatMemorySection(
 			"Things I Know About Myself",
 			"These are my own observations, patterns, and identity notes. Things I've learned about how I communicate, what works, and who I am.",
-			selfFacts,
+			selfMemories,
 		))
 	}
 
 	return strings.Join(parts, "\n\n"), allInjected, nil
 }
 
-// blendFacts filters semantic search results for a given subject,
-// deduplicating by fact ID. Returns both the facts and observability data
+// blendMemories filters semantic search results for a given subject,
+// deduplicating by memory ID. Returns both the memories and observability data
 // about how each was selected.
 //
-// If relevantFacts is nil (no embeddings), returns nothing.
-func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact, maxDist float64) ([]Fact, []InjectedFact, error) {
+// If relevantMemories is nil (no embeddings), returns nothing.
+func blendMemories(store *Store, subject string, maxMemories int, relevantMemories []Memory, maxDist float64) ([]Memory, []InjectedMemory, error) {
 	seen := make(map[int64]bool)
-	var result []Fact
-	var injected []InjectedFact
+	var result []Memory
+	var injected []InjectedMemory
 
 	// First pass: semantic results for this subject (most relevant first).
-	// These are the facts KNN says are closest to what the user just said.
-	// Filter by maxDist — with a small fact set, KNN returns "nearest"
+	// These are the memories KNN says are closest to what the user just said.
+	// Filter by maxDist — with a small memory set, KNN returns "nearest"
 	// neighbors that are still completely irrelevant (dist 0.5+). Without
 	// this filter, therapy cancellations show up when you ask about code.
-	if relevantFacts != nil {
-		for _, f := range relevantFacts {
-			if f.Subject != subject {
+	if relevantMemories != nil {
+		for _, m := range relevantMemories {
+			if m.Subject != subject {
 				continue
 			}
-			// Skip facts that are too far from the query
-			if maxDist > 0 && f.Distance > maxDist {
-				factPreview := f.Fact
-				if len(factPreview) > 50 {
-					factPreview = factPreview[:50] + "..."
+			// Skip memories that are too far from the query
+			if maxDist > 0 && m.Distance > maxDist {
+				memPreview := m.Content
+				if len(memPreview) > 50 {
+					memPreview = memPreview[:50] + "..."
 				}
-				log.Infof("  [fact filtered] #%d dist=%.3f > max=%.3f — %s", f.ID, f.Distance, maxDist, factPreview)
+				log.Infof("  [memory filtered] #%d dist=%.3f > max=%.3f — %s", m.ID, m.Distance, maxDist, memPreview)
 				continue
 			}
-			if !seen[f.ID] {
-				seen[f.ID] = true
-				result = append(result, f)
-				// Preserve the fact's source — "semantic" for direct KNN hits,
-				// "linked" for facts pulled in via Zettelkasten 1-hop traversal.
+			if !seen[m.ID] {
+				seen[m.ID] = true
+				result = append(result, m)
+				// Preserve the memory's source — "semantic" for direct KNN hits,
+				// "linked" for memories pulled in via Zettelkasten 1-hop traversal.
 				source := "semantic"
-				if f.Source == "linked" {
+				if m.Source == "linked" {
 					source = "linked"
 				}
-				injected = append(injected, InjectedFact{
-					ID: f.ID, Fact: f.Fact, Category: f.Category,
-					Subject: f.Subject,
-					Distance: f.Distance, Source: source,
+				injected = append(injected, InjectedMemory{
+					ID: m.ID, Content: m.Content, Category: m.Category,
+					Subject: m.Subject,
+					Distance: m.Distance, Source: source,
 				})
 			}
 		}
@@ -219,48 +219,48 @@ func blendFacts(store *Store, subject string, maxFacts int, relevantFacts []Fact
 }
 
 // legacyDatePrefix matches the [YYYY-MM-DD] prefix that was previously
-// baked into "context" category fact text. Now that all facts get their
+// baked into "context" category memory text. Now that all memories get their
 // timestamp rendered from the DB, we strip these to avoid double-stamping.
 var legacyDatePrefix = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2}\]\s*`)
 
-// formatFactSection builds a formatted memory section with a title,
-// description, and facts grouped by category. Each fact is prefixed
+// formatMemorySection builds a formatted memory section with a title,
+// description, and memories grouped by category. Each memory is prefixed
 // with its creation date from the DB so the chat model has temporal
 // context — e.g., "[Mar 29] User prefers Lexend font".
-func formatFactSection(title, description string, facts []Fact) string {
+func formatMemorySection(title, description string, memories []Memory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n%s\n\n", title, description)
 
-	// Group facts by category.
-	groups := make(map[string][]Fact)
+	// Group memories by category.
+	groups := make(map[string][]Memory)
 	var order []string
-	for _, f := range facts {
-		cat := f.Category
+	for _, m := range memories {
+		cat := m.Category
 		if cat == "" {
 			cat = "other"
 		}
 		if _, exists := groups[cat]; !exists {
 			order = append(order, cat)
 		}
-		groups[cat] = append(groups[cat], f)
+		groups[cat] = append(groups[cat], m)
 	}
 
 	for _, cat := range order {
 		displayCat := strings.ToUpper(cat[:1]) + cat[1:]
 		fmt.Fprintf(&b, "**%s:**\n", displayCat)
-		for _, f := range groups[cat] {
-			// Strip any legacy [YYYY-MM-DD] prefix from old context facts
+		for _, m := range groups[cat] {
+			// Strip any legacy [YYYY-MM-DD] prefix from old context memories
 			// so we don't double-stamp them.
-			factText := legacyDatePrefix.ReplaceAllString(f.Fact, "")
+			memText := legacyDatePrefix.ReplaceAllString(m.Content, "")
 			// Render the DB timestamp as a compact date prefix.
 			// "Jan 02" format: abbreviated month + zero-padded day.
-			stamp := f.Timestamp.Format("Jan 02")
+			stamp := m.Timestamp.Format("Jan 02")
 			// Include context in parentheses when present — gives the chat
 			// model the "why" alongside the "what".
-			if f.Context != "" {
-				fmt.Fprintf(&b, "- [%s] %s (%s)\n", stamp, factText, f.Context)
+			if m.Context != "" {
+				fmt.Fprintf(&b, "- [%s] %s (%s)\n", stamp, memText, m.Context)
 			} else {
-				fmt.Fprintf(&b, "- [%s] %s\n", stamp, factText)
+				fmt.Fprintf(&b, "- [%s] %s\n", stamp, memText)
 			}
 		}
 		b.WriteString("\n")

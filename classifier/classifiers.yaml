@@ -1,8 +1,8 @@
 # Classifier verdict definitions.
 #
 # Environments:
-#   fact      — quality gate for user facts saved to memory
-#   self_fact — quality gate for bot self-observations saved to memory
+#   memory    — quality gate for user memories saved to memory
+#   self_memory — quality gate for bot self-observations saved to memory
 #   reply     — style gate for outgoing responses (catches AI-isms)
 #
 # Each classifier has a preamble, an ordered list of verdicts, and a footer.
@@ -21,18 +21,18 @@
 #   summarization is always acceptable.
 
 classifiers:
-  fact:
+  memory:
     preamble: >-
       You are a quality gate for a personal chatbot's memory system.
-      A fact about the USER has been proposed for permanent storage.
+      A memory about the USER has been proposed for permanent storage.
       Evaluate it against the following criteria and return the FIRST
       matching verdict.
     write_types:
-      - fact
+      - memory
     verdicts:
       - name: LOW_VALUE
         description: >-
-          Is the fact too vague, generic, or obvious to be worth permanent
+          Is the memory too vague, generic, or obvious to be worth permanent
           storage? Would it add meaningful context in future conversations?
         examples:
           - '"User enjoys reading and finds it a pleasant activity" (says nothing specific)'
@@ -43,33 +43,33 @@ classifiers:
           specificity is what matters. "User enjoys short, surreal books
           like Piranesi" is SAVE — that's actionable.
         rejection:
-          default_detail: this fact is too vague or generic to be worth saving
+          default_detail: this memory is too vague or generic to be worth saving
           suffix: >-
-            Facts should capture specific, meaningful information that
+            Memories should capture specific, meaningful information that
             couldn't be inferred from conversation history.
 
       - name: SAVE
         description: >-
-          The fact is real, specific, useful, and actually stated or
+          The memory is real, specific, useful, and actually stated or
           clearly implied by the user.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
       Examples: "SAVE", "LOW_VALUE — too vague to be actionable"
 
-  self_fact:
+  self_memory:
     preamble: >-
       You are a quality gate for a personal chatbot's memory system.
-      A SELF-FACT has been proposed — this is an observation the chatbot
+      A SELF-MEMORY has been proposed — this is an observation the chatbot
       is making about ITSELF: its own communication patterns, relationship
       dynamics, or things it has learned about how to be a better
-      companion. These are NOT facts about the user. Evaluate whether
+      companion. These are NOT memories about the user. Evaluate whether
       this self-observation is worth keeping permanently.
     write_types:
-      - self_fact
+      - self_memory
     verdicts:
       - name: LOW_VALUE
         description: >-
-          Is the self-fact too vague, generic, or obvious to be worth
+          Is the self-memory too vague, generic, or obvious to be worth
           permanent storage? Would it help the chatbot be a better
           companion in future conversations?
         examples:
@@ -84,12 +84,12 @@ classifiers:
         rejection:
           default_detail: this self-observation is too vague or generic to be worth saving
           suffix: >-
-            Self-facts should capture specific patterns or insights that
+            Self-memories should capture specific patterns or insights that
             would help in future conversations.
 
       - name: SAVE
         description: >-
-          The self-fact captures a specific, actionable insight about the
+          The self-memory captures a specific, actionable insight about the
           chatbot's own patterns, communication style, or relationship
           dynamics that would improve future interactions.
     footer: |-

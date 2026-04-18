@@ -31,10 +31,10 @@ import (
 	// dispatch table. Same pattern as agent.go's blank imports — the init()
 	// in each package calls tools.Register(name, handler).
 	_ "her/tools/done"
-	_ "her/tools/remove_fact"
-	_ "her/tools/save_fact"
-	_ "her/tools/save_self_fact"
-	_ "her/tools/update_fact"
+	_ "her/tools/remove_memory"
+	_ "her/tools/save_memory"
+	_ "her/tools/save_self_memory"
+	_ "her/tools/update_memory"
 )
 
 // MemoryAgentInput is the turn transcript passed from the main agent loop
@@ -61,20 +61,20 @@ type MemoryAgentParams struct {
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
-const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this conversation turn and decide what facts are worth saving permanently.
+const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this conversation turn and decide what memories are worth saving permanently.
 
-Use save_fact for facts about {{user}}.
-Use save_self_fact for observations about {{her}}'s own patterns, communication style, or relationship dynamics.
-Use update_fact when something you already know has changed or been refined.
-Use remove_fact for facts that are now incorrect or made redundant by new information.
+Use save_memory for memories about {{user}}.
+Use save_self_memory for observations about {{her}}'s own patterns, communication style, or relationship dynamics.
+Use update_memory when something you already know has changed or been refined.
+Use remove_memory for memories that are now incorrect or made redundant by new information.
 
-Rules for writing good facts:
-- Write facts as timeless truths — NO temporal references like "today", "last week", or "right now"
+Rules for writing good memories:
+- Write memories as timeless truths — NO temporal references like "today", "last week", or "right now"
 - Only save what would matter in a conversation 30 days from now
 - Be specific: "{{user}} prefers stealth builds in Elden Ring" beats "{{user}} likes games"
-- User preferences ABOUT fiction are real facts. In-game events are NOT.
-- Transient moods (tired today, stressed this week) are NOT facts — skip them.
-- Do NOT re-save anything already in the existing facts list.
+- User preferences ABOUT fiction are real memories. In-game events are NOT.
+- Transient moods (tired today, stressed this week) are NOT memories — skip them.
+- Do NOT re-save anything already in the existing memories list.
 
 Call done when finished.`
 
@@ -109,14 +109,14 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		})
 	}
 
-	emitEnd := func(factsSaved int, cost float64) {
+	emitEnd := func(memoriesSaved int, cost float64) {
 		if params.EventBus != nil {
 			params.EventBus.Emit(tui.TurnEndEvent{
-				Time:       time.Now(),
-				TurnID:     input.TriggerMsgID + 1,
-				ElapsedMs:  time.Since(turnStart).Milliseconds(),
-				TotalCost:  cost,
-				FactsSaved: factsSaved,
+				Time:          time.Now(),
+				TurnID:        input.TriggerMsgID + 1,
+				ElapsedMs:     time.Since(turnStart).Milliseconds(),
+				TotalCost:     cost,
+				MemoriesSaved: memoriesSaved,
 			})
 		}
 	}
@@ -151,7 +151,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	// Tool definitions for the memory agent — the 4 memory tools plus done.
 	// These are loaded from the same YAML registry as all other tools.
 	memToolDefs := tools.LookupToolDefs(
-		[]string{"save_fact", "save_self_fact", "update_fact", "remove_fact", "done"},
+		[]string{"save_memory", "save_self_memory", "update_memory", "remove_memory", "done"},
 		params.Cfg,
 	)
 
@@ -235,8 +235,8 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		}
 	}
 
-	log.Infof("  memory agent: %d facts saved | $%.6f", len(tctx.SavedFacts), totalCost)
-	emitEnd(len(tctx.SavedFacts), totalCost)
+	log.Infof("  memory agent: %d memories saved | $%.6f", len(tctx.SavedMemories), totalCost)
+	emitEnd(len(tctx.SavedMemories), totalCost)
 }
 
 // loadMemoryAgentPrompt reads memory_agent_prompt.md from the same directory
@@ -277,17 +277,17 @@ func buildMemoryTranscript(input MemoryAgentInput, store *memory.Store) string {
 		b.WriteString("\n\n")
 	}
 
-	// Show existing facts for dedup context — the model should not re-save
+	// Show existing memories for dedup context — the model should not re-save
 	// anything already here. Cap at 30 to avoid flooding the context.
-	facts, err := store.AllActiveFacts()
-	if err == nil && len(facts) > 0 {
-		b.WriteString("## Existing facts (do NOT re-save these)\n")
+	memories, err := store.AllActiveMemories()
+	if err == nil && len(memories) > 0 {
+		b.WriteString("## Existing memories (do NOT re-save these)\n")
 		limit := 30
-		if len(facts) < limit {
-			limit = len(facts)
+		if len(memories) < limit {
+			limit = len(memories)
 		}
-		for _, f := range facts[:limit] {
-			fmt.Fprintf(&b, "- [ID=%d] %s\n", f.ID, f.Fact)
+		for _, m := range memories[:limit] {
+			fmt.Fprintf(&b, "- [ID=%d] %s\n", m.ID, m.Content)
 		}
 	}
 
