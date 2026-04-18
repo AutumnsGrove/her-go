@@ -15,6 +15,7 @@ package bot
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"her/agent"
@@ -230,6 +231,16 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 		}
 	}
 
+	// Stream callback — delivers live tokens to Telegram as the chat model
+	// generates them, creating a typing effect. Only active when streaming
+	// is enabled in config. getPlaceholder is a closure so it always returns
+	// the current placeholder, even after a stageResetCallback reassignment.
+	var streamCallback tools.StreamCallback
+	var stopStream func()
+	if b.cfg.Chat.Streaming {
+		streamCallback, stopStream = b.makeStreamCallback(c, func() *tele.Message { return placeholder })
+	}
+
 	// --- TUI events ---
 	turnStart := time.Now()
 	if b.eventBus != nil {
@@ -253,6 +264,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	params.DeletePlaceholderCallback = deletePlaceholderCallback
 	params.SendConfirmCallback = sendConfirmCallback
 	params.TTSCallback = ttsCallback
+	params.StreamCallback = streamCallback
 	params.TraceCallback = traceCallback
 	params.MemoryTraceCallback = memoryTraceCallback
 	params.ImageBase64 = input.ImageBase64
@@ -263,6 +275,12 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	result, err := agent.Run(params)
 	b.agentBusy.Store(false)
 
+	// Stop the stream ticker before closing stopTyping — both may try to
+	// edit the placeholder, and we want the authoritative StatusCallback
+	// edit (deanonymized text, already sent inside agent.Run) to be last.
+	if stopStream != nil {
+		stopStream()
+	}
 	close(stopTyping)
 
 	if err != nil {
@@ -312,4 +330,64 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
 	}
+}
+
+// makeStreamCallback creates a streaming callback that funnels LLM tokens to
+// Telegram via incremental message edits. Returns the callback (for injection
+// into tools.Context.StreamCallback) and a stop function that shuts down the
+// background ticker goroutine.
+//
+// Design: tokens arrive fast (one per ~10ms) but Telegram's edit rate limit
+// is ~1 per second per message. We collect tokens in a mutex-protected buffer
+// and flush to Telegram every 400ms — fast enough to feel live, safely under
+// the rate limit. A "▋" block cursor appends while streaming to signal the
+// response is still in progress.
+//
+// getPlaceholder is a closure so that stageResetCallback's reassignment of
+// the placeholder variable is picked up at flush time rather than capturing
+// the pointer value at construction time.
+func (b *Bot) makeStreamCallback(c tele.Context, getPlaceholder func() *tele.Message) (tools.StreamCallback, func()) {
+	var mu sync.Mutex
+	var buf strings.Builder
+	var lastFlushed string
+	done := make(chan struct{})
+
+	// Flush goroutine — edits the Telegram message every 400ms.
+	go func() {
+		ticker := time.NewTicker(400 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				current := buf.String()
+				mu.Unlock()
+				if current == lastFlushed || current == "" {
+					continue
+				}
+				// Append cursor so the user can see the reply is still coming.
+				_, err := c.Bot().Edit(getPlaceholder(), current+"▋")
+				if err != nil && !strings.Contains(err.Error(), "not modified") {
+					// Rate limit or edit conflict — skip this tick, try next.
+					continue
+				}
+				lastFlushed = current
+			}
+		}
+	}()
+
+	cb := func(chunk string) error {
+		mu.Lock()
+		buf.WriteString(chunk)
+		mu.Unlock()
+		return nil
+	}
+
+	stop := func() {
+		close(done)
+	}
+
+	return cb, stop
 }

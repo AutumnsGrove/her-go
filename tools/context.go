@@ -63,6 +63,12 @@ type SendConfirmCallback func(text string) (telegramMsgID int64, err error)
 // the last stage reset when the agent loop exits.
 type DeletePlaceholderCallback func() error
 
+// StreamCallback delivers streaming chat tokens to the transport layer.
+// Called once per token chunk during ChatCompletionStreaming. The reply
+// tool calls this as the chat model streams — the bot layer batches these
+// into Telegram edits for a live typing effect.
+type StreamCallback func(chunk string) error
+
 // ---------------------------------------------------------------------------
 // Context — the dependency bundle every tool handler receives.
 //
@@ -113,6 +119,10 @@ type Context struct {
 	StageResetCallback        StageResetCallback
 	DeletePlaceholderCallback DeletePlaceholderCallback
 	SendConfirmCallback       SendConfirmCallback
+	// StreamCallback delivers streaming tokens to Telegram in real time.
+	// Nil means streaming is disabled for this turn — reply falls back to
+	// the existing non-streaming path automatically.
+	StreamCallback StreamCallback
 
 	// --- Conversation state ---
 

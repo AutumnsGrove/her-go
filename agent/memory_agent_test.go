@@ -19,7 +19,7 @@ package agent
 //     connection closes. No temp files, no cleanup code needed.
 
 import (
-	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -30,40 +30,32 @@ import (
 	"her/memory"
 )
 
-// mockToolCallResponse builds the JSON body the mock server sends back.
-// It matches the chatAPIResponse struct in llm/client.go:
+// writeMockSSEToolCall writes an SSE streaming response for a single tool call.
+// The agent client now uses doStreamRequest (SSE) for all tool-calling completions,
+// so mock servers must respond in SSE format.
 //
-//	choices[0].message.tool_calls → the tool the model wants to call
-//	usage → token counts (required so SaveMetric doesn't get zeros)
-//	model  → string (returned in ChatResponse.Model)
-func mockToolCallResponse(toolName, toolArgs string) map[string]any {
-	return map[string]any{
-		"choices": []map[string]any{
-			{
-				"message": map[string]any{
-					"content": "",
-					"tool_calls": []map[string]any{
-						{
-							"id":   "call_test",
-							"type": "function",
-							"function": map[string]any{
-								"name":      toolName,
-								"arguments": toolArgs,
-							},
-						},
-					},
-				},
-				"finish_reason": "tool_calls",
-			},
-		},
-		"usage": map[string]any{
-			"prompt_tokens":     10,
-			"completion_tokens": 5,
-			"total_tokens":      15,
-			"cost":              0.0001,
-		},
-		"model": "test-model",
-	}
+// Two data frames are sent:
+//  1. The tool call delta (index 0, ID, name, full arguments in one chunk)
+//  2. The finish frame (finish_reason + usage)
+//
+// Followed by "data: [DONE]" to signal stream end.
+func writeMockSSEToolCall(w http.ResponseWriter, toolName, toolArgs string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	// Frame 1: tool call delta with full arguments in one chunk.
+	fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_test\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%s}}]},\"finish_reason\":null}]}\n\n",
+		toolName, jsonQuote(toolArgs))
+	// Frame 2: finish reason + usage.
+	fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,\"cost\":0.0001},\"model\":\"test-model\"}\n\n")
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+}
+
+// jsonQuote wraps a raw JSON string in JSON string quotes so it can be
+// embedded as a string value inside another JSON object. The arguments
+// field in the SSE delta must be a JSON-encoded string, not a raw object.
+func jsonQuote(s string) string {
+	// Use %q for Go string quoting — it produces valid JSON string syntax
+	// for all inputs we use in tests (no special unicode, just ASCII JSON).
+	return fmt.Sprintf("%q", s)
 }
 
 // TestRunMemoryAgent_SavesFactAndCallsDone is the main integration test.
@@ -80,22 +72,15 @@ func TestRunMemoryAgent_SavesFactAndCallsDone(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := callCount.Add(1)
-
-		var resp map[string]any
 		switch n {
 		case 1:
 			// First request: ask the agent to save a fact.
-			resp = mockToolCallResponse(
-				"save_fact",
-				`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, stealth"}`,
-			)
+			writeMockSSEToolCall(w, "save_fact",
+				`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, stealth"}`)
 		default:
 			// Second request (and any beyond): call done to end the loop.
-			resp = mockToolCallResponse("done", `{}`)
+			writeMockSSEToolCall(w, "done", `{}`)
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 

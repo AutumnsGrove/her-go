@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -207,6 +208,8 @@ type chatRequest struct {
 	// Provider controls OpenRouter's provider routing — which infrastructure
 	// serves the model. Pin to fast providers (Groq) or exclude slow ones.
 	Provider *ProviderRouting `json:"provider,omitempty"`
+
+	Stream bool `json:"stream,omitempty"`
 }
 
 // chatAPIResponse mirrors the JSON structure returned by the API.
@@ -225,6 +228,48 @@ type chatAPIResponse struct {
 		Cost             float64 `json:"cost"`
 	} `json:"usage"`
 	Model string `json:"model"`
+}
+
+// sseChunk mirrors one streaming delta event from the OpenAI SSE format.
+// Each chunk arrives as a "data: {...}" line in the SSE stream.
+type sseChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string             `json:"content"`
+			ToolCalls []sseToolCallDelta `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int     `json:"prompt_tokens"`
+		CompletionTokens int     `json:"completion_tokens"`
+		TotalTokens      int     `json:"total_tokens"`
+		Cost             float64 `json:"cost"`
+	} `json:"usage"`
+	Model string `json:"model"`
+}
+
+// sseToolCallDelta is one fragment of a streaming tool call. Arguments
+// arrive in pieces across many chunks; index identifies which tool call
+// this fragment belongs to. ID and Name only appear in the first chunk
+// for that index.
+type sseToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// partialToolCall accumulates streaming fragments for a single tool call
+// until the stream is complete or aborted.
+type partialToolCall struct {
+	id        string
+	callType  string
+	name      string
+	arguments strings.Builder
 }
 
 // NewClient creates a configured LLM client.
@@ -277,6 +322,32 @@ func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
 	return c.chatCompletion(messages, nil)
 }
 
+// ChatCompletionStreaming sends a conversation to the chat model and streams
+// tokens back via onChunk as they arrive. Returns the complete ChatResponse
+// once streaming finishes. If streaming fails with a retriable error and a
+// fallback model is configured, falls back to a non-streaming call and
+// delivers the full content as a single onChunk call.
+//
+// Used by the reply tool to show a live typing effect in Telegram while
+// still capturing the full response for style gating, length guards, PII
+// deanonymization, TTS, and DB persistence.
+func (c *Client) ChatCompletionStreaming(messages []ChatMessage, onChunk func(string)) (*ChatResponse, error) {
+	resp, err := c.doStreamingChat(c.model, c.temperature, c.maxTokens, messages, onChunk)
+	if err != nil && c.fallbackModel != "" && isRetriable(err) {
+		log.Warn("streaming chat failed, falling back to non-streaming",
+			"primary", c.model,
+			"fallback", c.fallbackModel,
+			"err", err,
+		)
+		resp, err = c.doRequest(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, nil, nil)
+		if err == nil {
+			resp.UsedFallback = true
+			onChunk(resp.Content)
+		}
+	}
+	return resp, err
+}
+
 // ChatCompletionWithTools sends a conversation with tool definitions.
 // The model may respond with tool_calls instead of (or in addition to)
 // regular content. The caller is responsible for executing the tools
@@ -307,20 +378,40 @@ func (c *Client) chatCompletion(messages []ChatMessage, tools []ToolDef, toolCho
 		tc = toolChoice[0]
 	}
 
-	// Try the primary model first.
-	resp, err := c.doRequest(c.model, c.temperature, c.maxTokens, messages, tools, tc)
+	// Use streaming for tool-calling completions. The SSE stream lets us
+	// abort the moment a second tool call (index >= 1) appears — enforcing
+	// sequential execution even when the model ignores parallel_tool_calls:false.
+	// Plain chat completions (no tools) use the non-streaming path.
+	var doReq func(string, float64, int, []ChatMessage, []ToolDef, interface{}) (*ChatResponse, error)
+	if len(tools) > 0 {
+		doReq = c.doStreamRequest
+	} else {
+		doReq = c.doRequest
+	}
+
+	resp, err := doReq(c.model, c.temperature, c.maxTokens, messages, tools, tc)
 	if err != nil && c.fallbackModel != "" && isRetriable(err) {
-		// Primary failed with a retriable error — try the fallback.
 		log.Warn("primary model failed, trying fallback",
 			"primary", c.model,
 			"fallback", c.fallbackModel,
 			"err", err,
 		)
-		resp, err = c.doRequest(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, tc)
+		resp, err = doReq(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, tc)
 		if err == nil {
 			resp.UsedFallback = true
 		}
 		return resp, err
+	}
+
+	// Defense-in-depth: if the model returned multiple tool calls despite
+	// our streaming abort, only keep the first one. The agent loop expects
+	// sequential execution — batched calls would skip the think result.
+	if resp != nil && len(resp.ToolCalls) > 1 {
+		log.Warn("model returned parallel tool calls — truncating to first",
+			"total", len(resp.ToolCalls),
+			"kept", resp.ToolCalls[0].Function.Name,
+		)
+		resp.ToolCalls = resp.ToolCalls[:1]
 	}
 
 	return resp, err
@@ -367,6 +458,12 @@ func isRetriable(err error) bool {
 
 	// Empty response
 	if strings.Contains(msg, "LLM returned no choices") {
+		return true
+	}
+
+	// Truncated tool call arguments from streaming — JSON was cut off before
+	// closing. The fallback (non-streaming) model may handle it better.
+	if strings.Contains(msg, "truncated tool call arguments") {
 		return true
 	}
 
@@ -472,5 +569,297 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 		TotalTokens:      apiResp.Usage.TotalTokens,
 		CostUSD:          apiResp.Usage.Cost,
 		Model:            apiResp.Model,
+	}, nil
+}
+
+// doStreamRequest sends a streaming chat completion request and returns
+// when the stream ends or is aborted. For tool calls, it aborts immediately
+// when a second tool call (index >= 1) starts — this enforces sequential
+// tool execution at our layer, preventing the model from batching think+reply
+// into one response even when parallel_tool_calls:false is ignored upstream.
+func (c *Client) doStreamRequest(model string, temperature float64, maxTokens int, messages []ChatMessage, tools []ToolDef, toolChoice interface{}) (*ChatResponse, error) {
+	reqBody := chatRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+		Tools:       tools,
+		Stream:      true,
+	}
+	if toolChoice != nil {
+		reqBody.ToolChoice = toolChoice
+	}
+	if len(tools) > 0 {
+		f := false
+		reqBody.ParallelToolCalls = &f
+	}
+	if c.provider != nil {
+		reqBody.Provider = c.provider
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	if debugMode {
+		prettyJSON, _ := json.MarshalIndent(reqBody, "", "  ")
+		log.Debug("API_REQUEST (stream)",
+			"model", model,
+			"messages", len(messages),
+			"tools", len(tools),
+			"body", string(prettyJSON),
+		)
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
+	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("calling LLM API (stream): %w", err)
+	}
+	// resp.Body is closed by the defer below (normal path) or explicitly
+	// inside the loop (abort path). The defer is a safety net for both.
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	// bufio.Scanner reads line-by-line. 1MB buffer handles large JSON chunks
+	// (e.g., long think arguments can arrive as one SSE line).
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	partials := make(map[int]*partialToolCall)
+	var contentBuilder strings.Builder
+	var finishReason string
+	var promptTokens, completionTokens, totalTokens int
+	var costUSD float64
+	var respModel string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if line == "data: [DONE]" {
+			break
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		var chunk sseChunk
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
+			// Malformed chunk — skip. OpenRouter sometimes sends keep-alive
+			// pings or comment lines that aren't valid JSON.
+			continue
+		}
+
+		if chunk.Model != "" {
+			respModel = chunk.Model
+		}
+		if chunk.Usage != nil {
+			promptTokens = chunk.Usage.PromptTokens
+			completionTokens = chunk.Usage.CompletionTokens
+			totalTokens = chunk.Usage.TotalTokens
+			costUSD = chunk.Usage.Cost
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		delta := chunk.Choices[0].Delta
+		if chunk.Choices[0].FinishReason != "" {
+			finishReason = chunk.Choices[0].FinishReason
+		}
+		if delta.Content != "" {
+			contentBuilder.WriteString(delta.Content)
+		}
+
+		for _, tc := range delta.ToolCalls {
+			if tc.Index >= 1 {
+				// Second tool call detected — model is batching.
+				// Close the body to abort the connection, then jump
+				// to response assembly with only call index 0.
+				resp.Body.Close()
+				goto buildResponse
+			}
+			p, ok := partials[tc.Index]
+			if !ok {
+				p = &partialToolCall{}
+				partials[tc.Index] = p
+			}
+			if tc.ID != "" {
+				p.id = tc.ID
+			}
+			if tc.Type != "" {
+				p.callType = tc.Type
+			}
+			if tc.Function.Name != "" {
+				p.name = tc.Function.Name
+			}
+			p.arguments.WriteString(tc.Function.Arguments)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+
+buildResponse:
+	var toolCalls []ToolCall
+	if p, ok := partials[0]; ok {
+		args := p.arguments.String()
+		if args != "" && !json.Valid([]byte(args)) {
+			return nil, fmt.Errorf("truncated tool call arguments: %.100s", args)
+		}
+		callType := p.callType
+		if callType == "" {
+			callType = "function"
+		}
+		toolCalls = []ToolCall{{
+			ID:   p.id,
+			Type: callType,
+			Function: FunctionCall{
+				Name:      p.name,
+				Arguments: args,
+			},
+		}}
+	}
+
+	if finishReason == "" && len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+
+	if debugMode {
+		log.Debug("API_RESPONSE (stream)",
+			"model", respModel,
+			"finish_reason", finishReason,
+			"prompt_tokens", promptTokens,
+			"completion_tokens", completionTokens,
+			"cost", costUSD,
+			"tool_calls", len(toolCalls),
+		)
+	}
+
+	return &ChatResponse{
+		Content:          contentBuilder.String(),
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
+		CostUSD:          costUSD,
+		Model:            respModel,
+	}, nil
+}
+
+// doStreamingChat sends a streaming chat completion (no tools) and calls
+// onChunk for each token as it arrives. Returns the complete ChatResponse
+// once the stream ends. Used by ChatCompletionStreaming to deliver tokens
+// to Telegram in real time while still capturing the full response for
+// downstream processing (style gate, length guard, deanonymization, TTS).
+func (c *Client) doStreamingChat(model string, temperature float64, maxTokens int, messages []ChatMessage, onChunk func(string)) (*ChatResponse, error) {
+	reqBody := chatRequest{
+		Model:       model,
+		Messages:    messages,
+		Temperature: temperature,
+		MaxTokens:   maxTokens,
+		Stream:      true,
+	}
+	if c.provider != nil {
+		reqBody.Provider = c.provider
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
+	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("calling LLM API (stream): %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	var contentBuilder strings.Builder
+	var finishReason string
+	var promptTokens, completionTokens, totalTokens int
+	var costUSD float64
+	var respModel string
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "data: [DONE]" {
+			break
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var chunk sseChunk
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
+			continue
+		}
+		if chunk.Model != "" {
+			respModel = chunk.Model
+		}
+		if chunk.Usage != nil {
+			promptTokens = chunk.Usage.PromptTokens
+			completionTokens = chunk.Usage.CompletionTokens
+			totalTokens = chunk.Usage.TotalTokens
+			costUSD = chunk.Usage.Cost
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		if chunk.Choices[0].FinishReason != "" {
+			finishReason = chunk.Choices[0].FinishReason
+		}
+		token := chunk.Choices[0].Delta.Content
+		if token != "" {
+			contentBuilder.WriteString(token)
+			onChunk(token)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading SSE stream: %w", err)
+	}
+
+	return &ChatResponse{
+		Content:          contentBuilder.String(),
+		FinishReason:     finishReason,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
+		CostUSD:          costUSD,
+		Model:            respModel,
 	}, nil
 }
