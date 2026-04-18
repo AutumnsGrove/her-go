@@ -95,6 +95,7 @@ type ChatConfig struct {
 	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). Groq/Kimi should respond in <5s — 20s is a reasonable ceiling.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+	Streaming   bool            `yaml:"streaming"` // stream reply tokens to Telegram for a live typing effect (default false)
 }
 
 // AgentConfig holds settings for the background tool-calling agent.

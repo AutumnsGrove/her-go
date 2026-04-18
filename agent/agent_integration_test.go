@@ -113,17 +113,14 @@ func TestRun_BasicTurn(t *testing.T) {
 
 	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
-		var resp map[string]any
 		switch n {
 		case 1:
-			resp = mockToolCallResponse("think", `{"thought":"The user said hello. I should greet them warmly."}`)
+			writeMockSSEToolCall(w, "think", `{"thought":"The user said hello. I should greet them warmly."}`)
 		case 2:
-			resp = mockToolCallResponse("reply", `{"instruction":"Greet the user warmly and ask how they are."}`)
+			writeMockSSEToolCall(w, "reply", `{"instruction":"Greet the user warmly and ask how they are."}`)
 		default:
-			resp = mockToolCallResponse("done", `{}`)
+			writeMockSSEToolCall(w, "done", `{}`)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer agentSrv.Close()
 
@@ -163,20 +160,17 @@ func TestRun_ToolFailureTurn(t *testing.T) {
 
 	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
-		var resp map[string]any
 		switch n {
 		case 1:
-			resp = mockToolCallResponse("think", `{"thought":"Let me try a tool."}`)
+			writeMockSSEToolCall(w, "think", `{"thought":"Let me try a tool."}`)
 		case 2:
 			// This tool doesn't exist — tools.Execute returns a clear error string.
-			resp = mockToolCallResponse("completely_nonexistent_tool_xyz", `{}`)
+			writeMockSSEToolCall(w, "completely_nonexistent_tool_xyz", `{}`)
 		case 3:
-			resp = mockToolCallResponse("reply", `{"instruction":"Respond to the user."}`)
+			writeMockSSEToolCall(w, "reply", `{"instruction":"Respond to the user."}`)
 		default:
-			resp = mockToolCallResponse("done", `{}`)
+			writeMockSSEToolCall(w, "done", `{}`)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer agentSrv.Close()
 
@@ -208,23 +202,20 @@ func TestRun_ContinuationTurn(t *testing.T) {
 
 	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := int(agentCallCount.Add(1))
-		var resp map[string]any
 		switch {
 		case n <= 15:
 			// Fill all 15 iterations of window 0 with think calls.
 			// Each has unique content to avoid the think-loop detector
 			// (agent.go:548), which bails if the same thought repeats twice.
-			resp = mockToolCallResponse("think",
+			writeMockSSEToolCall(w, "think",
 				fmt.Sprintf(`{"thought":"still working through the problem, step %d of 15"}`, n))
 		case n == 16:
 			// Window 1 starts. Continuation context was injected — the agent
 			// should now reply to update the user on progress.
-			resp = mockToolCallResponse("reply", `{"instruction":"Here is my update after working through it."}`)
+			writeMockSSEToolCall(w, "reply", `{"instruction":"Here is my update after working through it."}`)
 		default:
-			resp = mockToolCallResponse("done", `{}`)
+			writeMockSSEToolCall(w, "done", `{}`)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer agentSrv.Close()
 
@@ -260,23 +251,20 @@ func TestRun_DeferredSearchLoad(t *testing.T) {
 
 	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
-		var resp map[string]any
 		switch n {
 		case 1:
 			// Load the search category. use_tools reads categories.yaml and
 			// adds web_search + web_read to the active toolDefs slice.
-			resp = mockToolCallResponse("use_tools", `{"tools":["search"]}`)
+			writeMockSSEToolCall(w, "use_tools", `{"tools":["search"]}`)
 		case 2:
 			// web_search is now a known handler. With nil TavilyClient, it
 			// returns "error: web search not configured..." — not "unknown tool".
-			resp = mockToolCallResponse("web_search", `{"query":"test query"}`)
+			writeMockSSEToolCall(w, "web_search", `{"query":"test query"}`)
 		case 3:
-			resp = mockToolCallResponse("reply", `{"instruction":"Here is what I found (or couldn't find)."}`)
+			writeMockSSEToolCall(w, "reply", `{"instruction":"Here is what I found (or couldn't find)."}`)
 		default:
-			resp = mockToolCallResponse("done", `{}`)
+			writeMockSSEToolCall(w, "done", `{}`)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
 	}))
 	defer agentSrv.Close()
 

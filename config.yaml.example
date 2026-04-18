@@ -20,6 +20,7 @@ chat:
   temperature: 0.85
   max_tokens: 4096
   timeout: 20                        # Groq/Kimi responds in <5s — 20s catches real hangs without waiting 60s for fallback
+  streaming: false                   # set true to stream reply tokens to Telegram (live typing effect)
   provider:
     order: ["Groq"]                  # pin to Groq for speed and consistency
   fallback:
@@ -30,7 +31,7 @@ chat:
 agent:
   model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
-  max_tokens: 2048                               # raised from 1024 — reply+facts JSON can exceed 1024, causing truncation retries
+  max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   fallback:

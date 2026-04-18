@@ -115,6 +115,7 @@ type RunParams struct {
 	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
 	DeletePlaceholderCallback tools.DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
 	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
+	StreamCallback            tools.StreamCallback            // nil-safe — streams chat tokens to Telegram for live typing effect
 	ImageBase64               string   // base64-encoded image data (empty if no image)
 	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
 	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
@@ -356,6 +357,7 @@ func Run(params RunParams) (*RunResult, error) {
 		StageResetCallback:        params.StageResetCallback,
 		DeletePlaceholderCallback: params.DeletePlaceholderCallback,
 		SendConfirmCallback:       params.SendConfirmCallback,
+		StreamCallback:            params.StreamCallback,
 		ChatLLM:                   params.ChatLLM,
 		VisionLLM:                 params.VisionLLM,
 		ClassifierLLM:             params.ClassifierLLM,

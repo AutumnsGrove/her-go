@@ -191,9 +191,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Content: ctx.ScrubbedUserMessage,
 	})
 
-	// Call the conversational model.
+	// Call the conversational model. If a StreamCallback is set (meaning the
+	// bot layer has a Telegram message ready to receive live token edits),
+	// use the streaming path so tokens flow to the user as they're generated.
+	// Otherwise fall back to the plain blocking call — same as before.
 	start := time.Now()
-	resp, err := ctx.ChatLLM.ChatCompletion(llmMessages)
+	var resp *llm.ChatResponse
+	if ctx.StreamCallback != nil {
+		resp, err = ctx.ChatLLM.ChatCompletionStreaming(llmMessages, func(token string) {
+			_ = ctx.StreamCallback(token)
+		})
+	} else {
+		resp, err = ctx.ChatLLM.ChatCompletion(llmMessages)
+	}
 	latencyMs := int(time.Since(start).Milliseconds())
 
 	if err != nil {
