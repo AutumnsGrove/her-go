@@ -163,6 +163,7 @@ type MemoryConfig struct {
 	AgentContextBudget  int     `yaml:"agent_context_budget"`  // agent model total prompt budget for action history compaction; 0 = use 6000 default
 	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
 	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
+	MaxMemoryLength    int     `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
 }
 
 // ScrubConfig controls PII scrubbing behavior.

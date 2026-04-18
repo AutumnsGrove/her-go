@@ -80,8 +80,9 @@ memory:
   extraction_interval: 10        # extract facts every N messages
   max_history_tokens: 8000       # message history token budget — compaction fires at 75% of this (6000 tokens). System prompt excluded.
   agent_context_budget: 16000    # agent model (Kimi K2.5) action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
-  auto_link_count: 3             # max links per new fact (0 = disabled). Links connect related facts into a knowledge graph.
+  auto_link_count: 3             # max links per new memory (0 = disabled). Links connect related memories into a knowledge graph.
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
+  max_memory_length: 300         # hard character limit per memory. The SPLIT classifier catches packed memories before this fires.
 
 scrub:
   enabled: true

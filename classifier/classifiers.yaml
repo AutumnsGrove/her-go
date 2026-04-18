@@ -48,13 +48,35 @@ classifiers:
             Memories should capture specific, meaningful information that
             couldn't be inferred from conversation history.
 
+      - name: SPLIT
+        description: >-
+          Does this memory clearly pack two or more genuinely independent
+          pieces of information that would each stand alone as a useful memory?
+          Only split when the ideas are truly independent — not just two
+          related aspects of the same topic.
+        examples:
+          - '"Autumn maintains sobriety from weed (started for a drug test) and avoids it because of dysphoria" → SPLIT (origin vs. ongoing reason are independent)'
+          - '"Autumn loves baking sourdough and is building grove.place" → SPLIT (baking and a work project are unrelated)'
+          - '"Autumn has ADHD and struggles with task initiation" → SAVE (the struggle is a direct expression of the ADHD, not independent)'
+          - '"Autumn prefers stealth builds in FromSoft games and finds combat stressful" → SAVE (same topic, two facets)'
+        note: >-
+          Each sub-memory must be a complete, self-contained sentence.
+          Use the same category as the original. Only split if BOTH pieces
+          would be independently useful in future conversations. When in
+          doubt, SAVE.
+
       - name: SAVE
         description: >-
           The memory is real, specific, useful, and actually stated or
           clearly implied by the user.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-      Examples: "SAVE", "LOW_VALUE — too vague to be actionable"
+      For SPLIT, add a JSON array of sub-memory strings on the next line:
+
+      SPLIT — packs two unrelated ideas
+      ["sub-memory one text here", "sub-memory two text here"]
+
+      Other examples: "SAVE", "LOW_VALUE — too vague to be actionable"
 
   self_memory:
     preamble: >-

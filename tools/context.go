@@ -216,6 +216,10 @@ type Context struct {
 	// search matches.
 	SimilarityThreshold float64
 
+	// MaxMemoryLength is the hard character limit for a single memory.
+	// 0 means use the package default (300). Configured via config.yaml.
+	MaxMemoryLength int
+
 	// PersonaFile is the path to persona.md on disk.
 	PersonaFile string
 
