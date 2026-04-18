@@ -196,7 +196,7 @@ func mockClassifierServer(t *testing.T, response string) *httptest.Server {
 
 func TestCheck(t *testing.T) {
 	t.Run("nil client fails open", func(t *testing.T) {
-		v := Check(nil, "fact", "some content", nil)
+		v := Check(nil, "memory", "some content", nil)
 		if !v.Allowed {
 			t.Error("nil classifier LLM should fail open (Allowed=true)")
 		}
@@ -210,7 +210,7 @@ func TestCheck(t *testing.T) {
 		defer srv.Close()
 		client := llm.NewClient(srv.URL, "test-key", "test-model", 0, 64)
 
-		v := Check(client, "nonexistent_type", "some fact", nil)
+		v := Check(client, "nonexistent_type", "some memory", nil)
 		if !v.Allowed {
 			t.Error("unknown writeType should fail open (Allowed=true)")
 		}
@@ -221,7 +221,7 @@ func TestCheck(t *testing.T) {
 		defer srv.Close()
 		client := llm.NewClient(srv.URL, "test-key", "test-model", 0, 64)
 
-		v := Check(client, "fact", "Autumn prefers stealth builds in Elden Ring", nil)
+		v := Check(client, "memory", "Autumn prefers stealth builds in Elden Ring", nil)
 		if !v.Allowed {
 			t.Errorf("SAVE response should allow write, got Allowed=false (type=%s reason=%s)", v.Type, v.Reason)
 		}
@@ -232,7 +232,7 @@ func TestCheck(t *testing.T) {
 		defer srv.Close()
 		client := llm.NewClient(srv.URL, "test-key", "test-model", 0, 64)
 
-		v := Check(client, "fact", "Autumn likes things", nil)
+		v := Check(client, "memory", "Autumn likes things", nil)
 		if v.Allowed {
 			t.Error("LOW_VALUE response should reject write (Allowed=false)")
 		}
@@ -281,7 +281,7 @@ func TestCheck(t *testing.T) {
 			{Role: "user", ContentRaw: "i built a grocery scraper"},
 			{Role: "assistant", ContentRaw: "that's a real project!"},
 		}
-		Check(client, "fact", "Autumn built a web scraper", snippet)
+		Check(client, "memory", "Autumn built a web scraper", snippet)
 
 		if !strings.Contains(capturedBody, "grocery scraper") {
 			t.Errorf("expected snippet content in LLM request body, got: %s", capturedBody)
@@ -295,7 +295,7 @@ func TestCheck(t *testing.T) {
 		defer srv.Close()
 		client := llm.NewClient(srv.URL, "test-key", "test-model", 0, 64)
 
-		v := Check(client, "fact", "some fact", nil)
+		v := Check(client, "memory", "some memory", nil)
 		if !v.Allowed {
 			t.Error("LLM error should fail open (Allowed=true)")
 		}

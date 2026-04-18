@@ -1,8 +1,8 @@
 package tools
 
-// Unit tests for the fact pipeline quality gates.
+// Unit tests for the memory pipeline quality gates.
 //
-// These tests call the gate logic directly by driving ExecSaveFact with a
+// These tests call the gate logic directly by driving ExecSaveMemory with a
 // minimal tools.Context (nil EmbedClient, nil ClassifierLLM). That means
 // only gates 1-2 (style, length) fire — the dedup and classifier gates are
 // skipped when embedding/classifier clients are absent. That's exactly what
@@ -35,7 +35,7 @@ func TestStyleGate(t *testing.T) {
 		ctx := minimalCtx()
 		// Trailing em-dash — sentence hangs with "—" at the end.
 		// Mid-sentence em-dashes are fine; only trailing ones are blocked.
-		result := ExecSaveFact(`{"fact":"User loves hiking —","category":"preference","tags":"outdoors, hiking"}`, "user", ctx)
+		result := ExecSaveMemory(`{"fact":"User loves hiking —","category":"preference","tags":"outdoors, hiking"}`, "user", ctx)
 		if !strings.HasPrefix(result, "rejected:") {
 			t.Errorf("expected rejection for trailing em-dash fact, got: %s", result)
 		}
@@ -43,7 +43,7 @@ func TestStyleGate(t *testing.T) {
 
 	t.Run("ai_slop_blocked", func(t *testing.T) {
 		ctx := minimalCtx()
-		result := ExecSaveFact(`{"fact":"User wants to leverage her Go skills for backend projects","category":"work","tags":"go, backend"}`, "user", ctx)
+		result := ExecSaveMemory(`{"fact":"User wants to leverage her Go skills for backend projects","category":"work","tags":"go, backend"}`, "user", ctx)
 		if !strings.HasPrefix(result, "rejected:") {
 			t.Errorf("expected rejection for 'leverage' fact, got: %s", result)
 		}
@@ -51,7 +51,7 @@ func TestStyleGate(t *testing.T) {
 
 	t.Run("clean_fact_passes", func(t *testing.T) {
 		ctx := minimalCtx()
-		result := ExecSaveFact(`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, elden ring, stealth"}`, "user", ctx)
+		result := ExecSaveMemory(`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, elden ring, stealth"}`, "user", ctx)
 		// Without embed/classifier, save should succeed (returns "saved user fact ID=...")
 		// or fail only due to nil store — not due to a style/length gate rejection.
 		if strings.HasPrefix(result, "rejected:") {
@@ -60,16 +60,16 @@ func TestStyleGate(t *testing.T) {
 	})
 }
 
-// TestLengthGate verifies that facts exceeding maxFactLength are rejected.
+// TestLengthGate verifies that facts exceeding maxMemoryLength are rejected.
 func TestLengthGate(t *testing.T) {
 	t.Run("over_limit_rejected", func(t *testing.T) {
 		ctx := minimalCtx()
-		// Build a fact that's exactly maxFactLength+1 characters.
-		longFact := strings.Repeat("x", maxFactLength+1)
+		// Build a fact that's exactly maxMemoryLength+1 characters.
+		longFact := strings.Repeat("x", maxMemoryLength+1)
 		argsJSON := `{"fact":"` + longFact + `","category":"other","tags":"test"}`
-		result := ExecSaveFact(argsJSON, "user", ctx)
+		result := ExecSaveMemory(argsJSON, "user", ctx)
 		if !strings.HasPrefix(result, "rejected:") {
-			t.Errorf("expected rejection for %d-char fact, got: %s", maxFactLength+1, result)
+			t.Errorf("expected rejection for %d-char fact, got: %s", maxMemoryLength+1, result)
 		}
 		if !strings.Contains(result, "characters") {
 			t.Errorf("rejection message should mention character count, got: %s", result)
@@ -78,19 +78,19 @@ func TestLengthGate(t *testing.T) {
 
 	t.Run("at_limit_passes_style_gate", func(t *testing.T) {
 		ctx := minimalCtx()
-		// Exactly maxFactLength characters — clean content, should pass style+length.
+		// Exactly maxMemoryLength characters — clean content, should pass style+length.
 		// Uses only simple alphanumeric content to avoid triggering style gate.
 		exactFact := "User studies Go programming and finds " + strings.Repeat("the language clean", 1)
-		// Pad to exactly maxFactLength with safe characters.
-		for len(exactFact) < maxFactLength {
+		// Pad to exactly maxMemoryLength with safe characters.
+		for len(exactFact) < maxMemoryLength {
 			exactFact += "a"
 		}
-		exactFact = exactFact[:maxFactLength] // trim to exact limit
+		exactFact = exactFact[:maxMemoryLength] // trim to exact limit
 		argsJSON := `{"fact":"` + exactFact + `","category":"other","tags":"test"}`
-		result := ExecSaveFact(argsJSON, "user", ctx)
+		result := ExecSaveMemory(argsJSON, "user", ctx)
 		// Should NOT be rejected by style or length gate.
 		if strings.Contains(result, "characters (max") {
-			t.Errorf("fact at exactly maxFactLength should not be rejected by length gate, got: %s", result)
+			t.Errorf("fact at exactly maxMemoryLength should not be rejected by length gate, got: %s", result)
 		}
 	})
 }

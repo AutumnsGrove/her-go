@@ -1,0 +1,50 @@
+name: update_memory
+description: >-
+  Update an existing memory when new information changes or refines what we
+  knew. Use this instead of save_memory when a memory already exists but needs
+  correction or expansion.
+hot: false
+parameters:
+  type: object
+  properties:
+    memory_id:
+      type: integer
+      description: "ID of the memory to update"
+    fact:
+      type: string
+      description: "The updated memory text"
+    category:
+      type: string
+      description: "Updated category. Use 'context' for ephemeral day-to-day info."
+      enum:
+        - identity
+        - relationship
+        - health
+        - work
+        - mood
+        - goal
+        - event
+        - preference
+        - context
+        - other
+    tags:
+      type: string
+      description: "Updated comma-separated topic tags for semantic search."
+    context:
+      type: string
+      description: >-
+        Optional 1-2 sentence note explaining WHY this memory matters or how
+        it connects to other knowledge. Only include when the context isn't
+        obvious from the memory itself.
+  required:
+    - memory_id
+    - fact
+    - category
+    - tags
+trace:
+  emoji: "📝"
+  format: "#{{.memory_id}} → {{.fact | escape}}\n    category={{.category}}"
+  on_reject:
+    prefix: "rejected:"
+    emoji: "🚫"
+    format: "#{{.memory_id}} <i>{{.Result | truncate 120 | escape}}</i>"

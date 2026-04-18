@@ -15,8 +15,8 @@ import (
 
 var retagCmd = &cobra.Command{
 	Use:   "retag",
-	Short: "Generate topic tags for existing facts and re-embed them",
-	Long: `One-time backfill: uses the LLM to generate topic tags for facts
+	Short: "Generate topic tags for existing memories and re-embed them",
+	Long: `One-time backfill: uses the LLM to generate topic tags for memories
 that don't have them yet, then re-embeds using the tags so semantic
 search works by topic rather than surface-level word overlap.
 
@@ -42,26 +42,26 @@ func runRetag(cmd *cobra.Command, args []string) error {
 	store.AutoLinkCount = cfg.Memory.AutoLinkCount
 	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
 
-	// Load all active facts that need tagging.
-	facts, err := store.AllActiveFacts()
+	// Load all active memories that need tagging.
+	memories, err := store.AllActiveMemories()
 	if err != nil {
-		return fmt.Errorf("loading facts: %w", err)
+		return fmt.Errorf("loading memories: %w", err)
 	}
 
-	// Filter to facts without tags.
-	var untagged []memory.Fact
-	for _, f := range facts {
-		if f.Tags == "" {
-			untagged = append(untagged, f)
+	// Filter to memories without tags.
+	var untagged []memory.Memory
+	for _, m := range memories {
+		if m.Tags == "" {
+			untagged = append(untagged, m)
 		}
 	}
 
 	if len(untagged) == 0 {
-		fmt.Println("All facts already have tags. Nothing to do.")
+		fmt.Println("All memories already have tags. Nothing to do.")
 		return nil
 	}
 
-	fmt.Printf("Found %d facts without tags. Generating...\n", len(untagged))
+	fmt.Printf("Found %d memories without tags. Generating...\n", len(untagged))
 
 	// Create LLM client for tag generation.
 	llmClient := llm.NewClient(
@@ -78,7 +78,7 @@ func runRetag(cmd *cobra.Command, args []string) error {
 		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 	}
 
-	// Process facts in batches of 10 to reduce LLM calls.
+	// Process memories in batches of 10 to reduce LLM calls.
 	batchSize := 10
 	for i := 0; i < len(untagged); i += batchSize {
 		end := i + batchSize
@@ -93,7 +93,7 @@ func runRetag(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		for j, f := range batch {
+		for j, m := range batch {
 			if j >= len(tags) {
 				break
 			}
@@ -103,8 +103,8 @@ func runRetag(cmd *cobra.Command, args []string) error {
 			}
 
 			// Save tags to DB.
-			if err := store.UpdateFactTags(f.ID, t); err != nil {
-				fmt.Printf("  Error saving tags for fact #%d: %v\n", f.ID, err)
+			if err := store.UpdateMemoryTags(m.ID, t); err != nil {
+				fmt.Printf("  Error saving tags for memory #%d: %v\n", m.ID, err)
 				continue
 			}
 
@@ -112,38 +112,38 @@ func runRetag(cmd *cobra.Command, args []string) error {
 			if embedClient != nil {
 				vec, err := embedClient.Embed(t)
 				if err != nil {
-					fmt.Printf("  Error embedding tags for fact #%d: %v\n", f.ID, err)
+					fmt.Printf("  Error embedding tags for memory #%d: %v\n", m.ID, err)
 					continue
 				}
 				// Pass nil for embeddingText — retag only refreshes the tag
-				// embedding (used for vec_facts KNN search). Text embeddings
+				// embedding (used for vec_memories KNN search). Text embeddings
 				// are populated lazily by checkDuplicate when needed.
-				if err := store.UpdateFactEmbedding(f.ID, vec, nil); err != nil {
-					fmt.Printf("  Error updating embedding for fact #%d: %v\n", f.ID, err)
+				if err := store.UpdateMemoryEmbedding(m.ID, vec, nil); err != nil {
+					fmt.Printf("  Error updating embedding for memory #%d: %v\n", m.ID, err)
 					continue
 				}
 			}
 
-			fmt.Printf("  #%d [%s] tags: %s\n", f.ID, f.Category, t)
+			fmt.Printf("  #%d [%s] tags: %s\n", m.ID, m.Category, t)
 		}
 	}
 
-	fmt.Println("Done! All facts tagged and re-embedded.")
+	fmt.Println("Done! All memories tagged and re-embedded.")
 	return nil
 }
 
-// generateTagsBatch asks the LLM to generate topic tags for a batch of facts
-// in a single call. Returns one tag string per fact.
-func generateTagsBatch(client *llm.Client, facts []memory.Fact) ([]string, error) {
-	// Build the prompt with all facts.
+// generateTagsBatch asks the LLM to generate topic tags for a batch of memories
+// in a single call. Returns one tag string per memory.
+func generateTagsBatch(client *llm.Client, memories []memory.Memory) ([]string, error) {
+	// Build the prompt with all memories.
 	var prompt strings.Builder
-	prompt.WriteString("Generate comma-separated topic tags for each fact below. Tags should describe WHAT the fact is about — the topics, themes, and contexts where this fact would be relevant in conversation. Be specific, not generic. Return a JSON array of strings, one per fact.\n\n")
+	prompt.WriteString("Generate comma-separated topic tags for each memory below. Tags should describe WHAT the memory is about — the topics, themes, and contexts where this memory would be relevant in conversation. Be specific, not generic. Return a JSON array of strings, one per memory.\n\n")
 
-	for i, f := range facts {
-		prompt.WriteString(fmt.Sprintf("%d. [%s, %s] %s\n", i+1, f.Category, f.Subject, f.Fact))
+	for i, m := range memories {
+		prompt.WriteString(fmt.Sprintf("%d. [%s, %s] %s\n", i+1, m.Category, m.Subject, m.Content))
 	}
 
-	prompt.WriteString(fmt.Sprintf("\nReturn ONLY a JSON array of %d strings, one per fact. Example: [\"mental health, burnout, coping, energy\", \"programming, go, backend, projects\"]", len(facts)))
+	prompt.WriteString(fmt.Sprintf("\nReturn ONLY a JSON array of %d strings, one per memory. Example: [\"mental health, burnout, coping, energy\", \"programming, go, backend, projects\"]", len(memories)))
 
 	resp, err := client.ChatCompletion([]llm.ChatMessage{
 		{Role: "user", Content: prompt.String()},

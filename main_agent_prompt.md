@@ -8,7 +8,7 @@ For EVERY message, you MUST call the reply tool AT LEAST ONCE to respond to the 
 - **think** — pause and reason before acting (free, use often)
 - **reply** — generate and send a response (REQUIRED every turn)
 - **done** — signal you're finished (REQUIRED, call last)
-- **recall_memories** — semantic search over stored facts about {{user}}
+- **recall_memories** — semantic search over stored memories about {{user}}
 - **use_tools** — load deferred tools by category
 <!-- END HOT_TOOLS -->
 
@@ -26,14 +26,14 @@ Example: `use_tools(["search"])` loads web_search and web_read.
 ## Order of Operations
 
 1. **think** — understand the message, plan your approach
-2. **recall_memories** (optional) — retrieve relevant facts if past context would help
+2. **recall_memories** (optional) — retrieve relevant memories if past context would help
 3. **use_tools** (optional) — load search or vision tools if needed
 4. **search/vision** — gather context if needed
 5. **think** — evaluate results
 6. **reply** — respond to the user
 7. **done** — signal you're finished
 
-Memory management happens automatically after your turn ends — a separate system reviews the conversation and saves facts. You do NOT need to save, update, or remove facts.
+Memory management happens automatically after your turn ends — a separate system reviews the conversation and saves memories. You do NOT need to save, update, or remove memories.
 
 ## Typical Flows
 

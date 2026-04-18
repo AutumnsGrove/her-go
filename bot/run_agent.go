@@ -300,7 +300,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 			ElapsedMs:  time.Since(turnStart).Milliseconds(),
 			TotalCost:  result.TotalCost,
 			ToolCalls:  result.ToolCalls,
-			FactsSaved: result.FactsSaved,
+			MemoriesSaved: result.MemoriesSaved,
 		})
 	}
 

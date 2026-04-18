@@ -11,13 +11,13 @@ import (
 
 var relinkCmd = &cobra.Command{
 	Use:   "relink",
-	Short: "Backfill Zettelkasten links for existing facts",
-	Long: `One-time backfill: scans all active facts that have embeddings and
+	Short: "Backfill Zettelkasten links for existing memories",
+	Long: `One-time backfill: scans all active memories that have embeddings and
 creates links between similar ones using the same auto-link logic that
-runs on new facts. Safe to run multiple times — duplicate links are
+runs on new memories. Safe to run multiple times — duplicate links are
 silently skipped (INSERT OR IGNORE).
 
-Run this once after enabling fact linking (auto_link_count > 0).`,
+Run this once after enabling memory linking (auto_link_count > 0).`,
 	RunE: runRelink,
 }
 
@@ -44,49 +44,49 @@ func runRelink(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Load all active facts — we need the ones with embeddings.
-	facts, err := store.AllActiveFacts()
+	// Load all active memories — we need the ones with embeddings.
+	memories, err := store.AllActiveMemories()
 	if err != nil {
-		return fmt.Errorf("loading facts: %w", err)
+		return fmt.Errorf("loading memories: %w", err)
 	}
 
-	// Filter to facts that have a tag embedding (needed for KNN search).
-	var linkable []memory.Fact
-	for _, f := range facts {
-		if len(f.Embedding) > 0 {
-			linkable = append(linkable, f)
+	// Filter to memories that have a tag embedding (needed for KNN search).
+	var linkable []memory.Memory
+	for _, m := range memories {
+		if len(m.Embedding) > 0 {
+			linkable = append(linkable, m)
 		}
 	}
 
 	if len(linkable) == 0 {
-		fmt.Println("No facts with embeddings found. Run 'her retag' first.")
+		fmt.Println("No memories with embeddings found. Run 'her retag' first.")
 		return nil
 	}
 
-	fmt.Printf("Found %d facts with embeddings. Linking (max %d neighbors, threshold %.2f)...\n",
+	fmt.Printf("Found %d memories with embeddings. Linking (max %d neighbors, threshold %.2f)...\n",
 		len(linkable), store.AutoLinkCount, store.AutoLinkThreshold)
 
 	linked := 0
 	errors := 0
-	for i, f := range linkable {
-		if err := store.AutoLinkFact(f.ID, f.Embedding); err != nil {
-			fmt.Printf("  Error linking fact #%d: %v\n", f.ID, err)
+	for i, m := range linkable {
+		if err := store.AutoLinkMemory(m.ID, m.Embedding); err != nil {
+			fmt.Printf("  Error linking memory #%d: %v\n", m.ID, err)
 			errors++
 			continue
 		}
-		// Progress indicator every 25 facts (or at the end).
+		// Progress indicator every 25 memories (or at the end).
 		if (i+1)%25 == 0 || i == len(linkable)-1 {
-			fmt.Printf("  Processed %d/%d facts\n", i+1, len(linkable))
+			fmt.Printf("  Processed %d/%d memories\n", i+1, len(linkable))
 		}
 		linked++
 	}
 
 	// Count total links created.
-	totalLinks, err := store.CountFactLinks()
+	totalLinks, err := store.CountMemoryLinks()
 	if err != nil {
-		fmt.Printf("\nDone! Processed %d facts, %d errors.\n", linked, errors)
+		fmt.Printf("\nDone! Processed %d memories, %d errors.\n", linked, errors)
 	} else {
-		fmt.Printf("\nDone! Processed %d facts, %d errors. Total links in graph: %d\n", linked, errors, totalLinks)
+		fmt.Printf("\nDone! Processed %d memories, %d errors. Total links in graph: %d\n", linked, errors, totalLinks)
 	}
 
 	return nil

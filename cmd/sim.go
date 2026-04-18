@@ -896,11 +896,11 @@ func copyMessages(tmpDB, simDB *sql.DB, runID int64, convID string) error {
 	return rows.Err()
 }
 
-// copyFacts copies all facts from the temp DB into sim_facts.
+// copyFacts copies all memories from the temp DB into sim_facts.
 func copyFacts(tmpDB, simDB *sql.DB, runID int64) error {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, fact, category, COALESCE(subject, 'user'), importance, active
-		 FROM facts ORDER BY id ASC`,
+		`SELECT timestamp, content, category, COALESCE(subject, 'user'), importance, active
+		 FROM memories ORDER BY id ASC`,
 	)
 	if err != nil {
 		return fmt.Errorf("querying facts: %w", err)
@@ -1332,7 +1332,7 @@ func writeFactsSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		facts = append(facts, f)
 	}
 
-	fmt.Fprintf(b, "## Facts Saved (%d)\n\n", len(facts))
+	fmt.Fprintf(b, "## Memories Saved (%d)\n\n", len(facts))
 	if len(facts) > 0 {
 		b.WriteString("| ID | Fact | Category | Subject | Importance |\n")
 		b.WriteString("|----|------|----------|---------|------------|\n")

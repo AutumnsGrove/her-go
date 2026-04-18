@@ -108,42 +108,42 @@ func (b *Bot) handleForget(c tele.Context) error {
 		return c.Send("usage: /forget <fact_id>\n\nUse /facts to see all active facts with their IDs.")
 	}
 
-	if err := b.store.DeactivateFact(factID); err != nil {
-		return c.Send(fmt.Sprintf("couldn't forget fact %d: %v", factID, err))
+	if err := b.store.DeactivateMemory(factID); err != nil {
+		return c.Send(fmt.Sprintf("couldn't forget memory %d: %v", factID, err))
 	}
 
-	log.Info("/forget: deactivated fact", "fact_id", factID)
-	return c.Send(fmt.Sprintf("Done — forgot fact #%d.", factID))
+	log.Info("/forget: deactivated memory", "memory_id", factID)
+	return c.Send(fmt.Sprintf("Done — forgot memory #%d.", factID))
 }
 
-// handleFacts lists all active facts, grouped by subject.
+// handleFacts lists all active memories, grouped by subject.
 func (b *Bot) handleFacts(c tele.Context) error {
-	facts, err := b.store.AllActiveFacts()
+	memories, err := b.store.AllActiveMemories()
 	if err != nil {
-		return c.Send("couldn't load facts right now, sorry!")
+		return c.Send("couldn't load memories right now, sorry!")
 	}
 
-	if len(facts) == 0 {
-		return c.Send("No facts saved yet. Keep chatting!")
+	if len(memories) == 0 {
+		return c.Send("No memories saved yet. Keep chatting!")
 	}
 
 	var msg strings.Builder
 	msg.WriteString("<b>\U0001F9E0 What I Know</b>\n\n")
 
 	currentSubject := ""
-	for _, f := range facts {
-		if f.Subject != currentSubject {
-			currentSubject = f.Subject
+	for _, m := range memories {
+		if m.Subject != currentSubject {
+			currentSubject = m.Subject
 			if currentSubject == "user" {
 				msg.WriteString("<b>About you:</b>\n")
 			} else {
 				msg.WriteString("\n<b>About me:</b>\n")
 			}
 		}
-		msg.WriteString(fmt.Sprintf("  #%d [%s] %s\n", f.ID, f.Category, f.Fact))
+		msg.WriteString(fmt.Sprintf("  #%d [%s] %s\n", m.ID, m.Category, m.Content))
 	}
 
-	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a fact.</i>")
+	msg.WriteString("\n<i>Use /forget &lt;id&gt; to remove a memory.</i>")
 
 	// Use pagination — if the fact list exceeds Telegram's 4096-char
 	// limit, it'll be split into pages with ◀/▶ navigation buttons.

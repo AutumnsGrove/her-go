@@ -58,10 +58,10 @@ type LayerResult struct {
 	Tokens  int    // estimated token count (len/4 heuristic)
 	Detail  string // human-readable detail: "5 facts", "10 msgs", etc.
 
-	// InjectedFacts is set by the memory layer to pass observability data
-	// back to the caller (for logging which facts made it into the prompt
+	// InjectedMemories is set by the memory layer to pass observability data
+	// back to the caller (for logging which memories made it into the prompt
 	// and why). Most layers leave this nil.
-	InjectedFacts []memory.InjectedFact
+	InjectedMemories []memory.InjectedMemory
 }
 
 // LayerContext carries everything a layer builder might need. This replaces
@@ -74,7 +74,7 @@ type LayerContext struct {
 	EmbedClient *embed.Client
 
 	// Runtime state — set by the agent before building the prompt.
-	RelevantFacts       []memory.Fact         // KNN results for semantic injection
+	RelevantMemories    []memory.Memory       // KNN results for semantic injection
 	ConversationSummary string                // from chat compaction
 	AgentActionSummary  string                // from agent compaction (tool call history)
 	RecentAgentActions  []memory.AgentAction  // recent tool calls kept in full fidelity
@@ -89,10 +89,10 @@ type LayerContext struct {
 	Instruction   string
 	SearchContext string
 
-	// AgentPassedFacts holds facts the agent explicitly chose via recall_memories
+	// AgentPassedMemories holds memories the agent explicitly chose via recall_memories
 	// and passed through the reply tool's facts parameter. When set, chat_memory.go
-	// injects these instead of the auto-searched RelevantFacts.
-	AgentPassedFacts []string
+	// injects these instead of the auto-searched RelevantMemories.
+	AgentPassedMemories []string
 }
 
 // PromptLayer defines a single layer in the prompt assembly pipeline.

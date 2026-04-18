@@ -20,19 +20,19 @@ import (
 )
 
 // Store wraps a SQLite database connection and provides methods for
-// reading/writing messages, facts, metrics, and PII vault entries.
+// reading/writing messages, memories, metrics, and PII vault entries.
 // In Go, this is how you build something like a Python class — a struct
 // with methods attached to it.
 type Store struct {
 	db             *sql.DB
-	EmbedDimension int // vector dimension for the vec_facts table (e.g. 768)
+	EmbedDimension int // vector dimension for the vec_memories table (e.g. 768)
 
-	// Zettelkasten fact linking — auto-connect new facts to similar existing ones.
-	// When a fact is saved, we KNN-search for neighbors and create bidirectional
-	// links. During retrieval, 1-hop traversal pulls in related facts that didn't
+	// Zettelkasten memory linking — auto-connect new memories to similar existing ones.
+	// When a memory is saved, we KNN-search for neighbors and create bidirectional
+	// links. During retrieval, 1-hop traversal pulls in related memories that didn't
 	// directly match the query. Think of it as Python's networkx graph, but
 	// stored in SQLite so it persists across restarts.
-	AutoLinkCount     int     // max links per new fact (0 = disabled)
+	AutoLinkCount     int     // max links per new memory (0 = disabled)
 	AutoLinkThreshold float64 // min cosine similarity to create a link (0.0-1.0)
 }
 
@@ -43,6 +43,12 @@ type Store struct {
 // embedDimension is the vector size for the sqlite-vec index (e.g. 768
 // for nomic-embed-text-v1.5). Pass 0 to skip creating the vector table
 // (useful if embeddings aren't configured).
+//
+// NOTE: The initial CREATE TABLE statements still create the legacy "facts",
+// "fact_links", and "vec_facts" tables for backward compatibility with older
+// databases. The migration block at the end creates the renamed "memories",
+// "memory_links", and "vec_memories" tables and copies data over. All runtime
+// queries use the new table names.
 func NewStore(dbPath string, embedDimension int) (*Store, error) {
 	// Register sqlite-vec as an auto-extension BEFORE opening any connections.
 	// This uses sqlite3_auto_extension() under the hood — every new connection
@@ -431,27 +437,45 @@ func (s *Store) initTables() error {
 		s.db.Exec(m) // ignore errors (column already exists)
 	}
 
-	// Index for the dual-stream summary lookups. LatestSummary queries
-	// (conversation_id, stream) on every message — without this, SQLite
-	// does a full table scan that degrades as summaries accumulate.
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream ON summaries(conversation_id, stream)`)
+	// memories — primary storage for learned facts about the user and self.
+	// Run `her migrate` once to copy data from the legacy `facts` table.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS memories (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		memory TEXT NOT NULL,
+		category TEXT,
+		source_message_id INTEGER,
+		importance INTEGER DEFAULT 5,
+		active BOOLEAN DEFAULT 1,
+		subject TEXT DEFAULT 'user',
+		embedding BLOB,
+		tags TEXT,
+		embedding_text BLOB,
+		superseded_by INTEGER REFERENCES memories(id),
+		supersede_reason TEXT,
+		context TEXT,
+		FOREIGN KEY (source_message_id) REFERENCES messages(id)
+	)`)
 
-	// Zettelkasten fact links — a graph of connections between related facts.
-	// This is an adjacency list: each row is an edge between two fact nodes.
-	// IDs are normalized (source < target) to prevent duplicate bidirectional
-	// entries — same trick social graph databases use for mutual friendships.
-	factLinksTable := `CREATE TABLE IF NOT EXISTS fact_links (
+	// Zettelkasten memory links — adjacency list connecting related memories.
+	// IDs are normalized (source < target) to avoid duplicate bidirectional edges.
+	s.db.Exec(`CREATE TABLE IF NOT EXISTS memory_links (
 		source_id  INTEGER NOT NULL,
 		target_id  INTEGER NOT NULL,
 		similarity REAL NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (source_id, target_id),
-		FOREIGN KEY (source_id) REFERENCES facts(id),
-		FOREIGN KEY (target_id) REFERENCES facts(id)
-	)`
-	if _, err := s.db.Exec(factLinksTable); err != nil {
-		return fmt.Errorf("creating fact_links table: %w", err)
-	}
+		FOREIGN KEY (source_id) REFERENCES memories(id),
+		FOREIGN KEY (target_id) REFERENCES memories(id)
+	)`)
+
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_source ON memory_links(source_id)`)
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_target ON memory_links(target_id)`)
+
+	// Index for the dual-stream summary lookups. LatestSummary queries
+	// (conversation_id, stream) on every message — without this, SQLite
+	// does a full table scan that degrades as summaries accumulate.
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream ON summaries(conversation_id, stream)`)
 
 	// Indexes — CREATE INDEX IF NOT EXISTS is idempotent like the tables.
 	// This index lets the scheduler's polling loop quickly find tasks that
@@ -461,16 +485,9 @@ func (s *Store) initTables() error {
 		 ON scheduled_tasks(next_run) WHERE enabled = 1`,
 
 		// Expense indexes — date index for "how much this week/month" queries,
-		// category index for per-category breakdowns. Both will be heavily
-		// used by Financial Pulse (phase 2).
+		// category index for per-category breakdowns.
 		`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`,
 		`CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)`,
-
-		// Fact link indexes — one per direction so the UNION query in
-		// LinkedFacts can use an index for each sub-query. Without these,
-		// the query planner would fall back to a full table scan.
-		`CREATE INDEX IF NOT EXISTS idx_fact_links_source ON fact_links(source_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_fact_links_target ON fact_links(target_id)`,
 	}
 	for _, idx := range indexes {
 		if _, err := s.db.Exec(idx); err != nil {
@@ -478,9 +495,9 @@ func (s *Store) initTables() error {
 		}
 	}
 
-	// sqlite-vec virtual table for KNN vector search on fact embeddings.
+	// sqlite-vec virtual table for KNN vector search on memory embeddings.
 	// vec0 is the virtual table module provided by the sqlite-vec extension.
-	// The rowid maps to facts.id so we can JOIN back for metadata.
+	// The rowid maps to memories.id so we can JOIN back for metadata.
 	// distance_metric=cosine means KNN results are ranked by cosine distance
 	// (0 = identical, 2 = opposite) instead of the default L2/Euclidean.
 	//
@@ -490,11 +507,11 @@ func (s *Store) initTables() error {
 	// nearest neighbor search behind the standard SQL interface.
 	if s.EmbedDimension > 0 {
 		vecDDL := fmt.Sprintf(
-			`CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(embedding float[%d] distance_metric=cosine)`,
+			`CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[%d] distance_metric=cosine)`,
 			s.EmbedDimension,
 		)
 		if _, err := s.db.Exec(vecDDL); err != nil {
-			return fmt.Errorf("creating vec_facts virtual table: %w", err)
+			return fmt.Errorf("creating vec_memories virtual table: %w", err)
 		}
 	}
 

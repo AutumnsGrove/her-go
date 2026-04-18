@@ -42,16 +42,16 @@ func (b *Bot) handleReflect(c tele.Context) error {
 		return c.Send("Not enough conversation history to reflect on yet. Keep chatting!")
 	}
 
-	facts, _ := b.store.RecentFacts("user", 10)
-	selfFacts, _ := b.store.RecentFacts("self", 10)
+	memories, _ := b.store.RecentMemories("user", 10)
+	selfMemories, _ := b.store.RecentMemories("self", 10)
 
 	var factStrings []string
-	for _, f := range facts {
-		factStrings = append(factStrings, f.Fact)
+	for _, m := range memories {
+		factStrings = append(factStrings, m.Content)
 	}
-	for _, f := range selfFacts {
-		if f.Category != "reflection" {
-			factStrings = append(factStrings, "(self) "+f.Fact)
+	for _, m := range selfMemories {
+		if m.Category != "reflection" {
+			factStrings = append(factStrings, "(self) "+m.Content)
 		}
 	}
 

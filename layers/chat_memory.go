@@ -1,16 +1,16 @@
 package layers
 
-// Layer 4: Memory context — facts injected into the chat model's prompt.
+// Layer 4: Memory context — memories injected into the chat model's prompt.
 //
 // Two sources, in priority order:
 //
-//  1. Agent-passed facts (ctx.AgentPassedFacts): the agent called recall_memories,
+//  1. Agent-passed memories (ctx.AgentPassedMemories): the agent called recall_memories,
 //     evaluated the results, and explicitly passed the relevant ones through the
 //     reply tool's facts parameter. These represent the agent's curated judgment.
 //     When present, they're injected verbatim — no redundancy filtering needed
 //     since the agent already chose them deliberately.
 //
-//  2. Auto-searched facts (ctx.RelevantFacts): the KNN results from the turn-start
+//  2. Auto-searched memories (ctx.RelevantMemories): the KNN results from the turn-start
 //     semantic search, used as a fallback when the agent passed nothing. Filtered
 //     for redundancy against conversation history before injection.
 
@@ -35,35 +35,35 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 		return LayerResult{}
 	}
 
-	// Path 1: agent explicitly passed facts via reply(facts=[...]).
+	// Path 1: agent explicitly passed memories via reply(facts=[...]).
 	// Inject these directly — the agent already did the relevance judgment.
-	if len(ctx.AgentPassedFacts) > 0 {
+	if len(ctx.AgentPassedMemories) > 0 {
 		var b strings.Builder
 		b.WriteString("## What I Remember\n\n")
-		for _, f := range ctx.AgentPassedFacts {
-			fmt.Fprintf(&b, "- %s\n", f)
+		for _, m := range ctx.AgentPassedMemories {
+			fmt.Fprintf(&b, "- %s\n", m)
 		}
 		return LayerResult{
 			Content: b.String(),
-			Detail:  fmt.Sprintf("%d agent-passed facts", len(ctx.AgentPassedFacts)),
+			Detail:  fmt.Sprintf("%d agent-passed memories", len(ctx.AgentPassedMemories)),
 		}
 	}
 
-	// Path 2: fallback to auto-searched facts from turn-start KNN.
-	// Filter out facts already represented in conversation history to
+	// Path 2: fallback to auto-searched memories from turn-start KNN.
+	// Filter out memories already represented in conversation history to
 	// avoid "context echo" (model fixating on repeated information).
-	filteredFacts := ctx.RelevantFacts
+	filteredMemories := ctx.RelevantMemories
 	if ctx.EmbedClient != nil {
 		recentMsgs, err := ctx.Store.RecentMessages(ctx.ConversationID, ctx.Cfg.Memory.RecentMessages)
 		if err == nil && len(recentMsgs) > 0 {
-			filteredFacts = memory.FilterRedundantFacts(filteredFacts, recentMsgs, ctx.EmbedClient)
+			filteredMemories = memory.FilterRedundantMemories(filteredMemories, recentMsgs, ctx.EmbedClient)
 		}
 	}
 
-	memCtx, injectedFacts, err := memory.BuildMemoryContext(
+	memCtx, injectedMemories, err := memory.BuildMemoryContext(
 		ctx.Store,
 		ctx.Cfg.Memory.MaxFactsInContext,
-		filteredFacts,
+		filteredMemories,
 		ctx.Cfg.Identity.User,
 		ctx.Cfg.Embed.MaxSemanticDistance,
 	)
@@ -73,8 +73,8 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 
 	// Count by source for the detail string.
 	semantic, linked := 0, 0
-	for _, f := range injectedFacts {
-		switch f.Source {
+	for _, m := range injectedMemories {
+		switch m.Source {
 		case "semantic":
 			semantic++
 		case "linked":
@@ -82,14 +82,14 @@ func buildChatMemory(ctx *LayerContext) LayerResult {
 		}
 	}
 
-	detail := fmt.Sprintf("%d facts (auto)", len(injectedFacts))
+	detail := fmt.Sprintf("%d memories (auto)", len(injectedMemories))
 	if linked > 0 {
 		detail = fmt.Sprintf("%d semantic + %d linked (auto)", semantic, linked)
 	}
 
 	return LayerResult{
-		Content:       memCtx,
-		Detail:        detail,
-		InjectedFacts: injectedFacts,
+		Content:          memCtx,
+		Detail:           detail,
+		InjectedMemories: injectedMemories,
 	}
 }

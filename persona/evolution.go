@@ -169,7 +169,7 @@ func MaybeRewrite(
 	}
 
 	// Get self-facts (non-reflection) for additional context.
-	selfFacts, err := store.RecentFacts("self", 20)
+	selfFacts, err := store.RecentMemories("self", 20)
 	if err != nil {
 		return false, fmt.Errorf("loading self-facts: %w", err)
 	}
@@ -178,7 +178,7 @@ func MaybeRewrite(
 	for _, f := range selfFacts {
 		// Reflections no longer appear in the facts table, so no
 		// category filter is needed here — every self-fact is a real observation.
-		fmt.Fprintf(&selfStr, "- %s\n", f.Fact)
+		fmt.Fprintf(&selfStr, "- %s\n", f.Content)
 	}
 	if selfStr.Len() == 0 {
 		selfStr.WriteString("(no self-observations yet)\n")
@@ -495,13 +495,13 @@ func NightlyReflect(
 	}
 
 	// Recent user facts (light context — this reflection is about the bot, not the user).
-	userFacts, _ := store.RecentFacts("user", 10)
+	userFacts, _ := store.RecentMemories("user", 10)
 	var userFactStr strings.Builder
 	if len(userFacts) == 0 {
 		userFactStr.WriteString("(no user facts yet)")
 	} else {
 		for _, f := range userFacts {
-			fmt.Fprintf(&userFactStr, "- %s\n", f.Fact)
+			fmt.Fprintf(&userFactStr, "- %s\n", f.Content)
 		}
 	}
 
@@ -617,14 +617,14 @@ func GatedRewrite(
 	}
 
 	// Self-facts for additional context.
-	selfFacts, err := store.RecentFacts("self", 20)
+	selfFacts, err := store.RecentMemories("self", 20)
 	if err != nil {
 		return false, fmt.Errorf("loading self-facts: %w", err)
 	}
 
 	var selfStr strings.Builder
 	for _, f := range selfFacts {
-		fmt.Fprintf(&selfStr, "- %s\n", f.Fact)
+		fmt.Fprintf(&selfStr, "- %s\n", f.Content)
 	}
 	if selfStr.Len() == 0 {
 		selfStr.WriteString("(no self-observations yet)\n")

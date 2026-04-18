@@ -139,7 +139,7 @@ func (e ToolCallEvent) EventSource() string  { return "agent" }
 type ContextEvent struct {
 	Time          time.Time
 	TurnID        int64
-	RelevantFacts int
+	RelevantMemories int
 }
 
 func (e ContextEvent) EventTime() time.Time { return e.Time }
@@ -169,7 +169,7 @@ type TurnEndEvent struct {
 	TotalCost  float64
 	ElapsedMs  int64
 	ToolCalls  int
-	FactsSaved int
+	MemoriesSaved int
 }
 
 func (e TurnEndEvent) EventTime() time.Time { return e.Time }

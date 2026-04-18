@@ -316,36 +316,36 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// Backfill embeddings in background
 	if embedClient != nil && cfg.Embed.Dimension > 0 {
 		go func() {
-			unembedded, err := store.FactsWithoutEmbeddings()
+			unembedded, err := store.MemoriesWithoutEmbeddings()
 			if err != nil {
-				log.Error("backfill: failed to query unembedded facts", "err", err)
+				log.Error("backfill: failed to query unembedded memories", "err", err)
 				return
 			}
 			if len(unembedded) == 0 {
 				return
 			}
-			log.Infof("Backfilling embeddings for %d facts...", len(unembedded))
-			for _, f := range unembedded {
+			log.Infof("Backfilling embeddings for %d memories...", len(unembedded))
+			for _, m := range unembedded {
 				// Embed by tags when available (topic-based retrieval),
-				// fall back to fact text for un-tagged facts.
-				embedText := f.Tags
+				// fall back to memory text for un-tagged memories.
+				embedText := m.Tags
 				if embedText == "" {
-					embedText = f.Fact
+					embedText = m.Content
 				}
 				vec, err := embedClient.Embed(embedText)
 				if err != nil {
-					log.Error("backfill: embedding failed", "fact_id", f.ID, "err", err)
+					log.Error("backfill: embedding failed", "memory_id", m.ID, "err", err)
 					continue
 				}
 				// Pass nil for embeddingText — this backfill only targets the tag
-				// embedding (vec_facts). Text embeddings are populated on-demand
-				// by checkDuplicate and FilterRedundantFacts.
-				if err := store.UpdateFactEmbedding(f.ID, vec, nil); err != nil {
-					log.Error("backfill: update failed", "fact_id", f.ID, "err", err)
+				// embedding (vec_memories). Text embeddings are populated on-demand
+				// by checkDuplicate and FilterRedundantMemories.
+				if err := store.UpdateMemoryEmbedding(m.ID, vec, nil); err != nil {
+					log.Error("backfill: update failed", "memory_id", m.ID, "err", err)
 					continue
 				}
 			}
-			log.Infof("Backfill complete: %d facts embedded", len(unembedded))
+			log.Infof("Backfill complete: %d memories embedded", len(unembedded))
 		}()
 	}
 

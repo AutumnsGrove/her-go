@@ -92,13 +92,13 @@ func runShape(cmd *cobra.Command, args []string) error {
 			ctx.RecentMessages = msgs
 		}
 
-		// Get semantically relevant facts (use a generic query).
+		// Get semantically relevant memories (use a generic query).
 		if embedClient != nil {
 			queryVec, err := embedClient.Embed("general conversation")
 			if err == nil {
-				facts, err := store.SemanticSearch(queryVec, cfg.Memory.MaxFactsInContext)
+				memories, err := store.SemanticSearch(queryVec, cfg.Memory.MaxFactsInContext)
 				if err == nil {
-					ctx.RelevantFacts = facts
+					ctx.RelevantMemories = memories
 				}
 			}
 		}
