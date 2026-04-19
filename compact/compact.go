@@ -17,6 +17,7 @@
 package compact
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
 
@@ -68,30 +69,11 @@ func EstimateHistoryTokens(summary string, messages []memory.Message) int {
 	return total
 }
 
-// summaryPrompt is sent to the LLM to summarize older messages.
-// It's designed to preserve conversational flow and emotional context
-// while being much shorter than the raw messages.
-// summaryPromptTmpl uses %s placeholders: userName, botName, userName, userName.
-const summaryPromptTmpl = `You are summarizing an earlier part of a conversation between %s and %s (an AI companion). Your goal is to capture what matters for continuing the conversation naturally.
-
-Preserve:
-- What topics were discussed and any conclusions reached
-- Emotional tone and how the conversation felt
-- Any commitments, plans, or things either person said they'd do
-- Context needed to understand references in later messages
-- The general arc of the conversation
-
-Don't preserve:
-- Exact wording — ALWAYS paraphrase in your own words, never copy phrases, metaphors, or specific advice verbatim
-- Greetings and small talk unless they established something important
-- Repetitive back-and-forth that can be summarized in one line
-- Information already captured in the facts/memories system
-
-Write the summary as a brief narrative, like you're catching up a friend who missed the first part of the conversation. Keep it concise. 2-4 sentences for a short exchange, 4-8 for a longer one.
-
-If there's an existing summary of even earlier conversation, incorporate it naturally into your new summary. Don't just append, weave it together.
-
-Identity anchor: The user's name is %s. Always refer to them as %s in your summary — never as "the user" or "they".`
+// summaryPromptTmpl is loaded from summary_prompt.md.
+// Parameters (in order): userName, botName, userName, userName.
+//
+//go:embed summary_prompt.md
+var summaryPromptTmpl string
 
 // CompactResult holds the output of MaybeCompact so callers can tell
 // whether compaction actually ran (vs. just returning existing state).
@@ -157,7 +139,7 @@ func MaybeCompact(
 		unsummarized = filtered
 	}
 
-	threshold := int(float64(maxHistoryTokens) * 0.75)
+	threshold := int(float64(maxHistoryTokens) * compactionThreshold)
 	estTokens := EstimateHistoryTokens(existingSummary, unsummarized)
 	log.Infof("  compaction check: %d un-summarized msgs, ~%d tokens (threshold: %d, budget: %d)",
 		len(unsummarized), estTokens, threshold, maxHistoryTokens)
@@ -277,33 +259,21 @@ func MaybeCompact(
 	}, nil
 }
 
+// compactionThreshold is the fraction of the token budget at which
+// compaction fires. Both chat and agent history use the same threshold.
+// Lives here (not in config) because it's an architectural invariant,
+// not a per-deployment tunable.
+const compactionThreshold = 0.75
+
 // verboseTools is a package-level alias for VerboseTools, used by the
 // agent compaction logic below. The canonical list lives in verbose_tools.go.
 var verboseTools = VerboseTools
 
-// agentSummaryPromptTmpl is the prompt for summarizing the agent's action
-// history. Unlike the chat summary (conversational flow), this focuses on
-// what the agent DID — tools called, decisions made, outcomes achieved.
-// %s placeholders: botName.
-const agentSummaryPromptTmpl = `You are summarizing the action history of %s's agent system — the tool-calling orchestrator that runs behind the scenes.
-
-Preserve:
-- Which tools were called and why (save_fact, update_fact, remove_fact, create_reminder, set_location, etc.)
-- What facts were saved, updated, or removed (include fact IDs when available)
-- Decisions made: why the agent chose one action over another
-- Outcomes: did the tool call succeed or fail? What was the result?
-- Any patterns: repeated searches, fact corrections, reminder chains
-
-Don't preserve:
-- Raw search results (web_search, book_search output) — just note what was searched and if useful results were found
-- Tool discovery (find_skill) — just note which tools were activated
-- Exact JSON arguments — paraphrase the intent
-- Think tool internal monologue — summarize the conclusion only
-
-Write the summary as a concise action log. Use brief, factual statements. Example:
-"Saved fact #42 about user's job (software engineer). Searched web for Go testing patterns — found useful results. Set reminder for medication at 9pm daily. Updated fact #15 (corrected user's timezone from EST to PST)."
-
-If there's an existing summary of earlier actions, incorporate it naturally.`
+// agentSummaryPromptTmpl is loaded from agent_summary_prompt.md.
+// Parameters (in order): botName.
+//
+//go:embed agent_summary_prompt.md
+var agentSummaryPromptTmpl string
 
 // AgentCompactResult holds the output of MaybeCompactAgent.
 type AgentCompactResult struct {
@@ -381,7 +351,7 @@ func MaybeCompactAgent(
 
 	// Check if we need to compact.
 	estTokens := estimateActionTokens(existingSummary, actions)
-	threshold := int(float64(agentContextBudget) * 0.75)
+	threshold := int(float64(agentContextBudget) * compactionThreshold)
 	log.Infof("  agent compaction check: %d actions, ~%d tokens (threshold: %d, budget: %d)",
 		len(actions), estTokens, threshold, agentContextBudget)
 
