@@ -243,14 +243,18 @@ func (s *Store) MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEnt
 
 // SimilarMoodEntriesWithin finds existing mood entries whose embedding
 // is close to the query vector (cosine distance) AND whose timestamp
-// is within the given window. The mood agent uses this to decide
+// is within (now - window, now]. The mood agent uses this to decide
 // whether a new inferred mood is a duplicate of one logged within the
 // dedup window — see docs/plans/PLAN-mood-tracking-redesign.md.
+//
+// The `now` parameter is injected so the caller controls the window
+// anchor; the sim passes a frozen FakeClock value, the live bot
+// passes time.Now().
 //
 // Returns a slice sorted by distance (closest first). `limit` caps the
 // number of results. Returns nil if the store was initialized without
 // a vec_moods virtual table (EmbedDimension=0).
-func (s *Store) SimilarMoodEntriesWithin(embedding []float32, window time.Duration, limit int) ([]MoodEntry, error) {
+func (s *Store) SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]MoodEntry, error) {
 	if s.EmbedDimension == 0 || len(embedding) == 0 {
 		return nil, nil
 	}
@@ -267,7 +271,7 @@ func (s *Store) SimilarMoodEntriesWithin(embedding []float32, window time.Durati
 	// window filter happens on the SQL side; vec0's KNN doesn't know
 	// about our time predicate. Ordering is by distance inside the JOIN.
 	// k must be a literal in the vec0 WHERE, hence the Go-side limit.
-	cutoff := time.Now().Add(-window).UTC()
+	cutoff := now.Add(-window).UTC()
 
 	rows, err := s.db.Query(`
 		SELECT m.id, m.ts, m.kind, m.valence, m.labels, m.associations, m.note,
