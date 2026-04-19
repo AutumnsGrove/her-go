@@ -22,8 +22,8 @@ import (
 )
 
 // Stream identifies which model a layer belongs to.
-// A layer tagged StreamChat only runs when building the Deepseek prompt.
-// A layer tagged StreamAgent only runs when building the Kimi K2.5 context.
+// A layer tagged StreamChat only runs when building the reply-model prompt.
+// A layer tagged StreamAgent only runs when building the main agent context.
 type Stream int
 
 const (
@@ -31,7 +31,7 @@ const (
 	// Layers here produce the 9-layer system prompt for the reply tool.
 	StreamChat Stream = iota
 
-	// StreamAgent is the orchestrator model (Kimi K2.5).
+	// StreamAgent is the orchestrator model.
 	// Layers here produce the user context message for the agent loop.
 	StreamAgent
 )

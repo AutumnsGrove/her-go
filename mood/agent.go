@@ -10,9 +10,16 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/trace"
 )
 
 var log = logger.WithPrefix("mood")
+
+// Register the mood agent's trace stream. Order 300 puts it after
+// main (100) and memory (200) when both are present.
+func init() {
+	trace.Register(trace.Stream{Name: "mood", Order: 300, Label: "🎭 <b>mood</b>"})
+}
 
 // Action describes what the agent did with a given turn. One action
 // per RunAgent call; result.Action tells the caller exactly what
@@ -199,23 +206,25 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	}
 
 	// Trace collector — accumulates HTML lines and flushes to the
-	// callback on every meaningful step. Safe to call even when the
-	// callback is nil; the append is harmless noise.
-	var trace traceBuf
-	trace.emit(deps.Trace, "🎭 <b>mood</b>\nthinking…")
+	// callback on every meaningful step. The slot's label header
+	// ("🎭 mood") is owned by the trace registry and prepended at
+	// render time, so we only send body content here. Safe to call
+	// even when the callback is nil.
+	var tb traceBuf
+	tb.emit(deps.Trace, "thinking…")
 
 	// 1. Ask the LLM.
 	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns)
 	if err != nil {
 		log.Error("mood agent LLM call failed", "err", err)
-		trace.line(fmt.Sprintf("⚠️ llm error: %s", err))
-		trace.flush(deps.Trace)
+		tb.line(fmt.Sprintf("⚠️ llm error: %s", err))
+		tb.flush(deps.Trace)
 		return Result{Action: ActionErrored, Reason: err.Error()}
 	}
 
 	if inference.Skip {
-		trace.line(fmt.Sprintf("skipped — %s", inference.Reason))
-		trace.flush(deps.Trace)
+		tb.line(fmt.Sprintf("skipped — %s", inference.Reason))
+		tb.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedNoSignal,
 			Reason:    inference.Reason,
@@ -223,17 +232,17 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 		}
 	}
 
-	trace.line(fmt.Sprintf("llm: valence=%d labels=%v conf=%.2f",
+	tb.line(fmt.Sprintf("llm: valence=%d labels=%v conf=%.2f",
 		inference.Valence, inference.Labels, inference.Confidence))
-	trace.flush(deps.Trace)
+	tb.flush(deps.Trace)
 
 	// 2. Vocab filter — drop hallucinated labels/associations.
 	before := len(inference.Labels) + len(inference.Associations)
 	inference.Labels = filterKnown(inference.Labels, deps.Vocab.IsLabel)
 	inference.Associations = filterKnown(inference.Associations, deps.Vocab.IsAssociation)
 	if len(inference.Labels) == 0 {
-		trace.line(fmt.Sprintf("vocab filter dropped all labels (had %d)", before))
-		trace.flush(deps.Trace)
+		tb.line(fmt.Sprintf("vocab filter dropped all labels (had %d)", before))
+		tb.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedVocab,
 			Reason:    fmt.Sprintf("no valid labels survived vocab filter (had %d entries)", before),
@@ -244,8 +253,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	// 3. Valence must land in [1,7]; otherwise the model made
 	// something up.
 	if inference.Valence < 1 || inference.Valence > 7 {
-		trace.line(fmt.Sprintf("valence %d out of range — dropped", inference.Valence))
-		trace.flush(deps.Trace)
+		tb.line(fmt.Sprintf("valence %d out of range — dropped", inference.Valence))
+		tb.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedNoSignal,
 			Reason:    fmt.Sprintf("valence %d out of range", inference.Valence),
@@ -259,13 +268,13 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	if heuristic > confidence {
 		confidence = heuristic
 	}
-	trace.line(fmt.Sprintf("hybrid confidence: %.2f (llm %.2f, signals %.2f)",
+	tb.line(fmt.Sprintf("hybrid confidence: %.2f (llm %.2f, signals %.2f)",
 		confidence, inference.Confidence, heuristic))
-	trace.flush(deps.Trace)
+	tb.flush(deps.Trace)
 
 	if confidence < cfg.ConfidenceLow {
-		trace.line(fmt.Sprintf("below low threshold %.2f — dropped", cfg.ConfidenceLow))
-		trace.flush(deps.Trace)
+		tb.line(fmt.Sprintf("below low threshold %.2f — dropped", cfg.ConfidenceLow))
+		tb.flush(deps.Trace)
 		return Result{
 			Action:     ActionDroppedLow,
 			Reason:     fmt.Sprintf("confidence %.2f below low threshold %.2f", confidence, cfg.ConfidenceLow),
@@ -279,8 +288,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	if deps.Classifier != nil {
 		ok, reason := classifyReal(ctx, deps.Classifier, inference, turns)
 		if !ok {
-			trace.line(fmt.Sprintf("classifier rejected: %s", reason))
-			trace.flush(deps.Trace)
+			tb.line(fmt.Sprintf("classifier rejected: %s", reason))
+			tb.flush(deps.Trace)
 			return Result{
 				Action:     ActionDroppedClassify,
 				Reason:     reason,
@@ -288,8 +297,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 				Inference:  inference,
 			}
 		}
-		trace.line("classifier: REAL ✓")
-		trace.flush(deps.Trace)
+		tb.line("classifier: REAL ✓")
+		tb.flush(deps.Trace)
 	}
 
 	// 6. Build the candidate entry (not yet saved). Embedding is
@@ -337,9 +346,9 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 			// human-readable.
 			topSim := 1.0 - neighbors[0].Distance
 			if topSim >= cfg.DedupSimilarity {
-				trace.line(fmt.Sprintf("dedup: similar to #%d (sim=%.2f) — dropped",
+				tb.line(fmt.Sprintf("dedup: similar to #%d (sim=%.2f) — dropped",
 					neighbors[0].ID, topSim))
-				trace.flush(deps.Trace)
+				tb.flush(deps.Trace)
 				return Result{
 					Action:     ActionDroppedDedup,
 					Reason:     fmt.Sprintf("similar entry #%d within window (sim=%.2f)", neighbors[0].ID, topSim),
@@ -347,12 +356,12 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 					Inference:  inference,
 				}
 			}
-			trace.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f (below %.2f threshold)",
+			tb.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f (below %.2f threshold)",
 				neighbors[0].ID, topSim, cfg.DedupSimilarity))
-			trace.flush(deps.Trace)
+			tb.flush(deps.Trace)
 		} else {
-			trace.line("dedup: no neighbors in window")
-			trace.flush(deps.Trace)
+			tb.line("dedup: no neighbors in window")
+			tb.flush(deps.Trace)
 		}
 	}
 
@@ -360,23 +369,23 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	if confidence >= cfg.ConfidenceHigh {
 		res := autoLog(deps, candidate, inference, confidence)
 		if res.Entry != nil {
-			trace.line(fmt.Sprintf("✅ auto-logged #%d (source=inferred)", res.Entry.ID))
+			tb.line(fmt.Sprintf("✅ auto-logged #%d (source=inferred)", res.Entry.ID))
 		} else {
-			trace.line(fmt.Sprintf("⚠️ auto-log errored: %s", res.Reason))
+			tb.line(fmt.Sprintf("⚠️ auto-log errored: %s", res.Reason))
 		}
-		trace.flush(deps.Trace)
+		tb.flush(deps.Trace)
 		return res
 	}
 	res := emitProposal(ctx, deps, cfg, candidate, inference, confidence)
 	switch res.Action {
 	case ActionProposalEmitted:
-		trace.line("📩 medium-confidence proposal sent")
+		tb.line("📩 medium-confidence proposal sent")
 	case ActionErrored:
-		trace.line(fmt.Sprintf("⚠️ proposal errored: %s", res.Reason))
+		tb.line(fmt.Sprintf("⚠️ proposal errored: %s", res.Reason))
 	default:
-		trace.line(fmt.Sprintf("dropped: %s", res.Reason))
+		tb.line(fmt.Sprintf("dropped: %s", res.Reason))
 	}
-	trace.flush(deps.Trace)
+	tb.flush(deps.Trace)
 	return res
 }
 

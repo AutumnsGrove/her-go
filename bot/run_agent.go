@@ -130,14 +130,19 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	}()
 
 	// --- Trace callbacks ---
-	// All three trace callbacks (main, memory, mood) write into named
-	// slots of a shared TraceBoard backing one Telegram message.
-	// Slots render in the order they first receive content.
+	// Trace callbacks pull from a single per-turn trace.Board. Each
+	// registered stream gets its own slot; render order comes from
+	// the trace.Streams() registry so main always shows before
+	// memory / mood. New agents in new packages can request a
+	// callback just by registering + calling getTrace("their-slot").
 	var traceCallback tools.TraceCallback
 	var memoryTraceCallback tools.TraceCallback
 	var moodTraceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
-		traceCallback, memoryTraceCallback, moodTraceCallback = b.makeTraceCallbacks(c)
+		getTrace := b.makeTraceCallbacks(c)
+		traceCallback = getTrace("main")
+		memoryTraceCallback = getTrace("memory")
+		moodTraceCallback = getTrace("mood")
 	}
 
 	// --- Reply placeholder ---

@@ -110,7 +110,7 @@ type ChatConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). Groq/Kimi should respond in <5s — 20s is a reasonable ceiling.
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 	Streaming   bool            `yaml:"streaming"` // stream reply tokens to Telegram for a live typing effect (default false)
@@ -153,7 +153,7 @@ type ClassifierConfig struct {
 // MemoryAgentConfig holds settings for the post-turn background memory agent.
 // This model runs after the main agent delivers its reply — it reviews the
 // conversation turn and extracts facts to save. Runs in a goroutine so it
-// never blocks the user. Kimi K2.5 is recommended for nuanced fact extraction.
+// never blocks the user. A strong narrative-language model is recommended for nuanced fact extraction.
 type MemoryAgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
@@ -164,7 +164,7 @@ type MemoryAgentConfig struct {
 }
 
 // MoodAgentConfig controls the post-turn background mood agent.
-// Same shape as MemoryAgentConfig — a Kimi-class model runs in a
+// Same shape as MemoryAgentConfig — a strong narrative-language model runs in a
 // goroutine after each reply, scoring a structured mood inference
 // against the Apple-style vocab. Nil/empty model disables the
 // agent at startup.

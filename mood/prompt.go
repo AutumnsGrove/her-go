@@ -16,8 +16,9 @@ import (
 // the current vocab file.
 //
 // This is a hot-path string: the model sees it with every call. The
-// instructions are terse on purpose, because Kimi K2 is good at
-// extracting structured output from short prompts but drifts when
+// instructions are terse on purpose, because the narrative-language
+// models we run here extract structured output well from short
+// prompts but drift when
 // you bury the schema under prose.
 //
 // NOTE: this prompt intentionally does NOT include examples. Apple

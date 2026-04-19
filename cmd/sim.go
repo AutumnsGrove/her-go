@@ -88,7 +88,7 @@ var chatModelFlag string
 // chatProviderFlag pins the chat model to a specific OpenRouter inference
 // provider. Comma-separated list tried in order — first available wins.
 // Useful when a model is hosted by multiple providers at different speeds:
-// e.g., Kimi K2 on Groq is much faster than on OpenRouter's default routing.
+// e.g., the memory agent model hosted on Groq is much faster than on OpenRouter's default routing.
 // Example: --chat-provider "Groq" or --chat-provider "Groq,Together"
 var chatProviderFlag string
 
@@ -579,7 +579,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Memory agent client (needed for run_dream support) ---
-	// The dreaming functions use the memory agent LLM (typically Kimi K2.5)
+	// The dreaming functions use the memory agent LLM
 	// because it's the same kind of task: nuanced language about the self.
 	var memoryAgentClient *llm.Client
 	if cfg.MemoryAgent.Model != "" {

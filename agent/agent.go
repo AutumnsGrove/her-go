@@ -17,6 +17,7 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/tools"
+	"her/trace"
 	"her/tui"
 
 	// Blank imports trigger init() registration for each tool's handler.
@@ -39,6 +40,15 @@ import (
 
 // log is the package-level logger for the agent package.
 var log = logger.WithPrefix("agent")
+
+// Register this package's trace streams. Main renders first as the
+// headline transcript with no label prefix; memory renders below
+// with a 🧩 label (different emoji from main/mood so the slots are
+// visually distinct at a glance).
+func init() {
+	trace.Register(trace.Stream{Name: "main", Order: 100})
+	trace.Register(trace.Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
+}
 
 // Callback types and toolContext have been moved to the tools package
 // (tools/context.go). The agent imports them as tools.Context,
@@ -474,7 +484,7 @@ outer:
 		for i := 0; i < iterationsPerWindow; i++ {
 			// Nudge on the first iteration only: tool_choice="required"
 			// forces the model into the tool-calling flow. Without this,
-			// Trinity occasionally skips tools entirely and outputs plain
+			// The main agent occasionally skips tools entirely and outputs plain
 			// text on iter 0. After the first call, "auto" lets the model
 			// drive naturally (it exits via the done tool).
 			var toolChoice interface{}
@@ -523,8 +533,8 @@ outer:
 						log.Info("  agent typed 'done' as text (treating as done signal)")
 						break outer
 					}
-					// Model returned plain text instead of a tool call. Kimi K2.5
-					// and Trinity are thinking models — if they skip tool calls it's
+					// Model returned plain text instead of a tool call. The
+					// tool-calling models we use are "thinking" ones — if they skip tool calls it's
 					// a prompting problem, not a model capability problem. Save the
 					// text as a fallback instruction and exit gracefully.
 					log.Warnf("  agent returned text instead of tool calls: %s", truncateLog(resp.Content, 200))
@@ -763,9 +773,9 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 		//
 		// Because memory_agent.go imports save_fact/save_self_fact/etc. in the
 		// same package, those handlers are registered in the global tools.Execute
-		// registry. Without this check, the main agent (Trinity) can call them by
+		// registry. Without this check, the main agent can call them by
 		// hallucinating tool calls for tools not in its schema — the handlers exist
-		// so Execute succeeds, but the action is wrong (memory writes belong to Kimi).
+		// so Execute succeeds, but the action is wrong (memory writes belong to the memory agent).
 		//
 		// ActiveTools is the authoritative list of what's available this turn.
 		// It starts as the hot tools and grows when use_tools loads a category.
