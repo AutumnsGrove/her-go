@@ -26,6 +26,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// fallbackSimAgentModel is used in sim reports when cfg.Agent.Model is empty.
+// The real default lives in config.yaml.example; this is a last-resort label
+// for display purposes only, not used to make actual LLM calls.
+const fallbackSimAgentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+
 // suiteFlag holds the path to the suite YAML file, set via --suite / -s.
 var suiteFlag string
 
@@ -324,12 +329,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("suite %q has no messages", s.Name)
 	}
 
-	log.Info("Simulation starting", "suite", s.Name, "messages", len(s.Messages))
-	fmt.Printf("\n=== Simulation: %s ===\n", s.Name)
+	log.Info("simulation starting", "suite", s.Name, "messages", len(s.Messages))
 	if s.Description != "" {
-		fmt.Printf("    %s\n", s.Description)
+		log.Infof("  %s", s.Description)
 	}
-	fmt.Printf("    %d messages to send\n\n", len(s.Messages))
 
 	// ------------------------------------------------------------------
 	// 2. Load config (skip Telegram + LLM key checks)
@@ -428,7 +431,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// Insert a new run row. We'll update it with totals at the end.
 	agentModel := cfg.Agent.Model
 	if agentModel == "" {
-		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+		agentModel = fallbackSimAgentModel
 	}
 
 	// embedModel captures the model name for the report + sim.db. If no
@@ -594,7 +597,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	messages := s.Messages
 	if limitFlag > 0 && limitFlag < len(messages) {
 		messages = messages[:limitFlag]
-		fmt.Printf("    (limited to first %d messages via --limit)\n\n", limitFlag)
+		log.Infof("limited to first %d messages via --limit", limitFlag)
 	}
 
 	turnResults := make([]simTurnResult, 0, len(messages))
@@ -603,7 +606,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	for i, msg := range messages {
 		turnStart := time.Now()
 
-		fmt.Printf("[%d/%d] %s: %s\n", i+1, total, cfg.Identity.User, msg)
+		log.Infof("[%d/%d] %s: %s", i+1, total, cfg.Identity.User, msg)
 
 		// Save the user message to the temp store.
 		msgID, err := store.SaveMessage("user", msg, "", conversationID)
@@ -622,7 +625,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		// In production this edits the Telegram message; here we just
 		// print to stdout so you can watch the agent think.
 		statusCallback := func(status string) error {
-			fmt.Printf("       [status] %s\n", status)
+			log.Infof("  [status] %s", status)
 			return nil
 		}
 
@@ -646,7 +649,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			lastTraceText = html
 			for _, line := range strings.Split(strings.TrimSpace(newPart), "\n") {
 				if line != "" {
-					fmt.Printf("       [trace] %s\n", line)
+					log.Infof("  [trace] %s", line)
 				}
 			}
 			return nil
@@ -675,7 +678,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
-			fmt.Printf("       %s: [ERROR: %s]\n\n", cfg.Identity.Her, err)
+			log.Errorf("  %s: [ERROR: %s]", cfg.Identity.Her, err)
 			turnResults = append(turnResults, simTurnResult{
 				userMsg:  msg,
 				botReply: fmt.Sprintf("[ERROR: %s]", err),
@@ -685,8 +688,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		elapsed := time.Since(turnStart)
-		fmt.Printf("       %s: %s\n", cfg.Identity.Her, result.ReplyText)
-		fmt.Printf("       (%s)\n\n", elapsed.Round(time.Millisecond))
+		log.Infof("  %s: %s", cfg.Identity.Her, result.ReplyText)
+		log.Infof("  (%s)", elapsed.Round(time.Millisecond))
 
 		turnResults = append(turnResults, simTurnResult{
 			userMsg:  msg,
@@ -698,7 +701,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		// models. In real usage the user types slowly enough that this
 		// isn't needed, but sim fires back-to-back.
 		if delayFlag > 0 && i < total-1 {
-			fmt.Printf("       (waiting %ds before next turn...)\n\n", delayFlag)
+			log.Infof("  (waiting %ds before next turn...)", delayFlag)
 			time.Sleep(time.Duration(delayFlag) * time.Second)
 		}
 	}
@@ -771,18 +774,18 @@ func runSim(cmd *cobra.Command, args []string) error {
 	var dreamResult simDreamResult
 	if s.RunDream && memoryAgentClient != nil {
 		dreamResult.Ran = true
-		fmt.Printf("\n[dream] Running nightly reflection...\n")
+		log.Info("[dream] running nightly reflection")
 		if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
-			fmt.Printf("[dream] Reflection error: %v\n", err)
+			log.Error("[dream] reflection error", "err", err)
 			dreamResult.ReflectError = err.Error()
 		} else {
 			reflections, _ := store.ReflectionsSince(time.Now().Add(-30 * time.Second))
 			if len(reflections) > 0 {
 				dreamResult.Reflection = reflections[len(reflections)-1].Content
-				fmt.Printf("[dream] Reflection: %s\n", dreamResult.Reflection)
+				log.Infof("[dream] reflection: %s", dreamResult.Reflection)
 			} else {
 				dreamResult.Reflection = "NOTHING_NOTABLE"
-				fmt.Printf("[dream] Reflection: NOTHING_NOTABLE\n")
+				log.Info("[dream] reflection: NOTHING_NOTABLE")
 			}
 		}
 
@@ -795,21 +798,21 @@ func runSim(cmd *cobra.Command, args []string) error {
 			minRefl = 3
 		}
 
-		fmt.Printf("[dream] Running gated persona rewrite (bypass=true)...\n")
+		log.Info("[dream] running gated persona rewrite (bypass=true)")
 		rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
 		if err != nil {
-			fmt.Printf("[dream] Rewrite error: %v\n", err)
+			log.Error("[dream] rewrite error", "err", err)
 			dreamResult.RewriteError = err.Error()
 		} else if rewritten {
 			dreamResult.Rewritten = true
 			data, _ := os.ReadFile(cfg.Persona.PersonaFile)
 			dreamResult.PersonaText = string(data)
-			fmt.Printf("[dream] Persona rewritten:\n%s\n", dreamResult.PersonaText)
+			log.Infof("[dream] persona rewritten:\n%s", dreamResult.PersonaText)
 		} else {
-			fmt.Printf("[dream] Rewrite: UNCHANGED\n")
+			log.Info("[dream] rewrite: UNCHANGED")
 		}
 	} else if s.RunDream && memoryAgentClient == nil {
-		fmt.Printf("\n[dream] Skipped — memory_agent.model not configured in config.yaml\n")
+		log.Warn("[dream] skipped — memory_agent.model not configured in config.yaml")
 	}
 
 	// ------------------------------------------------------------------
@@ -834,7 +837,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if err := os.WriteFile(reportPath, []byte(report), 0o644); err != nil {
 			log.Error("failed to write report", "err", err)
 		} else {
-			fmt.Printf("Report saved: %s\n", reportPath)
+			log.Infof("report saved: %s", reportPath)
 		}
 	}
 
@@ -842,14 +845,15 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// 10. Print summary
 	// ------------------------------------------------------------------
 
-	fmt.Printf("\n=== Simulation Complete ===\n")
-	fmt.Printf("    Suite:      %s\n", s.Name)
-	fmt.Printf("    Run ID:     %d\n", runID)
-	fmt.Printf("    Embed:      %s (dim=%d)\n", cfg.Embed.Model, cfg.Embed.Dimension)
-	fmt.Printf("    Messages:   %d\n", total)
-	fmt.Printf("    Duration:   %s\n", totalDuration.Round(time.Millisecond))
-	fmt.Printf("    Cost:       $%.4f\n", totalCost)
-	fmt.Printf("    Results:    sims/sim.db\n\n")
+	log.Info("simulation complete",
+		"suite", s.Name,
+		"run_id", runID,
+		"embed", fmt.Sprintf("%s (dim=%d)", cfg.Embed.Model, cfg.Embed.Dimension),
+		"messages", total,
+		"duration", totalDuration.Round(time.Millisecond),
+		"cost", fmt.Sprintf("$%.4f", totalCost),
+		"results", "sims/sim.db",
+	)
 
 	return nil
 }
@@ -1103,7 +1107,7 @@ func generateReport(
 
 	agentModel := cfg.Agent.Model
 	if agentModel == "" {
-		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+		agentModel = fallbackSimAgentModel
 	}
 	reportEmbedModel := cfg.Embed.Model
 	if reportEmbedModel == "" {

@@ -274,15 +274,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("could not determine working directory: %w", err)
 	}
 
-	fmt.Printf("Setting up %s on %s as %s\n", cfg.Identity.Her, hostname, currentUser.Username)
-	fmt.Printf("Working directory: %s\n\n", workDir)
+	log.Infof("setting up %s on %s as %s", cfg.Identity.Her, hostname, currentUser.Username)
+	log.Infof("working directory: %s", workDir)
 
 	// Kick off dependency installs in the background immediately.
 	// These run concurrently while we build the binary and set up launchd.
 	depResults := installDeps()
 
 	// Step 1: Build the binary.
-	fmt.Println("[1/6] Building binary...")
+	log.Info("[1/6] building binary")
 	binaryPath := filepath.Join(workDir, "her-go")
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	buildCmd.Dir = workDir
@@ -291,10 +291,10 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	if err := buildCmd.Run(); err != nil {
 		return fmt.Errorf("go build failed: %w", err)
 	}
-	fmt.Printf("      Built: %s\n\n", binaryPath)
+	log.Infof("built: %s", binaryPath)
 
 	// Step 2: Generate the plist.
-	fmt.Println("[2/6] Generating plist...")
+	log.Info("[2/6] generating plist")
 	logsDir := filepath.Join(workDir, "logs")
 	data := plistData{
 		Label:      serviceLabel(cfg.Identity.Her),
@@ -324,65 +324,57 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write plist: %w", err)
 	}
 	plistFile.Close()
-	fmt.Printf("      Wrote: %s\n\n", dest)
+	log.Infof("wrote: %s", dest)
 
 	// Step 3: Create logs directory.
-	fmt.Println("[3/6] Creating logs directory...")
+	log.Info("[3/6] creating logs directory")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create logs directory: %w", err)
 	}
-	fmt.Printf("      Dir:   %s\n\n", logsDir)
+	log.Infof("dir: %s", logsDir)
 
 	// Step 4: (plist already written to ~/Library/LaunchAgents in step 2)
-	fmt.Println("[4/6] Plist installed to ~/Library/LaunchAgents")
-	fmt.Println()
+	log.Info("[4/6] plist installed to ~/Library/LaunchAgents")
 
 	// Step 5: Load the service.
-	fmt.Println("[5/6] Loading service...")
+	log.Info("[5/6] loading service")
 	loadCmd := exec.Command("launchctl", "load", dest)
 	loadCmd.Stdout = os.Stdout
 	loadCmd.Stderr = os.Stderr
 	if err := loadCmd.Run(); err != nil {
-		log.Warn("launchctl load failed", "err", err)
-		fmt.Println("      You may need to unload first: her stop")
+		log.Warn("launchctl load failed — you may need to unload first: her stop", "err", err)
 	} else {
-		fmt.Println("      Service loaded!")
+		log.Info("service loaded")
 	}
-	fmt.Println()
 
 	// Step 6: Wait for background dependency installs to finish.
 	// The channel was created in installDeps() — ranging over it gives
 	// us each result as it arrives, and stops when the channel closes
 	// (which happens after all goroutines call wg.Done()).
-	fmt.Println("[6/6] ML dependencies...")
+	log.Info("[6/6] ML dependencies")
 	var warnings []string
 	for r := range depResults {
-		status := "ok"
-		if !r.OK {
-			status = "MISSING"
-			warnings = append(warnings, fmt.Sprintf("  ! %s: %s", r.Name, r.Message))
+		if r.OK {
+			log.Info("dep ok", "name", r.Name, "detail", r.Message)
+		} else {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", r.Name, r.Message))
+			log.Warn("dep missing", "name", r.Name, "detail", r.Message)
 		}
-		fmt.Printf("      %-20s %s (%s)\n", r.Name, status, r.Message)
 	}
 
 	// Summary.
-	fmt.Println()
-	fmt.Println("--- Setup complete ---")
-	fmt.Printf("  Binary:   %s\n", binaryPath)
-	fmt.Printf("  Plist:    %s\n", dest)
-	fmt.Printf("  Logs:     %s\n", logsDir)
-	fmt.Printf("  Service:  %s\n", serviceLabel(cfg.Identity.Her))
+	log.Info("setup complete",
+		"binary", binaryPath,
+		"plist", dest,
+		"logs", logsDir,
+		"service", serviceLabel(cfg.Identity.Her),
+	)
 
 	for _, w := range warnings {
-		log.Warn(w)
+		log.Warn("missing dependency", "detail", w)
 	}
 
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  her start    — start the service")
-	fmt.Println("  her stop     — stop the service")
-	fmt.Println("  her status   — check service status")
-	fmt.Println("  her logs     — tail log output")
+	log.Info("commands: her start | her stop | her status | her logs")
 
 	return nil
 }

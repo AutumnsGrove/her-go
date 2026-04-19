@@ -30,6 +30,20 @@ go run main.go run
 go build -o her && ./her run
 ```
 
+## Primary Design Principle
+
+> **Code translates data. It never defines it.**
+
+If a value could live in a config file, YAML manifest, or named constant — it must. No hardcoded strings scattered across logic. No parallel data structures that duplicate what a manifest already defines. One source of truth, read everywhere. This is the most important rule in this codebase. When in doubt, ask: "should this be in config?"
+
+Concrete rules:
+- Model names only in `config.yaml`, read via `cfg.Models.*` — never a bare model string in `.go`
+- Tool definitions (name, description, parameters, category) only in `tools/<name>/tool.yaml`
+- Prompt text and persona copy only in `.md` files — not inline in Go source
+- Thresholds, token budgets, similarity cutoffs in config, not as magic literals
+- Telegram command strings defined once as constants, not re-typed in multiple handlers
+- If the same string appears twice, one instance is a bug
+
 ## Key Design Decisions
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
