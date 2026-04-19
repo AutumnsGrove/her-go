@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -197,6 +198,31 @@ func (b *Bot) handleMoodProposalCallback(c tele.Context) error {
 		_ = c.Respond(&tele.CallbackResponse{Text: "unknown option"})
 		return nil
 	}
+}
+
+// Thin aliases so the wizard command handler (in bot/mood_wizard.go)
+// doesn't have to import mood directly. Keeping the coupling narrow.
+const (
+	moodGraphRangeWeek  = mood.GraphRangeWeek
+	moodGraphRangeMonth = mood.GraphRangeMonth
+	moodGraphRangeYear  = mood.GraphRangeYear
+)
+
+// sendMoodGraph renders a PNG of the user's mood trajectory for the
+// given range and sends it as a Telegram photo reply. Runs
+// synchronously — the render is sub-second for a month of data.
+func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
+	png, err := mood.RenderValencePNG(b.store, b.moodVocab, r, time.Now())
+	if err != nil {
+		log.Error("mood graph render", "range", r, "err", err)
+		return c.Send("couldn't render the mood chart right now.")
+	}
+
+	photo := &tele.Photo{
+		File:    tele.FromReader(bytes.NewReader(png)),
+		Caption: fmt.Sprintf("📈 mood — last %s", r.String()),
+	}
+	return c.Send(photo)
 }
 
 // launchMoodAgent fires mood.Runner.RunForConversation in a goroutine.

@@ -44,14 +44,31 @@ type wizardState struct {
 // sweeper GCs it. 10 minutes matches the plan.
 const wizardTTL = 10 * time.Minute
 
-// handleMoodCommand starts a fresh wizard for the calling chat. Any
-// existing wizard for the chat is replaced — if you type /mood twice,
-// the second one wins.
+// handleMoodCommand routes /mood. With no argument it starts the
+// wizard; with "week" / "month" / "year" it sends a PNG graph.
 func (b *Bot) handleMoodCommand(c tele.Context) error {
 	if b.moodVocab == nil {
 		return c.Send("mood tracking isn't configured on this bot.")
 	}
 
+	arg := strings.ToLower(strings.TrimSpace(c.Message().Payload))
+	switch arg {
+	case "":
+		return b.startMoodWizard(c)
+	case "week":
+		return b.sendMoodGraph(c, moodGraphRangeWeek)
+	case "month":
+		return b.sendMoodGraph(c, moodGraphRangeMonth)
+	case "year":
+		return b.sendMoodGraph(c, moodGraphRangeYear)
+	default:
+		return c.Send("usage: /mood | /mood week | /mood month | /mood year")
+	}
+}
+
+// startMoodWizard kicks off the multi-step picker. Replaces any
+// in-flight wizard for the chat (second /mood wins).
+func (b *Bot) startMoodWizard(c tele.Context) error {
 	chatID := c.Message().Chat.ID
 	w := &wizardState{
 		Step:      1,
