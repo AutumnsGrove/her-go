@@ -8,6 +8,16 @@ import (
 	"her/memory"
 )
 
+// TickOnce runs a single dispatch pass synchronously and returns. The
+// regular Run() loop calls the underlying tick() on every ticker
+// interval; TickOnce exposes the same behavior to tests and to the
+// headless sim harness so they can drive the scheduler without a live
+// ticker. Safe to call concurrently with Run() — both call the same
+// store.DueSchedulerTasks path, and the DB is the source of truth.
+func (s *Scheduler) TickOnce(ctx context.Context) {
+	s.tick(ctx)
+}
+
 // tick fetches every due task and dispatches it. Called once per
 // ticker interval from Run(). A slow handler delays subsequent handlers
 // on the same tick, which is fine for our scale — we don't have

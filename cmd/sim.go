@@ -968,35 +968,14 @@ func copySummaries(tmpDB, simDB *sql.DB, runID int64) error {
 }
 
 // copyMoodEntries copies mood entries from the temp DB into sim_mood_entries.
+//
+// TEMPORARILY A NO-OP. The mood schema was redesigned in the mood-tracking
+// branch (rating 1-5 → Apple-style valence/labels/associations). The
+// sim_mood_entries table in sim.db still expects the old columns. Once
+// the new mood agent is wired up and actually writes rows, update
+// sim_mood_entries + this copier together.
 func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
-	rows, err := tmpDB.Query(
-		`SELECT timestamp, rating, note, tags, source FROM mood_entries ORDER BY id ASC`,
-	)
-	if err != nil {
-		return fmt.Errorf("querying mood entries: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var ts string
-		var rating int
-		// sql.NullString handles NULL values from the database. In Go,
-		// a regular string can't be null — NullString has a .Valid bool
-		// that tells you whether the value was NULL or not.
-		var note, tags, source sql.NullString
-		if err := rows.Scan(&ts, &rating, &note, &tags, &source); err != nil {
-			return fmt.Errorf("scanning mood entry: %w", err)
-		}
-		_, err := simDB.Exec(
-			`INSERT INTO sim_mood_entries (run_id, timestamp, rating, note, tags, source)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			runID, ts, rating, note, tags, source,
-		)
-		if err != nil {
-			return fmt.Errorf("inserting sim_mood_entry: %w", err)
-		}
-	}
-	return rows.Err()
+	return nil
 }
 
 // copyMetrics copies metrics from the temp DB into sim_metrics and returns
