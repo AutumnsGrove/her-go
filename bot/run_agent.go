@@ -292,6 +292,11 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
+	// Fire the mood agent in a goroutine. Runs parallel to the memory
+	// agent that agent.Run already launched; both are post-reply
+	// best-effort and never block the user.
+	b.launchMoodAgent(input.ConversationID)
+
 	// --- TUI end event ---
 	if b.eventBus != nil {
 		b.eventBus.Emit(tui.TurnEndEvent{
