@@ -58,10 +58,14 @@ type openMeteoResponse struct {
 // "km/h" for readability — hence the separate "display" unit strings
 // below.
 func Fetch(lat, lon float64, tempUnit, windUnit string) (*Current, error) {
-	if tempUnit == "" {
+	// Whitelist valid unit values. Open-Meteo only understands these
+	// exact strings in the URL — anything else would silently return
+	// default units, and a malformed config value could inject URL
+	// parameters via &-separation. Belt and suspenders.
+	if tempUnit != "fahrenheit" && tempUnit != "celsius" {
 		tempUnit = "fahrenheit"
 	}
-	if windUnit == "" {
+	if windUnit != "mph" && windUnit != "kmh" {
 		windUnit = "mph"
 	}
 
