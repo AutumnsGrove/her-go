@@ -2,43 +2,70 @@
 package bot
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	tele "gopkg.in/telebot.v4"
 )
 
-// handleHelp shows all available commands.
+// helpData is loaded from help.yaml — the single source of truth for
+// /help output. Uses {{her}} placeholders expanded at render time.
+//
+//go:embed help.yaml
+var helpYAML string
+
+// helpSpec mirrors the YAML structure in help.yaml.
+type helpSpec struct {
+	Sections []struct {
+		Title    string `yaml:"title"`
+		Commands []struct {
+			Cmd  string `yaml:"cmd"`
+			Desc string `yaml:"desc"`
+		} `yaml:"commands"`
+	} `yaml:"sections"`
+	Footer string `yaml:"footer"`
+}
+
+// handleHelp renders the help text from help.yaml, expanding {{her}}
+// to the configured bot name.
 func (b *Bot) handleHelp(c tele.Context) error {
-	msg := "\U0001F4D6 <b>Commands</b>\n\n" +
-		"<b>Conversation</b>\n" +
-		"/clear — start a fresh conversation\n" +
-		"/compact — summarize older messages to free up context\n\n" +
-		"<b>Memory</b>\n" +
-		"/facts — list all remembered facts\n" +
-		"/forget <code>&lt;id&gt;</code> — forget a specific fact\n\n" +
-		"<b>Persona</b>\n" +
-		"/persona — view " + b.cfg.Identity.Her + "'s current personality\n" +
-		"/persona traits — personality trait scores\n" +
-		"/persona rewrite — manually trigger a persona rewrite\n" +
-		"/reflect — trigger a reflection\n" +
-		"/reflections — view past reflections\n" +
-		"/dream — run a full dream cycle now (reflection + persona rewrite)\n\n" +
-		"<b>Mood</b>\n" +
-		"/mood — log your mood (4-step wizard: valence → labels → associations → note)\n" +
-		"/mood <code>week|month|year</code> — mood chart over time\n\n" +
-		"<b>Info</b>\n" +
-		"/stats — token usage, cost, and message counts\n" +
-		"/status — uptime, models, and service health\n\n" +
-		"<b>System</b>\n" +
-		"/traces — toggle agent thinking traces in chat\n" +
-		"/restart — restart the bot process\n" +
-		"/help — this message\n\n" +
-		"<b>Features</b>\n" +
-		"Send a photo and " + b.cfg.Identity.Her + " will describe what she sees.\n" +
-		"Just chat normally — she remembers your conversations."
-	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	var spec helpSpec
+	if err := yaml.Unmarshal([]byte(helpYAML), &spec); err != nil {
+		log.Error("failed to parse help.yaml", "err", err)
+		return c.Send("something went wrong loading help — check the logs!")
+	}
+
+	expand := func(s string) string {
+		return strings.ReplaceAll(s, "{{her}}", b.cfg.Identity.Her)
+	}
+
+	var msg strings.Builder
+	msg.WriteString("\U0001F4D6 <b>Commands</b>\n\n")
+
+	for _, section := range spec.Sections {
+		msg.WriteString("<b>")
+		msg.WriteString(section.Title)
+		msg.WriteString("</b>\n")
+		for _, cmd := range section.Commands {
+			// Wrap command args in <code> tags for Telegram formatting.
+			// Split on first space: "/mood week|month|year" → "/mood" + " week|month|year"
+			display := cmd.Cmd
+			if spaceIdx := strings.Index(cmd.Cmd, " "); spaceIdx > 0 {
+				display = cmd.Cmd[:spaceIdx] + " <code>" + cmd.Cmd[spaceIdx+1:] + "</code>"
+			}
+			fmt.Fprintf(&msg, "%s — %s\n", display, expand(cmd.Desc))
+		}
+		msg.WriteString("\n")
+	}
+
+	if spec.Footer != "" {
+		msg.WriteString(expand(strings.TrimSpace(spec.Footer)))
+	}
+
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handleClear resets the conversation context.
