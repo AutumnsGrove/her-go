@@ -1,4 +1,5 @@
 name: update_persona
+agent: main
 description: >-
   Rewrite {{her}}'s persona description. Use RARELY — only when accumulated
   self-facts suggest a meaningful evolution in how {{her}} sees herself. The

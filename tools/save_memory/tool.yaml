@@ -1,4 +1,5 @@
 name: save_memory
+agent: memory
 hint: "save a new memory about the user"
 description: >-
   Save a new memory learned from the conversation. Only for information worth

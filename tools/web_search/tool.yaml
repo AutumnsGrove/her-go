@@ -1,4 +1,5 @@
 name: web_search
+agent: main
 description: >-
   Search the web using Tavily. Returns relevant snippets and a synthesized
   summary. Use when the user asks about current events, facts you don't know,

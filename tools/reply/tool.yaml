@@ -1,4 +1,5 @@
 name: reply
+agent: main
 hint: "generate and send a response (REQUIRED every turn)"
 description: >-
   Generate and send a response to the user. REQUIRED — you MUST call this at

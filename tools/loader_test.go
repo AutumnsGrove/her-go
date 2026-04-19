@@ -10,13 +10,13 @@ func TestYAMLLoader(t *testing.T) {
 
 	// Check that all expected tools loaded from YAML.
 	// Update this count when tools are added or removed.
-	const expectedToolCount = 19
+	const expectedToolCount = 15
 	if len(toolDefs) != expectedToolCount {
 		t.Errorf("expected %d tools, got %d", expectedToolCount, len(toolDefs))
 	}
 
 	// Spot-check the core tool set (post-Phase-1 scope).
-	expectedTools := []string{"think", "done", "reply", "save_fact", "view_image", "web_search", "web_read"}
+	expectedTools := []string{"think", "done", "reply", "save_memory", "view_image", "web_search", "web_read"}
 	for _, name := range expectedTools {
 		def, ok := LookupDef(name)
 		if !ok {

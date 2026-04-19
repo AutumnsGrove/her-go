@@ -1,4 +1,5 @@
 name: set_location
+agent: main
 description: >-
   Set {{user}}'s HOME location so get_weather knows where to fetch weather
   for. Geocodes a city, address, landmark, or raw "lat,lon" coordinates
