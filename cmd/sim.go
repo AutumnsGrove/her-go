@@ -17,6 +17,7 @@ import (
 	"her/memory"
 	"her/mood"
 	"her/persona"
+	"her/scheduler"
 	"her/scrub"
 	"her/search"
 
@@ -139,7 +140,8 @@ type suite struct {
 	Description string   `yaml:"description"`
 	Tags        []string `yaml:"tags"`
 	Messages    []string `yaml:"messages"`
-	RunDream    bool     `yaml:"run_dream"` // if true, run a full dream cycle after all messages complete
+	RunDream    bool     `yaml:"run_dream"`  // run a full dream cycle after all messages complete
+	RunRollup   bool     `yaml:"run_rollup"` // force the daily mood rollup after all messages complete
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -151,6 +153,24 @@ type simTurnResult struct {
 	userMsg  string
 	botReply string
 	elapsed  time.Duration
+}
+
+// simRollupResult captures the output of a forced daily mood rollup
+// (run_rollup: true). In production the rollup fires at 21:00 local
+// via the scheduler — the sim skips that clock and invokes the
+// handler directly so we can verify the aggregation without waiting
+// for an actual day to pass.
+type simRollupResult struct {
+	Ran         bool
+	Skipped     bool   // true when the handler decided there was nothing to roll up
+	SkipReason  string // human-readable reason for Skipped
+	EntryID     int64
+	Valence     int
+	Labels      []string
+	Associations []string
+	Note        string
+	SummaryText string // what the bot would have sent to the owner chat
+	Error       string
 }
 
 // simDreamResult captures the output of the dream cycle (run_dream: true)
@@ -922,10 +942,65 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// ------------------------------------------------------------------
+	// 8c. Optional: force the daily mood rollup (run_rollup: true)
+	// ------------------------------------------------------------------
+	// Mirrors run_dream: the scheduler normally fires the rollup at
+	// 21:00 local via cron, but we skip that clock in the sim and
+	// invoke the handler directly. Lets us verify aggregation +
+	// summary without waiting for a wall-clock day.
+	var rollupResult simRollupResult
+	if s.RunRollup && moodRunner != nil {
+		rollupResult.Ran = true
+		fmt.Printf("\n[rollup] Forcing daily mood rollup...\n")
+
+		// Capture the would-be Telegram summary instead of sending
+		// anywhere — cmd/sim stays headless.
+		var capturedSummary string
+		captureSend := func(_ int64, text string) (int, error) {
+			capturedSummary = text
+			return 0, nil
+		}
+		deps := &scheduler.Deps{Store: store, Send: captureSend, ChatID: 1}
+
+		// Count dailies before/after so we can tell apart "created a
+		// new one" vs "skipped because one already existed".
+		before, _ := store.RecentMoodEntries(memory.MoodKindDaily, 1)
+		var beforeID int64
+		if len(before) > 0 {
+			beforeID = before[0].ID
+		}
+
+		h := mood.DailyRollupHandler()
+		if err := h.Execute(context.Background(), json.RawMessage(`{}`), deps); err != nil {
+			rollupResult.Error = err.Error()
+			fmt.Printf("[rollup] Error: %v\n", err)
+		} else {
+			after, _ := store.RecentMoodEntries(memory.MoodKindDaily, 1)
+			if len(after) > 0 && after[0].ID != beforeID {
+				entry := after[0]
+				rollupResult.EntryID = entry.ID
+				rollupResult.Valence = entry.Valence
+				rollupResult.Labels = entry.Labels
+				rollupResult.Associations = entry.Associations
+				rollupResult.Note = entry.Note
+				rollupResult.SummaryText = capturedSummary
+				fmt.Printf("[rollup] Logged daily entry #%d: valence=%d labels=%v\n",
+					entry.ID, entry.Valence, entry.Labels)
+			} else {
+				rollupResult.Skipped = true
+				rollupResult.SkipReason = "handler skipped (no momentary entries today or daily already exists)"
+				fmt.Printf("[rollup] Skipped — nothing new to log\n")
+			}
+		}
+	} else if s.RunRollup && moodRunner == nil {
+		fmt.Printf("\n[rollup] Skipped — mood_agent.model not configured in config.yaml\n")
+	}
+
+	// ------------------------------------------------------------------
 	// 9. Generate markdown report
 	// ------------------------------------------------------------------
 
-	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult)
+	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult, rollupResult)
 	if err != nil {
 		log.Error("failed to generate report", "err", err)
 	} else {
@@ -1211,6 +1286,7 @@ func generateReport(
 	totalCost float64,
 	totalDuration time.Duration,
 	dream simDreamResult,
+	rollup simRollupResult,
 ) (string, error) {
 	// strings.Builder is Go's equivalent of Python's io.StringIO or
 	// just building a string with a list of parts and joining them.
@@ -1263,10 +1339,54 @@ func generateReport(
 	// Dream section (only present when run_dream: true)
 	writeDreamSection(&b, dream)
 
+	// Forced daily rollup section (only present when run_rollup: true).
+	writeRollupSection(&b, rollup)
+
 	// Cost summary
 	writeCostSection(&b, simDB, runID)
 
 	return b.String(), nil
+}
+
+// writeRollupSection writes the forced daily-mood-rollup output to
+// the report. Only called when run_rollup: true in the suite YAML.
+func writeRollupSection(b *strings.Builder, r simRollupResult) {
+	if !r.Ran {
+		return
+	}
+	b.WriteString("## Daily Mood Rollup (forced)\n\n")
+
+	if r.Error != "" {
+		fmt.Fprintf(b, "**Error:** %s\n\n", r.Error)
+		return
+	}
+	if r.Skipped {
+		fmt.Fprintf(b, "_Skipped — %s._\n\n", r.SkipReason)
+		return
+	}
+
+	fmt.Fprintf(b, "**Entry #%d logged** — valence %d/7, labels: %s, associations: %s\n\n",
+		r.EntryID, r.Valence,
+		orDashList(r.Labels), orDashList(r.Associations),
+	)
+	if r.Note != "" {
+		fmt.Fprintf(b, "Note:\n> %s\n\n", r.Note)
+	}
+	if r.SummaryText != "" {
+		b.WriteString("**Summary the bot would have sent:**\n\n")
+		b.WriteString("```\n")
+		b.WriteString(r.SummaryText)
+		b.WriteString("\n```\n\n")
+	}
+}
+
+// orDashList returns a comma-joined list or "—" when empty. Tiny
+// helper for report tables.
+func orDashList(items []string) string {
+	if len(items) == 0 {
+		return "—"
+	}
+	return strings.Join(items, ", ")
 }
 
 // writeDreamSection writes the nightly reflection and persona rewrite output

@@ -236,6 +236,14 @@ func startOfDay(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
+// DailyRollupHandler returns a scheduler.Handler for the daily mood
+// rollup. Mostly useful for the sim (which calls Execute directly to
+// force-run the handler without waiting for 21:00); production code
+// goes through the init()-registered instance.
+func DailyRollupHandler() scheduler.Handler {
+	return dailyRollupHandler{}
+}
+
 func init() {
 	scheduler.Register(dailyRollupHandler{})
 }
