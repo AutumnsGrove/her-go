@@ -75,9 +75,19 @@ func (s *Scheduler) loadAndUpsertAll(rootDir string) error {
 			}
 		}
 
-		payload := cfg.Payload
-		if len(payload) == 0 {
+		// Re-marshal the YAML-parsed payload to JSON. yaml.v3 gives us a
+		// Go value (map[string]any for mappings, slices, scalars). The
+		// handler contract is JSON bytes, so we convert once here rather
+		// than in every handler.
+		var payload json.RawMessage
+		if cfg.Payload == nil {
 			payload = json.RawMessage("{}")
+		} else {
+			raw, err := json.Marshal(cfg.Payload)
+			if err != nil {
+				return fmt.Errorf("scheduler: marshalling payload for %s: %w", kind, err)
+			}
+			payload = raw
 		}
 
 		task := &memory.SchedulerTask{
