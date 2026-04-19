@@ -75,6 +75,11 @@ type HarnessOptions struct {
 	// Out lets scenario runners (the CLI) attach a log writer. Default:
 	// io.Discard.
 	Out io.Writer
+
+	// EmbedDim enables the sqlite-vec virtual tables (vec_memories,
+	// vec_moods) at the given dimension. Default 0 = no vector
+	// tables; scenarios that need KNN dedup must set this.
+	EmbedDim int
 }
 
 // NewHarness constructs a Harness with fresh fakes and a temp SQLite.
@@ -92,7 +97,7 @@ func NewHarness(t TestingT, opts HarnessOptions) *Harness {
 	clock := NewFakeClock(start)
 
 	dbPath := filepath.Join(t.TempDir(), "sim.db")
-	store, err := memory.NewStore(dbPath, 0)
+	store, err := memory.NewStore(dbPath, opts.EmbedDim)
 	if err != nil {
 		t.Fatalf("sim: NewStore: %v", err)
 	}
@@ -168,6 +173,11 @@ type Scenario struct {
 	Setup       func(h *Harness) error
 	Steps       []Step
 	Assertions  []Assertion
+
+	// HarnessOptions overrides the default Harness config for this
+	// scenario. Zero value = defaults. Scenarios that need a
+	// vec-enabled store set EmbedDim here.
+	HarnessOptions HarnessOptions
 }
 
 var (

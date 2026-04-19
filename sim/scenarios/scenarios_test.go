@@ -16,7 +16,7 @@ func TestAllScenarios(t *testing.T) {
 	for _, s := range sim.AllScenarios() {
 		s := s
 		t.Run(s.Name, func(t *testing.T) {
-			h := sim.NewHarness(t, sim.HarnessOptions{})
+			h := sim.NewHarness(t, s.HarnessOptions)
 			if err := s.Run(h); err != nil {
 				t.Fatalf("%s: %v", s.Name, err)
 			}
