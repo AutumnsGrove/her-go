@@ -29,7 +29,7 @@ Identify:
 ### Step 2 — Spawn Go Reviewer
 
 Spawn the `go-reviewer` sub-agent. It will:
-- Run C1–C8 compliance checks (error handling, concurrency, interfaces, security, resources, clarity, testing, formatting)
+- Run C0–C8 compliance checks — starting with **C0: Data Primacy** (single source of truth, no hardcoded values, manifest-driven behavior) then error handling, concurrency, interfaces, security, resources, clarity, testing, formatting
 - Apply STRIDE threat modeling to changed code
 - Identify logic errors and dead code
 - Report PASS/WARN/FAIL with `file:line` evidence
@@ -39,6 +39,20 @@ Wait for the go-reviewer to complete before continuing to Step 3.
 ### Step 3 — Her-go Architecture Checks
 
 Read each changed file. Apply the following checklists:
+
+#### Data Primacy — Her-go Specific
+
+> **Code translates data. It never defines it.** This is the project's primary design principle.
+
+Check that the diff does not violate the single-source-of-truth rule in any of these her-go-specific ways:
+
+- **Model names** — model identifiers (e.g. `qwen/qwen3-235b-a22b-2507`) appear only in `config.yaml` and are read from `cfg.Models.*` in code. A model string hardcoded anywhere in `.go` files is a FAIL.
+- **Tool definitions** — the authoritative description of a tool (name, description, parameters, category) lives in `tools/<name>/tool.yaml`. If any of that information is duplicated in Go code, the YAML is not the source of truth.
+- **Prompt and message text** — user-facing strings, persona copy, and prompt templates belong in `.md` or `.yaml` files. Inline prose in `.go` source is a FAIL unless it is a short, stable error message with no user-facing copy.
+- **Thresholds and tuning values** — token budgets, similarity cutoffs, retry counts, rate limits must be config fields, not bare literals. A `0.75` or `4096` appearing as a magic number in logic is a FAIL.
+- **Command and trigger strings** — Telegram command names (e.g. `/traces`, `/reflect`) must be defined once (as a constant or config key) and referenced everywhere else. Repeated string literals for the same command are a FAIL.
+- **PII patterns** — scrub rules and regex patterns must live in one place. If the same pattern appears in two files, one is a copy — find which is canonical.
+- **Status/label strings** — classifier verdicts, memory types, tool categories must be defined as typed constants or read from the manifest. No bare `"SAVE"` or `"RECALL"` strings scattered across the codebase.
 
 #### Tool Registration Pattern
 New tools must follow the established registration pattern:
@@ -150,7 +164,12 @@ Packages changed: [list]
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Tool registration pattern | ✅ / ⚠️ / ❌ / N/A | |
+| **Data primacy — no hardcoded model names** | ✅ / ⚠️ / ❌ / N/A | |
+| **Data primacy — tool definitions in YAML only** | | |
+| **Data primacy — no inline prompt/copy in .go files** | | |
+| **Data primacy — thresholds/tuning in config** | | |
+| **Data primacy — command strings defined once** | | |
+| Tool registration pattern | | |
 | Context bundle usage | | |
 | PII scrubbing at boundaries | | |
 | Memory classifier flow | | |
@@ -187,6 +206,7 @@ READY TO MERGE / NEEDS MINOR FIXES / CHANGES REQUIRED
 
 ## Principles
 
+- **Code translates data. It never defines it.** If a value could live in a config, manifest, or constant, it must. Hardcoded values scattered through logic are a design smell, not just a style issue. — Autumn Grove
 - Audit is read-only. Never modify files during an audit run.
 - Evidence required for every non-passing finding (`file:line`).
 - N/A is valid and honest.
