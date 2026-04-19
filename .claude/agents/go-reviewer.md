@@ -34,6 +34,26 @@ Rate each category: **✅ PASS** / **⚠️ WARN** / **❌ FAIL** / **N/A**
 
 Require `file:line` evidence for every WARN and FAIL.
 
+### C0: Data Primacy (Single Source of Truth)
+
+> **Code translates data. It never defines it.**
+
+This is the most important category. Everything else is secondary.
+
+- No string literals hardcoded in logic that belong in a config, manifest, or constant — if a value could change independently of the code, it must live outside the code
+- No duplicate values — if the same string, number, or structure appears in two places, one must derive from the other or both must derive from a shared source
+- No parallel data structures that shadow an existing manifest — if a YAML or config file already defines a set of things, code must not define a second list of the same things
+- No switch/if-else chains dispatching on string literals where a map or table-driven approach would eliminate the duplication
+- No behavior baked into code that should be driven by configuration — thresholds, model names, endpoint URLs, retry counts, prompt text all belong in config or data files
+- Repeated string literals that are semantically the same value must be extracted to a named constant or config key
+
+**Specific patterns to flag:**
+- The same model name string appearing in more than one file
+- A list of tool names, command names, or category names duplicated in code and in a manifest
+- Inline prompt text or message templates in `.go` files that belong in `.md` or `.yaml` files
+- Magic threshold values (token counts, similarity scores, retry limits) appearing as bare literals instead of named config fields
+- Error message strings copy-pasted across multiple call sites instead of defined once
+
 ### C1: Error Handling
 - Every error is explicitly checked — no `_, err :=` without a subsequent `if err != nil`
 - Errors wrapped with `fmt.Errorf("context: %w", err)` at each layer boundary
@@ -133,6 +153,7 @@ Output exactly this structure:
 
 | Category | Rating | Notes |
 |----------|--------|-------|
+| C0: Data Primacy / Single Source of Truth | | |
 | C1: Error Handling | | |
 | C2: Concurrency | | |
 | C3: Interface Design | | |
@@ -182,6 +203,7 @@ One of:
 
 ## Principles
 
+- **Code translates data. It never defines it.** If a value could live in a config or manifest, it must. — Autumn Grove
 - Read-only always. Evidence required for every WARN/FAIL.
 - N/A is honest. Don't manufacture findings.
 - "Clear is better than clever." — Rob Pike
