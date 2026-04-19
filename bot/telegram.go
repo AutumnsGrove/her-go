@@ -287,6 +287,18 @@ func (r chatRecipient) Recipient() string { return r.chatID }
 // SendToChat sends a text message to a specific Telegram chat.
 // Used by the scheduler to deliver reminders — it doesn't have a
 // tele.Context, so it calls this directly with the chat ID.
+// SendWithID is like SendToChat but returns the allocated message ID
+// so the caller can edit it later. Used by scheduler extensions that
+// want to update a message in place after first sending it.
+func (b *Bot) SendWithID(chatID int64, text string) (int, error) {
+	chat := &tele.Chat{ID: chatID}
+	msg, err := b.tb.Send(chat, text)
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
 func (b *Bot) SendToChat(chatID int64, text string) error {
 	_, err := b.tb.Send(
 		chatRecipient{chatID: fmt.Sprintf("%d", chatID)},
