@@ -177,6 +177,115 @@ else
 fi
 
 # ============================================================================
+# 6. HELP YAML SYNC — new commands must appear in help.yaml
+# ============================================================================
+# If you register a new /command in bot/telegram.go, it needs an entry in
+# bot/help.yaml so users can discover it via /help. Catches the classic
+# "added a command but forgot to document it" bug.
+# Suppress: add "// help-ok" on the Handle line (for internal-only commands)
+
+if echo "$go_files" | grep -q 'bot/'; then
+    echo -e "${DIM}Checking help.yaml sync...${NC}"
+
+    # Extract /commands registered in staged bot/*.go files
+    # Pattern: b.tb.Handle("/foo" or bot.Handle("/foo"
+    registered=$(git diff --cached -U0 -- 'bot/*.go' | \
+        grep '^+' | grep -v '^+++' | \
+        grep -oE 'Handle\s*\(\s*"\/[a-z_]+"' | \
+        grep -oE '\/[a-z_]+' | sort -u || true)
+
+    if [ -n "$registered" ]; then
+        help_missing=""
+        for cmd in $registered; do
+            # Check if the command appears in help.yaml
+            if ! grep -q "cmd:.*${cmd}" bot/help.yaml 2>/dev/null; then
+                # Check for help-ok suppression on the Handle line
+                if ! git diff --cached -U0 -- 'bot/*.go' | \
+                    grep "Handle.*\"${cmd}\"" | grep -q 'help-ok'; then
+                    help_missing="${help_missing}  ${cmd}\n"
+                fi
+            fi
+        done
+
+        if [ -n "$help_missing" ]; then
+            echo -e "${RED}  ✗ New commands not in bot/help.yaml:${NC}"
+            echo -e "$help_missing"
+            echo -e "${YELLOW}    Fix: Add entries to bot/help.yaml${NC}"
+            echo -e "${YELLOW}    Suppress: add ${BLUE}// help-ok${YELLOW} on the Handle line${NC}"
+            checks_failed=1
+        else
+            echo -e "${GREEN}  ✓ help.yaml in sync${NC}"
+        fi
+    else
+        echo -e "${GREEN}  ✓ help.yaml sync (no new commands)${NC}"
+    fi
+else
+    echo -e "${GREEN}  ✓ help.yaml sync skipped (no bot/ files staged)${NC}"
+fi
+
+# ============================================================================
+# 7. DATA PRIMACY — no hardcoded model strings in Go code
+# ============================================================================
+# Model identifiers (e.g., "qwen/qwen3-235b") belong in config.yaml, read
+# via cfg.Models.*. A model string in .go source means someone will forget
+# to update it when the model changes. The config is the single source of truth.
+# Suppress: add "// model-ok" on the same line (for test fixtures, comments)
+
+echo -e "${DIM}Checking for hardcoded model strings...${NC}"
+
+# Common model string patterns from OpenRouter
+model_hits=$(git diff --cached -U0 -- '*.go' | \
+    grep '^+' | grep -v '^+++' | \
+    grep -v '_test\.go' | \
+    grep -v 'model-ok' | \
+    grep -v '^\+\s*//' | \
+    grep -oE '"(qwen|deepseek|anthropic|google|moonshotai|openai|meta-llama|mistralai)/[a-zA-Z0-9._-]+"' || true)
+
+if [ -z "$model_hits" ]; then
+    echo -e "${GREEN}  ✓ no hardcoded models${NC}"
+else
+    echo -e "${RED}  ✗ Hardcoded model string in Go code:${NC}"
+    echo "$model_hits" | sort -u | sed 's/^/    /'
+    echo -e "${YELLOW}    Fix: Use cfg.Models.* from config.yaml${NC}"
+    echo -e "${YELLOW}    Suppress: add ${BLUE}// model-ok${YELLOW} on the line${NC}"
+    checks_failed=1
+fi
+
+# ============================================================================
+# 8. TOOL REGISTRATION — new tool dirs must be imported in agent.go
+# ============================================================================
+# Every tools/<name>/handler.go registers via init(). For init() to run,
+# the package must be blank-imported in agent/agent.go. Missing the import
+# means the tool silently doesn't exist at runtime — no error, just gone.
+
+echo -e "${DIM}Checking tool registration...${NC}"
+
+# Find all tool handler dirs (each has a handler.go)
+tool_dirs=$(find tools -name handler.go -maxdepth 2 2>/dev/null | \
+    sed 's|/handler.go||' | sort || true)
+
+if [ -n "$tool_dirs" ]; then
+    unregistered=""
+    for dir in $tool_dirs; do
+        pkg="her/${dir}"
+        if ! grep -q "\"${pkg}\"" agent/agent.go 2>/dev/null; then
+            unregistered="${unregistered}  ${pkg}\n"
+        fi
+    done
+
+    if [ -n "$unregistered" ]; then
+        echo -e "${RED}  ✗ Tool handlers not imported in agent/agent.go:${NC}"
+        echo -e "$unregistered"
+        echo -e "${YELLOW}    Fix: Add ${BLUE}_ \"her/tools/<name>\"${YELLOW} to agent/agent.go imports${NC}"
+        checks_failed=1
+    else
+        echo -e "${GREEN}  ✓ tool registration${NC}"
+    fi
+else
+    echo -e "${GREEN}  ✓ tool registration (no tool handlers found)${NC}"
+fi
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""

@@ -130,13 +130,19 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	}()
 
 	// --- Trace callbacks ---
-	// Both callbacks share a SINGLE Telegram message (🧠 placeholder).
-	// Trinity's tool calls appear first; Kimi's memory tool calls are appended
-	// below a separator after Trinity finishes. One message, always above the reply.
+	// Trace callbacks pull from a single per-turn trace.Board. Each
+	// registered stream gets its own slot; render order comes from
+	// the trace.Streams() registry so main always shows before
+	// memory / mood. New agents in new packages can request a
+	// callback just by registering + calling getTrace("their-slot").
 	var traceCallback tools.TraceCallback
 	var memoryTraceCallback tools.TraceCallback
+	var moodTraceCallback tools.TraceCallback
 	if b.cfg.Agent.Trace {
-		traceCallback, memoryTraceCallback = b.makeTraceCallbacks(c)
+		getTrace := b.makeTraceCallbacks(c)
+		traceCallback = getTrace("main")
+		memoryTraceCallback = getTrace("memory")
+		moodTraceCallback = getTrace("mood")
 	}
 
 	// --- Reply placeholder ---
@@ -291,6 +297,12 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
+
+	// Fire the mood agent in a goroutine. Runs parallel to the memory
+	// agent that agent.Run already launched; both are post-reply
+	// best-effort and never block the user. moodTraceCallback may be
+	// nil (traces disabled) — the launch is still safe.
+	b.launchMoodAgent(input.ConversationID, moodTraceCallback)
 
 	// --- TUI end event ---
 	if b.eventBus != nil {

@@ -103,8 +103,8 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	if params.EventBus != nil {
 		params.EventBus.Emit(tui.TurnStartEvent{
 			Time:           turnStart,
-			TurnID:         input.TriggerMsgID + 1, // +1 distinguishes from Trinity's turn in the TUI
-			UserMessage:    "🧠 Kimi (memory)",
+			TurnID:         input.TriggerMsgID + 1, // +1 distinguishes from the main agent's turn in the TUI
+			UserMessage:    "🧩 memory",
 			ConversationID: input.ConversationID,
 		})
 	}
@@ -164,16 +164,18 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	const maxIterations = 10
 
 	// tracing tracks whether we have a live trace callback and accumulates
-	// the formatted trace lines for the memory agent's separate trace message.
+	// the formatted trace lines for the memory agent's slot.
+	// The slot header (🧩 memory) is owned by the trace registry —
+	// callers prepend it at render time — so we only send body
+	// content here.
 	tracing := params.TraceCallback != nil
-	const memTraceHeader = "🧠 <b>Kimi</b> (memory)\n"
 	var traceLines []string
 
 	emitMemTrace := func() {
 		if !tracing || len(traceLines) == 0 {
 			return
 		}
-		_ = params.TraceCallback(memTraceHeader + strings.Join(traceLines, "\n"))
+		_ = params.TraceCallback(strings.Join(traceLines, "\n"))
 	}
 
 	for i := 0; i < maxIterations; i++ {

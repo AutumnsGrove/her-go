@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/mood"
 	"her/search"
 	"her/tui"
 	"her/voice"
@@ -35,6 +37,7 @@ type Bot struct {
 	llm              *llm.Client          // conversational model (Deepseek)
 	agentLLM         *llm.Client          // tool-calling orchestrator
 	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
+	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
 	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
 	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
 	embedClient      *embed.Client        // local embedding model for similarity
@@ -46,6 +49,23 @@ type Bot struct {
 	configPath    string // path to config.yaml — needed for /traces toggle
 	systemPrompt  string
 	startTime     time.Time
+
+	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
+	// when cfg.MoodAgent.Model is empty. runAgent launches a
+	// goroutine that calls moodRunner.RunForConversation after each
+	// reply. The sweeper runs in its own goroutine started by Start().
+	moodRunner      *mood.Runner
+	moodSweeper     *mood.ProposalSweeper
+	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
+
+	// moodVocab is the loaded vocab used by both the agent and the
+	// /mood wizard. Shared so the two paths can't drift.
+	moodVocab *mood.Vocab
+
+	// moodWizards tracks in-flight /mood sessions per chat id.
+	// Value is *wizardState. Wizards auto-expire after 10 minutes
+	// (sweeper inside handleMoodWizardCallback handles the gc).
+	moodWizards sync.Map
 
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
@@ -100,7 +120,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, memoryAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -142,6 +162,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		llm:            llmClient,
 		agentLLM:       agentLLM,
 		memoryAgentLLM: memoryAgentLLM,
+		moodAgentLLM:   moodAgentLLM,
 		visionLLM:      visionLLM,
 		classifierLLM:  classifierLLM,
 		embedClient:    embedClient,
@@ -155,6 +176,16 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 		startTime:      time.Now(),
 		eventBus:       eventBus,
 		agentEvents:    make(chan agent.AgentEvent, 16),
+	}
+
+	// Build the mood runner + sweeper if the mood agent is configured.
+	// These wire the real production path: medium-confidence inferences
+	// emit Telegram proposals via bot.sendMoodProposal; the sweeper
+	// edits expired proposals in place on its own goroutine.
+	if moodAgentLLM != nil {
+		if err := bot.initMood(); err != nil {
+			return nil, fmt.Errorf("initializing mood pipeline: %w", err)
+		}
 	}
 
 	// cmd wraps a handler to log the command to the command_log table.
@@ -181,11 +212,9 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	tb.Handle("/compact", cmd("/compact", bot.handleCompact))
 	tb.Handle("/status", cmd("/status", bot.handleStatus))
 	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
-	tb.Handle("/remind", cmd("/remind", bot.handleRemind))
-	tb.Handle("/schedule", cmd("/schedule", bot.handleSchedule))
 	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
-	tb.Handle("/mood", cmd("/mood", bot.handleMood))
 	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
+	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
 	tb.Handle("/dream", cmd("/dream", bot.handleDream))
 
 	// Register message handler for all text messages.
@@ -235,12 +264,19 @@ func (b *Bot) Start() {
 	// agent run without a user message.
 	go b.consumeAgentEvents()
 
+	// Start the mood proposal expiry sweeper if the mood pipeline
+	// is configured. No-op otherwise.
+	b.startMoodSweeper()
+
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
 }
 
 // Stop gracefully shuts down the bot.
 func (b *Bot) Stop() {
+	if b.moodSweeperStop != nil {
+		b.moodSweeperStop() // cancels the sweeper goroutine
+	}
 	b.tb.Stop()
 	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }
@@ -266,6 +302,18 @@ func (r chatRecipient) Recipient() string { return r.chatID }
 // SendToChat sends a text message to a specific Telegram chat.
 // Used by the scheduler to deliver reminders — it doesn't have a
 // tele.Context, so it calls this directly with the chat ID.
+// SendWithID is like SendToChat but returns the allocated message ID
+// so the caller can edit it later. Used by scheduler extensions that
+// want to update a message in place after first sending it.
+func (b *Bot) SendWithID(chatID int64, text string) (int, error) {
+	chat := &tele.Chat{ID: chatID}
+	msg, err := b.tb.Send(chat, text)
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
 func (b *Bot) SendToChat(chatID int64, text string) error {
 	_, err := b.tb.Send(
 		chatRecipient{chatID: fmt.Sprintf("%d", chatID)},
@@ -383,6 +431,14 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 // and manages memory. The placeholder message gets edited to show status
 // updates and the final response as tools execute.
 func (b *Bot) handleMessage(c tele.Context) error {
+	// Intercept text replies when a /mood wizard is waiting on its
+	// note step. The wizard handler writes the entry + acknowledges
+	// via edit; we return early so the message doesn't flow through
+	// the agent pipeline.
+	if b.HandleMoodWizardNote(c) {
+		return nil
+	}
+
 	msg := c.Message()
 	userText := msg.Text
 	conversationID := b.getConversationID(msg.Chat.ID)

@@ -73,6 +73,32 @@ search:
   tavily_api_key: "${TAVILY_API_KEY}"
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
 
+mood_agent:
+  # Kimi K2 via OpenRouter → Groq. Structured-output model —
+  # returns JSON per the mood schema. Empty model disables the
+  # post-turn mood agent entirely.
+  model: "moonshotai/kimi-k2-0905"
+  temperature: 0.2
+  max_tokens: 512
+  timeout: 60
+  # provider:
+  #   order: ["Groq"]
+
+mood:
+  # Point at a custom vocab file to override Apple's embedded lists.
+  # Empty → use mood/vocab.yaml embedded at build time.
+  vocab_path: ""
+  context_turns: 5               # how many recent turns the agent sees
+  confidence_high: 0.75          # ≥ this → auto-log as source=inferred
+  confidence_low: 0.40           # < this → drop silently
+  dedup_window_minutes: 120      # KNN dedup lookback
+  dedup_similarity: 0.80         # cosine similarity threshold for "same mood"
+  proposal_expiry_minutes: 30    # how long a Telegram proposal stays tappable
+  sweeper_interval_minutes: 5    # how often the expiry sweeper runs
+  daily_rollup_cron: "0 21 * * *"  # 21:00 local — end-of-day rollup
+  # classifier is the unified cfg.classifier.model — same model across
+  # memory writes and mood writes, no separate knob.
+
 memory:
   db_path: "./her.db"
   recent_messages: 6             # sliding window size (compaction summaries cover older context)

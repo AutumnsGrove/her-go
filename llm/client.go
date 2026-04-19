@@ -50,7 +50,7 @@ type Client struct {
 	fallbackMaxTokens   int
 
 	// Provider routing — OpenRouter-specific. Controls which providers
-	// serve this model (e.g., pin Kimi K2 to Groq for speed).
+	// serve this model (e.g., pin a memory-agent model to Groq for speed).
 	provider *ProviderRouting
 }
 

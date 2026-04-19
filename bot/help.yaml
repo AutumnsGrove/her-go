@@ -1,0 +1,63 @@
+# Help text for the /help command. Each section has a title and a list
+# of commands with their descriptions. {{her}} is expanded at runtime
+# to the bot's configured name (e.g., "Mira").
+#
+# This is the single source of truth for /help output. Adding a new
+# command? Add it here — the Go code just renders this list.
+
+sections:
+  - title: Conversation
+    commands:
+      - cmd: /clear
+        desc: start a fresh conversation
+      - cmd: /compact
+        desc: summarize older messages to free up context
+
+  - title: Memory
+    commands:
+      - cmd: "/forget <id>"
+        desc: forget a specific fact
+      - cmd: /facts
+        desc: list all remembered facts
+
+  - title: Persona
+    commands:
+      - cmd: /persona
+        desc: "view {{her}}'s current personality"
+      - cmd: /persona traits
+        desc: personality trait scores
+      - cmd: /persona rewrite
+        desc: manually trigger a persona rewrite
+      - cmd: /reflect
+        desc: trigger a reflection
+      - cmd: /reflections
+        desc: view past reflections
+      - cmd: /dream
+        desc: "run a full dream cycle now (reflection + persona rewrite)"
+
+  - title: Mood
+    commands:
+      - cmd: /mood
+        desc: "log your mood (4-step wizard: valence → labels → associations → note)"
+      - cmd: "/mood week|month|year"
+        desc: mood chart over time
+
+  - title: Info
+    commands:
+      - cmd: /stats
+        desc: "token usage, cost, and message counts"
+      - cmd: /status
+        desc: "uptime, models, and service health"
+
+  - title: System
+    commands:
+      - cmd: /traces
+        desc: toggle agent thinking traces in chat
+      - cmd: /restart
+        desc: restart the bot process
+      - cmd: /help
+        desc: this message
+
+footer: |
+  Send a photo and {{her}} will describe what she sees.
+  Just chat normally — she remembers your conversations.

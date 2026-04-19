@@ -133,31 +133,6 @@ func (s *Store) initTables() error {
 			FOREIGN KEY (message_id) REFERENCES messages(id)
 		)`,
 
-		// Scheduled tasks — the scheduler's task table. Supports one-shot
-		// reminders (v0.2), recurring cron jobs, and conditional tasks (v0.6).
-		// The scheduler polls this every minute for tasks where next_run <= now.
-		// All state lives here so tasks survive restarts.
-		`CREATE TABLE IF NOT EXISTS scheduled_tasks (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT,
-			schedule_type TEXT NOT NULL,
-			cron_expr TEXT,
-			trigger_at DATETIME,
-			task_type TEXT NOT NULL,
-			payload JSON NOT NULL,
-			enabled BOOLEAN DEFAULT 1,
-			last_run DATETIME,
-			next_run DATETIME,
-			run_count INTEGER DEFAULT 0,
-			max_runs INTEGER,
-			priority TEXT NOT NULL DEFAULT 'normal',
-			created_by TEXT DEFAULT 'user',
-			source_message_id INTEGER,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (source_message_id) REFERENCES messages(id)
-		)`,
-
 		`CREATE TABLE IF NOT EXISTS persona_versions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -218,22 +193,6 @@ func (s *Store) initTables() error {
 			tool_args TEXT,
 			content TEXT,
 			FOREIGN KEY (message_id) REFERENCES messages(id)
-		)`,
-
-		// Mood entries — tracks the user's emotional state over time.
-		// Sources: "inferred" (LLM guesses from conversation), "manual"
-		// (Mira logs it from what the user says), "checkin" (proactive
-		// inline keyboard check-ins in v0.6).
-		// Rating is 1-5: 1=bad, 2=rough, 3=meh, 4=good, 5=great.
-		// Tags is a JSON object for structured metadata (energy, stress, etc.).
-		`CREATE TABLE IF NOT EXISTS mood_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-			rating INTEGER NOT NULL,
-			note TEXT,
-			tags TEXT,
-			source TEXT DEFAULT 'inferred',
-			conversation_id TEXT
 		)`,
 
 		// Expenses — structured financial data from receipt scanning.
@@ -365,6 +324,77 @@ func (s *Store) initTables() error {
 			last_reflection_at DATETIME,
 			last_rewrite_at    DATETIME
 		)`,
+
+		// Scheduler tasks — backs the extension-based scheduler package
+		// (`scheduler/`). One row per registered task; extensions declare
+		// themselves via task.yaml files and the runner dispatches by
+		// kind. See docs/plans/PLAN-mood-tracking-redesign.md for the
+		// full design.
+		`CREATE TABLE IF NOT EXISTS scheduler_tasks (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind               TEXT NOT NULL,
+			cron_expr          TEXT,
+			next_fire          DATETIME NOT NULL,
+			payload_json       TEXT NOT NULL DEFAULT '{}',
+			retry_max_attempts INTEGER NOT NULL DEFAULT 0,
+			retry_backoff      TEXT NOT NULL DEFAULT 'none',
+			retry_initial_wait INTEGER NOT NULL DEFAULT 0,
+			last_run_at        DATETIME,
+			last_error         TEXT,
+			attempt_count      INTEGER NOT NULL DEFAULT 0,
+			created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_scheduler_tasks_next_fire
+			ON scheduler_tasks(next_fire)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_tasks_kind
+			ON scheduler_tasks(kind)`,
+
+		// Mood entries — Apple-style state-of-mind tracking. Each row is
+		// either a momentary snapshot (one specific moment) or a daily
+		// rollup (how the day felt overall). See the `mood/` package and
+		// docs/plans/PLAN-mood-tracking-redesign.md.
+		//
+		//   valence      — 1-7, very unpleasant → very pleasant
+		//   labels       — JSON array of strings from mood/vocab.yaml
+		//   associations — JSON array of domain tags (Work, Family, …)
+		//   source       — "inferred" | "confirmed" | "manual"
+		//   confidence   — 0-1; only meaningful for inferred entries
+		//   embedding    — cached note+labels vector for KNN dedup
+		`CREATE TABLE IF NOT EXISTS mood_entries (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts              DATETIME DEFAULT CURRENT_TIMESTAMP,
+			kind            TEXT NOT NULL,
+			valence         INTEGER NOT NULL,
+			labels          TEXT NOT NULL DEFAULT '[]',
+			associations   TEXT NOT NULL DEFAULT '[]',
+			note           TEXT NOT NULL DEFAULT '',
+			source         TEXT NOT NULL,
+			confidence     REAL NOT NULL DEFAULT 0,
+			conversation_id TEXT,
+			embedding      BLOB,
+			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mood_entries_ts
+			ON mood_entries(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_mood_entries_kind_ts
+			ON mood_entries(kind, ts)`,
+
+		// Pending mood proposals — medium-confidence inference proposals
+		// the user hasn't tapped yet. Telegram message ID is stored so the
+		// expiry sweeper can edit the inline keyboard in place when the
+		// proposal times out. Once the user taps (or the sweeper acts),
+		// the row moves to status=confirmed/rejected/expired.
+		`CREATE TABLE IF NOT EXISTS pending_mood_proposals (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts                  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			telegram_chat_id    INTEGER NOT NULL,
+			telegram_message_id INTEGER NOT NULL,
+			proposal_json       TEXT NOT NULL,
+			status              TEXT NOT NULL DEFAULT 'pending',
+			expires_at          DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pending_mood_status_expires
+			ON pending_mood_proposals(status, expires_at)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -399,10 +429,6 @@ func (s *Store) initTables() error {
 		// voice_memo_path: path to original audio file for voice messages.
 		// Already in the CREATE TABLE for new DBs, but existing DBs need this.
 		`ALTER TABLE messages ADD COLUMN voice_memo_path TEXT`,
-		// priority: "normal", "high", or "critical". Controls which damping
-		// checks a task is subject to. Critical tasks (reminders, medication)
-		// always fire. Existing tasks get "normal" which is the safe default.
-		`ALTER TABLE scheduled_tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`,
 		// tags: comma-separated topic descriptors for semantic search.
 		// Facts are embedded by tags (not by fact text) so the vector space
 		// organizes by TOPIC rather than by surface-level word overlap.
@@ -478,12 +504,7 @@ func (s *Store) initTables() error {
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream ON summaries(conversation_id, stream)`)
 
 	// Indexes — CREATE INDEX IF NOT EXISTS is idempotent like the tables.
-	// This index lets the scheduler's polling loop quickly find tasks that
-	// are due to run: it only includes enabled tasks, sorted by next_run.
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run
-		 ON scheduled_tasks(next_run) WHERE enabled = 1`,
-
 		// Expense indexes — date index for "how much this week/month" queries,
 		// category index for per-category breakdowns.
 		`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`,
@@ -512,6 +533,18 @@ func (s *Store) initTables() error {
 		)
 		if _, err := s.db.Exec(vecDDL); err != nil {
 			return fmt.Errorf("creating vec_memories virtual table: %w", err)
+		}
+
+		// Parallel virtual table for mood entries — same vec0 engine,
+		// same cosine distance metric, different rowid space. Keyed by
+		// mood_entries.id for JOINing back to the parent row. Powers the
+		// embedding-based dedup pass in the mood agent.
+		moodVecDDL := fmt.Sprintf(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS vec_moods USING vec0(embedding float[%d] distance_metric=cosine)`,
+			s.EmbedDimension,
+		)
+		if _, err := s.db.Exec(moodVecDDL); err != nil {
+			return fmt.Errorf("creating vec_moods virtual table: %w", err)
 		}
 	}
 

@@ -1,0 +1,19 @@
+# mood_daily_rollup — end-of-day summary of today's momentary entries.
+#
+# Fires at 21:00 local time. The handler queries today's entries,
+# averages valence, picks the top labels and associations, and logs a
+# kind=daily, source=inferred MoodEntry. If the scheduler Deps has a
+# Send callback wired (the live bot does), it also pushes a short
+# summary to the owner chat.
+#
+# Retries: two attempts with a 1-minute wait. Transient OpenRouter /
+# SQLite hiccups resolve quickly; beyond that we'd rather skip to
+# tomorrow than spam retries.
+
+kind: mood_daily_rollup
+cron: "0 21 * * *"
+payload: {}
+retry:
+  max_attempts: 2
+  backoff: linear
+  initial_wait: 1m

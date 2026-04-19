@@ -32,7 +32,9 @@ type Config struct {
 	Vision        VisionConfig        `yaml:"vision"`
 	Classifier    ClassifierConfig    `yaml:"classifier"`
 	MemoryAgent   MemoryAgentConfig   `yaml:"memory_agent"`
+	MoodAgent     MoodAgentConfig     `yaml:"mood_agent"`
 	Memory        MemoryConfig        `yaml:"memory"`
+	Mood          MoodConfig          `yaml:"mood"`
 	Embed      EmbedConfig      `yaml:"embed"`
 	Search     SearchConfig     `yaml:"search"`
 	Scrub      ScrubConfig      `yaml:"scrub"`
@@ -108,7 +110,7 @@ type ChatConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). Groq/Kimi should respond in <5s — 20s is a reasonable ceiling.
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 	Streaming   bool            `yaml:"streaming"` // stream reply tokens to Telegram for a live typing effect (default false)
@@ -151,7 +153,7 @@ type ClassifierConfig struct {
 // MemoryAgentConfig holds settings for the post-turn background memory agent.
 // This model runs after the main agent delivers its reply — it reviews the
 // conversation turn and extracts facts to save. Runs in a goroutine so it
-// never blocks the user. Kimi K2.5 is recommended for nuanced fact extraction.
+// never blocks the user. A strong narrative-language model is recommended for nuanced fact extraction.
 type MemoryAgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
@@ -159,6 +161,57 @@ type MemoryAgentConfig struct {
 	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
+// MoodAgentConfig controls the post-turn background mood agent.
+// Same shape as MemoryAgentConfig — a strong narrative-language model runs in a
+// goroutine after each reply, scoring a structured mood inference
+// against the Apple-style vocab. Nil/empty model disables the
+// agent at startup.
+type MoodAgentConfig struct {
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default)
+	Provider    *ProviderConfig `yaml:"provider,omitempty"`
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
+// MoodConfig holds behavior knobs for the mood agent + sweeper.
+// Defaults match docs/plans/PLAN-mood-tracking-redesign.md.
+type MoodConfig struct {
+	// VocabPath is the YAML file listing valence buckets, labels,
+	// and associations. Empty → use the embedded default.
+	VocabPath string `yaml:"vocab_path"`
+
+	// ContextTurns is how many recent user+assistant turns the
+	// agent sees. Default 5.
+	ContextTurns int `yaml:"context_turns"`
+
+	// ConfidenceHigh — ≥ this → auto-log. Default 0.75.
+	ConfidenceHigh float64 `yaml:"confidence_high"`
+
+	// ConfidenceLow — < this → drop silently. Default 0.40.
+	ConfidenceLow float64 `yaml:"confidence_low"`
+
+	// DedupWindowMinutes is the KNN dedup lookback. Default 120.
+	DedupWindowMinutes int `yaml:"dedup_window_minutes"`
+
+	// DedupSimilarity — cosine similarity threshold for "same
+	// mood again". Default 0.80.
+	DedupSimilarity float64 `yaml:"dedup_similarity"`
+
+	// ProposalExpiryMinutes is how long a Telegram proposal stays
+	// tappable. Default 30.
+	ProposalExpiryMinutes int `yaml:"proposal_expiry_minutes"`
+
+	// SweeperIntervalMinutes is how often the expiry sweeper runs.
+	// Default 5.
+	SweeperIntervalMinutes int `yaml:"sweeper_interval_minutes"`
+
+	// DailyRollupCron is the cron expression for the daily rollup
+	// task. Default "0 21 * * *" (9pm local).
+	DailyRollupCron string `yaml:"daily_rollup_cron"`
 }
 
 // ProviderConfig controls OpenRouter provider routing from config.yaml.
