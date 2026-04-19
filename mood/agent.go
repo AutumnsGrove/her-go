@@ -148,6 +148,13 @@ type Deps struct {
 	// analysis can reconstruct which conversation the mood came
 	// from. Empty means "unknown" (stored as NULL).
 	ConversationID string
+
+	// Trace is optional — when non-nil, RunAgent calls it at each
+	// decision point with a cumulative HTML trace string. Same
+	// signature as the memory agent's trace callback so the bot can
+	// hand the mood agent a callback that writes into a shared
+	// TraceBoard slot. Leaving it nil disables tracing.
+	Trace func(html string) error
 }
 
 // Result is what RunAgent reports back. Exactly one of Entry or
@@ -191,14 +198,24 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 		turns = turns[len(turns)-cfg.ContextTurns:]
 	}
 
+	// Trace collector — accumulates HTML lines and flushes to the
+	// callback on every meaningful step. Safe to call even when the
+	// callback is nil; the append is harmless noise.
+	var trace traceBuf
+	trace.emit(deps.Trace, "🎭 <b>mood</b>\nthinking…")
+
 	// 1. Ask the LLM.
 	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns)
 	if err != nil {
 		log.Error("mood agent LLM call failed", "err", err)
+		trace.line(fmt.Sprintf("⚠️ llm error: %s", err))
+		trace.flush(deps.Trace)
 		return Result{Action: ActionErrored, Reason: err.Error()}
 	}
 
 	if inference.Skip {
+		trace.line(fmt.Sprintf("skipped — %s", inference.Reason))
+		trace.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedNoSignal,
 			Reason:    inference.Reason,
@@ -206,11 +223,17 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 		}
 	}
 
+	trace.line(fmt.Sprintf("llm: valence=%d labels=%v conf=%.2f",
+		inference.Valence, inference.Labels, inference.Confidence))
+	trace.flush(deps.Trace)
+
 	// 2. Vocab filter — drop hallucinated labels/associations.
 	before := len(inference.Labels) + len(inference.Associations)
 	inference.Labels = filterKnown(inference.Labels, deps.Vocab.IsLabel)
 	inference.Associations = filterKnown(inference.Associations, deps.Vocab.IsAssociation)
 	if len(inference.Labels) == 0 {
+		trace.line(fmt.Sprintf("vocab filter dropped all labels (had %d)", before))
+		trace.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedVocab,
 			Reason:    fmt.Sprintf("no valid labels survived vocab filter (had %d entries)", before),
@@ -221,6 +244,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	// 3. Valence must land in [1,7]; otherwise the model made
 	// something up.
 	if inference.Valence < 1 || inference.Valence > 7 {
+		trace.line(fmt.Sprintf("valence %d out of range — dropped", inference.Valence))
+		trace.flush(deps.Trace)
 		return Result{
 			Action:    ActionDroppedNoSignal,
 			Reason:    fmt.Sprintf("valence %d out of range", inference.Valence),
@@ -234,8 +259,13 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	if heuristic > confidence {
 		confidence = heuristic
 	}
+	trace.line(fmt.Sprintf("hybrid confidence: %.2f (llm %.2f, signals %.2f)",
+		confidence, inference.Confidence, heuristic))
+	trace.flush(deps.Trace)
 
 	if confidence < cfg.ConfidenceLow {
+		trace.line(fmt.Sprintf("below low threshold %.2f — dropped", cfg.ConfidenceLow))
+		trace.flush(deps.Trace)
 		return Result{
 			Action:     ActionDroppedLow,
 			Reason:     fmt.Sprintf("confidence %.2f below low threshold %.2f", confidence, cfg.ConfidenceLow),
@@ -249,6 +279,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	if deps.Classifier != nil {
 		ok, reason := classifyReal(ctx, deps.Classifier, inference, turns)
 		if !ok {
+			trace.line(fmt.Sprintf("classifier rejected: %s", reason))
+			trace.flush(deps.Trace)
 			return Result{
 				Action:     ActionDroppedClassify,
 				Reason:     reason,
@@ -256,6 +288,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 				Inference:  inference,
 			}
 		}
+		trace.line("classifier: REAL ✓")
+		trace.flush(deps.Trace)
 	}
 
 	// 6. Build the candidate entry (not yet saved). Embedding is
@@ -303,6 +337,9 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 			// human-readable.
 			topSim := 1.0 - neighbors[0].Distance
 			if topSim >= cfg.DedupSimilarity {
+				trace.line(fmt.Sprintf("dedup: similar to #%d (sim=%.2f) — dropped",
+					neighbors[0].ID, topSim))
+				trace.flush(deps.Trace)
 				return Result{
 					Action:     ActionDroppedDedup,
 					Reason:     fmt.Sprintf("similar entry #%d within window (sim=%.2f)", neighbors[0].ID, topSim),
@@ -310,14 +347,37 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 					Inference:  inference,
 				}
 			}
+			trace.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f (below %.2f threshold)",
+				neighbors[0].ID, topSim, cfg.DedupSimilarity))
+			trace.flush(deps.Trace)
+		} else {
+			trace.line("dedup: no neighbors in window")
+			trace.flush(deps.Trace)
 		}
 	}
 
 	// 8. Route by confidence tier.
 	if confidence >= cfg.ConfidenceHigh {
-		return autoLog(deps, candidate, inference, confidence)
+		res := autoLog(deps, candidate, inference, confidence)
+		if res.Entry != nil {
+			trace.line(fmt.Sprintf("✅ auto-logged #%d (source=inferred)", res.Entry.ID))
+		} else {
+			trace.line(fmt.Sprintf("⚠️ auto-log errored: %s", res.Reason))
+		}
+		trace.flush(deps.Trace)
+		return res
 	}
-	return emitProposal(ctx, deps, cfg, candidate, inference, confidence)
+	res := emitProposal(ctx, deps, cfg, candidate, inference, confidence)
+	switch res.Action {
+	case ActionProposalEmitted:
+		trace.line("📩 medium-confidence proposal sent")
+	case ActionErrored:
+		trace.line(fmt.Sprintf("⚠️ proposal errored: %s", res.Reason))
+	default:
+		trace.line(fmt.Sprintf("dropped: %s", res.Reason))
+	}
+	trace.flush(deps.Trace)
+	return res
 }
 
 // autoLog saves a high-confidence inferred entry and returns the
@@ -456,4 +516,57 @@ func filterKnown(in []string, isKnown func(string) bool) []string {
 // return something the caller can log/branch on).
 func errResult(err error) Result {
 	return Result{Action: ActionErrored, Reason: err.Error()}
+}
+
+// traceBuf accumulates trace lines as the agent makes decisions.
+// Each flush sends the full cumulative text to the callback so the
+// Telegram message edit shows a growing list rather than one-liner
+// overwrites. Safe to use even when the callback is nil — line() is
+// a noop in that case. Not thread-safe: the agent runs single-
+// threaded within one RunAgent call.
+type traceBuf struct {
+	header string
+	lines  []string
+}
+
+// emit writes the first (header + body) line, initializing the buf.
+// Subsequent calls should use line() + flush().
+func (t *traceBuf) emit(cb func(string) error, body string) {
+	t.header = body
+	if cb == nil {
+		return
+	}
+	_ = cb(body)
+}
+
+// line appends a detail line to the buffer. No callback fire — pair
+// with flush().
+func (t *traceBuf) line(s string) {
+	t.lines = append(t.lines, s)
+}
+
+// flush renders the full header + lines and sends to the callback.
+// Pair with line() to coalesce multiple decisions into one edit.
+func (t *traceBuf) flush(cb func(string) error) {
+	if cb == nil {
+		return
+	}
+	text := t.header
+	if len(t.lines) > 0 {
+		text = text + "\n" + joinLines(t.lines)
+	}
+	_ = cb(text)
+}
+
+// joinLines joins with newlines. Out of line only so the agent file
+// doesn't need another strings.Join import line in every caller.
+func joinLines(in []string) string {
+	if len(in) == 0 {
+		return ""
+	}
+	out := in[0]
+	for _, s := range in[1:] {
+		out += "\n" + s
+	}
+	return out
 }

@@ -227,16 +227,26 @@ func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
 
 // launchMoodAgent fires mood.Runner.RunForConversation in a goroutine.
 // Called from runAgent after the main reply is sent. No-op when the
-// mood runner isn't configured.
-func (b *Bot) launchMoodAgent(convID string) {
+// mood runner isn't configured. When trace is non-nil, decision-point
+// traces flow into its slot of the turn's TraceBoard.
+func (b *Bot) launchMoodAgent(convID string, trace func(string) error) {
 	if b.moodRunner == nil || convID == "" {
 		return
 	}
 	go func() {
-		// Use a generous timeout — the mood agent does one LLM call
-		// plus an optional classifier pass. 60s is safely past any
-		// reasonable round-trip.
-		res := b.moodRunner.RunForConversationWithTimeout(context.Background(), convID, 60*time.Second)
+		// 60s timeout — mood agent does one LLM call plus an
+		// optional classifier pass. Safely past any reasonable
+		// round-trip.
+		var res mood.Result
+		if trace != nil {
+			res = b.moodRunner.RunForConversationWithTrace(
+				context.Background(), convID, 60*time.Second, trace,
+			)
+		} else {
+			res = b.moodRunner.RunForConversationWithTimeout(
+				context.Background(), convID, 60*time.Second,
+			)
+		}
 		if res.Action == mood.ActionErrored {
 			log.Warn("mood agent errored", "reason", res.Reason)
 		}
