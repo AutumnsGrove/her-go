@@ -7,4 +7,7 @@ vision:
   hint: "User sent a photo"
 
 search:
-  hint: "User asks about current events, facts you don't know, or shares a link to read"
+  hint: "User asks about current events, facts you don't know, a specific book/author, or shares a link to read"
+
+context:
+  hint: "User asks about weather, mentions the outdoors/commute, or wants to set their home location"

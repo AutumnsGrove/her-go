@@ -28,7 +28,9 @@ go build -o her && ./her run
 You (Telegram) → her binary → Qwen3 (agent, orchestrates the turn)
                                  ├── think (reason about what to do)
                                  ├── recall_memories (semantic fact search)
-                                 ├── use_tools → web_search / web_read / view_image
+                                 ├── use_tools → search  (web_search, web_read, search_books)
+                                 │             / vision  (view_image)
+                                 │             / context (get_weather, set_location)
                                  ├── reply (calls Deepseek, sends response)
                                  └── done (signals turn complete)
                                ↓ (after reply sent)
@@ -62,6 +64,8 @@ For a deep dive into all model calls, data flow, and the dual compaction system,
 - **Persona evolution** — Mira reflects on conversations and rewrites her own personality description over time, with trait tracking and damped updates
 - **Thinking traces** — Optional `/traces` command shows the agent's tool calls and the memory agent's fact extraction in a single Telegram message above the reply
 - **Web search** — Tavily integration for real-time information, loaded on demand via `use_tools`
+- **Book search** — Open Library lookup for titles, authors, topics, or ISBNs. No API key, loaded on demand alongside web search
+- **Weather + location** — On-demand current conditions via Open-Meteo. `set_location` geocodes a city, address, landmark, or raw coords (via Nominatim) and persists to both `config.yaml` and the `location_history` table so Mira remembers where "home" is across restarts
 - **Vision** — Image understanding via Gemini Flash, loaded on demand via `use_tools`
 - **Voice** — Local speech-to-text (Parakeet) and text-to-speech (Piper)
 - **PII scrubbing** — Tiered: hard identifiers redacted, contact info tokenized + deanonymized, names pass through
@@ -105,6 +109,7 @@ Copy `config.yaml.example` to `config.yaml` and fill in:
 - `embed.base_url` — local embedding server (LM Studio, Ollama)
 - `embed.model` — embedding model name
 - `voice` — paths to local Parakeet STT and Piper TTS binaries
+- `location` — home coordinates + unit prefs (`fahrenheit`/`celsius`, `mph`/`kmh`). Populated automatically by the `set_location` tool — you rarely need to edit this by hand.
 
 ## Editable Prompts (no recompilation needed)
 
@@ -128,16 +133,18 @@ her-go/
 ├── compact/          # Dual compaction (chat conversations + agent action history)
 ├── config/           # YAML config loading + env var substitution
 ├── embed/            # Local embedding client for semantic similarity
+├── integrate/        # External integrations (Nominatim geocoding)
 ├── llm/              # OpenAI-compatible LLM client (fallback, cost tracking)
 ├── logger/           # Structured logging (charmbracelet/log)
-├── memory/           # SQLite store: messages, facts, summaries, metrics, vault
+├── memory/           # SQLite store: messages, facts, summaries, metrics, vault, location_history
 ├── persona/          # Reflection, persona evolution, trait tracking, dreaming
 ├── scrub/            # Tiered PII detection + deanonymization
-├── search/           # Tavily web search
+├── search/           # Tavily web search + Open Library book search
 ├── tools/            # Tool YAML manifests + handlers (init-registered)
 ├── tui/              # Terminal UI events and rendering
 ├── vision/           # Image understanding via Gemini Flash
 ├── voice/            # Parakeet STT + Piper TTS
+├── weather/          # Current conditions via Open-Meteo (no API key)
 ├── sims/             # Simulation suites + results
 ├── docs/             # Architecture docs (model calls, data flow, compaction)
 ├── prompt.md         # Mira's personality
@@ -153,4 +160,4 @@ her-go/
 - Contact info (phone, email) is tokenized and deanonymized in responses
 - Names and context pass through for conversational coherence
 - Voice processing runs entirely locally via Parakeet and Piper
-- Search queries go to Tavily; everything else stays on your machine
+- External services used only when the matching tool is invoked: Tavily (web search), Open Library (book search), Open-Meteo (weather), Nominatim (geocoding). All four are free; only Tavily needs a key. Everything else stays on your machine.

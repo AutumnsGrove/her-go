@@ -1,0 +1,22 @@
+name: get_weather
+description: >-
+  Get the current weather. With no arguments, uses {{user}}'s saved home
+  location from config (set via set_location). Pass a location string
+  (e.g., "Tokyo", "Portland Oregon", "40.7,-74.0") for a one-off lookup
+  at a different place — the saved home location is NOT changed.
+  Returns temperature, conditions, precipitation, and wind. Use when
+  {{user}} asks about weather or when weather is obviously relevant to
+  what they just said (planning a walk, commenting on how it feels
+  outside, etc.).
+hot: false
+category: context
+parameters:
+  type: object
+  properties:
+    location:
+      type: string
+      description: "Optional one-off location. Omit to use the saved home location."
+  required: []
+trace:
+  emoji: "🌤"
+  format: "{{if .location}}{{.location | escape}} → {{end}}{{.Result | truncate 80 | escape}}"

@@ -1,0 +1,23 @@
+name: set_location
+description: >-
+  Set {{user}}'s HOME location so get_weather knows where to fetch weather
+  for. Geocodes a city, address, landmark, or raw "lat,lon" coordinates
+  into coordinates. Persists to config.yaml AND mirrors to location_history
+  in the DB. Do NOT save a separate memory for the coordinates — this
+  tool handles all persistence. Use only when {{user}} asks to change
+  their saved home location (moved, traveling long-term, etc.). For
+  one-off weather at another place, pass the location arg to get_weather
+  directly.
+hot: false
+category: context
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: "City, address, landmark, or raw coordinates (e.g., 'Portland Oregon', 'Brooklyn Public Library', '40.7128,-74.0060')"
+  required:
+    - query
+trace:
+  emoji: "📍"
+  format: "{{.query | escape}}"
