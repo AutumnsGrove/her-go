@@ -56,6 +56,15 @@ type Bot struct {
 	moodRunner  *mood.Runner
 	moodSweeper *mood.ProposalSweeper
 
+	// moodVocab is the loaded vocab used by both the agent and the
+	// /mood wizard. Shared so the two paths can't drift.
+	moodVocab *mood.Vocab
+
+	// moodWizards tracks in-flight /mood sessions per chat id.
+	// Value is *wizardState. Wizards auto-expire after 10 minutes
+	// (sweeper inside handleMoodWizardCallback handles the gc).
+	moodWizards sync.Map
+
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
 	// window starts fresh.
@@ -203,6 +212,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
 	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
 	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
+	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
 	tb.Handle("/dream", cmd("/dream", bot.handleDream))
 
 	// Register message handler for all text messages.
@@ -416,6 +426,14 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 // and manages memory. The placeholder message gets edited to show status
 // updates and the final response as tools execute.
 func (b *Bot) handleMessage(c tele.Context) error {
+	// Intercept text replies when a /mood wizard is waiting on its
+	// note step. The wizard handler writes the entry + acknowledges
+	// via edit; we return early so the message doesn't flow through
+	// the agent pipeline.
+	if b.HandleMoodWizardNote(c) {
+		return nil
+	}
+
 	msg := c.Message()
 	userText := msg.Text
 	conversationID := b.getConversationID(msg.Chat.ID)

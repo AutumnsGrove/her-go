@@ -26,6 +26,7 @@ func (b *Bot) initMood() error {
 		}
 		vocab = v
 	}
+	b.moodVocab = vocab
 
 	// Fill in AgentConfig defaults from config.yaml.
 	high := b.cfg.Mood.ConfidenceHigh
@@ -93,6 +94,9 @@ func (b *Bot) initMood() error {
 
 	// Register the mood_proposal callback handler (Log it / Edit / No).
 	b.tb.Handle(&tele.InlineButton{Unique: "mood_proposal"}, b.handleMoodProposalCallback)
+
+	// Register the /mood wizard callback handler + command.
+	b.tb.Handle(&tele.InlineButton{Unique: "mood_wizard"}, b.handleMoodWizardCallback)
 
 	return nil
 }
