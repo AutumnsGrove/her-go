@@ -12,27 +12,6 @@ import (
 	tele "gopkg.in/telebot.v4"
 )
 
-// handleMood sends a mood check-in keyboard on demand — the same one
-// the scheduler sends on a cron. Lets you log your mood any time with
-// /mood instead of waiting for the scheduled check-in.
-func (b *Bot) handleMood(c tele.Context) error {
-	markup := &tele.ReplyMarkup{}
-	row1 := markup.Row(
-		markup.Data("😊 Great", "mood", "5"),
-		markup.Data("🙂 Good", "mood", "4"),
-		markup.Data("😐 Meh", "mood", "3"),
-	)
-	row2 := markup.Row(
-		markup.Data("😔 Rough", "mood", "2"),
-		markup.Data("😢 Bad", "mood", "1"),
-	)
-	markup.Inline(row1, row2)
-
-	return c.Send("how are you feeling right now?", &tele.SendOptions{
-		ReplyMarkup: markup,
-	})
-}
-
 // handleReflect manually triggers a reflection.
 func (b *Bot) handleReflect(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
