@@ -212,10 +212,6 @@ type MoodConfig struct {
 	// DailyRollupCron is the cron expression for the daily rollup
 	// task. Default "0 21 * * *" (9pm local).
 	DailyRollupCron string `yaml:"daily_rollup_cron"`
-
-	// ClassifierModel overrides cfg.Classifier.Model for the mood
-	// classifier specifically. Empty → reuse the main classifier.
-	ClassifierModel string `yaml:"classifier_model"`
 }
 
 // ProviderConfig controls OpenRouter provider routing from config.yaml.

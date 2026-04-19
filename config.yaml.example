@@ -96,7 +96,8 @@ mood:
   proposal_expiry_minutes: 30    # how long a Telegram proposal stays tappable
   sweeper_interval_minutes: 5    # how often the expiry sweeper runs
   daily_rollup_cron: "0 21 * * *"  # 21:00 local — end-of-day rollup
-  classifier_model: ""           # empty → reuse cfg.classifier.model
+  # classifier is the unified cfg.classifier.model — same model across
+  # memory writes and mood writes, no separate knob.
 
 memory:
   db_path: "./her.db"
