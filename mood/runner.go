@@ -97,6 +97,24 @@ func (r *Runner) RunForConversationWithTimeout(parent context.Context, convID st
 	return r.RunForConversation(ctx, convID)
 }
 
+// RunForConversationWithTrace is like the timeout variant but also
+// swaps in a per-turn trace callback. Used by the bot when
+// cfg.Agent.Trace is on so each turn's mood agent lights up a named
+// slot on the turn's TraceBoard.
+func (r *Runner) RunForConversationWithTrace(parent context.Context, convID string, timeout time.Duration, trace func(string) error) Result {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	// Shallow-copy so the callback swap can't race with another
+	// concurrent RunForConversation using the same Runner.
+	r2 := *r
+	r2.Deps.Trace = trace
+	return r2.RunForConversation(ctx, convID)
+}
+
 // Assert that Runner's dep list is the minimal surface a bot has to
 // wire up — any new required field should show up here so we can
 // delete it from the list if we later remove it.
