@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"her/embed"
 	"her/llm"
 	"her/memory"
+	"her/mood"
 	"her/persona"
+	"her/scheduler"
 	"her/scrub"
 	"her/search"
 
@@ -85,7 +88,7 @@ var chatModelFlag string
 // chatProviderFlag pins the chat model to a specific OpenRouter inference
 // provider. Comma-separated list tried in order — first available wins.
 // Useful when a model is hosted by multiple providers at different speeds:
-// e.g., Kimi K2 on Groq is much faster than on OpenRouter's default routing.
+// e.g., the memory agent model hosted on Groq is much faster than on OpenRouter's default routing.
 // Example: --chat-provider "Groq" or --chat-provider "Groq,Together"
 var chatProviderFlag string
 
@@ -137,7 +140,8 @@ type suite struct {
 	Description string   `yaml:"description"`
 	Tags        []string `yaml:"tags"`
 	Messages    []string `yaml:"messages"`
-	RunDream    bool     `yaml:"run_dream"` // if true, run a full dream cycle after all messages complete
+	RunDream    bool     `yaml:"run_dream"`  // run a full dream cycle after all messages complete
+	RunRollup   bool     `yaml:"run_rollup"` // force the daily mood rollup after all messages complete
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -149,6 +153,24 @@ type simTurnResult struct {
 	userMsg  string
 	botReply string
 	elapsed  time.Duration
+}
+
+// simRollupResult captures the output of a forced daily mood rollup
+// (run_rollup: true). In production the rollup fires at 21:00 local
+// via the scheduler — the sim skips that clock and invokes the
+// handler directly so we can verify the aggregation without waiting
+// for an actual day to pass.
+type simRollupResult struct {
+	Ran         bool
+	Skipped     bool   // true when the handler decided there was nothing to roll up
+	SkipReason  string // human-readable reason for Skipped
+	EntryID     int64
+	Valence     int
+	Labels      []string
+	Associations []string
+	Note        string
+	SummaryText string // what the bot would have sent to the owner chat
+	Error       string
 }
 
 // simDreamResult captures the output of the dream cycle (run_dream: true)
@@ -213,11 +235,15 @@ CREATE TABLE IF NOT EXISTS sim_facts (
 CREATE TABLE IF NOT EXISTS sim_mood_entries (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	rating INTEGER NOT NULL,
+	ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+	kind TEXT NOT NULL,
+	valence INTEGER NOT NULL,
+	labels TEXT NOT NULL DEFAULT '[]',
+	associations TEXT NOT NULL DEFAULT '[]',
 	note TEXT,
-	tags TEXT,
-	source TEXT DEFAULT 'inferred'
+	source TEXT NOT NULL,
+	confidence REAL NOT NULL DEFAULT 0,
+	conversation_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sim_metrics (
@@ -553,7 +579,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Memory agent client (needed for run_dream support) ---
-	// The dreaming functions use the memory agent LLM (typically Kimi K2.5)
+	// The dreaming functions use the memory agent LLM
 	// because it's the same kind of task: nuanced language about the self.
 	var memoryAgentClient *llm.Client
 	if cfg.MemoryAgent.Model != "" {
@@ -566,6 +592,85 @@ func runSim(cmd *cobra.Command, args []string) error {
 			maTokens = 4096
 		}
 		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
+	}
+
+	// --- Mood agent client (optional) ---
+	// The mood agent runs parallel to the memory agent after each turn.
+	// In sim mode we run it in PURE INFERRING mode: ConfidenceHigh is
+	// collapsed to ConfidenceLow so every passing inference auto-logs
+	// as source=inferred. There's no human to tap proposals during a
+	// sim, and dropping mediums would lose data we want to evaluate.
+	var moodAgentClient *llm.Client
+	var moodRunner *mood.Runner
+	if cfg.MoodAgent.Model != "" {
+		mTemp := cfg.MoodAgent.Temperature
+		if mTemp == 0 {
+			mTemp = 0.2
+		}
+		mTokens := cfg.MoodAgent.MaxTokens
+		if mTokens == 0 {
+			mTokens = 512
+		}
+		moodAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+
+		vocab := mood.Default()
+		if cfg.Mood.VocabPath != "" {
+			v, err := mood.LoadVocab(cfg.Mood.VocabPath)
+			if err != nil {
+				return fmt.Errorf("loading mood vocab: %w", err)
+			}
+			vocab = v
+		}
+
+		// Pure-inferring config — one threshold does both jobs.
+		low := cfg.Mood.ConfidenceLow
+		if low == 0 {
+			low = 0.40
+		}
+		dedupWin := time.Duration(cfg.Mood.DedupWindowMinutes) * time.Minute
+		if dedupWin == 0 {
+			dedupWin = 2 * time.Hour
+		}
+		dedupSim := cfg.Mood.DedupSimilarity
+		if dedupSim == 0 {
+			dedupSim = 0.80
+		}
+		ctxTurns := cfg.Mood.ContextTurns
+		if ctxTurns == 0 {
+			ctxTurns = 5
+		}
+
+		// In sim the mood classifier and embed client follow the main
+		// ones — same model settings, so no extra cost beyond what the
+		// real bot would pay.
+		embedForMood := func(_ context.Context, text string) ([]float32, error) {
+			if embedClient == nil {
+				return nil, nil
+			}
+			return embedClient.Embed(text)
+		}
+
+		moodRunner = &mood.Runner{
+			Deps: mood.Deps{
+				LLM:        moodAgentClient,
+				Classifier: classifierClient, // reuse main classifier
+				Store:      store,
+				Vocab:      vocab,
+				Embed:      embedForMood,
+				// Propose deliberately nil — in sim we don't
+				// emit proposals. ConfidenceHigh=Low ensures we
+				// never hit the emit-proposal path anyway.
+			},
+			Config: mood.AgentConfig{
+				ContextTurns:    ctxTurns,
+				ConfidenceHigh:  low, // sim quirk: collapse the two tiers
+				ConfidenceLow:   low,
+				DedupWindow:     dedupWin,
+				DedupSimilarity: dedupSim,
+			},
+		}
+		log.Info("mood agent enabled for sim (pure-inferring mode)",
+			"model", cfg.MoodAgent.Model, "threshold", low)
 	}
 
 	// ------------------------------------------------------------------
@@ -697,6 +802,27 @@ func runSim(cmd *cobra.Command, args []string) error {
 			elapsed:  elapsed,
 		})
 
+		// --- Mood agent ---
+		// Runs synchronously in sim mode so the report captures its
+		// output per turn. Errors are logged, never fatal — the mood
+		// agent is best-effort.
+		if moodRunner != nil {
+			moodRes := moodRunner.RunForConversation(context.Background(), conversationID)
+			switch moodRes.Action {
+			case mood.ActionAutoLogged:
+				fmt.Printf("       [mood] logged: valence=%d labels=%v conf=%.2f\n",
+					moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
+			case mood.ActionDroppedLow, mood.ActionDroppedNoSignal, mood.ActionDroppedVocab:
+				fmt.Printf("       [mood] dropped: %s (%s)\n", moodRes.Action, moodRes.Reason)
+			case mood.ActionDroppedDedup:
+				fmt.Printf("       [mood] dedup: %s\n", moodRes.Reason)
+			case mood.ActionDroppedClassify:
+				fmt.Printf("       [mood] classifier rejected: %s\n", moodRes.Reason)
+			case mood.ActionErrored:
+				fmt.Printf("       [mood] error: %s\n", moodRes.Reason)
+			}
+		}
+
 		// Pause between turns to avoid hitting rate limits on free-tier
 		// models. In real usage the user types slowly enough that this
 		// isn't needed, but sim fires back-to-back.
@@ -816,10 +942,65 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// ------------------------------------------------------------------
+	// 8c. Optional: force the daily mood rollup (run_rollup: true)
+	// ------------------------------------------------------------------
+	// Mirrors run_dream: the scheduler normally fires the rollup at
+	// 21:00 local via cron, but we skip that clock in the sim and
+	// invoke the handler directly. Lets us verify aggregation +
+	// summary without waiting for a wall-clock day.
+	var rollupResult simRollupResult
+	if s.RunRollup && moodRunner != nil {
+		rollupResult.Ran = true
+		fmt.Printf("\n[rollup] Forcing daily mood rollup...\n")
+
+		// Capture the would-be Telegram summary instead of sending
+		// anywhere — cmd/sim stays headless.
+		var capturedSummary string
+		captureSend := func(_ int64, text string) (int, error) {
+			capturedSummary = text
+			return 0, nil
+		}
+		deps := &scheduler.Deps{Store: store, Send: captureSend, ChatID: 1}
+
+		// Count dailies before/after so we can tell apart "created a
+		// new one" vs "skipped because one already existed".
+		before, _ := store.RecentMoodEntries(memory.MoodKindDaily, 1)
+		var beforeID int64
+		if len(before) > 0 {
+			beforeID = before[0].ID
+		}
+
+		h := mood.DailyRollupHandler()
+		if err := h.Execute(context.Background(), json.RawMessage(`{}`), deps); err != nil {
+			rollupResult.Error = err.Error()
+			fmt.Printf("[rollup] Error: %v\n", err)
+		} else {
+			after, _ := store.RecentMoodEntries(memory.MoodKindDaily, 1)
+			if len(after) > 0 && after[0].ID != beforeID {
+				entry := after[0]
+				rollupResult.EntryID = entry.ID
+				rollupResult.Valence = entry.Valence
+				rollupResult.Labels = entry.Labels
+				rollupResult.Associations = entry.Associations
+				rollupResult.Note = entry.Note
+				rollupResult.SummaryText = capturedSummary
+				fmt.Printf("[rollup] Logged daily entry #%d: valence=%d labels=%v\n",
+					entry.ID, entry.Valence, entry.Labels)
+			} else {
+				rollupResult.Skipped = true
+				rollupResult.SkipReason = "handler skipped (no momentary entries today or daily already exists)"
+				fmt.Printf("[rollup] Skipped — nothing new to log\n")
+			}
+		}
+	} else if s.RunRollup && moodRunner == nil {
+		fmt.Printf("\n[rollup] Skipped — mood_agent.model not configured in config.yaml\n")
+	}
+
+	// ------------------------------------------------------------------
 	// 9. Generate markdown report
 	// ------------------------------------------------------------------
 
-	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult)
+	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult, rollupResult)
 	if err != nil {
 		log.Error("failed to generate report", "err", err)
 	} else {
@@ -967,10 +1148,14 @@ func copySummaries(tmpDB, simDB *sql.DB, runID int64) error {
 	return rows.Err()
 }
 
-// copyMoodEntries copies mood entries from the temp DB into sim_mood_entries.
+// copyMoodEntries copies mood entries from the temp DB into
+// sim_mood_entries. Schema matches the Apple-style redesign: valence
+// 1-7 + labels/associations as JSON + confidence + source.
 func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, rating, note, tags, source FROM mood_entries ORDER BY id ASC`,
+		`SELECT ts, kind, valence, labels, associations, COALESCE(note, ''),
+		        source, confidence, COALESCE(conversation_id, '')
+		 FROM mood_entries ORDER BY id ASC`,
 	)
 	if err != nil {
 		return fmt.Errorf("querying mood entries: %w", err)
@@ -978,19 +1163,22 @@ func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var ts string
-		var rating int
-		// sql.NullString handles NULL values from the database. In Go,
-		// a regular string can't be null — NullString has a .Valid bool
-		// that tells you whether the value was NULL or not.
-		var note, tags, source sql.NullString
-		if err := rows.Scan(&ts, &rating, &note, &tags, &source); err != nil {
+		var (
+			ts, kind, labels, associations, note, source, convID string
+			valence                                               int
+			confidence                                            float64
+		)
+		if err := rows.Scan(&ts, &kind, &valence, &labels, &associations, &note,
+			&source, &confidence, &convID); err != nil {
 			return fmt.Errorf("scanning mood entry: %w", err)
 		}
 		_, err := simDB.Exec(
-			`INSERT INTO sim_mood_entries (run_id, timestamp, rating, note, tags, source)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			runID, ts, rating, note, tags, source,
+			`INSERT INTO sim_mood_entries
+			   (run_id, ts, kind, valence, labels, associations, note,
+			    source, confidence, conversation_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, kind, valence, labels, associations, note,
+			source, confidence, convID,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_mood_entry: %w", err)
@@ -1098,6 +1286,7 @@ func generateReport(
 	totalCost float64,
 	totalDuration time.Duration,
 	dream simDreamResult,
+	rollup simRollupResult,
 ) (string, error) {
 	// strings.Builder is Go's equivalent of Python's io.StringIO or
 	// just building a string with a list of parts and joining them.
@@ -1150,10 +1339,54 @@ func generateReport(
 	// Dream section (only present when run_dream: true)
 	writeDreamSection(&b, dream)
 
+	// Forced daily rollup section (only present when run_rollup: true).
+	writeRollupSection(&b, rollup)
+
 	// Cost summary
 	writeCostSection(&b, simDB, runID)
 
 	return b.String(), nil
+}
+
+// writeRollupSection writes the forced daily-mood-rollup output to
+// the report. Only called when run_rollup: true in the suite YAML.
+func writeRollupSection(b *strings.Builder, r simRollupResult) {
+	if !r.Ran {
+		return
+	}
+	b.WriteString("## Daily Mood Rollup (forced)\n\n")
+
+	if r.Error != "" {
+		fmt.Fprintf(b, "**Error:** %s\n\n", r.Error)
+		return
+	}
+	if r.Skipped {
+		fmt.Fprintf(b, "_Skipped — %s._\n\n", r.SkipReason)
+		return
+	}
+
+	fmt.Fprintf(b, "**Entry #%d logged** — valence %d/7, labels: %s, associations: %s\n\n",
+		r.EntryID, r.Valence,
+		orDashList(r.Labels), orDashList(r.Associations),
+	)
+	if r.Note != "" {
+		fmt.Fprintf(b, "Note:\n> %s\n\n", r.Note)
+	}
+	if r.SummaryText != "" {
+		b.WriteString("**Summary the bot would have sent:**\n\n")
+		b.WriteString("```\n")
+		b.WriteString(r.SummaryText)
+		b.WriteString("\n```\n\n")
+	}
+}
+
+// orDashList returns a comma-joined list or "—" when empty. Tiny
+// helper for report tables.
+func orDashList(items []string) string {
+	if len(items) == 0 {
+		return "—"
+	}
+	return strings.Join(items, ", ")
 }
 
 // writeDreamSection writes the nightly reflection and persona rewrite output
@@ -1353,9 +1586,11 @@ func writeFactsSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 }
 
 // writeMoodSection writes the mood entries table to the report.
+// Columns reflect the Apple-style schema: valence 1-7, JSON-array
+// labels and associations, LLM-self-rated confidence, and source.
 func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	rows, err := simDB.Query(
-		`SELECT timestamp, rating, note, source
+		`SELECT ts, kind, valence, labels, associations, note, source, confidence
 		 FROM sim_mood_entries WHERE run_id = ? ORDER BY id ASC`, runID,
 	)
 	if err != nil {
@@ -1364,37 +1599,50 @@ func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type moodRow struct {
-		ts     string
-		rating int
-		note   sql.NullString
-		source sql.NullString
+		ts, kind, labels, associations, note, source string
+		valence                                       int
+		confidence                                    float64
 	}
 	var moods []moodRow
 	for rows.Next() {
 		var m moodRow
-		if err := rows.Scan(&m.ts, &m.rating, &m.note, &m.source); err != nil {
+		if err := rows.Scan(&m.ts, &m.kind, &m.valence, &m.labels, &m.associations,
+			&m.note, &m.source, &m.confidence); err != nil {
 			continue
 		}
 		moods = append(moods, m)
 	}
 
 	fmt.Fprintf(b, "## Mood Entries (%d)\n\n", len(moods))
-	if len(moods) > 0 {
-		b.WriteString("| Time | Rating | Note | Source |\n")
-		b.WriteString("|------|--------|------|--------|\n")
-		for _, m := range moods {
-			note := ""
-			if m.note.Valid {
-				note = m.note.String
-			}
-			source := "inferred"
-			if m.source.Valid {
-				source = m.source.String
-			}
-			fmt.Fprintf(b, "| %s | %d | %s | %s |\n", m.ts, m.rating, note, source)
-		}
+	if len(moods) == 0 {
+		b.WriteString("_No mood inferences this run._\n\n")
+		return
+	}
+	b.WriteString("| Time | Kind | Valence | Labels | Associations | Note | Source | Conf |\n")
+	b.WriteString("|------|------|---------|--------|--------------|------|--------|------|\n")
+	for _, m := range moods {
+		// Turn the raw JSON arrays into comma-separated lists for
+		// readability. Fall back to the raw string if decode fails.
+		labels := renderJSONArray(m.labels)
+		assocs := renderJSONArray(m.associations)
+		fmt.Fprintf(b, "| %s | %s | %d | %s | %s | %s | %s | %.2f |\n",
+			m.ts, m.kind, m.valence, labels, assocs, m.note, m.source, m.confidence)
 	}
 	b.WriteString("\n")
+}
+
+// renderJSONArray decodes a JSON string-array into a comma-separated
+// display string. Empty input and decode failures render as an em-dash.
+func renderJSONArray(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "[]" || s == "null" {
+		return "—"
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(s), &items); err != nil || len(items) == 0 {
+		return "—"
+	}
+	return strings.Join(items, ", ")
 }
 
 // writeSummariesSection writes any compaction summaries to the report.

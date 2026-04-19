@@ -1,0 +1,112 @@
+# Mood vocabulary — Apple State of Mind, verbatim.
+#
+# This file is the single source of truth for valence buckets, feeling
+# labels, and life-area associations. Code reads it; it does not define
+# vocab of its own. Editing this file updates the /mood wizard chips,
+# the agent prompt, and the graph labels without a rebuild (when
+# hot-reload lands).
+#
+# Sources:
+#   https://support.apple.com/guide/iphone/log-your-state-of-mind-iph6a6decb13/ios
+#   https://developer.apple.com/videos/play/wwdc2024/10109/
+
+# valence_buckets — 1 (very unpleasant) through 7 (very pleasant).
+# Each bucket has an emoji that shows on the wizard button and a hex
+# colour used by /mood week|month|year graphs. Colours echo Apple's
+# purple → blue → grey → orange → yellow gradient.
+valence_buckets:
+  1:
+    label: "Very Unpleasant"
+    emoji: "😩"
+    color: "#6B4AC4"
+  2:
+    label: "Unpleasant"
+    emoji: "😟"
+    color: "#8A6CE8"
+  3:
+    label: "Slightly Unpleasant"
+    emoji: "🙁"
+    color: "#A98DF1"
+  4:
+    label: "Neutral"
+    emoji: "😐"
+    color: "#B0B0B0"
+  5:
+    label: "Slightly Pleasant"
+    emoji: "🙂"
+    color: "#F5C26B"
+  6:
+    label: "Pleasant"
+    emoji: "😊"
+    color: "#F6A945"
+  7:
+    label: "Very Pleasant"
+    emoji: "😄"
+    color: "#F68B22"
+
+# labels — feeling words grouped by valence tier. The wizard filters
+# the chip list by the selected bucket's tier (unpleasant / neutral /
+# pleasant) so the user isn't scrolling through 35+ labels.
+labels:
+  unpleasant:
+    - Angry
+    - Anxious
+    - Ashamed
+    - Disappointed
+    - Discouraged
+    - Disgusted
+    - Embarrassed
+    - Frustrated
+    - Guilty
+    - Hopeless
+    - Irritated
+    - Jealous
+    - Lonely
+    - Overwhelmed
+    - Sad
+    - Scared
+    - Stressed
+    - Worried
+  neutral:
+    - Calm
+    - Content
+    - Indifferent
+    - Relaxed
+    - Satisfied
+  pleasant:
+    - Amazed
+    - Amused
+    - Brave
+    - Confident
+    - Excited
+    - Grateful
+    - Happy
+    - Hopeful
+    - Joyful
+    - Passionate
+    - Peaceful
+    - Proud
+    - Relieved
+    - Surprised
+
+# associations — life domains that can contribute to the mood. Flat
+# list, shown as optional multi-select chips in step 3 of the wizard.
+associations:
+  - Health
+  - Fitness
+  - Self-care
+  - Hobbies
+  - Identity
+  - Spirituality
+  - Community
+  - Family
+  - Friends
+  - Partner
+  - Dating
+  - Tasks
+  - Work
+  - Education
+  - Travel
+  - Weather
+  - Current Events
+  - Money

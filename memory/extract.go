@@ -17,8 +17,12 @@ var log = logger.WithPrefix("memory")
 // No parameters — used as a static system prompt.
 //
 // NOTE: ExtractMemories is not currently called anywhere. It's reserved for a
-// future "memory pruning" feature. Keep this prompt in sync with
-// main_agent_prompt.md so both paths agree on what's worth saving.
+// future "memory pruning" feature where Mira can revisit old conversations
+// and re-extract only the memories that held up over time. The agent's
+// save_memory tool handles real-time extraction. Keep this prompt in sync
+// with the main_agent_prompt.md rules so the two paths agree on what's
+// worth saving. Mood extraction lives in the dedicated mood agent (`mood/`),
+// not here.
 //
 //go:embed extraction_prompt.md
 var extractionPrompt string
@@ -26,7 +30,6 @@ var extractionPrompt string
 // extractionResponse is the top-level JSON structure from the LLM.
 type extractionResponse struct {
 	Facts []extractedMemory `json:"facts"`
-	Mood  *extractedMood    `json:"mood"` // nil if no mood signal detected
 }
 
 // extractedMemory is the JSON structure for a single memory.
@@ -34,13 +37,6 @@ type extractionResponse struct {
 type extractedMemory struct {
 	Fact     string `json:"fact"`
 	Category string `json:"category"`
-}
-
-// extractedMood is the JSON structure for inferred mood.
-type extractedMood struct {
-	Rating int               `json:"rating"`
-	Note   string            `json:"note"`
-	Tags   map[string]string `json:"tags"` // energy, stress, social, etc.
 }
 
 // ExtractMemories analyzes recent messages and extracts long-term memories
@@ -74,9 +70,13 @@ func ExtractMemories(store *Store, llmClient *llm.Client, conversationID string,
 		fmt.Fprintf(&transcript, "%s: %s\n\n", role, msg.ContentRaw)
 	}
 
+	// Expand {{her}}/{{user}} placeholders in the prompt template.
+	prompt := strings.ReplaceAll(extractionPrompt, "{{her}}", botName)
+	prompt = strings.ReplaceAll(prompt, "{{user}}", userName)
+
 	// Call the LLM with the extraction prompt.
 	llmMessages := []llm.ChatMessage{
-		{Role: "system", Content: extractionPrompt},
+		{Role: "system", Content: prompt},
 		{Role: "user", Content: transcript.String()},
 	}
 
@@ -100,7 +100,7 @@ func ExtractMemories(store *Store, llmClient *llm.Client, conversationID string,
 		var memories []extractedMemory
 		if err2 := json.Unmarshal([]byte(jsonStr), &memories); err2 == nil {
 			extraction.Facts = memories
-			log.Debug("extraction response was old-format memory array, no mood data")
+			log.Debug("extraction response was old-format memory array")
 		} else {
 			log.Error("failed to parse extraction response as JSON", "err", err, "raw", resp.Content)
 			return fmt.Errorf("parsing extraction response: %w", err)
@@ -117,27 +117,6 @@ func ExtractMemories(store *Store, llmClient *llm.Client, conversationID string,
 			continue
 		}
 		log.Debug("extracted memory", "category", m.Category, "memory", m.Fact)
-	}
-
-	// Store inferred mood if the LLM detected an emotional signal.
-	if extraction.Mood != nil && extraction.Mood.Rating >= 1 && extraction.Mood.Rating <= 5 {
-		tagsJSON := ""
-		if len(extraction.Mood.Tags) > 0 {
-			if b, err := json.Marshal(extraction.Mood.Tags); err == nil {
-				tagsJSON = string(b)
-			}
-		}
-		if _, err := store.SaveMoodEntry(
-			extraction.Mood.Rating,
-			extraction.Mood.Note,
-			tagsJSON,
-			"inferred",
-			conversationID,
-		); err != nil {
-			log.Error("saving inferred mood", "err", err)
-		} else {
-			log.Debug("inferred mood", "rating", extraction.Mood.Rating, "note", extraction.Mood.Note)
-		}
 	}
 
 	log.Info("extraction complete", "memories", len(extraction.Facts), "messages", len(messages))

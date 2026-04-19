@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"her/memory"
 	"her/scrub"
 	"her/tools"
+	"her/trace"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -75,24 +75,34 @@ func (b *Bot) getConversationID(chatID int64) string {
 	return newID
 }
 
-// makeTraceCallbacks creates both the Trinity and Kimi trace callbacks sharing
-// a SINGLE Telegram message. Trinity's tool calls appear first, then a clear
-// separator, then Kimi's memory tool calls. One message, two labeled sections,
-// always above the reply.
+// makeTraceCallbacks wires up the trace inbox for one turn: one
+// Telegram message, N named slots (one per registered trace.Stream),
+// shared across every agent that fires during this turn.
 //
-// If Kimi has nothing to save, the message just shows Trinity's traces — no
-// orphan placeholder emojis, no extra messages.
-func (b *Bot) makeTraceCallbacks(c tele.Context) (mainTrace, memTrace tools.TraceCallback) {
+// Returns a lookup function — call trace("main"), trace("memory"),
+// trace("mood"), or any other registered stream name — and receive a
+// tools.TraceCallback that writes into that slot. Slots not in the
+// trace.Streams() registry still work as a fallback (they render
+// after registered ones in insertion order), so a new agent in a
+// new package can call trace.Register + request a callback without
+// any edit to this function.
+//
+// Slots render in registry order, not completion order — main always
+// comes first, then memory and mood, regardless of which post-turn
+// agent finishes writing first.
+func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCallback {
 	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
 	if err != nil {
 		log.Warn("trace: failed to send placeholder", "err", err)
 		traceMsg = nil
 	}
 
-	var mu sync.Mutex
-	var mainContent string // Trinity's accumulated trace text
-
-	editMsg := func(text string) {
+	// edit is the single function the board calls on every slot
+	// change. Handles Telegram's HTML-parse fallback inline.
+	edit := func(text string) {
+		if text == "" {
+			return
+		}
 		if traceMsg == nil {
 			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			if err != nil {
@@ -102,37 +112,24 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) (mainTrace, memTrace tools.Trac
 				}
 			}
 			traceMsg = msg
-		} else {
-			_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			if err != nil && !strings.Contains(err.Error(), "not modified") {
-				_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
-			}
+			return
+		}
+		_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		if err != nil && !strings.Contains(err.Error(), "not modified") {
+			_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
 		}
 	}
 
-	// Trinity's callback — updates the shared message with its content.
-	mainTrace = func(text string) error {
-		go func() {
-			mu.Lock()
-			defer mu.Unlock()
-			mainContent = text
-			editMsg(text)
-		}()
-		return nil
-	}
+	board := trace.NewBoard(edit)
 
-	// Kimi's callback — appends below Trinity's content with a separator.
-	memTrace = func(text string) error {
-		go func() {
-			mu.Lock()
-			defer mu.Unlock()
-			combined := mainContent + "\n\n─────────────\n" + text
-			editMsg(combined)
-		}()
-		return nil
+	return func(slot string) tools.TraceCallback {
+		return func(text string) error {
+			// Fire the board update in a goroutine so the agent
+			// loop isn't blocked on Telegram API latency.
+			go board.Set(slot, text)
+			return nil
+		}
 	}
-
-	return mainTrace, memTrace
 }
 
 // handleTraces toggles agent thinking traces on/off.

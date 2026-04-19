@@ -2,46 +2,70 @@
 package bot
 
 import (
+	_ "embed"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	tele "gopkg.in/telebot.v4"
 )
 
-// handleHelp shows all available commands.
+// helpData is loaded from help.yaml — the single source of truth for
+// /help output. Uses {{her}} placeholders expanded at render time.
+//
+//go:embed help.yaml
+var helpYAML string
+
+// helpSpec mirrors the YAML structure in help.yaml.
+type helpSpec struct {
+	Sections []struct {
+		Title    string `yaml:"title"`
+		Commands []struct {
+			Cmd  string `yaml:"cmd"`
+			Desc string `yaml:"desc"`
+		} `yaml:"commands"`
+	} `yaml:"sections"`
+	Footer string `yaml:"footer"`
+}
+
+// handleHelp renders the help text from help.yaml, expanding {{her}}
+// to the configured bot name.
 func (b *Bot) handleHelp(c tele.Context) error {
-	msg := "\U0001F4D6 <b>Commands</b>\n\n" +
-		"<b>Conversation</b>\n" +
-		"/clear — start a fresh conversation\n" +
-		"/compact — summarize older messages to free up context\n\n" +
-		"<b>Memory</b>\n" +
-		"/facts — list all remembered facts\n" +
-		"/forget <code>&lt;id&gt;</code> — forget a specific fact\n\n" +
-		"<b>Persona</b>\n" +
-		"/persona — view " + b.cfg.Identity.Her + "'s current personality\n" +
-		"/persona traits — personality trait scores\n" +
-		"/persona rewrite — manually trigger a persona rewrite\n" +
-		"/reflect — trigger a reflection\n" +
-		"/reflections — view past reflections\n" +
-		"/dream — run a full dream cycle now (reflection + persona rewrite)\n\n" +
-		"<b>Reminders</b>\n" +
-		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
-		"/schedule — list upcoming reminders\n\n" +
-		"<b>Mood &amp; Wellness</b>\n" +
-		"/mood — log your current mood (quick buttons)\n\n" +
-		"<b>Info</b>\n" +
-		"/stats — token usage, cost, and message counts\n" +
-		"/status — uptime, models, and service health\n\n" +
-		"<b>System</b>\n" +
-		"/traces — toggle agent thinking traces in chat\n" +
-		"/restart — restart the bot process\n" +
-		"/help — this message\n\n" +
-		"<b>Features</b>\n" +
-		"Send a photo and " + b.cfg.Identity.Her + " will describe what she sees.\n" +
-		"Just chat normally — she remembers your conversations."
-	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	var spec helpSpec
+	if err := yaml.Unmarshal([]byte(helpYAML), &spec); err != nil {
+		log.Error("failed to parse help.yaml", "err", err)
+		return c.Send("something went wrong loading help — check the logs!")
+	}
+
+	expand := func(s string) string {
+		return strings.ReplaceAll(s, "{{her}}", b.cfg.Identity.Her)
+	}
+
+	var msg strings.Builder
+	msg.WriteString("\U0001F4D6 <b>Commands</b>\n\n")
+
+	for _, section := range spec.Sections {
+		msg.WriteString("<b>")
+		msg.WriteString(section.Title)
+		msg.WriteString("</b>\n")
+		for _, cmd := range section.Commands {
+			// Wrap command args in <code> tags for Telegram formatting.
+			// Split on first space: "/mood week|month|year" → "/mood" + " week|month|year"
+			display := cmd.Cmd
+			if spaceIdx := strings.Index(cmd.Cmd, " "); spaceIdx > 0 {
+				display = cmd.Cmd[:spaceIdx] + " <code>" + cmd.Cmd[spaceIdx+1:] + "</code>"
+			}
+			fmt.Fprintf(&msg, "%s — %s\n", display, expand(cmd.Desc))
+		}
+		msg.WriteString("\n")
+	}
+
+	if spec.Footer != "" {
+		msg.WriteString(expand(strings.TrimSpace(spec.Footer)))
+	}
+
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // handleClear resets the conversation context.
@@ -150,116 +174,3 @@ func (b *Bot) handleFacts(c tele.Context) error {
 	return b.sendPaginated(c, msg.String())
 }
 
-// handleRemind routes reminder requests through the agent pipeline.
-// Instead of trying to parse natural language time ourselves (which is
-// brittle), we let the LLM do what it's good at — understanding
-// "in 2 mins", "tomorrow at 3pm", "next friday morning", etc.
-//
-// The agent sees the text as a normal message, recognizes the reminder
-// intent, and calls the create_reminder tool with a proper ISO timestamp.
-// This means /remind is really just a convenience shortcut — the user
-// could also just say "remind me to call the dentist at 3pm" in normal
-// conversation and the agent would do the same thing.
-func (b *Bot) handleRemind(c tele.Context) error {
-	args := strings.TrimSpace(c.Message().Payload)
-	if args == "" {
-		return c.Send(
-			"<b>Usage:</b> /remind <code>&lt;time&gt; &lt;message&gt;</code>\n\n"+
-				"<b>Examples:</b>\n"+
-				"/remind 3pm call the dentist\n"+
-				"/remind tomorrow at 10am take out the trash\n"+
-				"/remind in 30 minutes check the oven\n"+
-				"/remind next friday review the report",
-			&tele.SendOptions{ParseMode: tele.ModeHTML},
-		)
-	}
-
-	// Rewrite the command as a natural message and feed it through
-	// the agent pipeline. The agent will parse the time, call
-	// create_reminder, and reply with a confirmation.
-	c.Message().Text = "remind me " + args
-	return b.handleMessage(c)
-}
-
-// handleSchedule lists active scheduled tasks or manages them.
-// Usage:
-//
-//	/schedule          — list all active tasks
-//	/schedule pause N  — disable task #N
-//	/schedule resume N — re-enable task #N
-//	/schedule delete N — remove task #N
-func (b *Bot) handleSchedule(c tele.Context) error {
-	args := strings.TrimSpace(c.Message().Payload)
-
-	// Sub-commands: pause, resume, delete.
-	if args != "" {
-		parts := strings.Fields(args)
-		if len(parts) >= 2 {
-			action := strings.ToLower(parts[0])
-			taskID, err := strconv.ParseInt(parts[1], 10, 64)
-			if err != nil {
-				return c.Send("Usage: /schedule <pause|resume|delete> <id>")
-			}
-
-			switch action {
-			case "pause":
-				if err := b.store.UpdateScheduledTaskEnabled(taskID, false); err != nil {
-					return c.Send(fmt.Sprintf("Couldn't pause task #%d: %v", taskID, err))
-				}
-				return c.Send(fmt.Sprintf("⏸ Paused task #%d.", taskID))
-
-			case "resume":
-				if err := b.store.UpdateScheduledTaskEnabled(taskID, true); err != nil {
-					return c.Send(fmt.Sprintf("Couldn't resume task #%d: %v", taskID, err))
-				}
-				return c.Send(fmt.Sprintf("▶️ Resumed task #%d.", taskID))
-
-			case "delete":
-				if err := b.store.DeleteScheduledTask(taskID); err != nil {
-					return c.Send(fmt.Sprintf("Couldn't delete task #%d: %v", taskID, err))
-				}
-				return c.Send(fmt.Sprintf("🗑 Deleted task #%d.", taskID))
-
-			default:
-				return c.Send("Unknown action. Try: /schedule pause|resume|delete <id>")
-			}
-		}
-	}
-
-	// Default: list all active tasks.
-	tasks, err := b.store.ListActiveTasks()
-	if err != nil {
-		log.Error("/schedule: listing tasks", "err", err)
-		return c.Send("Couldn't load scheduled tasks right now.")
-	}
-
-	if len(tasks) == 0 {
-		return c.Send("No scheduled tasks. Use /remind to create one!")
-	}
-
-	loc := time.Local
-
-	var sb strings.Builder
-	sb.WriteString("<b>📋 Scheduled Tasks</b>\n\n")
-
-	for _, t := range tasks {
-		name := "unnamed"
-		if t.Name != nil {
-			name = *t.Name
-		}
-
-		nextRun := "—"
-		if t.NextRun != nil {
-			nextRun = t.NextRun.In(loc).Format("Mon Jan 2 at 3:04 PM")
-		}
-
-		sb.WriteString(fmt.Sprintf(
-			"<b>#%d</b> %s\n  ⏰ %s | type: %s\n\n",
-			t.ID, name, nextRun, t.TaskType,
-		))
-	}
-
-	sb.WriteString("<i>/schedule pause|resume|delete &lt;id&gt;</i>")
-
-	return c.Send(sb.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
-}

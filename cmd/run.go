@@ -21,9 +21,17 @@ import (
 	"her/logger"
 	"her/memory"
 	"her/persona"
+	"her/scheduler"
 	"her/search"
 	"her/tui"
 	"her/voice"
+
+	// Blank-import scheduler extensions so their init() side-effects
+	// (scheduler.Register) run. Each extension lives in its domain
+	// package; we pull them in here so the runtime knows about them
+	// without the scheduler package itself depending on every
+	// domain.
+	_ "her/mood"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -270,6 +278,39 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "skipped"})
 	}
 
+	// --- Mood agent client (optional) ---
+	// Post-turn background agent that infers the user's state of mind.
+	// Same shape as the memory agent: runs parallel in a goroutine,
+	// never blocks the reply. Empty model disables it.
+	var moodAgentClient *llm.Client
+	if cfg.MoodAgent.Model != "" {
+		mTokens := cfg.MoodAgent.MaxTokens
+		if mTokens == 0 {
+			mTokens = 512
+		}
+		mTemp := cfg.MoodAgent.Temperature
+		if mTemp == 0 {
+			mTemp = 0.2
+		}
+		moodAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+		if cfg.MoodAgent.Timeout > 0 {
+			moodAgentClient.WithTimeout(time.Duration(cfg.MoodAgent.Timeout) * time.Second)
+		}
+		if cfg.MoodAgent.Provider != nil {
+			moodAgentClient.WithProvider(&llm.ProviderRouting{
+				Order: cfg.MoodAgent.Provider.Order,
+				Only:  cfg.MoodAgent.Provider.Only,
+				Sort:  cfg.MoodAgent.Provider.Sort,
+			})
+		}
+		if cfg.MoodAgent.Fallback != nil {
+			moodAgentClient.WithFallback(cfg.MoodAgent.Fallback.Model, cfg.MoodAgent.Fallback.Temperature, cfg.MoodAgent.Fallback.MaxTokens)
+		}
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "mood_agent", Status: "ready", Detail: cfg.MoodAgent.Model})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "mood_agent", Status: "skipped"})
+	}
+
 	// --- Embedding client ---
 	// Client is always created here if configured. Health check + optional
 	// auto-start happens in the sidecars section below alongside stt/tts.
@@ -359,7 +400,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, memoryAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()
@@ -368,10 +409,39 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 
+	// --- Scheduler ---
+	// Powers the extension-based task system (mood daily rollup, future
+	// reminders, etc.). Loads every registered scheduler.Handler's
+	// task.yaml at startup and dispatches on a 30s ticker. Extensions
+	// self-register via init(); the scheduler just orchestrates.
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	rootDir, err := os.Getwd()
+	if err != nil {
+		log.Error("scheduler: getting cwd", "err", err)
+		rootDir = "."
+	}
+	schedDeps := &scheduler.Deps{
+		Store:   store,
+		Send:    tgBot.SendWithID,
+		ChatID:  cfg.Telegram.OwnerChat,
+	}
+	sched, err := scheduler.New(store, schedDeps, rootDir)
+	if err != nil {
+		log.Error("scheduler startup failed; daily rollup disabled", "err", err)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "scheduler", Status: "failed", Detail: err.Error()})
+	} else {
+		go func() {
+			if err := sched.Run(schedCtx); err != nil {
+				log.Error("scheduler stopped", "err", err)
+			}
+		}()
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "scheduler", Status: "ready"})
+	}
+
 	// --- Dreamer ---
 	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
 	// It needs a context so it shuts down cleanly when the bot exits.
-	// We use the memory agent LLM (Kimi K2.5) for dreaming — same model, same
+	// We reuse the memory agent LLM for dreaming — same model, same
 	// purpose (nuanced language processing), no need for a separate config entry.
 	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
 	if memoryAgentClient != nil {
@@ -424,6 +494,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Cleanup ---
 	dreamerCancel() // tell the dreamer goroutine to stop at its next wake-up
+	schedCancel()   // same for the scheduler runner
 
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)

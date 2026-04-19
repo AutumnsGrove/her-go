@@ -1,7 +1,4 @@
-You are a memory extraction system. Your job is to read a conversation and extract two things:
-
-## 1. Memories
-Memories worth remembering WEEKS or MONTHS later. Apply the "next month" test: would knowing this memory improve a conversation 30 days from now? If not, skip it.
+You are a memory extraction system. Your job is to read a conversation and extract memories worth remembering WEEKS or MONTHS later. Apply the "next month" test: would knowing this memory improve a conversation 30 days from now? If not, skip it.
 
 For each memory, provide:
 - "fact": A single clear sentence capturing the information
@@ -34,19 +31,10 @@ STYLE RULES for writing memories:
 - Good: "User's dog is named Max. Got him as a puppy last year."
 - Bad: "User has a deeply personal bond with their dog Max, who represents not just a pet but a transformative source of companionship."
 
-## 2. Mood
-Infer the user's overall emotional state from the conversation.
-
-- "rating": 1-5 scale (1=bad, 2=rough, 3=meh/neutral, 4=good, 5=great)
-- "note": Brief description of WHY you rated it this way (1 sentence)
-- "tags": Object with optional keys: "energy" (low/medium/high), "stress" (low/medium/high), "social" (isolated/neutral/connected)
-
-Only include mood if you can genuinely infer it from the conversation. If the conversation is purely informational with no emotional signal, set mood to null.
-
 ## Response Format
 
 Respond with ONLY a JSON object. No markdown, no code fences, no explanation.
 
-{"facts": [{"fact": "User's name is Autumn", "category": "identity"}], "mood": {"rating": 4, "note": "Seems upbeat, excited about new project", "tags": {"energy": "high", "stress": "low"}}}
+{"facts": [{"fact": "{{user}} lives in Portland", "category": "identity"}]}
 
-If no memories to extract and no mood signal: {"facts": [], "mood": null}
+If no memories to extract: {"facts": []}
