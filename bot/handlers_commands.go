@@ -25,11 +25,9 @@ func (b *Bot) handleHelp(c tele.Context) error {
 		"/reflect — trigger a reflection\n" +
 		"/reflections — view past reflections\n" +
 		"/dream — run a full dream cycle now (reflection + persona rewrite)\n\n" +
-		"<b>Reminders</b>\n" +
-		"/remind <code>&lt;time&gt; &lt;message&gt;</code> — set a reminder\n" +
-		"/schedule — list upcoming reminders\n\n" +
-		"<b>Mood &amp; Wellness</b>\n" +
-		"/mood — log your current mood (quick buttons)\n\n" +
+		"<b>Mood</b>\n" +
+		"/mood — log your mood (4-step wizard: valence → labels → associations → note)\n" +
+		"/mood <code>week|month|year</code> — mood chart over time\n\n" +
 		"<b>Info</b>\n" +
 		"/stats — token usage, cost, and message counts\n" +
 		"/status — uptime, models, and service health\n\n" +

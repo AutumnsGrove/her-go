@@ -3,7 +3,6 @@ package mood
 import (
 	"bytes"
 	"fmt"
-	"image/color"
 	"time"
 
 	"her/memory"
@@ -77,15 +76,9 @@ func RenderValencePNG(store *memory.Store, vocab *Vocab, r GraphRange, now time.
 
 	xValues := make([]time.Time, 0, len(entries))
 	yValues := make([]float64, 0, len(entries))
-	pointColors := make([]drawing.Color, 0, len(entries))
 	for _, e := range entries {
 		xValues = append(xValues, e.Timestamp)
 		yValues = append(yValues, float64(e.Valence))
-		if b, ok := vocab.Buckets[e.Valence]; ok {
-			pointColors = append(pointColors, parseHex(b.Color))
-		} else {
-			pointColors = append(pointColors, drawing.ColorBlack)
-		}
 	}
 
 	// go-chart doesn't support per-point coloring on a single series
@@ -275,6 +268,3 @@ func parseHexByte(s string) (uint8, error) {
 	return out, nil
 }
 
-// Ensure the image/color import isn't dropped — drawing.Color wraps
-// it in go-chart's API surface. Blank reference keeps gopls happy.
-var _ = color.Black

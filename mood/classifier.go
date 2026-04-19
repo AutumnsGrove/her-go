@@ -53,7 +53,8 @@ func classifyReal(ctx context.Context, client *llm.Client, inf *Inference, turns
 		log.Warn("mood classifier LLM call failed; failing open", "err", err)
 		return true, ""
 	}
-	_ = ctx // reserved for cancellation
+	// TODO: pass ctx to ChatCompletion when the client supports context-based cancellation.
+	_ = ctx
 
 	verdict := strings.ToUpper(strings.TrimSpace(resp.Content))
 	// Strip any trailing punctuation the model adds.

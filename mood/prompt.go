@@ -111,7 +111,8 @@ func callLLM(ctx context.Context, client *llm.Client, vocab *Vocab, turns []Turn
 	if err != nil {
 		return nil, fmt.Errorf("mood LLM call: %w", err)
 	}
-	_ = ctx // context propagation lives in llm.Client; stubbed here for future cancellation support
+	// TODO: pass ctx to ChatCompletion when the client supports context-based cancellation.
+	_ = ctx
 
 	inf, err := parseInference(resp.Content)
 	if err != nil {
