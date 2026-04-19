@@ -332,7 +332,7 @@ func TestSaveMoodEntry_EmbeddingRoundTripsViaVecMoods(t *testing.T) {
 
 	// Row should be present, and a KNN query with the SAME vector
 	// should find itself with distance ~0.
-	hits, err := store.SimilarMoodEntriesWithin(base, 24*time.Hour, 5)
+	hits, err := store.SimilarMoodEntriesWithin(time.Now(), base, 24*time.Hour, 5)
 	if err != nil {
 		t.Fatalf("SimilarMoodEntriesWithin: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestSimilarMoodEntriesWithin_RespectsTimeWindow(t *testing.T) {
 	}
 
 	// 30-min window should find only the fresh entry.
-	hits, err := store.SimilarMoodEntriesWithin(newVec, 30*time.Minute, 5)
+	hits, err := store.SimilarMoodEntriesWithin(time.Now(), newVec, 30*time.Minute, 5)
 	if err != nil {
 		t.Fatalf("SimilarMoodEntriesWithin: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestSimilarMoodEntriesWithin_RespectsTimeWindow(t *testing.T) {
 
 func TestSimilarMoodEntriesWithin_EmbedDimZeroReturnsNil(t *testing.T) {
 	store := newMoodTestStore(t) // embedDim=0
-	got, err := store.SimilarMoodEntriesWithin([]float32{0.1, 0.2}, time.Hour, 5)
+	got, err := store.SimilarMoodEntriesWithin(time.Now(), []float32{0.1, 0.2}, time.Hour, 5)
 	if err != nil {
 		t.Fatalf("SimilarMoodEntriesWithin: %v", err)
 	}
