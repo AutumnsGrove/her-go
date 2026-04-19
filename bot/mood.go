@@ -253,15 +253,16 @@ func (b *Bot) launchMoodAgent(convID string, trace func(string) error) {
 	}()
 }
 
-// startMoodSweeper launches the proposal-expiry sweeper goroutine. The
-// sweeper shuts down when the returned cancel fn is called; Start()
-// drops the cancel into the bot's lifecycle at some future point. For
-// now it's fire-and-forget and the OS reclaims it on shutdown.
+// startMoodSweeper launches the proposal-expiry sweeper goroutine.
+// The sweeper shuts down when Bot.Stop() calls the stored cancel func,
+// so it doesn't leak on graceful shutdown.
 func (b *Bot) startMoodSweeper() {
 	if b.moodSweeper == nil {
 		return
 	}
-	go b.moodSweeper.Run(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	b.moodSweeperStop = cancel
+	go b.moodSweeper.Run(ctx)
 	log.Info("mood proposal sweeper started", "interval", b.moodSweeper.Interval)
 }
 

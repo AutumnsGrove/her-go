@@ -3,6 +3,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -53,8 +54,9 @@ type Bot struct {
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
 	// goroutine that calls moodRunner.RunForConversation after each
 	// reply. The sweeper runs in its own goroutine started by Start().
-	moodRunner  *mood.Runner
-	moodSweeper *mood.ProposalSweeper
+	moodRunner      *mood.Runner
+	moodSweeper     *mood.ProposalSweeper
+	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
 
 	// moodVocab is the loaded vocab used by both the agent and the
 	// /mood wizard. Shared so the two paths can't drift.
@@ -272,6 +274,9 @@ func (b *Bot) Start() {
 
 // Stop gracefully shuts down the bot.
 func (b *Bot) Stop() {
+	if b.moodSweeperStop != nil {
+		b.moodSweeperStop() // cancels the sweeper goroutine
+	}
 	b.tb.Stop()
 	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }

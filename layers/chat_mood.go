@@ -18,8 +18,11 @@ import (
 	"strings"
 	"time"
 
+	"her/logger"
 	"her/memory"
 )
+
+var log = logger.WithPrefix("layers")
 
 // minMoodEntriesToInject is the threshold below which the layer emits
 // nothing. A single stray inference out of context is noise, not
@@ -42,9 +45,13 @@ func buildChatMood(ctx *LayerContext) LayerResult {
 
 	recent, err := ctx.Store.RecentMoodEntries(memory.MoodKindMomentary, 5)
 	if err != nil {
+		log.Debug("mood layer: failed to load recent entries", "err", err)
 		return LayerResult{}
 	}
-	latestDaily, _ := ctx.Store.LatestMoodEntry(memory.MoodKindDaily)
+	latestDaily, err := ctx.Store.LatestMoodEntry(memory.MoodKindDaily)
+	if err != nil {
+		log.Debug("mood layer: failed to load daily entry", "err", err)
+	}
 
 	totalEntries := len(recent)
 	if latestDaily != nil && daysSince(latestDaily.Timestamp) <= 2 {
