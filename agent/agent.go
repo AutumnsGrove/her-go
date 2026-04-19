@@ -24,8 +24,11 @@ import (
 	// Each import causes the package's init() to run, which calls
 	// tools.Register("name", Handle) to add the handler to the registry.
 	_ "her/tools/done"
+	_ "her/tools/get_weather"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
+	_ "her/tools/search_books"
+	_ "her/tools/set_location"
 	_ "her/tools/think"
 	_ "her/tools/update_persona"
 	_ "her/tools/use_tools"

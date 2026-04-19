@@ -38,6 +38,22 @@ type Config struct {
 	Scrub      ScrubConfig      `yaml:"scrub"`
 	Persona    PersonaConfig    `yaml:"persona"`
 	Voice      VoiceConfig      `yaml:"voice"`
+	Location   LocationConfig   `yaml:"location,omitempty"`
+}
+
+// LocationConfig holds the user's saved home coordinates and unit
+// preferences, used by the get_weather tool. Lat/lon are written by
+// the set_location tool whenever the user updates their home location
+// (via SetLocation — a surgical YAML edit that preserves formatting).
+//
+// Zero values are the "no location set" state; the get_weather tool
+// prompts the user to run set_location when it sees 0/0.
+type LocationConfig struct {
+	Latitude  float64 `yaml:"latitude"`
+	Longitude float64 `yaml:"longitude"`
+	Name      string  `yaml:"name,omitempty"`       // display name from the last geocoding ("Portland, Oregon")
+	TempUnit  string  `yaml:"temp_unit,omitempty"`  // "fahrenheit" (default) or "celsius"
+	WindUnit  string  `yaml:"wind_unit,omitempty"`  // "mph" (default) or "kmh"
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into
@@ -362,6 +378,166 @@ func (c *Config) SetTrace(configPath string, enabled bool) error {
 	}
 
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// SetLocation writes the user's home coordinates (and optional display
+// name) into both the in-memory config and config.yaml on disk. Like
+// SetTrace, this is a surgical line-level edit — finds the latitude/
+// longitude/name lines under the "location:" section and replaces
+// their values, preserving comments and formatting.
+//
+// If the "location:" section doesn't exist yet, it's appended to the
+// end of the file. We intentionally don't use a full YAML round-trip
+// (yaml.Marshal → yaml.Unmarshal) because it would strip comments
+// from the whole file.
+func (c *Config) SetLocation(configPath string, lat, lon float64, name string) error {
+	c.Location.Latitude = lat
+	c.Location.Longitude = lon
+	if name != "" {
+		c.Location.Name = name
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	const indent = "  " // same two-space indent as other top-level sections
+
+	// Scan once to find the section and each field's line index (if present).
+	inLocation := false
+	locationHeader := -1
+	latIdx, lonIdx, nameIdx := -1, -1, -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect top-level YAML sections (no leading whitespace, not a comment).
+		isTopLevel := len(trimmed) > 0 &&
+			!strings.HasPrefix(line, " ") &&
+			!strings.HasPrefix(line, "\t") &&
+			!strings.HasPrefix(trimmed, "#")
+
+		if isTopLevel {
+			if strings.HasPrefix(trimmed, "location:") {
+				inLocation = true
+				locationHeader = i
+				continue
+			}
+			if inLocation {
+				// Left the location: section — stop scanning.
+				inLocation = false
+			}
+		}
+
+		if inLocation {
+			switch {
+			case strings.HasPrefix(trimmed, "latitude:"):
+				latIdx = i
+			case strings.HasPrefix(trimmed, "longitude:"):
+				lonIdx = i
+			case strings.HasPrefix(trimmed, "name:"):
+				nameIdx = i
+			}
+		}
+	}
+
+	// Helper: replace the "key: value" part of a line in place, preserving
+	// leading indent and any trailing " # comment".
+	replaceValue := func(line, key, value string) string {
+		// Everything up to (and including) "key:".
+		keyMarker := key + ":"
+		keyPos := strings.Index(line, keyMarker)
+		if keyPos < 0 {
+			return line // shouldn't happen — we already matched the prefix
+		}
+		prefix := line[:keyPos]
+		// Preserve an inline comment if there is one.
+		rest := line[keyPos+len(keyMarker):]
+		comment := ""
+		if hashPos := strings.Index(rest, "#"); hashPos >= 0 {
+			comment = " " + strings.TrimLeft(rest[hashPos:], " ")
+		}
+		return fmt.Sprintf("%s%s %s%s", prefix, keyMarker, value, comment)
+	}
+
+	// If the location section doesn't exist yet, append a fresh block.
+	if locationHeader < 0 {
+		block := []string{
+			"",
+			"location:",
+			fmt.Sprintf("%slatitude: %s", indent, formatFloat(lat)),
+			fmt.Sprintf("%slongitude: %s", indent, formatFloat(lon)),
+		}
+		if name != "" {
+			block = append(block, fmt.Sprintf("%sname: %q", indent, name))
+		}
+		// Trim a trailing empty line so we don't end up with a double blank.
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		lines = append(lines, block...)
+		return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+	}
+
+	// Section exists — update in place, or insert any missing keys right
+	// after the "location:" header. We insert in reverse order so the
+	// index math stays correct after each splice.
+	if nameIdx >= 0 && name != "" {
+		lines[nameIdx] = replaceValue(lines[nameIdx], "name", fmt.Sprintf("%q", name))
+	} else if name != "" {
+		newLine := fmt.Sprintf("%sname: %q", indent, name)
+		lines = insertAfter(lines, locationHeader, newLine)
+		// Shift latIdx/lonIdx if they come after the header.
+		if latIdx > locationHeader {
+			latIdx++
+		}
+		if lonIdx > locationHeader {
+			lonIdx++
+		}
+	}
+
+	if lonIdx >= 0 {
+		lines[lonIdx] = replaceValue(lines[lonIdx], "longitude", formatFloat(lon))
+	} else {
+		newLine := fmt.Sprintf("%slongitude: %s", indent, formatFloat(lon))
+		lines = insertAfter(lines, locationHeader, newLine)
+		if latIdx > locationHeader {
+			latIdx++
+		}
+	}
+
+	if latIdx >= 0 {
+		lines[latIdx] = replaceValue(lines[latIdx], "latitude", formatFloat(lat))
+	} else {
+		newLine := fmt.Sprintf("%slatitude: %s", indent, formatFloat(lat))
+		lines = insertAfter(lines, locationHeader, newLine)
+	}
+
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// formatFloat renders a float with up to 6 decimal places and no trailing
+// zeros — matches the precision Open-Meteo and Nominatim return. Using
+// %g would drop trailing zeros but can slip into scientific notation for
+// very small or very large values, which would be confusing in config.
+func formatFloat(f float64) string {
+	s := fmt.Sprintf("%.6f", f)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	if s == "" || s == "-" {
+		return "0"
+	}
+	return s
+}
+
+// insertAfter splices a new line into a slice immediately after the given
+// index. This is the standard Go idiom for inserting into a slice — no
+// built-in "insert" function (unlike Python's list.insert()), so we build
+// it from append() and a slice expression.
+func insertAfter(lines []string, idx int, newLine string) []string {
+	return append(lines[:idx+1], append([]string{newLine}, lines[idx+1:]...)...)
 }
 
 // ExportEnv sets process-level environment variables from config values
