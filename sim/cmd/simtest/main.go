@@ -95,7 +95,11 @@ func main() {
 	var failures int
 	run := func(s sim.Scenario) {
 		t := &cliT{}
-		h := sim.NewHarness(t, sim.HarnessOptions{Out: os.Stdout})
+		// Take the scenario's own HarnessOptions and pin Out to
+		// stdout so the CLI always narrates the run.
+		opts := s.HarnessOptions
+		opts.Out = os.Stdout
+		h := sim.NewHarness(t, opts)
 		err := s.Run(h)
 		t.runCleanups()
 		if err != nil {
