@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"her/embed"
 	"her/llm"
 	"her/memory"
+	"her/mood"
 	"her/persona"
 	"her/scrub"
 	"her/search"
@@ -213,11 +215,15 @@ CREATE TABLE IF NOT EXISTS sim_facts (
 CREATE TABLE IF NOT EXISTS sim_mood_entries (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	rating INTEGER NOT NULL,
+	ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+	kind TEXT NOT NULL,
+	valence INTEGER NOT NULL,
+	labels TEXT NOT NULL DEFAULT '[]',
+	associations TEXT NOT NULL DEFAULT '[]',
 	note TEXT,
-	tags TEXT,
-	source TEXT DEFAULT 'inferred'
+	source TEXT NOT NULL,
+	confidence REAL NOT NULL DEFAULT 0,
+	conversation_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sim_metrics (
@@ -568,6 +574,85 @@ func runSim(cmd *cobra.Command, args []string) error {
 		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
 	}
 
+	// --- Mood agent client (optional) ---
+	// The mood agent runs parallel to the memory agent after each turn.
+	// In sim mode we run it in PURE INFERRING mode: ConfidenceHigh is
+	// collapsed to ConfidenceLow so every passing inference auto-logs
+	// as source=inferred. There's no human to tap proposals during a
+	// sim, and dropping mediums would lose data we want to evaluate.
+	var moodAgentClient *llm.Client
+	var moodRunner *mood.Runner
+	if cfg.MoodAgent.Model != "" {
+		mTemp := cfg.MoodAgent.Temperature
+		if mTemp == 0 {
+			mTemp = 0.2
+		}
+		mTokens := cfg.MoodAgent.MaxTokens
+		if mTokens == 0 {
+			mTokens = 512
+		}
+		moodAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+
+		vocab := mood.Default()
+		if cfg.Mood.VocabPath != "" {
+			v, err := mood.LoadVocab(cfg.Mood.VocabPath)
+			if err != nil {
+				return fmt.Errorf("loading mood vocab: %w", err)
+			}
+			vocab = v
+		}
+
+		// Pure-inferring config — one threshold does both jobs.
+		low := cfg.Mood.ConfidenceLow
+		if low == 0 {
+			low = 0.40
+		}
+		dedupWin := time.Duration(cfg.Mood.DedupWindowMinutes) * time.Minute
+		if dedupWin == 0 {
+			dedupWin = 2 * time.Hour
+		}
+		dedupSim := cfg.Mood.DedupSimilarity
+		if dedupSim == 0 {
+			dedupSim = 0.80
+		}
+		ctxTurns := cfg.Mood.ContextTurns
+		if ctxTurns == 0 {
+			ctxTurns = 5
+		}
+
+		// In sim the mood classifier and embed client follow the main
+		// ones — same model settings, so no extra cost beyond what the
+		// real bot would pay.
+		embedForMood := func(_ context.Context, text string) ([]float32, error) {
+			if embedClient == nil {
+				return nil, nil
+			}
+			return embedClient.Embed(text)
+		}
+
+		moodRunner = &mood.Runner{
+			Deps: mood.Deps{
+				LLM:        moodAgentClient,
+				Classifier: classifierClient, // reuse main classifier
+				Store:      store,
+				Vocab:      vocab,
+				Embed:      embedForMood,
+				// Propose deliberately nil — in sim we don't
+				// emit proposals. ConfidenceHigh=Low ensures we
+				// never hit the emit-proposal path anyway.
+			},
+			Config: mood.AgentConfig{
+				ContextTurns:    ctxTurns,
+				ConfidenceHigh:  low, // sim quirk: collapse the two tiers
+				ConfidenceLow:   low,
+				DedupWindow:     dedupWin,
+				DedupSimilarity: dedupSim,
+			},
+		}
+		log.Info("mood agent enabled for sim (pure-inferring mode)",
+			"model", cfg.MoodAgent.Model, "threshold", low)
+	}
+
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
@@ -696,6 +781,27 @@ func runSim(cmd *cobra.Command, args []string) error {
 			botReply: result.ReplyText,
 			elapsed:  elapsed,
 		})
+
+		// --- Mood agent ---
+		// Runs synchronously in sim mode so the report captures its
+		// output per turn. Errors are logged, never fatal — the mood
+		// agent is best-effort.
+		if moodRunner != nil {
+			moodRes := moodRunner.RunForConversation(context.Background(), conversationID)
+			switch moodRes.Action {
+			case mood.ActionAutoLogged:
+				fmt.Printf("       [mood] logged: valence=%d labels=%v conf=%.2f\n",
+					moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
+			case mood.ActionDroppedLow, mood.ActionDroppedNoSignal, mood.ActionDroppedVocab:
+				fmt.Printf("       [mood] dropped: %s (%s)\n", moodRes.Action, moodRes.Reason)
+			case mood.ActionDroppedDedup:
+				fmt.Printf("       [mood] dedup: %s\n", moodRes.Reason)
+			case mood.ActionDroppedClassify:
+				fmt.Printf("       [mood] classifier rejected: %s\n", moodRes.Reason)
+			case mood.ActionErrored:
+				fmt.Printf("       [mood] error: %s\n", moodRes.Reason)
+			}
+		}
 
 		// Pause between turns to avoid hitting rate limits on free-tier
 		// models. In real usage the user types slowly enough that this
@@ -967,15 +1073,43 @@ func copySummaries(tmpDB, simDB *sql.DB, runID int64) error {
 	return rows.Err()
 }
 
-// copyMoodEntries copies mood entries from the temp DB into sim_mood_entries.
-//
-// TEMPORARILY A NO-OP. The mood schema was redesigned in the mood-tracking
-// branch (rating 1-5 → Apple-style valence/labels/associations). The
-// sim_mood_entries table in sim.db still expects the old columns. Once
-// the new mood agent is wired up and actually writes rows, update
-// sim_mood_entries + this copier together.
+// copyMoodEntries copies mood entries from the temp DB into
+// sim_mood_entries. Schema matches the Apple-style redesign: valence
+// 1-7 + labels/associations as JSON + confidence + source.
 func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
-	return nil
+	rows, err := tmpDB.Query(
+		`SELECT ts, kind, valence, labels, associations, COALESCE(note, ''),
+		        source, confidence, COALESCE(conversation_id, '')
+		 FROM mood_entries ORDER BY id ASC`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying mood entries: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			ts, kind, labels, associations, note, source, convID string
+			valence                                               int
+			confidence                                            float64
+		)
+		if err := rows.Scan(&ts, &kind, &valence, &labels, &associations, &note,
+			&source, &confidence, &convID); err != nil {
+			return fmt.Errorf("scanning mood entry: %w", err)
+		}
+		_, err := simDB.Exec(
+			`INSERT INTO sim_mood_entries
+			   (run_id, ts, kind, valence, labels, associations, note,
+			    source, confidence, conversation_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, kind, valence, labels, associations, note,
+			source, confidence, convID,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting sim_mood_entry: %w", err)
+		}
+	}
+	return rows.Err()
 }
 
 // copyMetrics copies metrics from the temp DB into sim_metrics and returns
@@ -1332,9 +1466,11 @@ func writeFactsSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 }
 
 // writeMoodSection writes the mood entries table to the report.
+// Columns reflect the Apple-style schema: valence 1-7, JSON-array
+// labels and associations, LLM-self-rated confidence, and source.
 func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	rows, err := simDB.Query(
-		`SELECT timestamp, rating, note, source
+		`SELECT ts, kind, valence, labels, associations, note, source, confidence
 		 FROM sim_mood_entries WHERE run_id = ? ORDER BY id ASC`, runID,
 	)
 	if err != nil {
@@ -1343,37 +1479,50 @@ func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type moodRow struct {
-		ts     string
-		rating int
-		note   sql.NullString
-		source sql.NullString
+		ts, kind, labels, associations, note, source string
+		valence                                       int
+		confidence                                    float64
 	}
 	var moods []moodRow
 	for rows.Next() {
 		var m moodRow
-		if err := rows.Scan(&m.ts, &m.rating, &m.note, &m.source); err != nil {
+		if err := rows.Scan(&m.ts, &m.kind, &m.valence, &m.labels, &m.associations,
+			&m.note, &m.source, &m.confidence); err != nil {
 			continue
 		}
 		moods = append(moods, m)
 	}
 
 	fmt.Fprintf(b, "## Mood Entries (%d)\n\n", len(moods))
-	if len(moods) > 0 {
-		b.WriteString("| Time | Rating | Note | Source |\n")
-		b.WriteString("|------|--------|------|--------|\n")
-		for _, m := range moods {
-			note := ""
-			if m.note.Valid {
-				note = m.note.String
-			}
-			source := "inferred"
-			if m.source.Valid {
-				source = m.source.String
-			}
-			fmt.Fprintf(b, "| %s | %d | %s | %s |\n", m.ts, m.rating, note, source)
-		}
+	if len(moods) == 0 {
+		b.WriteString("_No mood inferences this run._\n\n")
+		return
+	}
+	b.WriteString("| Time | Kind | Valence | Labels | Associations | Note | Source | Conf |\n")
+	b.WriteString("|------|------|---------|--------|--------------|------|--------|------|\n")
+	for _, m := range moods {
+		// Turn the raw JSON arrays into comma-separated lists for
+		// readability. Fall back to the raw string if decode fails.
+		labels := renderJSONArray(m.labels)
+		assocs := renderJSONArray(m.associations)
+		fmt.Fprintf(b, "| %s | %s | %d | %s | %s | %s | %s | %.2f |\n",
+			m.ts, m.kind, m.valence, labels, assocs, m.note, m.source, m.confidence)
 	}
 	b.WriteString("\n")
+}
+
+// renderJSONArray decodes a JSON string-array into a comma-separated
+// display string. Empty input and decode failures render as an em-dash.
+func renderJSONArray(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "[]" || s == "null" {
+		return "—"
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(s), &items); err != nil || len(items) == 0 {
+		return "—"
+	}
+	return strings.Join(items, ", ")
 }
 
 // writeSummariesSection writes any compaction summaries to the report.
