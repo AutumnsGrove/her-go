@@ -441,7 +441,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// --- Dreamer ---
 	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
 	// It needs a context so it shuts down cleanly when the bot exits.
-	// We use the memory agent LLM (Kimi K2.5) for dreaming — same model, same
+	// We reuse the memory agent LLM for dreaming — same model, same
 	// purpose (nuanced language processing), no need for a separate config entry.
 	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
 	if memoryAgentClient != nil {

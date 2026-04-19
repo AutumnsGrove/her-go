@@ -10,6 +10,7 @@ import (
 	"her/memory"
 	"her/scrub"
 	"her/tools"
+	"her/trace"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -74,28 +75,33 @@ func (b *Bot) getConversationID(chatID int64) string {
 	return newID
 }
 
-// makeTraceCallbacks wires up the trace inbox for this turn: a single
-// Telegram message with three named slots — "main" (Trinity, the
-// foreground agent), "memory" (Kimi, the post-turn memory agent), and
-// "mood" (the post-turn mood agent). Each agent writes into its own
-// slot via the returned callback; the TraceBoard re-renders the whole
-// message whenever a slot changes and pushes the edit to Telegram.
+// makeTraceCallbacks wires up the trace inbox for one turn: one
+// Telegram message, N named slots (one per registered trace.Stream),
+// shared across every agent that fires during this turn.
 //
-// Slots render in insertion order (main first, then memory or mood in
-// whichever ran first). Empty content clears a slot so no orphan
-// headers linger when an agent bails out.
-func (b *Bot) makeTraceCallbacks(c tele.Context) (mainTrace, memTrace, moodTrace tools.TraceCallback) {
+// Returns a lookup function — call trace("main"), trace("memory"),
+// trace("mood"), or any other registered stream name — and receive a
+// tools.TraceCallback that writes into that slot. Slots not in the
+// trace.Streams() registry still work as a fallback (they render
+// after registered ones in insertion order), so a new agent in a
+// new package can call trace.Register + request a callback without
+// any edit to this function.
+//
+// Slots render in registry order, not completion order — main always
+// comes first, then memory and mood, regardless of which post-turn
+// agent finishes writing first.
+func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCallback {
 	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
 	if err != nil {
 		log.Warn("trace: failed to send placeholder", "err", err)
 		traceMsg = nil
 	}
 
-	// edit is the single function the TraceBoard calls on every
-	// slot change. Handles Telegram's HTML-parse fallback inline.
+	// edit is the single function the board calls on every slot
+	// change. Handles Telegram's HTML-parse fallback inline.
 	edit := func(text string) {
 		if text == "" {
-			return // nothing to render; leave whatever's already there
+			return
 		}
 		if traceMsg == nil {
 			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -114,23 +120,16 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) (mainTrace, memTrace, moodTrace
 		}
 	}
 
-	board := NewTraceBoard(edit)
+	board := trace.NewBoard(edit)
 
-	mainTrace = func(text string) error {
-		// Fire the board update in a goroutine so the agent loop
-		// isn't blocked on Telegram API latency.
-		go board.Set("main", text)
-		return nil
+	return func(slot string) tools.TraceCallback {
+		return func(text string) error {
+			// Fire the board update in a goroutine so the agent
+			// loop isn't blocked on Telegram API latency.
+			go board.Set(slot, text)
+			return nil
+		}
 	}
-	memTrace = func(text string) error {
-		go board.Set("memory", text)
-		return nil
-	}
-	moodTrace = func(text string) error {
-		go board.Set("mood", text)
-		return nil
-	}
-	return mainTrace, memTrace, moodTrace
 }
 
 // handleTraces toggles agent thinking traces on/off.
