@@ -146,8 +146,8 @@ type Deps struct {
 
 	// ConversationID is stamped onto every inferred entry so later
 	// analysis can reconstruct which conversation the mood came
-	// from. Zero means "unknown" (stored as NULL).
-	ConversationID int64
+	// from. Empty means "unknown" (stored as NULL).
+	ConversationID string
 }
 
 // Result is what RunAgent reports back. Exactly one of Entry or
