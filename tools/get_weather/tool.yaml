@@ -1,4 +1,5 @@
 name: get_weather
+agent: main
 description: >-
   Get the current weather. With no arguments, uses {{user}}'s saved home
   location from config (set via set_location). Pass a location string

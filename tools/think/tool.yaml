@@ -1,4 +1,5 @@
 name: think
+agent: main
 hint: "pause and reason before acting (free, use often)"
 description: >-
   Pause and reason before acting. Use this to evaluate search results,

@@ -154,7 +154,7 @@ func (b *Bot) executeConfirmedAction(pending *memory.PendingConfirmation) (strin
 		}
 		return fmt.Sprintf("%d expenses deleted", deleted), nil
 
-	case "remove_fact":
+	case "remove_memory":
 		var payload struct {
 			FactID int64 `json:"fact_id"`
 		}

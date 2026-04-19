@@ -1,4 +1,5 @@
 name: search_books
+agent: main
 description: >-
   Search Open Library for books by title, author, topic, or any mix.
   Returns up to 10 hits with title, author(s), first-published year,

@@ -252,37 +252,58 @@ else
 fi
 
 # ============================================================================
-# 8. TOOL REGISTRATION — new tool dirs must be imported in agent.go
+# 8. TOOL REGISTRATION — tools must be imported in the correct agent file
 # ============================================================================
-# Every tools/<name>/handler.go registers via init(). For init() to run,
-# the package must be blank-imported in agent/agent.go. Missing the import
-# means the tool silently doesn't exist at runtime — no error, just gone.
+# Each tool.yaml declares `agent: main`, `agent: memory`, or `agent: [main, memory]`.
+# The tool's init() only runs if the package is blank-imported in the right file:
+#   main   → agent/agent.go
+#   memory → agent/memory_agent.go
+# Missing the import means the tool silently doesn't exist at runtime.
+# Tools without a tool.yaml (like use_tools) are skipped — they're meta-tools.
 
 echo -e "${DIM}Checking tool registration...${NC}"
 
-# Find all tool handler dirs (each has a handler.go)
-tool_dirs=$(find tools -name handler.go -maxdepth 2 2>/dev/null | \
-    sed 's|/handler.go||' | sort || true)
+tool_errors=""
+for yaml in tools/*/tool.yaml; do
+    dir=$(dirname "$yaml")
+    name=$(basename "$dir")
+    pkg="her/${dir}"
 
-if [ -n "$tool_dirs" ]; then
-    unregistered=""
-    for dir in $tool_dirs; do
-        pkg="her/${dir}"
-        if ! grep -q "\"${pkg}\"" agent/agent.go 2>/dev/null; then
-            unregistered="${unregistered}  ${pkg}\n"
-        fi
-    done
+    # Read the agent field from tool.yaml
+    agent_val=$(grep '^agent:' "$yaml" 2>/dev/null | sed 's/^agent:\s*//' | tr -d '[]' || true)
 
-    if [ -n "$unregistered" ]; then
-        echo -e "${RED}  ✗ Tool handlers not imported in agent/agent.go:${NC}"
-        echo -e "$unregistered"
-        echo -e "${YELLOW}    Fix: Add ${BLUE}_ \"her/tools/<name>\"${YELLOW} to agent/agent.go imports${NC}"
-        checks_failed=1
-    else
-        echo -e "${GREEN}  ✓ tool registration${NC}"
+    if [ -z "$agent_val" ]; then
+        tool_errors="${tool_errors}  ${name}: missing 'agent' field in tool.yaml\n"
+        continue
     fi
+
+    # Check each declared agent
+    for agent in $(echo "$agent_val" | tr ',' ' '); do
+        agent=$(echo "$agent" | tr -d ' ')
+        case "$agent" in
+            main)
+                if ! grep -q "\"${pkg}\"" agent/agent.go 2>/dev/null; then
+                    tool_errors="${tool_errors}  ${name} (agent: main) → missing from agent/agent.go\n"
+                fi
+                ;;
+            memory)
+                if ! grep -q "\"${pkg}\"" agent/memory_agent.go 2>/dev/null; then
+                    tool_errors="${tool_errors}  ${name} (agent: memory) → missing from agent/memory_agent.go\n"
+                fi
+                ;;
+        esac
+    done
+done
+
+if [ -n "$tool_errors" ]; then
+    echo -e "${RED}  ✗ Tool registration mismatch:${NC}"
+    echo -e "$tool_errors"
+    echo -e "${YELLOW}    Each tool.yaml declares its agent. The matching file must import it:${NC}"
+    echo -e "${YELLOW}      agent: main   → ${BLUE}_ \"her/tools/<name>\"${YELLOW} in agent/agent.go${NC}"
+    echo -e "${YELLOW}      agent: memory → ${BLUE}_ \"her/tools/<name>\"${YELLOW} in agent/memory_agent.go${NC}"
+    checks_failed=1
 else
-    echo -e "${GREEN}  ✓ tool registration (no tool handlers found)${NC}"
+    echo -e "${GREEN}  ✓ tool registration${NC}"
 fi
 
 # ============================================================================

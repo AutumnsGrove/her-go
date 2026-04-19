@@ -399,7 +399,7 @@ func Run(params RunParams) (*RunResult, error) {
 
 	// We loop up to 10 iterations to allow for think + search + refine cycles.
 	// With the think tool, a typical complex flow might use 6-7 iterations:
-	// think → search → think(evaluate) → search(refine) → think → reply → save_fact
+	// think → search → think(evaluate) → search(refine) → think → reply → save_memory
 	// --- Agent tool-calling loop ---
 	// Modeled after Crush (charmbracelet/fantasy): loop while the model
 	// keeps returning tool calls (finish_reason == "tool_calls"). When the
@@ -771,7 +771,7 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 	default:
 		// Guard: only dispatch tools that are in the current active tool set.
 		//
-		// Because memory_agent.go imports save_fact/save_self_fact/etc. in the
+		// Because memory_agent.go imports save_memory/save_self_memory/etc. in the
 		// same package, those handlers are registered in the global tools.Execute
 		// registry. Without this check, the main agent can call them by
 		// hallucinating tool calls for tools not in its schema — the handlers exist

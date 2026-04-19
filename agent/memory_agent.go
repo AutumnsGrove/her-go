@@ -10,7 +10,7 @@
 //
 // The memory agent uses the same tool registry (tools.Execute) and the
 // same fact pipeline (style gate, length gate, dedup, classifier) as the
-// old inline save_fact calls — just without the time pressure.
+// old inline save_memory calls — just without the time pressure.
 package agent
 
 import (
@@ -80,7 +80,7 @@ Call done when finished.`
 
 // RunMemoryAgent reviews the given turn transcript and saves any facts worth
 // keeping. Runs a lightweight tool-calling loop (max 10 iterations) using
-// the memory tools: save_fact, save_self_fact, update_fact, remove_fact, done.
+// the memory tools: save_memory, save_self_memory, update_memory, remove_memory, done.
 //
 // This function is designed to be called inside a goroutine — it logs
 // results but never returns an error to the caller. A missing fact is

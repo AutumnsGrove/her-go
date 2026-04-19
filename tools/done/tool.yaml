@@ -1,4 +1,5 @@
 name: done
+agent: [main, memory]
 hint: "signal you're finished (REQUIRED, call last)"
 description: >-
   Signal that you are completely finished with this turn. Call this

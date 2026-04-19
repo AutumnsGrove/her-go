@@ -1,4 +1,5 @@
 name: remove_memory
+agent: memory
 description: >-
   Remove a memory that is no longer true, was incorrect, or is redundant with
   another memory. The memory is soft-deleted (kept for audit but excluded from

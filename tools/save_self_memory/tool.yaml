@@ -1,4 +1,5 @@
 name: save_self_memory
+agent: memory
 description: >-
   Save an observation about {{her}}'s own behavior or communication patterns —
   things she has learned through conversation, not things already in her system

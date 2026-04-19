@@ -1,4 +1,5 @@
 name: update_memory
+agent: memory
 description: >-
   Update an existing memory when new information changes or refines what we
   knew. Use this instead of save_memory when a memory already exists but needs

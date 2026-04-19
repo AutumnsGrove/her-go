@@ -1,4 +1,5 @@
 name: web_read
+agent: main
 description: >-
   Extract clean text content from a URL using Tavily. Use when the user
   shares a link and wants you to read it, or when a web_search result

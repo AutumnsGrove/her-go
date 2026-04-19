@@ -389,9 +389,9 @@ func renderToolCallEvent(ev ToolCallEvent) string {
 		return thinkStyle.Render(fmt.Sprintf("%s %s", icon, thought))
 	case "reply":
 		icon = "📝"
-	case "save_fact", "update_fact":
+	case "save_memory", "update_memory":
 		icon = "💾"
-	case "remove_fact":
+	case "remove_memory":
 		icon = "🗑"
 	case "web_search":
 		icon = "🔍"

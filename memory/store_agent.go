@@ -10,7 +10,7 @@ import (
 // combined into one struct so the agent sees call + outcome together.
 type AgentAction struct {
 	MessageID int64  // which user message triggered this action
-	ToolName  string // e.g. "save_fact", "web_search", "recall_memories"
+	ToolName  string // e.g. "save_memory", "web_search", "recall_memories"
 	ToolArgs  string // JSON arguments (may be truncated for verbose tools)
 	Result    string // tool result (may be truncated for verbose tools)
 }
