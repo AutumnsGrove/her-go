@@ -39,6 +39,8 @@ You (Telegram) → her binary → main agent (Qwen3, orchestrates the turn)
                                 ├── update_memory             ├── classifier check
                                 ├── remove_memory             ├── KNN dedup
                                 └── done                      └── auto-log / propose / drop
+                                  ↑ (each write gated by)         ↑
+                                  classifier (Claude Haiku 4.5) — fail-open one-shot verdicts
                               ↓
                               scheduler (cron-driven extensions)
                                 └── mood_daily_rollup at 21:00 local
@@ -50,16 +52,16 @@ For a deep dive into model calls, data flow, and the dual compaction system, see
 
 ## The Gang (agents + models)
 
-Three agents do the LLM-driven work. Two more LLM roles (reply, classifier) and a vision model are called by the agents as tools. Local models handle embeddings, speech, and audio.
+Three agents do the LLM-driven work — they have their own loops, run autonomously, and produce traces. Three more LLM roles (reply, classifier, vision) are one-shot calls invoked by the agents — same kind of model, simpler shape: one input, one verdict, no loop. Local models handle embeddings, speech, and audio.
 
 | Role | Type | Model | Via | When it runs |
 |---|---|---|---|---|
 | **main** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | every turn (foreground) |
 | **memory** | agent | Kimi K2 (`moonshotai/kimi-k2-0905`) | OpenRouter → Groq | after each reply (background) |
 | **mood** | agent | Kimi K2 (`moonshotai/kimi-k2-0905`) | OpenRouter → Groq | after each reply (background, parallel to memory) |
-| reply | tool | Deepseek V3.2 (`deepseek/deepseek-v3.2`) | OpenRouter | called by main via the `reply` tool |
-| classifier | gate | Claude Haiku 4.5 (`anthropic/claude-haiku-4.5`) | OpenRouter | gates memory writes AND mood writes (one shared client) |
-| vision | tool | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter | called via `view_image` |
+| reply | tool LLM | Deepseek V3.2 (`deepseek/deepseek-v3.2`) | OpenRouter | called by main via the `reply` tool |
+| classifier | tool LLM | Claude Haiku 4.5 (`anthropic/claude-haiku-4.5`) | OpenRouter | called by memory + mood to gate writes (fail-open) |
+| vision | tool LLM | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter | called by main via `view_image` |
 | embeddings | local | Nomic Embed Text v1.5 | Local (LM Studio/Ollama) | semantic dedup for memories + moods |
 | STT | local | Parakeet | Local | voice memo → text |
 | TTS | local | Piper | Local | text → voice reply |
@@ -68,8 +70,8 @@ Each agent registers itself with the **trace inbox** (`trace/`) at init time —
 
 ## Features
 
-- **Multi-agent pipeline** — main orchestrates, reply converses, memory remembers, mood tracks state of mind. Each runs only when needed; the user waits on none of them.
-- **Memory system** — Facts extracted by a background agent, stored in SQLite, semantically deduplicated via local embeddings, quality-gated by a shared classifier LLM.
+- **Multi-agent pipeline** — main orchestrates, memory remembers, mood tracks state of mind. Each runs only when needed; the user waits on none of them. Reply, classifier, and vision are one-shot LLM calls the agents make.
+- **Memory system** — Facts extracted by a background agent, stored in SQLite, semantically deduplicated via local embeddings, gated by a classifier LLM call before they land.
 - **Mood tracking (Apple State of Mind style)** — A dedicated agent infers valence (1–7), labels, and life-area associations from the turn. High confidence auto-logs; medium sends a Telegram proposal with inline buttons; low drops silently. Embedding-based dedup over a sliding window. Charts via `/mood week|month|year` (PNG, color-coded by valence). Manual `/mood` opens a 4-step wizard. See [docs/plans/PLAN-mood-tracking-redesign.md](docs/plans/PLAN-mood-tracking-redesign.md).
 - **Trace inbox** — `/traces` lights up a single shared Telegram message with one slot per agent (main → memory → mood). Slots render in registry-defined order regardless of which agent finishes first. Adding a new agent is one `trace.Register` call.
 - **Scheduler** — Extension-based cron system (`scheduler/`). Domain packages register `task.yaml` files at init time; the runner dispatches due tasks every 30s with per-task retry policy. Currently powers the **daily mood rollup** at 21:00 local; designed to host more (reminders, weekly digests) without scheduler edits.
