@@ -46,7 +46,7 @@ func TestSaveMoodEntry_RoundTrip(t *testing.T) {
 		Note:           "Got a good code review today",
 		Source:         MoodSourceInferred,
 		Confidence:     0.82,
-		ConversationID: 100,
+		ConversationID: "tg_42_1736894400",
 	}
 	id, err := store.SaveMoodEntry(entry)
 	if err != nil {
@@ -84,8 +84,8 @@ func TestSaveMoodEntry_RoundTrip(t *testing.T) {
 	if got.Confidence < 0.81 || got.Confidence > 0.83 {
 		t.Errorf("Confidence = %v, want ~0.82", got.Confidence)
 	}
-	if got.ConversationID != 100 {
-		t.Errorf("ConversationID = %d, want 100", got.ConversationID)
+	if got.ConversationID != "tg_42_1736894400" {
+		t.Errorf("ConversationID = %q, want %q", got.ConversationID, "tg_42_1736894400")
 	}
 }
 

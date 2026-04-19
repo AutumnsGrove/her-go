@@ -370,7 +370,7 @@ func (s *Store) initTables() error {
 			note           TEXT NOT NULL DEFAULT '',
 			source         TEXT NOT NULL,
 			confidence     REAL NOT NULL DEFAULT 0,
-			conversation_id INTEGER,
+			conversation_id TEXT,
 			embedding      BLOB,
 			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,

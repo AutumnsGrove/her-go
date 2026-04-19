@@ -51,7 +51,7 @@ type MoodEntry struct {
 	Note           string
 	Source         MoodSource
 	Confidence     float64
-	ConversationID int64 // 0 means NULL (manual entries typically have no conv)
+	ConversationID string // empty means NULL (manual entries typically have no conv)
 
 	// Embedding is the cached note+labels vector. Nil when the entry
 	// was saved without an embedding (e.g. manual entries in tests
@@ -114,7 +114,7 @@ func (s *Store) SaveMoodEntry(entry *MoodEntry) (int64, error) {
 	}
 
 	var convID any = entry.ConversationID
-	if entry.ConversationID == 0 {
+	if entry.ConversationID == "" {
 		convID = nil
 	}
 
@@ -298,7 +298,7 @@ func (s *Store) SimilarMoodEntriesWithin(now time.Time, embedding []float32, win
 			assocJSON    string
 			kindStr      string
 			sourceStr    string
-			convNullable sql.NullInt64
+			convNullable sql.NullString
 			embData      []byte
 			distance     float64
 		)
@@ -312,7 +312,7 @@ func (s *Store) SimilarMoodEntriesWithin(now time.Time, embedding []float32, win
 		e.Kind = MoodKind(kindStr)
 		e.Source = MoodSource(sourceStr)
 		if convNullable.Valid {
-			e.ConversationID = convNullable.Int64
+			e.ConversationID = convNullable.String
 		}
 		e.Labels = unmarshalStringArray(labelsJSON)
 		e.Associations = unmarshalStringArray(assocJSON)
@@ -533,7 +533,7 @@ func scanMoodEntries(rows *sql.Rows) ([]MoodEntry, error) {
 			assocJSON    string
 			kindStr      string
 			sourceStr    string
-			convNullable sql.NullInt64
+			convNullable sql.NullString
 			embData      []byte
 		)
 		if err := rows.Scan(
@@ -545,7 +545,7 @@ func scanMoodEntries(rows *sql.Rows) ([]MoodEntry, error) {
 		e.Kind = MoodKind(kindStr)
 		e.Source = MoodSource(sourceStr)
 		if convNullable.Valid {
-			e.ConversationID = convNullable.Int64
+			e.ConversationID = convNullable.String
 		}
 		e.Labels = unmarshalStringArray(labelsJSON)
 		e.Associations = unmarshalStringArray(assocJSON)
