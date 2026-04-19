@@ -26,6 +26,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// fallbackSimAgentModel is used in sim reports when cfg.Agent.Model is empty.
+// The real default lives in config.yaml.example; this is a last-resort label
+// for display purposes only, not used to make actual LLM calls.
+const fallbackSimAgentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+
 // suiteFlag holds the path to the suite YAML file, set via --suite / -s.
 var suiteFlag string
 
@@ -428,7 +433,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// Insert a new run row. We'll update it with totals at the end.
 	agentModel := cfg.Agent.Model
 	if agentModel == "" {
-		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+		agentModel = fallbackSimAgentModel
 	}
 
 	// embedModel captures the model name for the report + sim.db. If no
@@ -1103,7 +1108,7 @@ func generateReport(
 
 	agentModel := cfg.Agent.Model
 	if agentModel == "" {
-		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
+		agentModel = fallbackSimAgentModel
 	}
 	reportEmbedModel := cfg.Embed.Model
 	if reportEmbedModel == "" {

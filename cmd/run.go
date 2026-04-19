@@ -210,40 +210,20 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.Chat.Model})
 	}
 
-	agentModel := cfg.Agent.Model
-	if agentModel == "" {
-		agentModel = "liquid/lfm-2.5-1.2b-instruct:free"
-	}
-	agentTemp := cfg.Agent.Temperature
-	if agentTemp == 0 {
-		agentTemp = 0.1
-	}
-	agentMaxTokens := cfg.Agent.MaxTokens
-	if agentMaxTokens == 0 {
-		agentMaxTokens = 512
-	}
-	agentClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, agentModel, agentTemp, agentMaxTokens)
+	agentClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Agent.Model, cfg.Agent.Temperature, cfg.Agent.MaxTokens)
 	if cfg.Agent.Timeout > 0 {
 		agentClient.WithTimeout(time.Duration(cfg.Agent.Timeout) * time.Second)
 	}
 	if cfg.Agent.Fallback != nil {
 		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: agentModel + " (fallback: " + cfg.Agent.Fallback.Model + ")"})
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: cfg.Agent.Model + " (fallback: " + cfg.Agent.Fallback.Model + ")"})
 	} else {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: agentModel})
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: cfg.Agent.Model})
 	}
 
 	var visionClient *llm.Client
 	if cfg.Vision.Model != "" {
-		visionTemp := cfg.Vision.Temperature
-		if visionTemp == 0 {
-			visionTemp = 0.3
-		}
-		visionMaxTokens := cfg.Vision.MaxTokens
-		if visionMaxTokens == 0 {
-			visionMaxTokens = 512
-		}
-		visionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Vision.Model, visionTemp, visionMaxTokens)
+		visionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
 		if cfg.Vision.Fallback != nil {
 			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
 		}
@@ -258,11 +238,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// mistakes for real user facts.
 	var classifierClient *llm.Client
 	if cfg.Classifier.Model != "" {
-		classifierMaxTokens := cfg.Classifier.MaxTokens
-		if classifierMaxTokens == 0 {
-			classifierMaxTokens = 64
-		}
-		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
+		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, cfg.Classifier.MaxTokens)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "ready", Detail: cfg.Classifier.Model})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "skipped"})
@@ -273,15 +249,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	// facts. Runs in a goroutine after the reply is sent — never blocks the user.
 	var memoryAgentClient *llm.Client
 	if cfg.MemoryAgent.Model != "" {
-		maMaxTokens := cfg.MemoryAgent.MaxTokens
-		if maMaxTokens == 0 {
-			maMaxTokens = 4096
-		}
-		maTemp := cfg.MemoryAgent.Temperature
-		if maTemp == 0 {
-			maTemp = 0.3
-		}
-		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maMaxTokens)
+		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, cfg.MemoryAgent.Temperature, cfg.MemoryAgent.MaxTokens)
 		if cfg.MemoryAgent.Timeout > 0 {
 			memoryAgentClient.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
 		}
