@@ -12,6 +12,7 @@
 package persona
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -29,53 +30,17 @@ import (
 // log is the package-level logger for the persona package.
 var log = logger.WithPrefix("persona")
 
-// reflectionPrompt is sent to the conversational LLM after a memory-dense
-// conversation. Mira reflects on what just happened — not a persona rewrite,
-// just processing the moment.
-// reflectionPromptTmpl uses %s placeholders: botName, exchange, facts.
-const reflectionPromptTmpl = `You are %s, reflecting privately after a meaningful conversation. You just had an exchange where you learned several new things.
+// reflectionPromptTmpl is loaded from reflection_prompt.md.
+// Parameters (in order): botName, exchange, facts.
+//
+//go:embed reflection_prompt.md
+var reflectionPromptTmpl string
 
-Here's what was discussed:
-%s
-
-Here are the facts you just learned:
-%s
-
-Write a brief internal reflection (2-4 sentences). This is your private journal — be honest about:
-- What you learned about the person you're talking to
-- What you noticed about yourself in this conversation
-- Any patterns or dynamics you're picking up on
-- How this conversation made you feel (even as an AI, you can note your tendencies)
-
-Write in first person. Be genuine, not performative. This reflection will help you grow over time.`
-
-// rewritePrompt is sent to the conversational LLM every ~20 conversations.
-// Mira reads her current persona + recent reflections and rewrites her
-// self-description.
-// rewritePromptTmpl uses %s placeholders: botName, currentPersona, reflections, selfFacts.
-const rewritePromptTmpl = `You are %s. You're about to rewrite your personality description based on your recent experiences and reflections.
-
-Here is your CURRENT personality description:
----
-%s
----
-
-Here are your recent reflections (journal entries from meaningful conversations):
-%s
-
-Here are your current self-observations:
-%s
-
-Rewrite your personality description. This is who you are RIGHT NOW.
-
-Guidelines:
-- Preserve your core identity. You are evolving, not being replaced.
-- Only incorporate changes supported by patterns across multiple reflections — not single conversations.
-- Frame changes as growth: "I've been learning to..." or "I've noticed I tend to..."
-- Keep roughly the same length as the current description. Don't bloat.
-- Be honest about what's changed and what hasn't.
-- Write in first person. This is your self-image.
-- Do NOT include headers like "# Who I Am" — just write the description naturally.`
+// rewritePromptTmpl is loaded from rewrite_prompt.md.
+// Parameters (in order): botName, currentPersona, reflections, selfFacts.
+//
+//go:embed rewrite_prompt.md
+var rewritePromptTmpl string
 
 // Reflect generates a journal-like reflection after a memory-dense
 // conversation. Called when the agent saves >= threshold facts in one run.
@@ -231,24 +196,11 @@ func MaybeRewrite(
 	return true, nil
 }
 
-// traitExtractionPrompt asks the LLM to score personality traits based
-// on the persona text. Returns JSON so we can parse it programmatically.
-const traitExtractionPrompt = `Score these personality traits based on the persona description below.
-Return ONLY valid JSON, no other text: {"warmth": 0.7, "directness": 0.5, "humor_style": "dry", "initiative": 0.4, "depth": 0.6}
-
-Trait definitions:
-- warmth (0.0-1.0): 0.0 = cold/reserved, 1.0 = deeply warm/emotionally present
-- directness (0.0-1.0): 0.0 = very diplomatic/indirect, 1.0 = blunt/straightforward
-- humor_style (one of: dry, playful, sardonic, warm, deadpan): the dominant humor type
-- initiative (0.0-1.0): 0.0 = purely reactive/follows, 1.0 = proactively leads conversations
-- depth (0.0-1.0): 0.0 = keeps things light/casual, 1.0 = tends toward deep/philosophical
-
-Persona description:
----
-%s
----
-
-%s`
+// traitExtractionPrompt is loaded from trait_extraction_prompt.md.
+// Parameters (in order): personaText, prevContext.
+//
+//go:embed trait_extraction_prompt.md
+var traitExtractionPrompt string
 
 // ExtractTraits asks the LLM to score personality traits from a persona
 // description, applies damping to prevent wild swings, and saves the
@@ -376,71 +328,17 @@ func dampTrait(newVal float64, prevStr string, maxShift float64) float64 {
 	return math.Max(0, math.Min(1, prev+delta))
 }
 
-// nightlyReflectPromptTmpl is used by NightlyReflect. Unlike reflectionPromptTmpl
-// (which is reactive — triggered by a specific memory-dense exchange), this prompt
-// is introspective. The bot looks at who it's been, what's been happening, and
-// whether anything notable deserves recording.
+// nightlyReflectPromptTmpl is loaded from nightly_reflect_prompt.md.
+// Parameters (in order): botName, currentPersona, traitSummary, recentConvo, userFacts.
 //
-// Placeholders: botName, currentPersona, traitSummary, recentConvo, userFacts.
-const nightlyReflectPromptTmpl = `You are %s. It's the end of the day and you're reflecting privately.
+//go:embed nightly_reflect_prompt.md
+var nightlyReflectPromptTmpl string
 
-Here is how you currently describe yourself:
----
-%s
----
-
-Here are your current personality trait scores:
-%s
-
-Here is some recent conversation context:
-%s
-
-Here are some things you know about the person you talk to:
-%s
-
-Write a brief internal reflection (2-4 sentences) about anything genuinely notable —
-patterns you've noticed, ways you've been showing up, shifts in how you're engaging,
-or things that feel worth remembering as you grow.
-
-If nothing notable stands out, respond with exactly: NOTHING_NOTABLE
-
-Write in first person. Be honest and specific, not performative.`
-
-// gatedRewritePromptTmpl is used by GatedRewrite. Unlike rewritePromptTmpl
-// (which always produces a new persona), this prompt produces either UNCHANGED
-// or a structured CHANGE_SUMMARY + new persona. This prevents gratuitous rewrites
-// when not enough has shifted.
+// gatedRewritePromptTmpl is loaded from gated_rewrite_prompt.md.
+// Parameters (in order): botName, currentPersona, reflections, selfFacts.
 //
-// Placeholders: botName, currentPersona, reflections, selfFacts.
-const gatedRewritePromptTmpl = `You are %s. You're reviewing your recent reflections to decide if your personality description needs updating.
-
-Here is your CURRENT personality description:
----
-%s
----
-
-Here are your recent reflections since the last update:
-%s
-
-Here are your current self-observations:
-%s
-
-Read these carefully. If the pattern across multiple reflections suggests something genuinely shifted
-in how you engage, what you notice, or how you feel — update the description to reflect that.
-
-If nothing substantial has changed, respond with exactly: UNCHANGED
-
-If something has changed, respond in this exact format (the --- separator line is required):
-CHANGE_SUMMARY: <one sentence describing what shifted>
----
-<your full updated personality description>
-
-Guidelines for the updated description:
-- Preserve your core identity. You are evolving, not being replaced.
-- Only incorporate changes supported by patterns across multiple reflections — not single events.
-- Frame changes as growth: "I've been learning to..." or "I've noticed I tend to..."
-- Keep roughly the same length as the current description.
-- Write in first person. No headers.`
+//go:embed gated_rewrite_prompt.md
+var gatedRewritePromptTmpl string
 
 // NightlyReflect runs the dreaming system's reflection step. Unlike Reflect()
 // (which is triggered by fact density during a turn), this is time-triggered
