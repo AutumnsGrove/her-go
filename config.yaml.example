@@ -100,6 +100,13 @@ persona:
   min_rewrite_days: 7                # minimum days between persona rewrites
   min_reflections: 3                 # minimum unconsumed reflections required before a rewrite is allowed
 
+location:
+  latitude: 0                   # written by set_location — leave 0/0 until set
+  longitude: 0
+  name: ""                      # display name from the last geocoding (e.g., "Portland, Oregon")
+  temp_unit: "fahrenheit"       # "fahrenheit" or "celsius"
+  wind_unit: "mph"              # "mph" or "kmh"
+
 voice:
   enabled: false                                                  # set true to accept voice memos
   stt:
