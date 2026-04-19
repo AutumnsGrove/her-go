@@ -129,10 +129,14 @@ type TaskConfig struct {
 	// at NextFire time and deletes the row.
 	Cron string `yaml:"cron"`
 
-	// Payload is forwarded verbatim to Handler.Execute. Use this to
-	// parameterize reusable handlers (e.g. a generic "send_message"
+	// Payload is forwarded verbatim to Handler.Execute as JSON. Use this
+	// to parameterize reusable handlers (e.g. a generic "send_message"
 	// handler that takes {"text": "..."} from here).
-	Payload json.RawMessage `yaml:"payload"`
+	//
+	// Typed as `any` because gopkg.in/yaml.v3 can't unmarshal a YAML map
+	// directly into json.RawMessage — the loader re-marshals this to
+	// JSON before handing it to the store/handler.
+	Payload any `yaml:"payload"`
 
 	// Retry controls failure behavior. Omitting it in YAML means "no retry".
 	Retry RetryConfig `yaml:"retry"`
