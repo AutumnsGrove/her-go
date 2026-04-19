@@ -348,6 +348,53 @@ func (s *Store) initTables() error {
 			ON scheduler_tasks(next_fire)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_tasks_kind
 			ON scheduler_tasks(kind)`,
+
+		// Mood entries — Apple-style state-of-mind tracking. Each row is
+		// either a momentary snapshot (one specific moment) or a daily
+		// rollup (how the day felt overall). See the `mood/` package and
+		// docs/plans/PLAN-mood-tracking-redesign.md.
+		//
+		//   valence      — 1-7, very unpleasant → very pleasant
+		//   labels       — JSON array of strings from mood/vocab.yaml
+		//   associations — JSON array of domain tags (Work, Family, …)
+		//   source       — "inferred" | "confirmed" | "manual"
+		//   confidence   — 0-1; only meaningful for inferred entries
+		//   embedding    — cached note+labels vector for KNN dedup
+		`CREATE TABLE IF NOT EXISTS mood_entries (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts              DATETIME DEFAULT CURRENT_TIMESTAMP,
+			kind            TEXT NOT NULL,
+			valence         INTEGER NOT NULL,
+			labels          TEXT NOT NULL DEFAULT '[]',
+			associations   TEXT NOT NULL DEFAULT '[]',
+			note           TEXT NOT NULL DEFAULT '',
+			source         TEXT NOT NULL,
+			confidence     REAL NOT NULL DEFAULT 0,
+			conversation_id INTEGER,
+			embedding      BLOB,
+			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mood_entries_ts
+			ON mood_entries(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_mood_entries_kind_ts
+			ON mood_entries(kind, ts)`,
+
+		// Pending mood proposals — medium-confidence inference proposals
+		// the user hasn't tapped yet. Telegram message ID is stored so the
+		// expiry sweeper can edit the inline keyboard in place when the
+		// proposal times out. Once the user taps (or the sweeper acts),
+		// the row moves to status=confirmed/rejected/expired.
+		`CREATE TABLE IF NOT EXISTS pending_mood_proposals (
+			id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts                  DATETIME DEFAULT CURRENT_TIMESTAMP,
+			telegram_chat_id    INTEGER NOT NULL,
+			telegram_message_id INTEGER NOT NULL,
+			proposal_json       TEXT NOT NULL,
+			status              TEXT NOT NULL DEFAULT 'pending',
+			expires_at          DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_pending_mood_status_expires
+			ON pending_mood_proposals(status, expires_at)`,
 	}
 
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
@@ -486,6 +533,18 @@ func (s *Store) initTables() error {
 		)
 		if _, err := s.db.Exec(vecDDL); err != nil {
 			return fmt.Errorf("creating vec_memories virtual table: %w", err)
+		}
+
+		// Parallel virtual table for mood entries — same vec0 engine,
+		// same cosine distance metric, different rowid space. Keyed by
+		// mood_entries.id for JOINing back to the parent row. Powers the
+		// embedding-based dedup pass in the mood agent.
+		moodVecDDL := fmt.Sprintf(
+			`CREATE VIRTUAL TABLE IF NOT EXISTS vec_moods USING vec0(embedding float[%d] distance_metric=cosine)`,
+			s.EmbedDimension,
+		)
+		if _, err := s.db.Exec(moodVecDDL); err != nil {
+			return fmt.Errorf("creating vec_moods virtual table: %w", err)
 		}
 	}
 
