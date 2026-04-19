@@ -278,7 +278,10 @@ func TestStreams_EmptyRegistry(t *testing.T) {
 // for a real-world message.
 func TestBoard_ProductionThreeSlotLayout(t *testing.T) {
 	withCleanRegistry(t)
-	Register(Stream{Name: "main", Order: 100})
+	// Mirror the real production registrations exactly — same Names,
+	// Orders, and Labels as the agent + mood packages register at
+	// init(). Keeps this test honest as a documentation reference.
+	Register(Stream{Name: "main", Order: 100, Label: "🛠️ <b>main</b>"})
 	Register(Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
 	Register(Stream{Name: "mood", Order: 300, Label: "🎭 <b>mood</b>"})
 
@@ -290,12 +293,12 @@ func TestBoard_ProductionThreeSlotLayout(t *testing.T) {
 	b.Set("main", "→ think\n→ reply\n→ done")
 
 	snap := b.Snapshot()
-	mainIdx := strings.Index(snap, "→ think")
+	mainIdx := strings.Index(snap, "🛠️")
 	memoryIdx := strings.Index(snap, "🧩")
 	moodIdx := strings.Index(snap, "🎭")
 
 	if mainIdx < 0 || memoryIdx < 0 || moodIdx < 0 {
-		t.Fatalf("missing sections: main=%d memory=%d mood=%d\n---\n%s",
+		t.Fatalf("missing labels: main=%d memory=%d mood=%d\n---\n%s",
 			mainIdx, memoryIdx, moodIdx, snap)
 	}
 	if !(mainIdx < memoryIdx && memoryIdx < moodIdx) {

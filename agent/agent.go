@@ -42,11 +42,11 @@ import (
 var log = logger.WithPrefix("agent")
 
 // Register this package's trace streams. Main renders first as the
-// headline transcript with no label prefix; memory renders below
-// with a 🧩 label (different emoji from main/mood so the slots are
-// visually distinct at a glance).
+// headline transcript; memory renders below with a 🧩 label. Each
+// stream gets its own emoji so the slots are visually distinct at
+// a glance — main is the big tool caller, hence the toolbox.
 func init() {
-	trace.Register(trace.Stream{Name: "main", Order: 100})
+	trace.Register(trace.Stream{Name: "main", Order: 100, Label: "🛠️ <b>main</b>"})
 	trace.Register(trace.Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
 }
 
