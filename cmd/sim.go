@@ -706,6 +706,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				Store:      store,
 				Vocab:      vocab,
 				Embed:      embedForMood,
+				PromptDir:  filepath.Dir(cfg.Persona.PromptFile),
 				// Propose deliberately nil — in sim we don't
 				// emit proposals. ConfidenceHigh=Low ensures we
 				// never hit the emit-proposal path anyway.
