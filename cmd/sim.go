@@ -861,6 +861,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 			case mood.ActionAutoLogged:
 				fmt.Printf("       [mood] logged: valence=%d labels=%v conf=%.2f\n",
 					moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
+			case mood.ActionUpdated:
+				fmt.Printf("       [mood] updated #%d: valence=%d labels=%v conf=%.2f\n",
+					moodRes.Entry.ID, moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
 			case mood.ActionDroppedLow, mood.ActionDroppedNoSignal, mood.ActionDroppedVocab:
 				fmt.Printf("       [mood] dropped: %s (%s)\n", moodRes.Action, moodRes.Reason)
 			case mood.ActionDroppedDedup:

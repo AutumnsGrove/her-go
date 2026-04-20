@@ -34,7 +34,7 @@ const agentPromptTemplate = `You are a mood-inference system. Given a recent con
   "valence": int,            // 1..7  (1=very unpleasant, 7=very pleasant)
   "labels": [string],        // pick only from the allowed list below
   "associations": [string],  // pick only from the allowed list below
-  "note": string,            // 1 short sentence explaining WHAT you heard
+  "note": string,            // 2-3 sentences: what emotional signals you observed, what triggered them, and what the user seems to be working through. Ground in their actual words, not your interpretation.
   "confidence": number,      // 0..1
   "signals": [string]        // short substrings in the conversation that led you here
 }

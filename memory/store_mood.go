@@ -164,6 +164,70 @@ func (s *Store) SaveMoodEntry(entry *MoodEntry) (int64, error) {
 	return id, nil
 }
 
+// UpdateMoodEntry refines an existing mood entry in place — updating
+// labels, associations, note, confidence, and embedding while
+// preserving the original timestamp and ID. This is the "same mood,
+// more detail" path: the user has been processing the same emotional
+// state for a while and the newer inference has richer context.
+//
+// The updated_at column is stamped so consumers can distinguish
+// original entries from refined ones. The vec_moods virtual table
+// embedding is also replaced so future KNN dedup sees the latest
+// vector geometry.
+func (s *Store) UpdateMoodEntry(id int64, entry *MoodEntry) error {
+	if entry == nil {
+		return fmt.Errorf("UpdateMoodEntry: nil entry")
+	}
+
+	labels, err := marshalStringArray(entry.Labels)
+	if err != nil {
+		return fmt.Errorf("UpdateMoodEntry: labels: %w", err)
+	}
+	associations, err := marshalStringArray(entry.Associations)
+	if err != nil {
+		return fmt.Errorf("UpdateMoodEntry: associations: %w", err)
+	}
+
+	var embBlob any
+	if len(entry.Embedding) > 0 {
+		b, err := serializeEmbedding(entry.Embedding)
+		if err != nil {
+			return fmt.Errorf("UpdateMoodEntry: embedding: %w", err)
+		}
+		embBlob = b
+	}
+
+	_, err = s.db.Exec(
+		`UPDATE mood_entries
+		 SET valence = ?, labels = ?, associations = ?, note = ?,
+		     confidence = ?, embedding = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		entry.Valence, labels, associations, entry.Note,
+		entry.Confidence, embBlob, id,
+	)
+	if err != nil {
+		return fmt.Errorf("UpdateMoodEntry: update: %w", err)
+	}
+
+	// Replace the vec_moods embedding so KNN dedup uses the latest vector.
+	if len(entry.Embedding) > 0 && s.EmbedDimension > 0 {
+		vecBytes, err := serializeEmbedding(entry.Embedding)
+		if err != nil {
+			return fmt.Errorf("UpdateMoodEntry: serialize for vec_moods: %w", err)
+		}
+		// sqlite-vec uses DELETE + INSERT to update a row.
+		s.db.Exec(`DELETE FROM vec_moods WHERE rowid = ?`, id)
+		if _, err := s.db.Exec(
+			`INSERT INTO vec_moods(rowid, embedding) VALUES (?, ?)`,
+			id, vecBytes,
+		); err != nil {
+			fmt.Printf("[mood] warning: vec_moods update failed for entry %d: %v\n", id, err)
+		}
+	}
+
+	return nil
+}
+
 // LatestMoodEntry returns the most recent mood entry of the given
 // kind, or nil when none exist. Empty kind means any.
 func (s *Store) LatestMoodEntry(kind MoodKind) (*MoodEntry, error) {
