@@ -102,7 +102,7 @@ func MaxMemoryLength() int {
 // gates, same embedding strategy, same classifier check.
 func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	var args struct {
-		Fact     string `json:"fact"`
+		Memory   string `json:"memory"`
 		Category string `json:"category"`
 		Tags     string `json:"tags"`
 		Context  string `json:"context"` // optional: why this memory matters
@@ -115,15 +115,15 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	// Em dashes mid-sentence are fine (normal prose punctuation). The tic
 	// we catch is a TRAILING em dash — a sentence that hangs with "—" at
 	// the end and nothing after it. That's the specific hallmark of AI slop.
-	trimmed := strings.TrimSpace(args.Fact)
+	trimmed := strings.TrimSpace(args.Memory)
 	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
-		memoryLog.Warn("blocked memory (trailing em dash)", "memory", args.Fact)
+		memoryLog.Warn("blocked memory (trailing em dash)", "memory", args.Memory)
 		return "rejected: rewrite this memory — it ends with a trailing em dash. Complete the sentence."
 	}
-	lower := strings.ToLower(args.Fact)
+	lower := strings.ToLower(args.Memory)
 	for _, blocked := range styleBlocklist {
 		if strings.Contains(lower, blocked) {
-			memoryLog.Warn("blocked memory (style)", "pattern", blocked, "memory", args.Fact)
+			memoryLog.Warn("blocked memory (style)", "pattern", blocked, "memory", args.Memory)
 			return fmt.Sprintf("rejected: rewrite this memory in plain, concise language. Avoid 'not just X it's Y' and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
 		}
 	}
@@ -134,9 +134,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	if limit <= 0 {
 		limit = maxMemoryLength
 	}
-	if len(args.Fact) > limit {
-		memoryLog.Warn("blocked memory (too long)", "len", len(args.Fact), "memory", args.Fact[:100])
-		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), limit)
+	if len(args.Memory) > limit {
+		memoryLog.Warn("blocked memory (too long)", "len", len(args.Memory), "memory", args.Memory[:100])
+		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Memory), limit)
 	}
 
 	// Embed by TAGS (not by memory text) so the vector space organizes by
@@ -145,7 +145,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	// memory text if the agent didn't provide tags.
 	embedText := args.Tags
 	if embedText == "" {
-		embedText = args.Fact
+		embedText = args.Memory
 	}
 
 	var newVec []float32
@@ -162,9 +162,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			// When context is provided, include it in the text embedding so
 			// semantic search is aware of the "why", not just the "what".
 			if args.Tags != "" {
-				memTextForEmbed := args.Fact
+				memTextForEmbed := args.Memory
 				if args.Context != "" {
-					memTextForEmbed = args.Fact + " " + args.Context
+					memTextForEmbed = args.Memory + " " + args.Context
 				}
 				textVec, err = ctx.EmbedClient.Embed(memTextForEmbed)
 				if err != nil {
@@ -179,7 +179,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			}
 
 			if duplicate, existingID, existingContent, sim, source := checkMemoryDuplicate(newVec, textVec, subject, threshold, ctx); duplicate {
-				memoryLog.Info("blocked duplicate memory", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "memory", args.Fact)
+				memoryLog.Info("blocked duplicate memory", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "memory", args.Memory)
 				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing memory ID=%d (%q) [matched on %s]. Use update_memory to refine it instead.",
 					sim*100, existingID, existingContent, source)
 			}
@@ -194,8 +194,8 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	// text as a rewrite, skip re-classification. This prevents the self-
 	// contradiction bug where the classifier rejects its own suggestion.
 	if ctx.ClassifierLLM != nil {
-		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
-			log.Info("classifier bypass: memory matches pre-approved rewrite", "memory", args.Fact)
+		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Memory)] {
+			log.Info("classifier bypass: memory matches pre-approved rewrite", "memory", args.Memory)
 		} else {
 			writeType := "memory"
 			if subject == "self" {
@@ -208,9 +208,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			if snippet == nil {
 				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
 			}
-			verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.Fact, snippet)
+			verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.Memory, snippet)
 			_ = ctx.Store.SaveClassifierLog(
-				ctx.ConversationID, writeType, verdict.Type, args.Fact, verdict.Reason, verdict.Rewrite,
+				ctx.ConversationID, writeType, verdict.Type, args.Memory, verdict.Reason, verdict.Rewrite,
 			)
 			if verdict.Rewrite != "" && ctx.PreApprovedRewrites != nil {
 				ctx.PreApprovedRewrites[strings.ToLower(verdict.Rewrite)] = true
@@ -236,7 +236,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		return "error: no store configured"
 	}
 
-	id, err := ctx.Store.SaveMemory(args.Fact, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context)
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context)
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
@@ -246,9 +246,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		label = "self memory"
 	}
 
-	ctx.SavedMemories = append(ctx.SavedMemories, args.Fact)
+	ctx.SavedMemories = append(ctx.SavedMemories, args.Memory)
 
-	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Fact)
+	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Memory)
 }
 
 // execSplitMemories saves each sub-memory produced by a SPLIT classifier verdict.

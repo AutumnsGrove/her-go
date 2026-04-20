@@ -11,7 +11,7 @@ parameters:
     memory_id:
       type: integer
       description: "ID of the memory to update"
-    fact:
+    memory:
       type: string
       description: "The updated memory text"
     category:
@@ -39,12 +39,12 @@ parameters:
         obvious from the memory itself.
   required:
     - memory_id
-    - fact
+    - memory
     - category
     - tags
 trace:
   emoji: "📝"
-  format: "#{{.memory_id}} → {{.fact | escape}}\n    category={{.category}}"
+  format: "#{{.memory_id}} → {{.memory | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"

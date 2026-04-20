@@ -13,7 +13,7 @@ hot: false
 parameters:
   type: object
   properties:
-    fact:
+    memory:
       type: string
       description: "A self-observation or identity memory about {{her}}"
     category:
@@ -37,12 +37,12 @@ parameters:
         Optional 1-2 sentence note explaining WHY this self-memory matters or
         how it connects to other knowledge.
   required:
-    - fact
+    - memory
     - category
     - tags
 trace:
   emoji: "🪞"
-  format: "{{.fact | escape}}\n    category={{.category}}"
+  format: "{{.memory | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"

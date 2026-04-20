@@ -397,6 +397,19 @@ func (s *Store) initTables() error {
 			ON pending_mood_proposals(status, expires_at)`,
 	}
 
+	// Pre-migration: detect and rebuild stale mood_entries table.
+	// The pre-redesign schema had (timestamp, rating, note, tags) which is
+	// structurally incompatible with the Apple-style schema (ts, kind,
+	// valence, labels, associations, confidence). CREATE TABLE IF NOT EXISTS
+	// silently keeps the old schema, then CREATE INDEX ON mood_entries(ts)
+	// crashes because ts doesn't exist. We detect the old schema by checking
+	// for the "rating" column and drop + recreate if found.
+	var hasOldMood int
+	s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('mood_entries') WHERE name = 'rating'`).Scan(&hasOldMood)
+	if hasOldMood > 0 {
+		s.db.Exec(`DROP TABLE IF EXISTS mood_entries`)
+	}
+
 	// Execute each CREATE TABLE statement. In Go, range is like Python's
 	// enumerate() — it gives you both the index and value. We use _ to
 	// ignore the index since we don't need it (the "blank identifier").

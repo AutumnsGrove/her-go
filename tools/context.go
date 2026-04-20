@@ -92,14 +92,14 @@ type Context struct {
 	// The view_image tool uses this. Nil if not configured.
 	VisionLLM *llm.Client
 
-	// ClassifierLLM validates memory writes (facts, moods, receipts)
+	// ClassifierLLM validates memory writes (memories, moods, receipts)
 	// before they hit the DB. Nil if not configured — writes pass
 	// through unchanged.
 	ClassifierLLM *llm.Client
 
 	// --- Storage & search ---
 
-	// Store is the SQLite-backed store for facts, messages, schedules,
+	// Store is the SQLite-backed store for memories, messages, schedules,
 	// expenses, and everything else that persists.
 	Store *memory.Store
 
@@ -144,11 +144,11 @@ type Context struct {
 
 	// RelevantMemories are memories semantically similar to the user's message.
 	// Used as fallback injection for the chat model when the agent didn't
-	// explicitly pass memories via the reply tool's facts parameter.
+	// explicitly pass memories via the reply tool's memories parameter.
 	RelevantMemories []memory.Memory
 
 	// AgentPassedMemories holds memories the agent explicitly chose to pass to the
-	// reply tool via its facts parameter. When non-empty, the chat model uses
+	// reply tool via its memories parameter. When non-empty, the chat model uses
 	// these instead of RelevantMemories — they represent the agent's curated
 	// judgment of what's contextually relevant, not just message-hash similarity.
 	AgentPassedMemories []string

@@ -48,16 +48,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		Instruction string   `json:"instruction"`
 		Context     string   `json:"context"`
-		Facts       []string `json:"facts"` // facts retrieved via recall_memories to inject into chat context
+		Memories    []string `json:"memories"` // memories retrieved via recall_memories to inject into chat context
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// If the agent passed facts, store them on ctx so the chat layer can use them.
+	// If the agent passed memories, store them on ctx so the chat layer can use them.
 	// These override the auto-searched RelevantMemories for this reply.
-	if len(args.Facts) > 0 {
-		ctx.AgentPassedMemories = args.Facts
+	if len(args.Memories) > 0 {
+		ctx.AgentPassedMemories = args.Memories
 	}
 
 	// Build the system prompt using the layer registry.

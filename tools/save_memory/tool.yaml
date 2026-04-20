@@ -11,7 +11,7 @@ hot: false
 parameters:
   type: object
   properties:
-    fact:
+    memory:
       type: string
       description: >-
         A clear, single-sentence memory about {{user}}. Must pass the 'next
@@ -46,12 +46,12 @@ parameters:
         obvious from the memory itself. Example: 'Primary project language —
         she knows Python/TS but is new to Go. Teaching mode matters.'
   required:
-    - fact
+    - memory
     - category
     - tags
 trace:
   emoji: "💾"
-  format: "{{.fact | escape}}\n    category={{.category}}"
+  format: "{{.memory | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"
