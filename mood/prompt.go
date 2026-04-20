@@ -2,50 +2,19 @@ package mood
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"her/llm"
 )
 
-// agentPromptTemplate is the system prompt the mood agent uses. It
-// embeds the allowed vocabulary at build time — labels and
-// associations are injected per-call so the LLM can only pick from
-// the current vocab file.
-//
-// This is a hot-path string: the model sees it with every call. The
-// instructions are terse on purpose, because the narrative-language
-// models we run here extract structured output well from short
-// prompts but drift when
-// you bury the schema under prose.
-//
-// NOTE: this prompt intentionally does NOT include examples. Apple
-// State of Mind vocabulary is unambiguous enough that examples can
-// skew the model toward whatever example emotions we showed. Ship a
-// dedicated eval suite instead.
-const agentPromptTemplate = `You are a mood-inference system. Given a recent conversation turn, decide whether the user expressed a mood, and if so, capture it in structured JSON.
-
-# Output (JSON only — no prose, no code fences)
-{
-  "skip": boolean,
-  "reason": string,          // when skip=true
-  "valence": int,            // 1..7  (1=very unpleasant, 7=very pleasant)
-  "labels": [string],        // pick only from the allowed list below
-  "associations": [string],  // pick only from the allowed list below
-  "note": string,            // 2-3 sentences: what emotional signals you observed, what triggered them, and what the user seems to be working through. Ground in their actual words, not your interpretation.
-  "confidence": number,      // 0..1
-  "signals": [string]        // short substrings in the conversation that led you here
-}
-
-# Rules
-- skip=true when the user did not express a mood (e.g. asking a factual question, discussing code, referencing fictional characters' feelings).
-- valence is required when skip=false.
-- Use 1-3 labels; match the valence tier (unpleasant / neutral / pleasant).
-- associations are optional; skip them when unsure.
-- note quotes or paraphrases from the user's own words; never fabricate.
-- confidence reflects how certain you are it's a first-person mood — not how intense the mood is. Explicit affect words → high (0.7+). Inferred from tone → medium (0.4-0.7). Speculative → low (<0.4, set skip=true instead).
+// defaultMoodPrompt is a minimal fallback if mood_agent_prompt.md can't be
+// loaded. The real prompt lives in mood_agent_prompt.md at the project root —
+// edit that file to change the prompt without recompiling.
+const defaultMoodPrompt = `You are a mood-inference system. Output JSON with: skip, reason, valence (1-7), labels, associations, note, confidence (0-1), signals. Use only labels/associations from the allowed lists. skip=true when no mood expressed.
 
 # Allowed labels
 {{LABELS}}
@@ -56,10 +25,28 @@ const agentPromptTemplate = `You are a mood-inference system. Given a recent con
 # Conversation
 {{TRANSCRIPT}}`
 
+// promptFilename is the name of the mood agent prompt file, expected
+// to live alongside the other prompt .md files in the project root.
+const promptFilename = "mood_agent_prompt.md"
+
+// loadMoodPrompt reads mood_agent_prompt.md from the same directory as
+// the main prompt file (cfg.Persona.PromptFile). Falls back to the
+// hardcoded default if the file is missing or empty — same pattern as
+// the main agent and memory agent prompts.
+func loadMoodPrompt(promptDir string) string {
+	path := filepath.Join(promptDir, promptFilename)
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		log.Warn("mood prompt file not found, using default", "path", path)
+		return defaultMoodPrompt
+	}
+	return strings.TrimSpace(string(data))
+}
+
 // buildPrompt substitutes the vocab and transcript placeholders in
-// the template. Keeps the template a single string constant so
-// reviewers can read the whole prompt in one pane.
-func buildPrompt(v *Vocab, turns []Turn) string {
+// the loaded template. The template is read from mood_agent_prompt.md
+// at call time so edits take effect without recompiling.
+func buildPrompt(template string, v *Vocab, turns []Turn) string {
 	labelList := strings.Join(v.AllLabels(), ", ")
 	assocList := strings.Join(v.Associations(), ", ")
 
@@ -72,7 +59,7 @@ func buildPrompt(v *Vocab, turns []Turn) string {
 		fmt.Fprintf(&b, "%s: %s\n\n", role, t.ScrubbedContent)
 	}
 
-	prompt := agentPromptTemplate
+	prompt := template
 	prompt = strings.ReplaceAll(prompt, "{{LABELS}}", labelList)
 	prompt = strings.ReplaceAll(prompt, "{{ASSOCIATIONS}}", assocList)
 	prompt = strings.ReplaceAll(prompt, "{{TRANSCRIPT}}", strings.TrimSpace(b.String()))
@@ -103,8 +90,11 @@ func parseInference(raw string) (*Inference, error) {
 // callLLM is the single LLM roundtrip for one mood inference.
 // Extracted into its own function so tests can unit-test
 // buildPrompt / parseInference separately from the runAgent flow.
-func callLLM(ctx context.Context, client *llm.Client, vocab *Vocab, turns []Turn) (*Inference, error) {
-	prompt := buildPrompt(vocab, turns)
+// promptDir is the directory containing mood_agent_prompt.md — typically
+// the project root (same dir as prompt.md). Empty string uses the default.
+func callLLM(ctx context.Context, client *llm.Client, vocab *Vocab, turns []Turn, promptDir string) (*Inference, error) {
+	template := loadMoodPrompt(promptDir)
+	prompt := buildPrompt(template, vocab, turns)
 	resp, err := client.ChatCompletion([]llm.ChatMessage{
 		{Role: "user", Content: prompt},
 	})

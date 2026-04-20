@@ -174,6 +174,11 @@ type Deps struct {
 	// from. Empty means "unknown" (stored as NULL).
 	ConversationID string
 
+	// PromptDir is the directory containing mood_agent_prompt.md.
+	// Typically the project root (same dir as prompt.md and config.yaml).
+	// Empty string falls back to the hardcoded default prompt.
+	PromptDir string
+
 	// Trace is optional — when non-nil, RunAgent calls it at each
 	// decision point with a cumulative HTML trace string. Same
 	// signature as the memory agent's trace callback so the bot can
@@ -232,7 +237,7 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	tb.emit(deps.Trace, "thinking…")
 
 	// 1. Ask the LLM.
-	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns)
+	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns, deps.PromptDir)
 	if err != nil {
 		log.Error("mood agent LLM call failed", "err", err)
 		tb.line(fmt.Sprintf("⚠️ llm error: %s", err))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,10 @@ func (b *Bot) initMood() error {
 		return b.embedClient.Embed(text)
 	}
 
+	// Derive the prompt directory from the main prompt file path —
+	// mood_agent_prompt.md lives alongside prompt.md in the project root.
+	promptDir := filepath.Dir(b.cfg.Persona.PromptFile)
+
 	b.moodRunner = &mood.Runner{
 		Deps: mood.Deps{
 			LLM:        b.moodAgentLLM,
@@ -72,6 +77,7 @@ func (b *Bot) initMood() error {
 			Vocab:      vocab,
 			Embed:      embedFn,
 			Propose:    b.sendMoodProposal,
+			PromptDir:  promptDir,
 		},
 		Config: mood.AgentConfig{
 			ContextTurns:    ctxTurns,

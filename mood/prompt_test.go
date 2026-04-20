@@ -11,7 +11,10 @@ func TestBuildPrompt_IncludesVocabAndTranscript(t *testing.T) {
 		{Role: "user", ScrubbedContent: "I'm exhausted"},
 		{Role: "assistant", ScrubbedContent: "That sounds rough."},
 	}
-	p := buildPrompt(v, turns)
+	// Try loading the real .md file from the project root (one level up
+	// from the mood/ package directory). Fall back to default if absent.
+	template := loadMoodPrompt("..")
+	p := buildPrompt(template, v, turns)
 
 	// Vocabulary is injected so the model can only pick known labels.
 	if !strings.Contains(p, "Stressed") {
