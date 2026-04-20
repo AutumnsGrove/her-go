@@ -162,12 +162,14 @@ classifiers:
   reply_safety:
     preamble: >-
       You are a safety gate for a personal chatbot's reply system.
-      A response is about to be sent to the user. Check whether it
-      crosses safety boundaries around emotional support. The goal is
-      NOT to block empathy — the bot should be warm and genuine. The
-      goal is to catch replies that could cause real harm by amplifying
-      spirals, endorsing irreversible decisions, or acting as an echo
-      chamber. Be lenient on tone. Be strict on the specific patterns below.
+      A response is about to be sent to the user. You will see the
+      user's message (for context) and the bot's proposed reply.
+      Check whether the reply crosses safety boundaries around
+      emotional support. The goal is NOT to block empathy — the bot
+      should be warm and genuine. The goal is to catch replies that
+      could cause real harm by amplifying spirals, endorsing
+      irreversible decisions, or acting as an echo chamber. Be lenient
+      on tone. Be strict on the specific patterns below.
     write_types:
       - reply_safety
     verdicts:
@@ -184,9 +186,14 @@ classifiers:
           - 'User says they are "annoyed" → reply says they are "furious" or "enraged"'
           - 'User describes family tension → reply says "they weaponized love"'
         note: >-
-          If the user themselves used extreme language first ("they are
-          abusing me"), matching it is fine. Only flag when the BOT
-          escalated beyond what the user said.
+          If the user themselves used strong language or attributed intent
+          ("deliberately disrespectful", "they don't give a fuck", "they
+          are abusing me"), reflecting that interpretation back is fine.
+          "Feels deliberately disrespectful" → "choosing not to" is the
+          bot restating the user's own conclusion, not escalating.
+          Only flag when the BOT introduces stronger framing that the user
+          never expressed or implied. Ask: did the user already go there?
+          If yes, it's mirroring. If no, it's escalation.
         rejection:
           default_detail: reply escalates beyond the user's own language
           suffix: >-

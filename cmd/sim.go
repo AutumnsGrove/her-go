@@ -50,7 +50,7 @@ var delayFlag int
 
 // agentModelFlag overrides the agent model from config.yaml for this run.
 // Useful for comparing different models without editing the config file.
-// Example: --agent-model "deepseek/deepseek-v3.2"
+// Example: --agent-model "qwen/qwen3-235b-a22b-2507"
 var agentModelFlag string
 
 // embedModelFlag overrides the embedding model from config.yaml for this run.
@@ -115,7 +115,7 @@ func init() {
 	simCmd.Flags().StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
 	simCmd.Flags().IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
 	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
-	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., deepseek/deepseek-v3.2)")
+	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
 	simCmd.Flags().StringVar(&embedModelFlag, "embed-model", "", "override embedding model for this run (e.g., voyage-4-nano)")
 	simCmd.Flags().StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL (e.g., https://openrouter.ai/api/v1)")
 	simCmd.Flags().StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs (defaults to LLM API key if empty)")

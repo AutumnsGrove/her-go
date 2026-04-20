@@ -34,7 +34,7 @@ var log = logger.WithPrefix("bot")
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
 	tb               *tele.Bot
-	llm              *llm.Client          // conversational model (Deepseek)
+	llm              *llm.Client          // conversational model (chat)
 	agentLLM         *llm.Client          // tool-calling orchestrator
 	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
 	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured

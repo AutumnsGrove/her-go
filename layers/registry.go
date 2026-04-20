@@ -27,7 +27,7 @@ import (
 type Stream int
 
 const (
-	// StreamChat is the conversational model (Deepseek V3.2).
+	// StreamChat is the conversational model (configured via cfg.Chat).
 	// Layers here produce the 9-layer system prompt for the reply tool.
 	StreamChat Stream = iota
 
