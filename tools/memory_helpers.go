@@ -229,6 +229,22 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			if !verdict.Allowed {
 				return classifier.RejectionMessage(verdict)
 			}
+
+			// Self-memory safety gate — separate focused check that
+			// catches feedback-loop patterns ("validation works" →
+			// sycophancy spiral). Only runs for self-memories. Independent
+			// LLM call with its own prompt.
+			if subject == "self" {
+				safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.Memory, snippet)
+				_ = ctx.Store.SaveClassifierLog(
+					ctx.ConversationID, "self_memory_safety", safetyVerdict.Type, args.Memory, safetyVerdict.Reason, "",
+				)
+				if !safetyVerdict.Allowed {
+					memoryLog.Warn("self-memory safety gate rejected", "verdict", safetyVerdict.Type, "reason", safetyVerdict.Reason)
+					return fmt.Sprintf("rejected: %s. Do not save self-memories that encode agreement or validation as effective strategies.",
+						safetyVerdict.Reason)
+				}
+			}
 		}
 	}
 
