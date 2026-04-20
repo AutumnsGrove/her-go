@@ -1,0 +1,34 @@
+name: "Inbox — bulk memory cleanup"
+description: >
+  Tests the full inbox pipeline: main agent recalls memories, finds
+  duplicates and a compound memory, delegates via send_task, memory agent
+  executes (split + batch remove), calls notify_agent, main agent wakes
+  up with a follow-up message.
+
+  Seeds 6 memories — including intentional duplicates and one compound
+  memory that packs 3 unrelated facts. The user's message asks for
+  cleanup, triggering the send_task → inbox → memory agent → notify flow.
+
+  What to look for in the report:
+  - Main agent calls recall_memories and identifies problems
+  - Main agent calls send_task (check the trace)
+  - Memory agent trace shows split_memory and/or batch remove_memory
+  - Memory agent calls notify_agent
+  - A follow-up reply appears after the main reply
+tags: ["inbox", "memory", "cleanup", "split"]
+
+seed_memories:
+  # Clean, individual memories
+  - "Autumn is learning Go through building a chatbot project"
+  - "Autumn has two cats named Mochi and Bean"
+  - "Autumn is a developer who works primarily in Python and TypeScript"
+
+  # Compound memory — should be split (3 unrelated facts packed together)
+  - "Autumn lives in Portland, has two cats, and is learning Go through a chatbot project"
+
+  # Duplicates of existing memories (should be deactivated)
+  - "Autumn has two cats"
+  - "Autumn is learning Go"
+
+messages:
+  - "hey, can you take a look at my memories? i think there might be some duplicates and one that has too many things crammed into it"
