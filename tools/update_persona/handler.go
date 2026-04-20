@@ -1,7 +1,7 @@
 // Package update_persona implements the update_persona tool — rewrites the
 // bot's persona.md file to reflect accumulated self-observations.
 //
-// This is the persona evolution mechanism: the agent calls this when self-facts
+// This is the persona evolution mechanism: the agent calls this when self-memories
 // suggest a meaningful shift in how the bot understands herself. It's called
 // rarely (at most every N reflections) to prevent thrashing.
 //

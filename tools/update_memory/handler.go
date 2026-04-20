@@ -32,7 +32,7 @@ func init() {
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		MemoryID int64  `json:"memory_id"`
-		Fact     string `json:"fact"`
+		Memory   string `json:"memory"`
 		Category string `json:"category"`
 		Tags     string `json:"tags"`
 		Context  string `json:"context"` // optional: why this memory matters
@@ -44,21 +44,21 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Apply the same style and length gates as save_memory.
 	// Trailing em dash check: catches the AI tic of sentences that hang with
 	// "—" at the end. Mid-sentence em dashes are fine — only trailing ones blocked.
-	trimmed := strings.TrimSpace(args.Fact)
+	trimmed := strings.TrimSpace(args.Memory)
 	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
-		log.Warn("blocked memory update (trailing em dash)", "memory", args.Fact)
+		log.Warn("blocked memory update (trailing em dash)", "memory", args.Memory)
 		return "rejected: rewrite this memory — it ends with a trailing em dash. Complete the sentence."
 	}
-	lower := strings.ToLower(args.Fact)
+	lower := strings.ToLower(args.Memory)
 	for _, blocked := range tools.StyleBlocklist() {
 		if strings.Contains(lower, blocked) {
-			log.Warn("blocked memory update (style)", "pattern", blocked, "memory", args.Fact)
+			log.Warn("blocked memory update (style)", "pattern", blocked, "memory", args.Memory)
 			return fmt.Sprintf("rejected: rewrite in plain, concise language. Blocked pattern: %q", blocked)
 		}
 	}
-	if len(args.Fact) > tools.MaxMemoryLength() {
-		log.Warn("blocked memory update (too long)", "len", len(args.Fact))
-		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Fact), tools.MaxMemoryLength())
+	if len(args.Memory) > tools.MaxMemoryLength() {
+		log.Warn("blocked memory update (too long)", "len", len(args.Memory))
+		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Memory), tools.MaxMemoryLength())
 	}
 
 	// --- Read old memory ---
@@ -79,14 +79,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Pre-approved bypass: if the classifier previously suggested this exact
 	// text as a rewrite, skip re-classification.
 	if ctx.ClassifierLLM != nil {
-		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Fact)] {
-			log.Info("classifier bypass: update matches pre-approved rewrite", "memory", args.Fact)
+		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Memory)] {
+			log.Info("classifier bypass: update matches pre-approved rewrite", "memory", args.Memory)
 		} else {
 			snippet := ctx.ClassifierSnippet
 			if snippet == nil {
 				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
 			}
-			classifyContent := fmt.Sprintf("Original memory: %s\nUpdated memory: %s", oldMemory.Content, args.Fact)
+			classifyContent := fmt.Sprintf("Original memory: %s\nUpdated memory: %s", oldMemory.Content, args.Memory)
 			verdict := classifier.Check(ctx.ClassifierLLM, "memory", classifyContent, snippet)
 			_ = ctx.Store.SaveClassifierLog(
 				ctx.ConversationID, "memory", verdict.Type, classifyContent, verdict.Reason, verdict.Rewrite,
@@ -105,13 +105,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if ctx.EmbedClient != nil {
 		embedText := args.Tags
 		if embedText == "" {
-			embedText = args.Fact
+			embedText = args.Memory
 		}
 		tagVec, _ = ctx.EmbedClient.Embed(embedText)
 		if args.Tags != "" {
-			memTextForEmbed := args.Fact
+			memTextForEmbed := args.Memory
 			if args.Context != "" {
-				memTextForEmbed = args.Fact + " " + args.Context
+				memTextForEmbed = args.Memory + " " + args.Context
 			}
 			textVec, _ = ctx.EmbedClient.Embed(memTextForEmbed)
 		}
@@ -120,7 +120,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// --- Save new memory + supersede old ---
 	// SaveMemory handles embedding storage, vec_memories index, and auto-linking.
 	newID, err := ctx.Store.SaveMemory(
-		args.Fact, args.Category, oldMemory.Subject,
+		args.Memory, args.Category, oldMemory.Subject,
 		oldMemory.SourceMessageID, 5,
 		tagVec, textVec, args.Tags, args.Context,
 	)
@@ -135,6 +135,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		log.Warnf("failed to create supersession chain %d → %d: %v", args.MemoryID, newID, err)
 	}
 
-	log.Infof("  update_memory: ID=%d superseded by ID=%d → %s", args.MemoryID, newID, args.Fact)
-	return fmt.Sprintf("updated: old memory ID=%d superseded by new memory ID=%d: %s", args.MemoryID, newID, args.Fact)
+	log.Infof("  update_memory: ID=%d superseded by ID=%d → %s", args.MemoryID, newID, args.Memory)
+	return fmt.Sprintf("updated: old memory ID=%d superseded by new memory ID=%d: %s", args.MemoryID, newID, args.Memory)
 }

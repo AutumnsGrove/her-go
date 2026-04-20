@@ -1,12 +1,12 @@
 // Package recall_memories implements the recall_memories tool — searches stored
-// facts by semantic similarity.
+// memories by semantic similarity.
 //
 // The agent calls this when the user asks "do you remember..." or references
 // something from a past conversation. It embeds the query and runs a KNN
-// search against the facts table's vector index.
+// search against the memories table's vector index.
 //
 // This is an active recall tool — different from the automatic context injection
-// that happens at the start of every turn. That injects facts silently; this
+// that happens at the start of every turn. That injects memories silently; this
 // tool is for when the agent needs to explicitly look something up.
 package recall_memories
 
@@ -25,8 +25,8 @@ func init() {
 	tools.Register("recall_memories", Handle)
 }
 
-// Handle embeds the query and searches the facts vector index for matches.
-// Returns facts sorted by similarity with distance scores so the agent can
+// Handle embeds the query and searches the memories vector index for matches.
+// Returns memories sorted by similarity with distance scores so the agent can
 // judge relevance. Cosine distance 0 = identical, 1 = orthogonal.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
@@ -68,12 +68,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return b.String()
 	}
 
-	facts, err := ctx.Store.SemanticSearch(queryVec, args.Limit)
+	memories, err := ctx.Store.SemanticSearch(queryVec, args.Limit)
 	if err != nil {
 		return fmt.Sprintf("error searching memories: %v", err)
 	}
 
-	if len(facts) == 0 {
+	if len(memories) == 0 {
 		return "no matching memories found"
 	}
 
@@ -81,13 +81,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// We convert distance to similarity (1 - distance) for readability —
 	// 95% similarity is easier to reason about than 0.05 distance.
 	var b strings.Builder
-	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(facts))
-	for _, f := range facts {
-		similarity := 1 - f.Distance
+	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(memories))
+	for _, m := range memories {
+		similarity := 1 - m.Distance
 		fmt.Fprintf(&b, "- [ID=%d, %s, similarity=%.0f%%] %s\n",
-			f.ID, f.Category, similarity*100, f.Content)
+			m.ID, m.Category, similarity*100, m.Content)
 	}
 
-	log.Infof("  recall_memories: %d results for %q", len(facts), args.Query)
+	log.Infof("  recall_memories: %d results for %q", len(memories), args.Query)
 	return b.String()
 }

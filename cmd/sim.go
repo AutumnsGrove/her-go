@@ -221,11 +221,11 @@ CREATE TABLE IF NOT EXISTS sim_messages (
 	conversation_id TEXT
 );
 
-CREATE TABLE IF NOT EXISTS sim_facts (
+CREATE TABLE IF NOT EXISTS sim_memories (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
 	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	fact TEXT NOT NULL,
+	memory TEXT NOT NULL,
 	category TEXT,
 	subject TEXT DEFAULT 'user',
 	importance INTEGER DEFAULT 5,
@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS sim_summaries (
 
 -- Labels let you tag any run with a human-readable name for easy reference.
 -- Example: INSERT INTO sim_run_labels (run_id, label) VALUES (38, 'baseline-post-refactor');
--- Then query: SELECT * FROM sim_facts WHERE run_id = (SELECT run_id FROM sim_run_labels WHERE label = 'baseline-post-refactor');
+-- Then query: SELECT * FROM sim_memories WHERE run_id = (SELECT run_id FROM sim_run_labels WHERE label = 'baseline-post-refactor');
 CREATE TABLE IF NOT EXISTS sim_run_labels (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
@@ -292,7 +292,7 @@ CREATE TABLE IF NOT EXISTS sim_run_labels (
 
 -- latest_runs: the most recent run for each suite name.
 -- Usage: SELECT * FROM latest_runs;
--- Usage: SELECT * FROM sim_facts WHERE run_id = (SELECT id FROM latest_runs WHERE suite_name = 'Getting to Know You');
+-- Usage: SELECT * FROM sim_memories WHERE run_id = (SELECT id FROM latest_runs WHERE suite_name = 'Getting to Know You');
 CREATE VIEW IF NOT EXISTS latest_runs AS
 SELECT r.*
 FROM sim_runs r
@@ -313,10 +313,10 @@ SELECT
 	r.chat_model,
 	r.total_cost_usd,
 	r.duration_ms,
-	COUNT(DISTINCT f.id) AS facts_saved,
+	COUNT(DISTINCT f.id) AS memories_saved,
 	COUNT(DISTINCT m.id) / 2 AS turns
 FROM sim_runs r
-LEFT JOIN sim_facts f ON f.run_id = r.id
+LEFT JOIN sim_memories f ON f.run_id = r.id
 LEFT JOIN sim_messages m ON m.run_id = r.id AND m.role = 'user'
 GROUP BY r.id;
 `
@@ -448,11 +448,57 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Migrate existing sim.db: add embed_model column if it doesn't exist.
-	// ALTER TABLE ADD COLUMN is idempotent-safe — SQLite returns "duplicate
-	// column name" if it already exists, which we just ignore. This is the
-	// simplest migration pattern for single-column additions.
+	// ── sim.db migrations ─────────────────────────────────────────────
+	// Each ALTER is idempotent-safe: SQLite returns "duplicate column" or
+	// "no such table" if already done, and we ignore the error. Run order
+	// doesn't matter as long as each statement is independent.
+
+	// v1: add embed_model to sim_runs.
 	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN embed_model TEXT`)
+
+	// v2: rename sim_facts → sim_memories, fact column → memory.
+	// The old table may not exist if this is a fresh DB (CREATE TABLE
+	// already uses the new name), so we ignore errors.
+	simDB.Exec(`ALTER TABLE sim_facts RENAME TO sim_memories`)
+	simDB.Exec(`ALTER TABLE sim_memories RENAME COLUMN fact TO memory`)
+
+	// v3: rebuild sim_mood_entries — the pre-redesign schema (rating,
+	// note, tags) is structurally incompatible with the Apple-style
+	// schema (ts, kind, valence, labels, associations, confidence).
+	// Drop the old table and let CREATE TABLE IF NOT EXISTS above
+	// recreate it with the correct schema. Old mood sim data was
+	// never successfully populated anyway (the copy always failed).
+	//
+	// We detect the old schema by checking for the "rating" column —
+	// if it exists, this is the stale table.
+	var hasRating int
+	err = simDB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sim_mood_entries') WHERE name = 'rating'`).Scan(&hasRating)
+	if err == nil && hasRating > 0 {
+		simDB.Exec(`DROP TABLE sim_mood_entries`)
+		// Re-run just the mood entries CREATE from the schema above.
+		simDB.Exec(`CREATE TABLE IF NOT EXISTS sim_mood_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id INTEGER NOT NULL REFERENCES sim_runs(id),
+			ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+			kind TEXT NOT NULL,
+			valence INTEGER NOT NULL,
+			labels TEXT NOT NULL DEFAULT '[]',
+			associations TEXT NOT NULL DEFAULT '[]',
+			note TEXT,
+			source TEXT NOT NULL,
+			confidence REAL NOT NULL DEFAULT 0,
+			conversation_id TEXT
+		)`)
+	}
+
+	// v4: add memory_model and mood_model columns to sim_runs.
+	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN memory_model TEXT`)
+	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN mood_model TEXT`)
+
+	// v5: recreate views — DROP + CREATE so they pick up renamed tables.
+	// Views are cheap metadata; dropping them loses nothing.
+	simDB.Exec(`DROP VIEW IF EXISTS run_summary`)
+	simDB.Exec(`DROP VIEW IF EXISTS latest_runs`)
 
 	// Insert a new run row. We'll update it with totals at the end.
 	agentModel := cfg.Agent.Model
@@ -468,10 +514,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 		embedModel = "(none)"
 	}
 
+	memoryModel := cfg.MemoryAgent.Model
+	moodModel := cfg.MoodAgent.Model
+
 	res, err := simDB.Exec(
-		`INSERT INTO sim_runs (suite_name, suite_path, chat_model, agent_model, embed_model, total_messages)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		s.Name, suiteFlag, cfg.Chat.Model, agentModel, embedModel, len(s.Messages),
+		`INSERT INTO sim_runs (suite_name, suite_path, chat_model, agent_model, embed_model, memory_model, mood_model, total_messages)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.Name, suiteFlag, cfg.Chat.Model, agentModel, embedModel, memoryModel, moodModel, len(s.Messages),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting sim run: %w", err)
@@ -854,9 +903,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Error("failed to copy messages", "err", err)
 	}
 
-	// Copy facts
-	if err := copyFacts(tmpDB, simDB, runID); err != nil {
-		log.Error("failed to copy facts", "err", err)
+	// Copy memories
+	if err := copyMemories(tmpDB, simDB, runID); err != nil {
+		log.Error("failed to copy memories", "err", err)
 	}
 
 	// Copy mood entries
@@ -1081,31 +1130,31 @@ func copyMessages(tmpDB, simDB *sql.DB, runID int64, convID string) error {
 	return rows.Err()
 }
 
-// copyFacts copies all memories from the temp DB into sim_facts.
-func copyFacts(tmpDB, simDB *sql.DB, runID int64) error {
+// copyMemories copies all memories from the temp DB into sim_memories.
+func copyMemories(tmpDB, simDB *sql.DB, runID int64) error {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, content, category, COALESCE(subject, 'user'), importance, active
+		`SELECT timestamp, memory, category, COALESCE(subject, 'user'), importance, active
 		 FROM memories ORDER BY id ASC`,
 	)
 	if err != nil {
-		return fmt.Errorf("querying facts: %w", err)
+		return fmt.Errorf("querying memories: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var ts, fact, category, subject string
+		var ts, mem, category, subject string
 		var importance int
 		var active bool
-		if err := rows.Scan(&ts, &fact, &category, &subject, &importance, &active); err != nil {
-			return fmt.Errorf("scanning fact: %w", err)
+		if err := rows.Scan(&ts, &mem, &category, &subject, &importance, &active); err != nil {
+			return fmt.Errorf("scanning memory: %w", err)
 		}
 		_, err := simDB.Exec(
-			`INSERT INTO sim_facts (run_id, timestamp, fact, category, subject, importance, active)
+			`INSERT INTO sim_memories (run_id, timestamp, memory, category, subject, importance, active)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			runID, ts, fact, category, subject, importance, active,
+			runID, ts, mem, category, subject, importance, active,
 		)
 		if err != nil {
-			return fmt.Errorf("inserting sim_fact: %w", err)
+			return fmt.Errorf("inserting sim_memory: %w", err)
 		}
 	}
 	return rows.Err()
@@ -1303,16 +1352,28 @@ func generateReport(
 		reportEmbedModel = "(none)"
 	}
 
+	reportMemoryModel := cfg.MemoryAgent.Model
+	if reportMemoryModel == "" {
+		reportMemoryModel = "(none)"
+	}
+	reportMoodModel := cfg.MoodAgent.Model
+	if reportMoodModel == "" {
+		reportMoodModel = "(none)"
+	}
+
 	// Header
 	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
-	fmt.Fprintf(&b, "**Run:** #%d | **Date:** %s | **Chat model:** %s | **Agent model:** %s | **Embed model:** %s | **Cost:** $%.4f\n\n",
+	fmt.Fprintf(&b, "**Run:** #%d | **Date:** %s | **Cost:** $%.4f\n\n",
 		runID,
 		time.Now().Format("2006-01-02 15:04"), // Go's time format uses a reference date, not %Y-%m-%d
-		cfg.Chat.Model,
-		agentModel,
-		reportEmbedModel,
 		totalCost,
 	)
+	fmt.Fprintf(&b, "| Role | Model |\n|------|-------|\n")
+	fmt.Fprintf(&b, "| Chat | %s |\n", cfg.Chat.Model)
+	fmt.Fprintf(&b, "| Agent | %s |\n", agentModel)
+	fmt.Fprintf(&b, "| Memory | %s |\n", reportMemoryModel)
+	fmt.Fprintf(&b, "| Mood | %s |\n", reportMoodModel)
+	fmt.Fprintf(&b, "| Embed | %s |\n\n", reportEmbedModel)
 
 	// Conversation section
 	b.WriteString("## Conversation\n\n")
@@ -1328,7 +1389,7 @@ func generateReport(
 	}
 
 	// Facts section
-	writeFactsSection(&b, simDB, runID)
+	writeMemoriesSection(&b, simDB, runID)
 
 	// Mood section
 	writeMoodSection(&b, simDB, runID)
@@ -1542,44 +1603,44 @@ func writeAgentTrace(b *strings.Builder, simDB *sql.DB, runID int64, turnNum int
 	b.WriteString("</details>\n\n")
 }
 
-// writeFactsSection writes the facts table to the report.
-func writeFactsSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+// writeMemoriesSection writes the memories table to the report.
+func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	rows, err := simDB.Query(
-		`SELECT id, fact, category, subject, importance
-		 FROM sim_facts WHERE run_id = ? ORDER BY id ASC`, runID,
+		`SELECT id, memory, category, subject, importance
+		 FROM sim_memories WHERE run_id = ? ORDER BY id ASC`, runID,
 	)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 
-	type factRow struct {
+	type memoryRow struct {
 		id         int64
-		fact       string
+		memory     string
 		category   sql.NullString
 		subject    string
 		importance int
 	}
-	var facts []factRow
+	var memories []memoryRow
 	for rows.Next() {
-		var f factRow
-		if err := rows.Scan(&f.id, &f.fact, &f.category, &f.subject, &f.importance); err != nil {
+		var m memoryRow
+		if err := rows.Scan(&m.id, &m.memory, &m.category, &m.subject, &m.importance); err != nil {
 			continue
 		}
-		facts = append(facts, f)
+		memories = append(memories, m)
 	}
 
-	fmt.Fprintf(b, "## Memories Saved (%d)\n\n", len(facts))
-	if len(facts) > 0 {
-		b.WriteString("| ID | Fact | Category | Subject | Importance |\n")
-		b.WriteString("|----|------|----------|---------|------------|\n")
-		for _, f := range facts {
+	fmt.Fprintf(b, "## Memories Saved (%d)\n\n", len(memories))
+	if len(memories) > 0 {
+		b.WriteString("| ID | Memory | Category | Subject | Importance |\n")
+		b.WriteString("|----|--------|----------|---------|------------|\n")
+		for _, m := range memories {
 			cat := ""
-			if f.category.Valid {
-				cat = f.category.String
+			if m.category.Valid {
+				cat = m.category.String
 			}
 			fmt.Fprintf(b, "| %d | %s | %s | %s | %d |\n",
-				f.id, f.fact, cat, f.subject, f.importance)
+				m.id, m.memory, cat, m.subject, m.importance)
 		}
 	}
 	b.WriteString("\n")

@@ -33,13 +33,13 @@ func TestExecuteMalformedJSON(t *testing.T) {
 	}()
 
 	// Truncated JSON (as if max_tokens cut it off mid-generation).
-	result := Execute("_test_tool_malformed", `{"fact":"likes coffee`, nil)
+	result := Execute("_test_tool_malformed", `{"memory":"likes coffee`, nil)
 	if !strings.Contains(result, "malformed JSON") {
 		t.Errorf("expected malformed JSON error, got: %q", result)
 	}
 
 	// Valid JSON should reach the handler normally.
-	result = Execute("_test_tool_malformed", `{"fact":"likes coffee"}`, nil)
+	result = Execute("_test_tool_malformed", `{"memory":"likes coffee"}`, nil)
 	if !strings.Contains(result, "handler called") {
 		t.Errorf("expected handler to be called with valid JSON, got: %q", result)
 	}

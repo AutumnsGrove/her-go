@@ -6,8 +6,8 @@ description: >-
   least once per turn. The instruction is a DIRECTIVE to a separate
   conversational model — describe what to say, not the words themselves.
 
-  Before calling reply, use recall_memories to search for relevant facts.
-  Pass what you find in the facts parameter — the conversational model will
+  Before calling reply, use recall_memories to search for relevant memories.
+  Pass what you find in the memories parameter — the conversational model will
   have exactly those injected into its context. If nothing is relevant, pass
   an empty list.
 hot: true
@@ -26,15 +26,15 @@ parameters:
       description: >-
         Optional additional context (search results, URL content) to include
         in the prompt.
-    facts:
+    memories:
       type: array
       items:
         type: string
       description: >-
-        Facts retrieved via recall_memories that are relevant to this reply.
+        Memories retrieved via recall_memories that are relevant to this reply.
         The conversational model will have these injected directly into its
-        context. Pass the fact text verbatim from recall_memories results.
-        Empty list if no facts are relevant.
+        context. Pass the memory text verbatim from recall_memories results.
+        Empty list if no memories are relevant.
   required:
     - instruction
 trace:
