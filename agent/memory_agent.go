@@ -31,9 +31,11 @@ import (
 	// dispatch table. Same pattern as agent.go's blank imports — the init()
 	// in each package calls tools.Register(name, handler).
 	_ "her/tools/done"
+	_ "her/tools/notify_agent"
 	_ "her/tools/remove_memory"
 	_ "her/tools/save_memory"
 	_ "her/tools/save_self_memory"
+	_ "her/tools/split_memory"
 	_ "her/tools/update_memory"
 )
 
@@ -56,8 +58,9 @@ type MemoryAgentParams struct {
 	Store         *memory.Store
 	EmbedClient   *embed.Client
 	Cfg           *config.Config
-	TraceCallback tools.TraceCallback // nil = tracing disabled for memory agent
-	EventBus      *tui.Bus            // nil-safe — emits tool call events for the TUI
+	TraceCallback tools.TraceCallback    // nil = tracing disabled for memory agent
+	EventBus      *tui.Bus               // nil-safe — emits tool call events for the TUI
+	AgentEventCB  tools.AgentEventCallback // nil-safe — fires when notify_agent is called
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
@@ -66,7 +69,9 @@ const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this 
 Use save_memory for memories about {{user}}.
 Use save_self_memory for observations about {{her}}'s own patterns, communication style, or relationship dynamics.
 Use update_memory when something you already know has changed or been refined.
-Use remove_memory for memories that are now incorrect or made redundant by new information.
+Use remove_memory for memories that are now incorrect or made redundant by new information. Accepts memory_id (single) or memory_ids (batch).
+Use split_memory to break a compound memory into individual facts.
+Use notify_agent (instead of done) when you completed inbox tasks and the user should be told.
 
 Rules for writing good memories:
 - Write memories as timeless truths — NO temporal references like "today", "last week", or "right now"
@@ -76,11 +81,14 @@ Rules for writing good memories:
 - Transient moods (tired today, stressed this week) are NOT memories — skip them.
 - Do NOT re-save anything already in the existing memories list.
 
-Call done when finished.`
+If you see an Inbox section in your transcript, handle those tasks and call notify_agent when done.
+Otherwise call done when finished.`
 
 // RunMemoryAgent reviews the given turn transcript and saves any facts worth
-// keeping. Runs a lightweight tool-calling loop (max 10 iterations) using
-// the memory tools: save_memory, save_self_memory, update_memory, remove_memory, done.
+// keeping. Runs a tool-calling loop with continuation windows (15 iterations
+// per window, up to 3 windows = 45 calls max) using the memory tools:
+// save_memory, save_self_memory, update_memory, remove_memory, split_memory,
+// notify_agent, done.
 //
 // This function is designed to be called inside a goroutine — it logs
 // results but never returns an error to the caller. A missing fact is
@@ -146,12 +154,13 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		TriggerMsgID:        input.TriggerMsgID,
 		PreApprovedRewrites: preApproved,
 		ClassifierSnippet:   contextSnippet,
+		AgentEventCB:        params.AgentEventCB,
 	}
 
 	// Tool definitions for the memory agent — the 4 memory tools plus done.
 	// These are loaded from the same YAML registry as all other tools.
 	memToolDefs := tools.LookupToolDefs(
-		[]string{"save_memory", "save_self_memory", "update_memory", "remove_memory", "done"},
+		[]string{"save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "notify_agent", "done"},
 		params.Cfg,
 	)
 
@@ -161,7 +170,20 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	}
 
 	var totalCost float64
-	const maxIterations = 10
+
+	// Memory agent loop limits — read from config with sensible defaults.
+	// Same continuation window pattern as the main agent. If the memory
+	// agent exhausts its iterations without calling done (e.g. during a
+	// bulk cleanup), it gets a fresh window with a progress summary
+	// injected.
+	iterationsPerWindow := params.Cfg.MemoryAgent.IterationsPerWindow
+	if iterationsPerWindow <= 0 {
+		iterationsPerWindow = 15
+	}
+	maxContinuations := params.Cfg.MemoryAgent.MaxContinuations
+	if maxContinuations <= 0 {
+		maxContinuations = 2
+	}
 
 	// tracing tracks whether we have a live trace callback and accumulates
 	// the formatted trace lines for the memory agent's slot.
@@ -178,62 +200,98 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		_ = params.TraceCallback(strings.Join(traceLines, "\n"))
 	}
 
-	for i := 0; i < maxIterations; i++ {
-		resp, err := params.LLM.ChatCompletionWithTools(messages, memToolDefs)
-		if err != nil {
-			log.Error("memory agent: LLM error", "err", err)
-			break
-		}
-
-		// Log cost and metrics — same as main agent.
-		params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID)
-		totalCost += resp.CostUSD
-		log.Infof("  [memory] tokens: %d prompt + %d completion | $%.6f | finish=%s",
-			resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-		if len(resp.ToolCalls) == 0 {
-			// Model returned text or an empty response — stop the loop.
-			break
-		}
-
-		// Append the assistant turn before executing tools.
-		messages = append(messages, llm.ChatMessage{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
-		})
-
-		// Execute each tool call, emit trace lines, and emit TUI events.
-		for _, tc := range resp.ToolCalls {
-			result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-			isError := strings.HasPrefix(result, "error:") || strings.HasPrefix(result, "rejected:")
-			log.Infof("    [memory] %s → %s", tc.Function.Name, truncateLog(result, 150))
+outer:
+	for window := 0; window <= maxContinuations; window++ {
+		if window > 0 {
+			// Exhausted the previous window without a done signal.
+			// Inject a continuation context so the model knows where it
+			// left off. Reuses the same summary builder as the main agent.
+			summary := buildContinuationSummary(traceLines)
 			messages = append(messages, llm.ChatMessage{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
+				Role: "system",
+				Content: fmt.Sprintf(
+					"You have used all %d iterations in the previous window without calling done. "+
+						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
+						"Continue your work and call done (or notify_agent) when finished.",
+					iterationsPerWindow, window, maxContinuations, summary,
+				),
 			})
-
-			if params.EventBus != nil {
-				params.EventBus.Emit(tui.ToolCallEvent{
-					Time:     time.Now(),
-					TurnID:   input.TriggerMsgID + 1,
-					ToolName: tc.Function.Name,
-					Args:     truncateLog(tc.Function.Arguments, 200),
-					Result:   truncateLog(result, 200),
-					IsError:  isError,
-				})
-			}
-
+			log.Infof("  [memory] continuation window %d/%d", window, maxContinuations)
 			if tracing {
-				line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
-				traceLines = append(traceLines, line)
+				traceLines = append(traceLines, fmt.Sprintf(
+					"🔄 <i>continuation window %d/%d</i>", window, maxContinuations))
 				emitMemTrace()
 			}
 		}
 
-		if tctx.DoneCalled {
-			break
+		for i := 0; i < iterationsPerWindow; i++ {
+			resp, err := params.LLM.ChatCompletionWithTools(messages, memToolDefs)
+			if err != nil {
+				log.Error("memory agent: LLM error", "err", err)
+				break outer
+			}
+
+			// Log cost and metrics — same as main agent.
+			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID)
+			totalCost += resp.CostUSD
+			log.Infof("  [memory] tokens: %d prompt + %d completion | $%.6f | finish=%s",
+				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
+
+			if len(resp.ToolCalls) == 0 {
+				// Model returned text or an empty response — stop the loop.
+				break outer
+			}
+
+			// Append the assistant turn before executing tools.
+			messages = append(messages, llm.ChatMessage{
+				Role:      "assistant",
+				Content:   resp.Content,
+				ToolCalls: resp.ToolCalls,
+			})
+
+			// Execute each tool call, emit trace lines, and emit TUI events.
+			for _, tc := range resp.ToolCalls {
+				result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+				isError := strings.HasPrefix(result, "error:") || strings.HasPrefix(result, "rejected:")
+				log.Infof("    [memory] %s → %s", tc.Function.Name, truncateLog(result, 150))
+				messages = append(messages, llm.ChatMessage{
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID,
+				})
+
+				if params.EventBus != nil {
+					params.EventBus.Emit(tui.ToolCallEvent{
+						Time:     time.Now(),
+						TurnID:   input.TriggerMsgID + 1,
+						ToolName: tc.Function.Name,
+						Args:     truncateLog(tc.Function.Arguments, 200),
+						Result:   truncateLog(result, 200),
+						IsError:  isError,
+					})
+				}
+
+				if tracing {
+					line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
+					traceLines = append(traceLines, line)
+					emitMemTrace()
+				}
+			}
+
+			if tctx.DoneCalled {
+				break outer
+			}
+		}
+
+		// Inner loop exhausted without done. If at the hard cap, give up.
+		if window == maxContinuations {
+			log.Warn("[memory] hit max continuations without done signal",
+				"total_calls", iterationsPerWindow*(window+1))
+			if tracing {
+				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
+				emitMemTrace()
+			}
+			break outer
 		}
 	}
 
@@ -277,6 +335,17 @@ func buildMemoryTranscript(input MemoryAgentInput, store *memory.Store) string {
 		b.WriteString("## Reply sent to user\n")
 		b.WriteString(input.ReplyText)
 		b.WriteString("\n\n")
+	}
+
+	// Check the inbox for tasks delegated by the main agent (via send_task).
+	// Consumed atomically — once read here, they won't appear again.
+	inboxMsgs, err := store.ConsumeInbox("memory")
+	if err == nil && len(inboxMsgs) > 0 {
+		b.WriteString("## Inbox — tasks from the main agent\n")
+		b.WriteString("The main agent has delegated these tasks to you. Handle them alongside your normal memory work.\n\n")
+		for _, msg := range inboxMsgs {
+			fmt.Fprintf(&b, "### Task: %s\n%s\n\n", msg.MsgType, msg.Payload)
+		}
 	}
 
 	// Show existing memories for dedup context — the model should not re-save

@@ -29,6 +29,7 @@ import (
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
 	_ "her/tools/search_books"
+	_ "her/tools/send_task"
 	_ "her/tools/set_location"
 	_ "her/tools/think"
 	_ "her/tools/update_persona"
@@ -132,8 +133,9 @@ type RunParams struct {
 	ImageBase64               string   // base64-encoded image data (empty if no image)
 	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
 	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
-	EventBus                  *tui.Bus // nil-safe — emits rich typed events for the TUI
-	ConfigPath                string   // path to config.yaml — needed for persisting location changes via set_location
+	EventBus                  *tui.Bus                    // nil-safe — emits rich typed events for the TUI
+	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
+	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -447,14 +449,18 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// Agent loop constants. The outer loop provides continuation windows —
-	// if the agent runs out of iterations without calling done, it gets
-	// a fresh window (up to maxContinuations times) with a summary of
-	// progress so far injected as context.
-	const (
+	// Agent loop limits — read from config with sensible defaults.
+	// The outer loop provides continuation windows: if the agent runs out
+	// of iterations without calling done, it gets a fresh window with a
+	// summary of progress injected as context.
+	iterationsPerWindow := params.Cfg.Agent.IterationsPerWindow
+	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 15
-		maxContinuations    = 3 // 4 windows total = 60 calls hard cap
-	)
+	}
+	maxContinuations := params.Cfg.Agent.MaxContinuations
+	if maxContinuations <= 0 {
+		maxContinuations = 3
+	}
 
 outer:
 	for window := 0; window <= maxContinuations; window++ {
@@ -745,6 +751,7 @@ outer:
 					Cfg:           params.Cfg,
 					TraceCallback: params.MemoryTraceCallback,
 					EventBus:      params.EventBus,
+					AgentEventCB:  params.AgentEventCB,
 				},
 			)
 		}

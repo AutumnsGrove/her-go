@@ -126,6 +126,11 @@ type AgentConfig struct {
 	Timeout     int             `yaml:"timeout"`   // HTTP timeout in seconds (0 = 60s default)
 	Trace       bool            `yaml:"trace"`     // show agent thinking traces in chat
 	Fallback    *FallbackConfig `yaml:"fallback"`  // optional fallback model for when primary is unavailable
+
+	// Loop tuning — how many iterations per window and how many continuation
+	// windows before giving up. Defaults: 15 iterations, 3 continuations (= 60 max).
+	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
+	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 3
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
@@ -161,6 +166,10 @@ type MemoryAgentConfig struct {
 	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+
+	// Loop tuning — same as AgentConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
+	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
+	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 2
 }
 
 // MoodAgentConfig controls the post-turn background mood agent.

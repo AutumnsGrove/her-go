@@ -1,0 +1,22 @@
+name: notify_agent
+agent: memory
+description: >-
+  Send results back to the main agent and trigger a follow-up message to the
+  user. Call this instead of done when you completed inbox tasks and the user
+  should be told what happened. Calling notify_agent also ends your turn
+  (no need to call done separately).
+hot: false
+parameters:
+  type: object
+  properties:
+    summary:
+      type: string
+      description: "Brief summary of what was done (e.g., 'split 2 memories, deactivated 4 duplicates')"
+    direct_message:
+      type: string
+      description: "If set, send this exact text to the user without running the full agent loop. Use for simple confirmations."
+  required:
+    - summary
+trace:
+  emoji: "📬"
+  format: "→ main: {{.summary | escape | truncate 80}}"

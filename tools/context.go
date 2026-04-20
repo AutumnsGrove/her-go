@@ -69,6 +69,15 @@ type DeletePlaceholderCallback func() error
 // into Telegram edits for a live typing effect.
 type StreamCallback func(chunk string) error
 
+// AgentEventCallback fires a system event that can trigger an agent run
+// without a user message. Used by notify_agent to wake up the main agent
+// after the memory agent finishes background work.
+//
+// The callback is defined here (not in agent/) to avoid circular imports.
+// The bot layer provides the implementation that translates these params
+// into an agent.AgentEvent and writes it to the agent event channel.
+type AgentEventCallback func(summary, directMessage string)
+
 // ---------------------------------------------------------------------------
 // Context — the dependency bundle every tool handler receives.
 //
@@ -225,6 +234,11 @@ type Context struct {
 
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
+
+	// AgentEventCB fires an event that wakes up the main agent after
+	// background work completes. Nil when not wired (e.g., tests, main agent).
+	// The memory agent's notify_agent tool calls this.
+	AgentEventCB AgentEventCallback
 
 	// ClassifierSnippet is the conversation snapshot used when running the
 	// classifier. When set, the memory helpers use it instead of querying the DB
