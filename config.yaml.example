@@ -40,9 +40,9 @@ agent:
     max_tokens: 2048
 
 classifier:
-  model: "anthropic/claude-haiku-4.5"  # small, fast model for memory + reply safety gates
-  temperature: 0.15                     # slight flex for nuanced safety judgments (escalation vs. mirroring)
-  max_tokens: 64                        # only needs ~20 tokens, 64 for safety margin
+  model: "google/gemini-3.1-flash-lite-preview"  # small, fast model for memory + reply safety gates
+  temperature: 0.15                               # slight flex for nuanced safety judgments (escalation vs. mirroring)
+  max_tokens: 64                                  # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
   model: "moonshotai/kimi-k2-0905"     # 1T instruct model — best fact extraction, no thinking/vision overhead
