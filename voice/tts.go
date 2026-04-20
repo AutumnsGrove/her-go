@@ -1,8 +1,8 @@
-// tts.go — Text-to-speech client for the Kokoro MLX server.
+// tts.go — Text-to-speech client for the Piper TTS sidecar.
 //
-// The mlx-audio server exposes an OpenAI-compatible /v1/audio/speech
-// endpoint. We POST JSON with the text and voice settings, and get
-// back raw audio bytes (WAV by default, or OGG/Opus for Telegram).
+// The Piper sidecar (scripts/tts_server.py) exposes an OpenAI-compatible
+// /v1/audio/speech endpoint. We POST JSON with the text and voice settings,
+// and get back WAV audio bytes which we convert to OGG/Opus for Telegram.
 //
 // This is the mirror image of stt.go:
 //
@@ -23,7 +23,7 @@ import (
 	"her/config"
 )
 
-// TTSClient talks to the local mlx-audio server for text-to-speech.
+// TTSClient talks to the local Piper TTS sidecar for text-to-speech.
 type TTSClient struct {
 	baseURL    string
 	model      string
@@ -48,7 +48,7 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 
 	voiceID := cfg.VoiceID
 	if voiceID == "" {
-		voiceID = "bf_alice" // warm, friendly default
+		voiceID = "en_GB-southern_english_female-low"
 	}
 
 	speed := cfg.Speed
@@ -151,11 +151,14 @@ func (c *TTSClient) Synthesize(text string) ([]byte, error) {
 	// ffmpeg does this conversion: pipe WAV in via stdin, get OGG out
 	// via stdout. The -c:a libopus flag selects the Opus codec.
 	//
-	// This is like running:
-	//   ffmpeg -i input.wav -c:a libopus -b:a 64k output.ogg
-	// but with stdin/stdout instead of files.
+	// The -ar 48000 is critical: Opus internally operates at 48kHz,
+	// and Piper's "low" voice models output at 16kHz. Without an
+	// explicit resample, the OGG container can get ambiguous sample
+	// rate metadata — Telegram then plays the audio at 3x speed
+	// (chipmunk effect). Forcing 48kHz ensures correct playback.
 	cmd := exec.Command("ffmpeg",
 		"-i", "pipe:0", // read WAV from stdin
+		"-ar", "48000", // resample to 48kHz (Opus native rate)
 		"-c:a", "libopus", // encode with Opus codec
 		"-b:a", "64k", // 64kbps — good quality for speech
 		"-application", "voip", // optimize for speech (vs music)
@@ -191,10 +194,9 @@ func (c *TTSClient) ReplyMode() string {
 	return c.replyMode
 }
 
-// IsAvailable checks if the mlx-audio server is reachable.
+// IsAvailable checks if the Piper TTS sidecar is reachable.
 func (c *TTSClient) IsAvailable() bool {
-	// The mlx-audio server serves OpenAPI docs at /docs.
-	resp, err := c.httpClient.Get(c.baseURL + "/docs")
+	resp, err := c.httpClient.Get(c.baseURL + "/healthz")
 	if err != nil {
 		return false
 	}
