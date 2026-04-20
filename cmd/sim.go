@@ -1364,6 +1364,14 @@ func generateReport(
 	if reportMoodModel == "" {
 		reportMoodModel = "(none)"
 	}
+	reportClassifierModel := cfg.Classifier.Model
+	if reportClassifierModel == "" {
+		reportClassifierModel = "(none)"
+	}
+	reportVisionModel := cfg.Vision.Model
+	if reportVisionModel == "" {
+		reportVisionModel = "(none)"
+	}
 
 	// Header
 	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
@@ -1377,6 +1385,8 @@ func generateReport(
 	fmt.Fprintf(&b, "| Agent | %s |\n", agentModel)
 	fmt.Fprintf(&b, "| Memory | %s |\n", reportMemoryModel)
 	fmt.Fprintf(&b, "| Mood | %s |\n", reportMoodModel)
+	fmt.Fprintf(&b, "| Classifier | %s |\n", reportClassifierModel)
+	fmt.Fprintf(&b, "| Vision | %s |\n", reportVisionModel)
 	fmt.Fprintf(&b, "| Embed | %s |\n\n", reportEmbedModel)
 
 	// Conversation section
