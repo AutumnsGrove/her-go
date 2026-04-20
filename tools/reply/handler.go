@@ -1,5 +1,5 @@
 // Package reply implements the reply tool — generates and delivers the
-// user-facing response via the chat model (Deepseek V3.2).
+// user-facing response via the chat model.
 //
 // This is the most complex tool in the system. It:
 //   1. Builds the chat system prompt from the layer registry (persona,
@@ -24,6 +24,7 @@ import (
 	"her/layers"
 	"her/llm"
 	"her/logger"
+	"her/memory"
 	"her/scrub"
 	"her/tools"
 	"her/tui"
@@ -340,9 +341,18 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// sycophantic validation. Independent from style — runs its own
 	// LLM call with its own prompt, knows nothing about style issues.
 	// Same retry-with-hint pattern: one chance to rephrase, then deliver.
+	//
+	// We pass the user's message as a snippet so the classifier can judge
+	// whether the bot is mirroring the user's temperature or escalating
+	// beyond it. Without this, it has no reference for "what did the user
+	// actually say?" and over-flags mirroring as escalation.
 	safetyGateNote := ""
 	if ctx.ClassifierLLM != nil {
-		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, nil)
+		safetySnippet := []memory.Message{{
+			Role:            "user",
+			ContentScrubbed: ctx.ScrubbedUserMessage,
+		}}
+		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
 		} else {

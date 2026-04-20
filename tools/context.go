@@ -84,7 +84,7 @@ type StreamCallback func(chunk string) error
 type Context struct {
 	// --- LLM clients ---
 
-	// ChatLLM is the conversational model (e.g., Deepseek). The reply
+	// ChatLLM is the conversational model (configured via cfg.Chat). The reply
 	// tool uses this to generate the user-facing response.
 	ChatLLM *llm.Client
 
