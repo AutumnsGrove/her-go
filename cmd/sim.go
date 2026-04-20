@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"her/agent"
@@ -142,12 +143,13 @@ func init() {
 // suite represents the YAML file that defines a scripted conversation.
 // The struct tags tell the YAML parser which keys to look for.
 type suite struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Tags        []string `yaml:"tags"`
-	Messages    []string `yaml:"messages"`
-	RunDream    bool     `yaml:"run_dream"`  // run a full dream cycle after all messages complete
-	RunRollup   bool     `yaml:"run_rollup"` // force the daily mood rollup after all messages complete
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	Tags         []string `yaml:"tags"`
+	Messages     []string `yaml:"messages"`
+	SeedMemories []string `yaml:"seed_memories"` // pre-populated before message loop (with embeddings)
+	RunDream     bool     `yaml:"run_dream"`     // run a full dream cycle after all messages complete
+	RunRollup    bool     `yaml:"run_rollup"`    // force the daily mood rollup after all messages complete
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -156,9 +158,10 @@ type suite struct {
 // inside a function are scoped to that function — they can't be used as
 // parameters elsewhere.
 type simTurnResult struct {
-	userMsg  string
-	botReply string
-	elapsed  time.Duration
+	userMsg       string
+	botReply      string
+	followUpReply string // from EventInboxReady — empty if no background task reported back
+	elapsed       time.Duration
 }
 
 // simRollupResult captures the output of a forced daily mood rollup
@@ -753,6 +756,36 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// 7. Message loop — send each message through the real pipeline
 	// ------------------------------------------------------------------
 
+	// --- Seed memories (if configured) ---
+	// Pre-populate the DB with memories before the conversation starts.
+	// Each seed goes through the real embedding pipeline so recall_memories
+	// can find them via semantic search. Useful for testing recall-dependent
+	// features (inbox cleanup, split requests) without needing earlier turns
+	// to establish the memories first.
+	if len(s.SeedMemories) > 0 {
+		log.Infof("  seeding %d memories...", len(s.SeedMemories))
+		for _, content := range s.SeedMemories {
+			var vec []float32
+			if embedClient != nil {
+				var err error
+				vec, err = embedClient.Embed(content)
+				if err != nil {
+					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
+				}
+			}
+			id, err := store.SaveMemory(content, "", "user", 0, 5, vec, vec, "", "")
+			if err != nil {
+				log.Error("seed memory failed", "err", err)
+				continue
+			}
+			if embedClient != nil && len(vec) > 0 {
+				_ = store.AutoLinkMemory(id, vec)
+			}
+			log.Infof("    seeded #%d: %s", id, content[:min(len(content), 60)])
+		}
+		log.Info("  seeding complete")
+	}
+
 	// turnResults collects the bot's reply for each turn so we can build
 	// the report afterward. make() pre-allocates the slice with capacity
 	// for all messages — like Python's [None] * n but for a typed slice.
@@ -820,6 +853,23 @@ func runSim(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
+		// Wire the background sync so we wait for the memory agent to
+		// finish before proceeding to the next turn. In production this
+		// is nil (fire-and-forget), but in sim we need deterministic ordering.
+		var bgWG sync.WaitGroup
+		bgWG.Add(1)
+
+		// Capture any AgentEvent fired by notify_agent so we can run
+		// the follow-up synchronously after the memory agent finishes.
+		var inboxEvent *agent.AgentEvent
+		agentEventCB := func(summary, directMessage string) {
+			inboxEvent = &agent.AgentEvent{
+				Type:          agent.EventInboxReady,
+				Summary:       summary,
+				DirectMessage: directMessage,
+			}
+		}
+
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
 			AgentLLM:            agentClient,
@@ -838,10 +888,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TriggerMsgID:        msgID,
 			StatusCallback:      statusCallback,
 			TraceCallback:       traceCallback,
-			TTSCallback: nil, // no TTS in sim
-			ConfigPath:  cfgFile,
+			TTSCallback:    nil, // no TTS in sim
+			ConfigPath:     cfgFile,
+			AgentEventCB:   agentEventCB,
+			BackgroundWG:   &bgWG,
 		})
 		if err != nil {
+			bgWG.Done() // release the WG so we don't deadlock
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
 			log.Errorf("  %s: [ERROR: %s]", cfg.Identity.Her, err)
 			turnResults = append(turnResults, simTurnResult{
@@ -856,10 +909,53 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Infof("  %s: %s", cfg.Identity.Her, result.ReplyText)
 		log.Infof("  (%s)", elapsed.Round(time.Millisecond))
 
+		// Wait for the memory agent goroutine to finish before checking
+		// for inbox events or proceeding to the next turn.
+		bgWG.Wait()
+
+		// If the memory agent called notify_agent, handle the follow-up
+		// synchronously — either a direct message or a brief agent loop.
+		var followUpReply string
+		if inboxEvent != nil {
+			if inboxEvent.DirectMessage != "" {
+				followUpReply = inboxEvent.DirectMessage
+				log.Infof("  %s (follow-up): %s", cfg.Identity.Her, followUpReply)
+			} else {
+				// Run a brief agent loop for a natural follow-up message.
+				followUpPrompt := fmt.Sprintf(
+					"[system] A background task has completed. Summary: %s\n\n"+
+						"Briefly update the user on what was done. Keep it to 1-2 sentences — "+
+						"this is a follow-up, not a new conversation.",
+					inboxEvent.Summary)
+				followUpResult, followUpErr := agent.Run(agent.RunParams{
+					AgentLLM:            agentClient,
+					ChatLLM:             chatClient,
+					Store:               store,
+					EmbedClient:         embedClient,
+					SimilarityThreshold: cfg.Embed.SimilarityThreshold,
+					Cfg:                 cfg,
+					ScrubbedUserMessage: followUpPrompt,
+					ConversationID:      "inbox-followup",
+					TriggerMsgID:        msgID,
+					StatusCallback:      statusCallback,
+					TraceCallback:       traceCallback,
+					ConfigPath:          cfgFile,
+				})
+				if followUpErr == nil {
+					followUpReply = followUpResult.ReplyText
+					log.Infof("  %s (follow-up): %s", cfg.Identity.Her, followUpReply)
+				} else {
+					log.Error("follow-up agent.Run failed", "err", followUpErr)
+				}
+			}
+			inboxEvent = nil
+		}
+
 		turnResults = append(turnResults, simTurnResult{
-			userMsg:  msg,
-			botReply: result.ReplyText,
-			elapsed:  elapsed,
+			userMsg:       msg,
+			botReply:      result.ReplyText,
+			followUpReply: followUpReply,
+			elapsed:       elapsed,
 		})
 
 		// --- Mood agent ---
@@ -1405,6 +1501,10 @@ func generateReport(
 		fmt.Fprintf(&b, "### Turn %d\n", i+1)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, turn.userMsg)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, turn.botReply)
+
+		if turn.followUpReply != "" {
+			fmt.Fprintf(&b, "**%s** *(follow-up):* %s\n\n", cfg.Identity.Her, turn.followUpReply)
+		}
 
 		// Add agent trace as a collapsible details block.
 		writeAgentTrace(&b, simDB, runID, i+1)

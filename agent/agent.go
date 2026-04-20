@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"her/layers"
@@ -136,6 +137,7 @@ type RunParams struct {
 	EventBus                  *tui.Bus                    // nil-safe — emits rich typed events for the TUI
 	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
+	BackgroundWG              *sync.WaitGroup             // nil = fire-and-forget (production); non-nil = caller can wait for memory agent to finish (sim)
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -730,6 +732,12 @@ outer:
 	//            reflections accumulate → triggers persona rewrite
 	// No concept of "conversations" needed — just fact and reflection counts.
 	go func() {
+		// Signal completion if a caller is waiting (sim mode).
+		// In production BackgroundWG is nil — this is a no-op.
+		if params.BackgroundWG != nil {
+			defer params.BackgroundWG.Done()
+		}
+
 		// --- Memory agent ---
 		// Runs first — we want facts saved before the reflection trigger
 		// checks the fact count. This way a fact-rich turn can trigger
