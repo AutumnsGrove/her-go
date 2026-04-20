@@ -28,6 +28,7 @@ type Action string
 
 const (
 	ActionAutoLogged      Action = "auto_logged"
+	ActionUpdated         Action = "updated_existing"
 	ActionProposalEmitted Action = "proposal_emitted"
 	ActionDroppedLow      Action = "dropped_low_confidence"
 	ActionDroppedNoSignal Action = "dropped_no_signal"
@@ -76,6 +77,17 @@ type AgentConfig struct {
 	// least this similar, we skip the write. Default 0.80.
 	DedupSimilarity float64
 
+	// UpdateSimilarity is the lower threshold for the "refine" path.
+	// When a neighbor is between UpdateSimilarity and DedupSimilarity
+	// (and within ±1 valence), we update the existing entry in place
+	// instead of creating a duplicate. Default 0.55.
+	UpdateSimilarity float64
+
+	// UpdateMaxValenceDrift is the maximum valence difference that
+	// still counts as "same mood, evolving." Beyond this the emotional
+	// state has shifted enough to warrant a new entry. Default 1.
+	UpdateMaxValenceDrift int
+
 	// ProposalExpiry is how long a medium-confidence proposal stays
 	// tappable before the sweeper edits it to "expired". Default 30m.
 	ProposalExpiry time.Duration
@@ -99,6 +111,12 @@ func (c AgentConfig) withDefaults() AgentConfig {
 	}
 	if c.DedupSimilarity <= 0 {
 		c.DedupSimilarity = 0.80
+	}
+	if c.UpdateSimilarity <= 0 {
+		c.UpdateSimilarity = 0.55
+	}
+	if c.UpdateMaxValenceDrift <= 0 {
+		c.UpdateMaxValenceDrift = 1
 	}
 	if c.ProposalExpiry <= 0 {
 		c.ProposalExpiry = 30 * time.Minute
@@ -332,7 +350,18 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 		}
 	}
 
-	// 7. Dedup — only when we have an embedding + vec_moods available.
+	// 7. Dedup + update — only when we have an embedding + vec_moods.
+	//
+	// Three tiers based on similarity to the nearest recent entry:
+	//   ≥ DedupSimilarity (0.80)  → drop (nearly identical)
+	//   ≥ UpdateSimilarity (0.55) → update existing entry in place
+	//                                (same emotional arc, more detail)
+	//   < UpdateSimilarity        → new entry (different mood)
+	//
+	// The update path also checks valence drift: if the new mood is
+	// more than ±UpdateMaxValenceDrift away from the neighbor, the
+	// emotional state has genuinely shifted and deserves its own row
+	// even if the topic is similar.
 	if len(candidate.Embedding) > 0 {
 		neighbors, err := deps.Store.SimilarMoodEntriesWithin(
 			deps.Clock(), candidate.Embedding, cfg.DedupWindow, 3,
@@ -341,23 +370,55 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 			log.Warn("dedup KNN query failed; proceeding", "err", err)
 		} else if len(neighbors) > 0 {
 			// sqlite-vec returns cosine DISTANCE (0 = identical).
-			// Our threshold is in similarity terms (0.80 = "this
-			// similar or more"). Convert once to keep the config
-			// human-readable.
-			topSim := 1.0 - neighbors[0].Distance
+			// Our thresholds are in similarity terms. Convert once.
+			nearest := neighbors[0]
+			topSim := 1.0 - nearest.Distance
+			valenceDrift := candidate.Valence - nearest.Valence
+			if valenceDrift < 0 {
+				valenceDrift = -valenceDrift
+			}
+
 			if topSim >= cfg.DedupSimilarity {
+				// Tier 1: nearly identical — drop.
 				tb.line(fmt.Sprintf("dedup: similar to #%d (sim=%.2f) — dropped",
-					neighbors[0].ID, topSim))
+					nearest.ID, topSim))
 				tb.flush(deps.Trace)
 				return Result{
 					Action:     ActionDroppedDedup,
-					Reason:     fmt.Sprintf("similar entry #%d within window (sim=%.2f)", neighbors[0].ID, topSim),
+					Reason:     fmt.Sprintf("similar entry #%d within window (sim=%.2f)", nearest.ID, topSim),
 					Confidence: confidence,
 					Inference:  inference,
 				}
 			}
-			tb.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f (below %.2f threshold)",
-				neighbors[0].ID, topSim, cfg.DedupSimilarity))
+
+			if topSim >= cfg.UpdateSimilarity && valenceDrift <= cfg.UpdateMaxValenceDrift {
+				// Tier 2: same emotional territory, evolving — update
+				// the existing entry with richer detail.
+				candidate.Source = memory.MoodSourceInferred
+				if err := deps.Store.UpdateMoodEntry(nearest.ID, candidate); err != nil {
+					log.Error("mood update failed; falling through to new entry",
+						"existing_id", nearest.ID, "err", err)
+				} else {
+					candidate.ID = nearest.ID
+					tb.line(fmt.Sprintf("♻️ updated #%d (sim=%.2f, valence %d→%d)",
+						nearest.ID, topSim, nearest.Valence, candidate.Valence))
+					tb.flush(deps.Trace)
+					log.Info("mood updated existing entry",
+						"id", nearest.ID, "valence", candidate.Valence,
+						"labels", candidate.Labels, "sim", topSim)
+					return Result{
+						Action:     ActionUpdated,
+						Reason:     fmt.Sprintf("refined entry #%d (sim=%.2f)", nearest.ID, topSim),
+						Confidence: confidence,
+						Inference:  inference,
+						Entry:      candidate,
+					}
+				}
+			}
+
+			// Tier 3: different enough — fall through to save new.
+			tb.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f drift=%d (new entry)",
+				nearest.ID, topSim, valenceDrift))
 			tb.flush(deps.Trace)
 		} else {
 			tb.line("dedup: no neighbors in window")

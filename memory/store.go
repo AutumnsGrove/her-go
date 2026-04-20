@@ -476,6 +476,12 @@ func (s *Store) initTables() error {
 		s.db.Exec(m) // ignore errors (column already exists)
 	}
 
+	// Mood table migration: add updated_at for the mood update/refine path.
+	// When a mood entry is refined (same emotional arc, new detail), we
+	// update the row in place and stamp updated_at so the original ts is
+	// preserved as "when the mood first appeared."
+	s.db.Exec(`ALTER TABLE mood_entries ADD COLUMN updated_at DATETIME`)
+
 	// memories — primary storage for learned facts about the user and self.
 	// Run `her migrate` once to copy data from the legacy `facts` table.
 	s.db.Exec(`CREATE TABLE IF NOT EXISTS memories (
