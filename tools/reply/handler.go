@@ -335,6 +335,42 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		styleGateNote = "[style: clean]"
 	}
 
+	// Safety gate — separate classifier focused on emotional safety.
+	// Catches escalation, drastic-decision endorsement, and pure
+	// sycophantic validation. Independent from style — runs its own
+	// LLM call with its own prompt, knows nothing about style issues.
+	// Same retry-with-hint pattern: one chance to rephrase, then deliver.
+	safetyGateNote := ""
+	if ctx.ClassifierLLM != nil {
+		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, nil)
+		if safetyVerdict.Allowed {
+			safetyGateNote = "[safety: SAFE]"
+		} else {
+			safetyHint := safetyVerdict.Reason
+			if safetyHint == "" {
+				safetyHint = "balance your support with honest perspective"
+			}
+			log.Info("reply: safety issue detected, retrying once",
+				"verdict", safetyVerdict.Type, "hint", safetyHint,
+				"preview", truncate(resp.Content, 80))
+
+			safetyMessages := append(llmMessages, llm.ChatMessage{
+				Role:    "system",
+				Content: "Safety note: " + safetyHint + ". Rephrase to be supportive but balanced.",
+			})
+			retryResp, retryErr := ctx.ChatLLM.ChatCompletion(safetyMessages)
+			if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
+				resp = retryResp
+				ctx.ReplyCost += retryResp.CostUSD
+				log.Info("reply: safety retry accepted", "preview", truncate(resp.Content, 80))
+				safetyGateNote = fmt.Sprintf("[safety: %s — retried (%s)]", safetyVerdict.Type, safetyHint)
+			} else {
+				log.Warn("reply: safety retry failed or invalid, delivering original")
+				safetyGateNote = fmt.Sprintf("[safety: %s — retry failed (%s)]", safetyVerdict.Type, safetyHint)
+			}
+		}
+	}
+
 	// Deanonymize PII tokens before sending to the user.
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
@@ -413,8 +449,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		preview = preview[:300] + "..."
 	}
 	suffix := "Your message has been sent. Call done to end your turn unless you have pending work (e.g., a search in progress)."
-	if styleGateNote != "" {
-		suffix = styleGateNote + "\n" + suffix
+	if styleGateNote != "" || safetyGateNote != "" {
+		gates := strings.TrimSpace(styleGateNote + " " + safetyGateNote)
+		suffix = gates + "\n" + suffix
 	}
 	return fmt.Sprintf("reply delivered to user: %q\n\n%s", preview, suffix)
 }

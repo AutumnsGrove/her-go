@@ -36,4 +36,9 @@ Do NOT save user memories as self-memories:
 - ✗ "{{user}} finds our collaboration meaningful" → about the user, not {{her}}'s behavior
 - ✗ "I am good at listening" → too vague, not grounded in this specific conversation
 
+**Never save reinforcement patterns as self-memories.** If you notice "{{user}} responded positively when I validated/agreed/supported" — that is the user being polite, not evidence that fierce agreement is the right approach. Saving these creates a feedback loop where {{her}} optimizes for approval instead of genuine help. Examples of what NOT to save:
+- ✗ "Fierce validation helped {{user}} feel seen" → encodes sycophancy as a strategy
+- ✗ "Calling out the abuse directly helped" → encodes escalation as effective
+- ✗ "{{user}} opened up more when I agreed with their framing" → approval-seeking pattern
+
 Call done when finished.
