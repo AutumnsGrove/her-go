@@ -396,7 +396,13 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 				}
 			}
 
-			if topSim >= cfg.UpdateSimilarity && valenceDrift <= cfg.UpdateMaxValenceDrift {
+			// Label overlap: does the new mood share at least one
+			// emotional label with the existing entry? Without overlap,
+			// the feeling has qualitatively shifted even if the topic
+			// is similar (e.g., Frustrated→Relieved about the same event).
+			labelOverlap := countLabelOverlap(candidate.Labels, nearest.Labels)
+
+			if topSim >= cfg.UpdateSimilarity && valenceDrift <= cfg.UpdateMaxValenceDrift && labelOverlap > 0 {
 				// Tier 2: same emotional territory, evolving — update
 				// the existing entry with richer detail.
 				candidate.Source = memory.MoodSourceInferred
@@ -422,8 +428,8 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 			}
 
 			// Tier 3: different enough — fall through to save new.
-			tb.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f drift=%d (new entry)",
-				nearest.ID, topSim, valenceDrift))
+			tb.line(fmt.Sprintf("dedup: nearest #%d sim=%.2f drift=%d overlap=%d (new entry)",
+				nearest.ID, topSim, valenceDrift, labelOverlap))
 			tb.flush(deps.Trace)
 		} else {
 			tb.line("dedup: no neighbors in window")
@@ -584,6 +590,24 @@ func filterKnown(in []string, isKnown func(string) bool) []string {
 		}
 	}
 	return out
+}
+
+// countLabelOverlap returns how many labels appear in both slices.
+// Used by the update path to distinguish "same feeling, more detail"
+// from "different feeling about the same topic." Zero overlap means
+// the emotional quality has shifted and a new entry is warranted.
+func countLabelOverlap(a, b []string) int {
+	set := make(map[string]bool, len(b))
+	for _, s := range b {
+		set[s] = true
+	}
+	count := 0
+	for _, s := range a {
+		if set[s] {
+			count++
+		}
+	}
+	return count
 }
 
 // errResult wraps a pre-dispatch failure so callers still get a
