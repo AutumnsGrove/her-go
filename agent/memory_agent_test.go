@@ -76,7 +76,7 @@ func TestRunMemoryAgent_SavesMemoryAndCallsDone(t *testing.T) {
 		case 1:
 			// First request: ask the agent to save a memory.
 			writeMockSSEToolCall(w, "save_memory",
-				`{"fact":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, stealth"}`)
+				`{"memory":"User prefers stealth builds in FromSoft games","category":"preference","tags":"games, stealth"}`)
 		default:
 			// Second request (and any beyond): call done to end the loop.
 			writeMockSSEToolCall(w, "done", `{}`)

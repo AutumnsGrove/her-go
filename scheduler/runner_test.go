@@ -202,11 +202,15 @@ func TestDispatch_ExhaustedRetriesSkipsToNextCron(t *testing.T) {
 	if got.AttemptCount != 0 {
 		t.Errorf("AttemptCount = %d, want 0 after exhaustion (should reset)", got.AttemptCount)
 	}
-	// next_fire should jump to the next cron hour (well beyond a retry
-	// backoff window).
-	waitUntil := time.Until(got.NextFire)
-	if waitUntil < 5*time.Minute {
-		t.Errorf("NextFire delta = %v, want > 5min (should skip to next cron)", waitUntil)
+	// next_fire should jump to the next cron hour, not a retry backoff.
+	// Verify by checking the minute is 0 (matches "0 * * * *") and the
+	// time is in the future. We don't assert a minimum delta because the
+	// next cron could be <5min away when the test runs near :56+.
+	if got.NextFire.Minute() != 0 {
+		t.Errorf("NextFire minute = %d, want 0 (should land on a cron boundary)", got.NextFire.Minute())
+	}
+	if !got.NextFire.After(time.Now()) {
+		t.Errorf("NextFire = %v, want future (should skip to next cron)", got.NextFire)
 	}
 }
 
