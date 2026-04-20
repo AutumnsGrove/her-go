@@ -57,6 +57,16 @@ func (r *Runner) RunForConversation(ctx context.Context, convID string) Result {
 		return Result{Action: ActionDroppedNoSignal, Reason: "no messages in conversation"}
 	}
 
+	// Drop the trailing assistant message if present — that's the
+	// current turn's reply, generated moments ago. The mood agent
+	// tracks the *user's* mood, so it should see conversation history
+	// leading up to (and including) the user's latest message, with
+	// prior assistant replies for context. The current reply hasn't
+	// been "responded to" yet, so it can't inform user mood.
+	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "assistant" {
+		msgs = msgs[:len(msgs)-1]
+	}
+
 	turns := make([]Turn, 0, len(msgs))
 	for _, m := range msgs {
 		content := m.ContentScrubbed
