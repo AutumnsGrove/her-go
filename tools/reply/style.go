@@ -49,6 +49,12 @@ const negParHint = "drop the 'it's not X, it's Y' reframe — say what it is dir
 // for the retry prompt if an issue is found. Only the first match
 // fires — one problem at a time keeps the retry focused.
 func hasStyleIssue(text string) (bool, string) {
+	// Normalize curly/smart quotes to straight ASCII before matching.
+	// Many LLMs output U+2018/U+2019 (''') instead of U+0027 ('),
+	// which silently breaks every contraction in our regex patterns
+	// ("that's", "isn't", "it's"). One replace fixes all branches.
+	text = strings.ReplaceAll(text, "\u2019", "'")
+	text = strings.ReplaceAll(text, "\u2018", "'")
 	lower := strings.ToLower(text)
 
 	// --- Negative parallelism (the big one) ---
