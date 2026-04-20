@@ -1,0 +1,30 @@
+name: send_task
+agent: main
+description: >-
+  Delegate a memory task to the background memory agent. Do your research first
+  (recall_memories to find duplicates or compound memories), then send a task
+  with all the context the memory agent needs to execute without re-querying.
+  The memory agent picks up inbox tasks automatically after the reply is sent.
+hint: "delegate memory work (cleanup, splits) to background agent"
+hot: true
+parameters:
+  type: object
+  properties:
+    task_type:
+      type: string
+      enum: [cleanup, split, general]
+      description: "Type of memory task to delegate"
+    note:
+      type: string
+      description: "Freeform instructions for the memory agent — be specific about what to do"
+    memory_ids:
+      type: array
+      items:
+        type: integer
+      description: "Relevant memory IDs (from recall_memories results)"
+  required:
+    - task_type
+    - note
+trace:
+  emoji: "📨"
+  format: "→ memory: {{.task_type}}"

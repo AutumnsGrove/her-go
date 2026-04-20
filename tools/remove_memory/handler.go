@@ -9,6 +9,7 @@ package remove_memory
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"her/logger"
 	"her/tools"
@@ -20,17 +21,43 @@ func init() {
 	tools.Register("remove_memory", Handle)
 }
 
-// Handle soft-deletes a memory by ID. If replaced_by is provided, it creates a
-// supersession chain — recording which newer memory replaced this one and why.
-// This preserves knowledge evolution: "used to work at X" → "now at Y."
+// Handle soft-deletes one or more memories by ID. Supports both single
+// (memory_id) and batch (memory_ids) modes. If replaced_by is provided
+// (single mode only), it creates a supersession chain — recording which
+// newer memory replaced this one and why.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		MemoryID   int64  `json:"memory_id"`
-		Reason     string `json:"reason"`
-		ReplacedBy int64  `json:"replaced_by"` // optional — if set, creates supersession chain
+		MemoryID   int64   `json:"memory_id"`
+		MemoryIDs  []int64 `json:"memory_ids"`
+		Reason     string  `json:"reason"`
+		ReplacedBy int64   `json:"replaced_by"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// Batch mode: deactivate multiple memories at once.
+	if len(args.MemoryIDs) > 0 {
+		var removed int
+		var errors []string
+		for _, id := range args.MemoryIDs {
+			if err := ctx.Store.DeactivateMemory(id); err != nil {
+				errors = append(errors, fmt.Sprintf("ID=%d: %v", id, err))
+				continue
+			}
+			removed++
+		}
+		log.Infof("  remove_memory: batch deactivated %d/%d (reason: %s)", removed, len(args.MemoryIDs), args.Reason)
+		if len(errors) > 0 {
+			return fmt.Sprintf("removed %d/%d memories (reason: %s); errors: %s",
+				removed, len(args.MemoryIDs), args.Reason, strings.Join(errors, "; "))
+		}
+		return fmt.Sprintf("removed %d memories (reason: %s)", removed, args.Reason)
+	}
+
+	// Single mode: require memory_id.
+	if args.MemoryID == 0 {
+		return "error: provide either memory_id (single) or memory_ids (batch)"
 	}
 
 	// If replaced_by is set, use SupersedeMemory to record the chain.

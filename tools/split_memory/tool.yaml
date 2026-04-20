@@ -1,0 +1,28 @@
+name: split_memory
+agent: memory
+description: >-
+  Split a compound memory into multiple individual memories. Deactivates the
+  original and creates new memories from the provided facts. Use this when a
+  memory packs multiple unrelated ideas that should be stored separately.
+hot: false
+parameters:
+  type: object
+  properties:
+    memory_id:
+      type: integer
+      description: "ID of the compound memory to split"
+    new_facts:
+      type: array
+      items:
+        type: string
+      description: "Individual facts extracted from the compound memory. Each becomes its own memory."
+    reason:
+      type: string
+      description: "Brief reason for the split"
+  required:
+    - memory_id
+    - new_facts
+    - reason
+trace:
+  emoji: "✂️"
+  format: "#{{.memory_id}} → {{.new_facts | len}} facts"

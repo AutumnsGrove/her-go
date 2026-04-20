@@ -34,6 +34,12 @@ const (
 	// quarantine the skill.
 	// Uses: SkillName, DDLStatement.
 	EventDDLDetected
+
+	// EventInboxReady fires when a background agent (memory, mood) has
+	// left results in the inbox for the main agent. The main agent wakes
+	// up, reads the inbox, and sends a brief follow-up message to the user.
+	// Uses: Summary, DirectMessage (optional).
+	EventInboxReady
 )
 
 // String implements fmt.Stringer for readable logging.
@@ -47,6 +53,8 @@ func (t AgentEventType) String() string {
 		return "coding-complete"
 	case EventDDLDetected:
 		return "ddl-detected"
+	case EventInboxReady:
+		return "inbox-ready"
 	default:
 		return "unknown"
 	}
@@ -74,6 +82,10 @@ type AgentEvent struct {
 
 	// --- EventDDLDetected fields ---
 	DDLStatement string // the DDL statement that was executed (CREATE TABLE, etc.)
+
+	// --- EventInboxReady fields ---
+	Summary       string // brief description of what was done
+	DirectMessage string // if set, send this text directly without a full agent loop
 
 	// --- Common ---
 	Timestamp time.Time

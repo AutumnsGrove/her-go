@@ -567,5 +567,10 @@ func (s *Store) initTables() error {
 		}
 	}
 
+	// Inter-agent inbox — lets agents pass tasks and results to each other.
+	if err := s.initInboxTable(); err != nil {
+		return err
+	}
+
 	return nil
 }

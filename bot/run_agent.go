@@ -341,6 +341,24 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		Cfg:                 b.cfg,
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
+		// Wire the agent event callback so the memory agent's notify_agent
+		// tool can wake up the main agent for a follow-up message.
+		// Non-blocking send: if the channel is full (16 buffered events),
+		// drop the event rather than deadlocking the memory agent goroutine.
+		AgentEventCB: func(summary, directMessage string) {
+			evt := agent.AgentEvent{
+				Type:          agent.EventInboxReady,
+				Summary:       summary,
+				DirectMessage: directMessage,
+				Timestamp:     time.Now(),
+			}
+			select {
+			case b.agentEvents <- evt:
+			default:
+				log.Warn("agent event channel full, dropping inbox-ready event",
+					"summary", summary)
+			}
+		},
 	}
 }
 
