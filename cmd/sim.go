@@ -92,6 +92,11 @@ var chatModelFlag string
 // Example: --chat-provider "Groq" or --chat-provider "Groq,Together"
 var chatProviderFlag string
 
+// classifierModelFlag overrides the classifier model for this run.
+// Useful for A/B testing different models as the safety/quality gate.
+// Example: --classifier-model "google/gemini-2.5-flash-lite"
+var classifierModelFlag string
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -123,6 +128,7 @@ func init() {
 	simCmd.Flags().StringVar(&memoryModelFlag, "memory-model", "", "override memory agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
 	simCmd.Flags().StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model for this run (e.g., anthropic/claude-haiku-4.5)")
 	simCmd.Flags().StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated (e.g., \"Groq\" or \"Groq,Together\")")
+	simCmd.Flags().StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model for this run (e.g., google/gemini-2.5-flash-lite)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -607,6 +613,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 	// --- Classifier client (optional) ---
 	// Enable the classifier in sims so we can test rejection behavior.
+	if classifierModelFlag != "" {
+		cfg.Classifier.Model = classifierModelFlag
+		log.Info("Classifier model overridden via --classifier-model", "model", classifierModelFlag)
+	}
 	var classifierClient *llm.Client
 	if cfg.Classifier.Model != "" {
 		classifierMaxTokens := cfg.Classifier.MaxTokens
