@@ -267,6 +267,9 @@ func parseResponse(response string) Verdict {
 	if strings.HasPrefix(upper, "PASS") {
 		return Verdict{Allowed: true, Type: "PASS"}
 	}
+	if strings.HasPrefix(upper, "SAFE") {
+		return Verdict{Allowed: true, Type: "SAFE"}
+	}
 
 	// SPLIT: allowed (we're saving, just atomizing). Parse the JSON array
 	// of sub-memories from the remainder. If parsing fails or returns fewer
