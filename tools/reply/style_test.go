@@ -91,6 +91,18 @@ func TestHasStyleIssue(t *testing.T) {
 			text: "That's not laziness—it's your brain protecting you.",
 			want: true,
 		},
+		// Curly/smart apostrophes (U+2019) — many LLMs output these instead
+		// of straight quotes. Must be caught identically to straight quotes.
+		{
+			name: "negpar/curly_thats_not_semicolon_its",
+			text: "That\u2019s not a moral failing; it\u2019s a hostage situation.",
+			want: true,
+		},
+		{
+			name: "negpar/curly_isnt_semicolon_its",
+			text: "The craving isn\u2019t weakness; it\u2019s withdrawal.",
+			want: true,
+		},
 		{
 			name: "negpar/less_like_more_like",
 			text: "Less like I'm thinking about thinking, more like I'm just here.",
