@@ -908,3 +908,140 @@ Pulled from the planning conversation, recorded for future-Autumn (and future-Cl
 | Reminder timing | Per-job in config + agent override per-shift | Panera 5 min away vs Cava 35 min away; one knob doesn't fit. |
 | Reminder text | Templated in `task.yaml` | Same principle: prose lives in YAML, not Go. |
 | Reminder ↔ shift link | New `reminder_job_id` column on `work_shifts` | One DB lookup beats a JSON-substring scan over `scheduler_jobs.payload`. |
+
+---
+
+## Part 10 — Known limitations (v1)
+
+Things this plan deliberately does not solve. Documented so they don't surprise anyone.
+
+- **No two-way sync from Apple Calendar.** If Autumn edits a shift event directly in Apple Calendar (drags it to a new time, deletes it), her doesn't know. The DB row stays with stale times. Mitigation: agent always reads `shift_list` (DB) for shift state, not the calendar, so the source of truth stays consistent within her's domain. Future work: a periodic poll that diffs DB vs calendar and flags drift.
+- **No travel-time / "leave now" reminders.** Apple-Maps-style "time to leave based on traffic" requires routing. Per-job `reminder_minutes` is a static heuristic for now.
+- **macOS-only.** EventKit is Apple-only. Linux/Windows hosts can't use the calendar tools — they'll fail with the bridge-not-found error. Future work: a Google Calendar HTTP bridge for cross-platform.
+- **Single calendar.** All shifts go to the calendar named in `config.calendar.calendar_name`. Multi-calendar support (e.g., a separate calendar per job, color-coded) is straightforward to add later but not in v1.
+- **Reminder once.** One reminder per shift, fired N minutes before. No "snooze" or "second reminder if you don't respond" behavior. Tractable as a future scheduler feature.
+- **No conflict resolution UI.** Overlap warnings are surfaced in `shift_schedule` returns but no inline confirmation flow ("two shifts overlap, want to keep both?"). Agent decides whether to relay to user.
+- **Bridge invocation cost.** Each calendar call spawns a Swift process (~50-100ms cold start on M-series). For batch operations the bridge handles N events in one invocation, so this only stings for one-off calls. Future work: a long-lived bridge subprocess if it becomes a bottleneck.
+
+---
+
+## Part 11 — Implementation phases
+
+Suggested order. Each phase is independently testable and shippable.
+
+### Phase 1 — Swift bridge
+
+- `calendar/bridge/Package.swift`, `Sources/her-calendar/{main,Commands,JSON}.swift`
+- `calendar/bridge/README.md` with build + permission steps
+- Manual smoke test: `echo '{...}' | her-calendar` from Terminal for each command (list, create, update, delete)
+- No Go changes yet
+
+**Done when:** Swift binary builds, runs against a test calendar in Apple Calendar, all 4 commands round-trip successfully.
+
+### Phase 2 — Schema + config
+
+- `config/config.go`: `CalendarConfig` + `JobConfig` structs, helpers
+- `config.yaml.example`: documented `calendar:` block
+- `memory/store.go`: migrations for `work_shifts`, `scheduler_jobs`, `reminder_job_id` column
+- `memory/store_shifts.go`: CRUD + supersession + history helpers (mirror `store_facts.go` style)
+- Tests: `memory/store_shifts_test.go` covering insert, list with totals, supersede chain walk, status transitions
+
+**Done when:** unit tests pass, config loads cleanly, migrations apply on a fresh DB without error.
+
+### Phase 3 — Calendar bridge wrapper (Go)
+
+- `calendar/bridge.go`: `Bridge` type with `Call()`, retry policy, fail-soft when binary missing
+- `calendar/bridge_test.go`: tests with a fake binary (shell script that echoes canned JSON)
+- Hook bridge initialization into `agent/agent.go` startup; log warning + continue if missing
+
+**Done when:** Go can drive the bridge end-to-end, retries on flaky exit codes, returns useful errors.
+
+### Phase 4 — Pure calendar tools
+
+- `tools/calendar_list/`, `tools/calendar_create/`, `tools/calendar_update/`, `tools/calendar_delete/`
+- Each: `tool.yaml` + `handler.go` + minimal handler test
+- Add `calendar` to `tools/categories.yaml`
+- Smoke test: agent invokes `calendar_create` for a fake event, sees it appear in Apple Calendar
+
+**Done when:** all 4 calendar tools work end-to-end with a real calendar.
+
+### Phase 5 — Scheduler one-offs
+
+- `memory/store.go`: `scheduler_jobs` table CRUD on `*memory.Store` (`InsertJob`, `DueJobs`, `MarkJobDone`, `MarkJobFailed`, `CancelJob`)
+- `scheduler/jobs.go`: `EnqueueJob`, `CancelJob`, `ListPendingJobs` on `*Scheduler`
+- `scheduler/scheduler.go::tick`: extend to also process due jobs from `scheduler_jobs`
+- Tests: `scheduler/jobs_test.go` covering enqueue, fire, cancel, retry, unknown-kind handling
+
+**Done when:** unit tests pass, a registered fake handler fires correctly via the new path without disturbing the recurring path.
+
+### Phase 6 — Shift tools
+
+- `tools/shift_schedule/`, `tools/shift_update/`, `tools/shift_cancel/`, `tools/shift_log_time/`, `tools/shift_list/`
+- Each combo tool wraps bridge call + DB write + (where applicable) scheduler enqueue/cancel in a single transaction-shaped flow
+- Overlap detection in `shift_schedule` and `shift_update`
+- Tests: per-tool handler tests with mocked bridge + real in-memory SQLite
+
+**Done when:** flows from Part X (sim) work end-to-end manually.
+
+### Phase 7 — Reminder handler
+
+- `scheduler/shift_reminder/handler.go` + `task.yaml`
+- Register in scheduler init
+- Tests: handler reads payload, fetches shift, skips cancelled/superseded, sends Telegram
+- End-to-end manual test: schedule a shift 2 minutes out, confirm reminder fires
+
+**Done when:** real shift triggers a real Telegram reminder at the right time, after edit/cancel re-routes correctly.
+
+### Phase 8 — Stale-code cleanup + agent prompt polish
+
+- Fix the four stale references from Part 8
+- Add the example flow to `main_agent_prompt.md`
+- Run `sims/tool-a-thon.yaml` (after fixing) to verify no regressions
+
+**Done when:** sims green, lint clean, no stale references in code or docs.
+
+---
+
+## Part 12 — Testing strategy
+
+Mirrors the existing project conventions (`*_test.go` files, table-driven tests where it fits, real SQLite for store tests).
+
+**Unit:**
+- `memory/store_shifts_test.go` — schema, CRUD, supersede chains, totals math
+- `scheduler/jobs_test.go` — one-off enqueue/fire/cancel/retry, isolation from recurring path
+- `scheduler/shift_reminder/handler_test.go` — payload parsing, status check (skip cancelled), template render
+- `calendar/bridge_test.go` — fake-binary harness, retry behavior, error code routing
+- `tools/shift_*/handler_test.go` — each combo tool with mocked bridge + in-memory store; cover happy path, partial failure, overlap warning
+
+**Integration / sim:**
+- New `sims/calendar-a-thon.yaml` (parallels `sims/fact-a-thon.yaml`) walking the four scenarios from the interview:
+  1. Schedule drop (5-shift batch, totals reported)
+  2. Clock out with implicit on-time start
+  3. "Wed actually moved to Thu" → supersede + new reminder
+  4. "How many hours last week" → totals from `shift_list`
+- Use the existing sim harness; assert tool-call sequences and final reply shape.
+
+**Manual smoke checklist:**
+- Build + grant permission flow on a fresh machine, following only the README
+- Schedule a shift starting in 2 minutes, confirm Telegram reminder fires
+- Edit that shift to start 5 minutes later, confirm old reminder cancelled and new one fires
+- Cancel the shift, confirm calendar event renamed and no reminder
+- Pre-existing calendar events untouched throughout
+
+---
+
+## Part 13 — Open questions / future
+
+Not blocking implementation. Captured for the next planning round.
+
+- **Two-way sync.** Periodic diff job that detects calendar drift and either (a) tells Autumn or (b) updates the DB. Needs UX thought — silent updates feel surprising.
+- **Multi-calendar.** A `calendar` field per-job in config so Panera shifts go to a "Panera" calendar (color-coded), Cava shifts to "Cava." Trivial schema change, more interesting UX (filtering in `calendar_list`).
+- **Travel-time reminders.** Wire up Apple Maps via MapKit in the Swift bridge to compute "leave now" time. Replaces static `reminder_minutes` with a dynamic per-day estimate.
+- **Snooze / second reminder.** Telegram inline button on the reminder message that re-enqueues a 5-min follow-up.
+- **Shift summary digest.** Weekly Sunday-evening recap: hours worked, overtime, no-shows. Recurring scheduler task; cheap to add once Phase 5 is in.
+- **Generic event reminders.** `calendar_create` doesn't enqueue reminders today — only `shift_schedule` does. Easy to add a `reminder_minutes` param to `calendar_create` once one-offs are proven via shifts.
+- **Promote scheduler from "single SQLite" to "any-store" interface.** Currently `Deps.Store any` with cast-on-use (`scheduler/types.go:55`). Fine for now; a real interface would help if we ever split storage.
+
+---
+
+*End of plan.*
