@@ -8,6 +8,8 @@ import (
 
 	"her/calendar"
 	"her/tools"
+
+	"github.com/charmbracelet/log"
 )
 
 func init() {
@@ -34,7 +36,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Use configured calendar if not overridden
 	calendarName := args.Calendar
 	if calendarName == "" {
-		calendarName = ctx.Config.Calendar.CalendarName
+		calendarName = ctx.Cfg.Calendar.CalendarName
 	}
 
 	// Build bridge request
@@ -47,7 +49,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Initialize bridge
-	bridge := calendar.NewBridge(ctx.Config, ctx.Logger)
+	logger := log.Default()
+	bridge := calendar.NewBridge(ctx.Cfg, logger)
 
 	// Call with timeout (generous for batch creates)
 	callCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
