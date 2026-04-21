@@ -63,9 +63,10 @@ type LocationConfig struct {
 // The bridge is optional — if missing at startup, calendar tools return clear
 // errors to the agent but don't block bot startup (fail-soft pattern).
 type CalendarConfig struct {
-	BridgePath      string `yaml:"bridge_path"`       // path to her-calendar Swift binary
-	CalendarName    string `yaml:"calendar_name"`     // which calendar to use in Apple Calendar
-	DefaultTimezone string `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
+	BridgePath      string   `yaml:"bridge_path"`       // path to her-calendar Swift binary
+	Calendars       []string `yaml:"calendars"`         // which calendars to monitor (reads from all)
+	DefaultCalendar string   `yaml:"default_calendar"`  // default calendar for creating events
+	DefaultTimezone string   `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into

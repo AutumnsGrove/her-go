@@ -25,6 +25,7 @@ enum RequestArgs: Codable {
     case create(events: [EventInput])
     case update(id: String, event: EventInput)
     case delete(id: String)
+    case listCalendars  // No args - just discover available calendars
 
     // CodingKeys tells Swift how to map between Swift property names and JSON keys.
     // This is like Go's `json:"field_name"` struct tags.
@@ -53,10 +54,8 @@ enum RequestArgs: Codable {
             let id = try container.decode(String.self, forKey: .id)
             self = .delete(id: id)
         } else {
-            throw DecodingError.dataCorrupted(
-                DecodingError.Context(codingPath: decoder.codingPath,
-                                     debugDescription: "Unknown request args format")
-            )
+            // Empty args object → list_calendars
+            self = .listCalendars
         }
     }
 
@@ -74,6 +73,8 @@ enum RequestArgs: Codable {
             try container.encode(event, forKey: .event)
         case .delete(let id):
             try container.encode(id, forKey: .id)
+        case .listCalendars:
+            break  // No args to encode
         }
     }
 }
@@ -87,6 +88,7 @@ struct EventInput: Codable {
     let end: String?            // ISO 8601 timestamp
     let location: String?
     let notes: String?
+    let calendar: String?       // NEW: optional target calendar for this event
 }
 
 // MARK: - Response Types
@@ -105,9 +107,10 @@ enum ResponseResult: Codable {
     case create(events: [EventID])
     case update(id: String)
     case delete(deleted: Bool)
+    case listCalendars(calendars: [String])
 
     enum CodingKeys: String, CodingKey {
-        case events, id, deleted
+        case events, id, deleted, calendars
     }
 
     init(from decoder: Decoder) throws {
@@ -117,6 +120,8 @@ enum ResponseResult: Codable {
             self = .list(events: events)
         } else if let events = try? container.decode([EventID].self, forKey: .events) {
             self = .create(events: events)
+        } else if let calendars = try? container.decode([String].self, forKey: .calendars) {
+            self = .listCalendars(calendars: calendars)
         } else if let id = try? container.decode(String.self, forKey: .id) {
             self = .update(id: id)
         } else if let deleted = try? container.decode(Bool.self, forKey: .deleted) {
@@ -137,6 +142,8 @@ enum ResponseResult: Codable {
             try container.encode(events, forKey: .events)
         case .create(let events):
             try container.encode(events, forKey: .events)
+        case .listCalendars(let calendars):
+            try container.encode(calendars, forKey: .calendars)
         case .update(let id):
             try container.encode(id, forKey: .id)
         case .delete(let deleted):
@@ -153,6 +160,7 @@ struct EventOutput: Codable {
     let end: String             // ISO 8601 timestamp
     let location: String?       // Optional fields use "?" suffix
     let notes: String?
+    let calendar: String        // NEW: which calendar this event is from
 }
 
 /// Just the event ID (returned by create command).

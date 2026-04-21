@@ -155,10 +155,17 @@ calendar:
   # the bot continues running (fail-soft pattern).
   bridge_path: "calendar/bridge/.build/release/her-calendar"
 
-  # Name of the calendar in Apple Calendar to read/write. Must already exist —
-  # her does not auto-create calendars. Errors on first calendar tool call if
-  # the calendar is not found.
-  calendar_name: "Work"
+  # List of calendars to monitor (reads events from all of these).
+  # Calendar names must match exactly as they appear in Apple Calendar.
+  # The calendar_list tool queries all of these and returns a unified timeline.
+  calendars:
+    - "Calendar"     # Default Apple Calendar
+    - "Work"
+    - "Testing"
+
+  # Default calendar for creating new events (must be in the calendars list above).
+  # Tools can override this on a per-event basis by specifying the calendar field.
+  default_calendar: "Calendar"
 
   # Timezone for get_time tool and naive timestamp interpretation. Also used
   # by agent_time layer when set (otherwise falls back to system timezone).

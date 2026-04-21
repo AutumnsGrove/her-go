@@ -36,27 +36,55 @@ func handleCommand(_ request: Request) async throws -> Response {
         }
     }
 
-    // Find the requested calendar by name
-    guard let calendar = findCalendar(named: request.calendar, in: store) else {
-        return Response(
-            ok: false,
-            result: nil,
-            error: "calendar_not_found",
-            message: "Calendar '\(request.calendar)' not found in Apple Calendar. Check spelling or create it first."
-        )
-    }
-
     // Dispatch to the appropriate command handler based on args variant
+    // Different commands need different calendar handling:
+    // - list_calendars: discovers available calendars (no calendar param needed)
+    // - list: uses comma-separated names or "*" wildcard
+    // - create: uses default calendar (request.calendar) + per-event overrides
+    // - update/delete: uses "*" wildcard to search all calendars
     let result: ResponseResult
     switch request.args {
+    case .listCalendars:
+        result = listCalendars(in: store)
+
     case .list(let start, let end):
-        result = try listEvents(in: calendar, start: start, end: end, store: store)
+        // Build calendar list from comma-separated names or wildcard
+        let calendars: [EKCalendar]
+        if request.calendar == "*" {
+            calendars = store.calendars(for: .event)
+        } else {
+            let names = request.calendar.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            calendars = names.compactMap { name in
+                findCalendar(named: name, in: store)
+            }
+            guard !calendars.isEmpty else {
+                return Response(
+                    ok: false,
+                    result: nil,
+                    error: "no_calendars_found",
+                    message: "None of the requested calendars were found: \(request.calendar)"
+                )
+            }
+        }
+        result = try listEvents(in: calendars, start: start, end: end, store: store)
+
     case .create(let events):
-        result = try createEvents(events, in: calendar, store: store)
+        // Find default calendar for events without explicit calendar
+        guard let defaultCalendar = findCalendar(named: request.calendar, in: store) else {
+            return Response(
+                ok: false,
+                result: nil,
+                error: "default_calendar_not_found",
+                message: "Default calendar '\(request.calendar)' not found"
+            )
+        }
+        result = try createEvents(events, defaultCalendar: defaultCalendar, store: store)
+
     case .update(let id, let event):
-        result = try updateEvent(id: id, with: event, in: calendar, store: store)
+        result = try updateEvent(id: id, with: event, calendarName: request.calendar, store: store)
+
     case .delete(let id):
-        result = try deleteEvent(id: id, store: store)
+        result = try deleteEvent(id: id, calendarName: request.calendar, store: store)
     }
 
     return Response(ok: true, result: result, error: nil, message: nil)
@@ -75,10 +103,25 @@ func findCalendar(named name: String, in store: EKEventStore) -> EKCalendar? {
     return calendars.first { $0.title.lowercased() == name.lowercased() }
 }
 
+// MARK: - Command: List Calendars
+
+/// List all available calendars that the user can add events to.
+/// This helps the agent discover which calendars exist without hardcoding names.
+func listCalendars(in store: EKEventStore) -> ResponseResult {
+    // Get all event calendars from the store
+    let calendars = store.calendars(for: .event)
+
+    // Extract calendar names (titles)
+    let names = calendars.map { $0.title }
+
+    return .listCalendars(calendars: names)
+}
+
 // MARK: - Command: List Events
 
-/// List events in a date range.
-func listEvents(in calendar: EKCalendar, start: String, end: String, store: EKEventStore) throws -> ResponseResult {
+/// List events in a date range from multiple calendars.
+/// Returns a unified timeline with each event tagged with its source calendar.
+func listEvents(in calendars: [EKCalendar], start: String, end: String, store: EKEventStore) throws -> ResponseResult {
     // Parse ISO 8601 timestamps (with or without fractional seconds)
     guard let startDate = parseISO8601(start) else {
         throw CommandError.invalidDate("Invalid start date: \(start)")
@@ -88,17 +131,18 @@ func listEvents(in calendar: EKCalendar, start: String, end: String, store: EKEv
     }
 
     // Build a predicate (query filter) for the date range
-    // NSPredicate is Objective-C's query language (EventKit predates Swift)
+    // EventKit natively supports multiple calendars in one query
     let predicate = store.predicateForEvents(
         withStart: startDate,
         end: endDate,
-        calendars: [calendar]
+        calendars: calendars
     )
 
     // Fetch events matching the predicate
     let ekEvents = store.events(matching: predicate)
 
     // Convert EKEvent objects to our JSON-friendly EventOutput structs
+    // Include the calendar name so the agent knows which calendar each event is from
     let events = ekEvents.map { event in
         EventOutput(
             id: event.eventIdentifier,
@@ -106,7 +150,8 @@ func listEvents(in calendar: EKCalendar, start: String, end: String, store: EKEv
             start: formatISO8601(event.startDate),
             end: formatISO8601(event.endDate),
             location: event.location,
-            notes: event.notes
+            notes: event.notes,
+            calendar: event.calendar.title
         )
     }
 
@@ -116,7 +161,8 @@ func listEvents(in calendar: EKCalendar, start: String, end: String, store: EKEv
 // MARK: - Command: Create Events
 
 /// Create one or more events (atomic per call — all or nothing).
-func createEvents(_ inputs: [EventInput], in calendar: EKCalendar, store: EKEventStore) throws -> ResponseResult {
+/// Each event can optionally specify its target calendar; otherwise uses defaultCalendar.
+func createEvents(_ inputs: [EventInput], defaultCalendar: EKCalendar, store: EKEventStore) throws -> ResponseResult {
     var createdEvents: [EKEvent] = []
     var eventIDs: [EventID] = []
 
@@ -137,9 +183,23 @@ func createEvents(_ inputs: [EventInput], in calendar: EKCalendar, store: EKEven
             throw CommandError.invalidDate("Invalid or missing end date")
         }
 
+        // Determine which calendar to use for this event
+        let targetCalendar: EKCalendar
+        if let calendarName = input.calendar {
+            // Event specifies a calendar — find it
+            guard let cal = findCalendar(named: calendarName, in: store) else {
+                rollbackEvents(createdEvents, in: store)
+                throw CommandError.calendarNotFound("Calendar '\(calendarName)' not found for event '\(title)'")
+            }
+            targetCalendar = cal
+        } else {
+            // Use default calendar
+            targetCalendar = defaultCalendar
+        }
+
         // Create the EKEvent
         let event = EKEvent(eventStore: store)
-        event.calendar = calendar
+        event.calendar = targetCalendar
         event.title = title
         event.startDate = startDate
         event.endDate = endDate
@@ -181,10 +241,22 @@ func rollbackEvents(_ events: [EKEvent], in store: EKEventStore) {
 // MARK: - Command: Update Event
 
 /// Update an existing event by ID.
-func updateEvent(id: String, with input: EventInput, in calendar: EKCalendar, store: EKEventStore) throws -> ResponseResult {
-    // Find the event by ID
+/// If calendarName is "*", searches across all calendars (eventIdentifier is globally unique).
+/// Otherwise, verifies the event is in the specified calendar.
+func updateEvent(id: String, with input: EventInput, calendarName: String, store: EKEventStore) throws -> ResponseResult {
+    // Find the event by ID (eventIdentifier is globally unique)
     guard let event = store.event(withIdentifier: id) else {
         throw CommandError.eventNotFound("Event with ID '\(id)' not found")
+    }
+
+    // If not wildcard, verify the event is in the requested calendar
+    if calendarName != "*" {
+        guard let requestedCalendar = findCalendar(named: calendarName, in: store) else {
+            throw CommandError.calendarNotFound("Calendar '\(calendarName)' not found")
+        }
+        guard event.calendar.calendarIdentifier == requestedCalendar.calendarIdentifier else {
+            throw CommandError.eventNotFound("Event '\(id)' exists but not in calendar '\(calendarName)'")
+        }
     }
 
     // Update only the fields that are provided (nil = don't change)
@@ -217,10 +289,22 @@ func updateEvent(id: String, with input: EventInput, in calendar: EKCalendar, st
 // MARK: - Command: Delete Event
 
 /// Delete an event by ID.
-func deleteEvent(id: String, store: EKEventStore) throws -> ResponseResult {
-    // Find the event
+/// If calendarName is "*", searches across all calendars (eventIdentifier is globally unique).
+/// Otherwise, verifies the event is in the specified calendar.
+func deleteEvent(id: String, calendarName: String, store: EKEventStore) throws -> ResponseResult {
+    // Find the event (eventIdentifier is globally unique)
     guard let event = store.event(withIdentifier: id) else {
         throw CommandError.eventNotFound("Event with ID '\(id)' not found")
+    }
+
+    // If not wildcard, verify the event is in the requested calendar
+    if calendarName != "*" {
+        guard let requestedCalendar = findCalendar(named: calendarName, in: store) else {
+            throw CommandError.calendarNotFound("Calendar '\(calendarName)' not found")
+        }
+        guard event.calendar.calendarIdentifier == requestedCalendar.calendarIdentifier else {
+            throw CommandError.eventNotFound("Event '\(id)' exists but not in calendar '\(calendarName)'")
+        }
     }
 
     // Delete it
@@ -269,6 +353,7 @@ func formatISO8601(_ date: Date) -> String {
 enum CommandError: Error, CustomStringConvertible {
     case invalidDate(String)
     case missingField(String)
+    case calendarNotFound(String)
     case eventNotFound(String)
     case saveFailed(String)
     case deleteFailed(String)
@@ -277,6 +362,7 @@ enum CommandError: Error, CustomStringConvertible {
         switch self {
         case .invalidDate(let msg): return msg
         case .missingField(let msg): return msg
+        case .calendarNotFound(let msg): return msg
         case .eventNotFound(let msg): return msg
         case .saveFailed(let msg): return msg
         case .deleteFailed(let msg): return msg

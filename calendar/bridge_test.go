@@ -13,8 +13,9 @@ import (
 func TestBridgeMissingBinary(t *testing.T) {
 	cfg := &config.Config{
 		Calendar: config.CalendarConfig{
-			BridgePath:   "/nonexistent/path/to/binary",
-			CalendarName: "Test",
+			BridgePath:      "/nonexistent/path/to/binary",
+			Calendars:       []string{"Test"},
+			DefaultCalendar: "Test",
 		},
 	}
 

@@ -31,10 +31,10 @@ parameters:
           notes:
             type: string
             description: "Optional notes/description."
+          calendar:
+            type: string
+            description: "Which calendar to create this event in. Must be one of the configured calendars. If omitted, uses default_calendar from config."
         required: [title, start, end]
-    calendar:
-      type: string
-      description: "Optional calendar name override. Defaults to config calendar_name."
   required: [events]
 trace:
   emoji: "➕"
