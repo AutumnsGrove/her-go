@@ -346,3 +346,307 @@ func (b *Bridge) Call(ctx context.Context, req Request) (Response, error) {
 ```
 
 Retry budget per tool call: 3 attempts. Total worst-case latency: ~3.5s. Logged at each retry so flaky permissions/EventKit-locked-by-Calendar.app scenarios are visible in `logger`.
+
+---
+
+## Part 5 — Tool catalog
+
+Two namespaces. **`shift_*`** are combos that touch both calendar and DB atomically. **`calendar_*`** are pure calendar (for ad-hoc events that aren't shifts: dentist, birthday, etc.).
+
+All tools follow the existing pattern: a `tool.yaml` manifest in `tools/<name>/` plus a `handler.go` that registers via `tools.Register`. None are hot — all loaded via `use_tools(["calendar"])`.
+
+### Shift tools (combo: calendar + DB)
+
+#### `shift_schedule`
+
+Create one or more shifts for a job. Calendar events created first (with retry); on success, DB rows inserted; on partial failure, persists what succeeded and reports the rest.
+
+```yaml
+# tools/shift_schedule/tool.yaml
+name: shift_schedule
+description: >-
+  Schedule one or more work shifts for a known job. Creates calendar
+  events in {{her}}'s configured Work calendar AND writes shift rows
+  to the local DB so they can be tracked, edited, and reminded about.
+  Use this when the user pastes a work schedule or asks to add shifts.
+  Always include the timezone offset in start/end (use the Current Time
+  block's timezone if not specified). Returns shift_ids and event_ids
+  per shift, plus any failures with reasons.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    job:
+      type: string
+      description: "Job name from config — e.g. 'Panera'. Aliases match case-insensitively."
+    role:
+      type: string
+      description: "Optional role override (e.g. 'Grill Cook'). Defaults to job's default_role from config."
+    shifts:
+      type: array
+      description: "One or more shifts to schedule. All atomic-per-call on the calendar side."
+      items:
+        type: object
+        properties:
+          start:
+            type: string
+            description: "ISO 8601 with offset, e.g. 2026-04-21T05:00:00-04:00"
+          end:
+            type: string
+            description: "ISO 8601 with offset"
+          notes:
+            type: string
+            description: "Optional per-shift notes"
+          reminder_minutes:
+            type: integer
+            description: "Optional override of the per-job reminder timing"
+        required: [start, end]
+  required: [job, shifts]
+```
+
+**Return shape:**
+```json
+{
+  "scheduled": [
+    { "shift_id": 17, "event_id": "ABC", "start": "...", "end": "...",
+      "scheduled_hours": 8.0, "reminder_at": "2026-04-21T04:15:00-04:00",
+      "warnings": ["overlaps with shift_id 14 (Cava 4-9p)"] }
+  ],
+  "failed": [
+    { "index": 2, "start": "...", "error": "calendar bridge timeout after 3 attempts" }
+  ],
+  "totals": { "shifts_scheduled": 4, "shifts_failed": 1, "scheduled_hours": 32.0 }
+}
+```
+
+**Behavior notes:**
+- Per-decision: **partial success.** Successful shifts persist; failed ones returned in `failed[]`. Tool doesn't return an error unless ALL shifts failed.
+- **Overlap detection** (per-decision: warn but allow): for each new shift, query active `work_shifts` where ranges intersect. Append a warning string to that shift's return entry. Don't block.
+- **Reminders enqueued atomically** with the shift insert — same DB transaction. If the scheduler insert fails, the shift insert rolls back too (the calendar event lingers; cleanup is the agent's job via `shift_cancel`).
+
+#### `shift_update`
+
+Edit an existing shift's scheduled time. Creates a new shift row, supersedes the old one, updates the EventKit event in place (keeps the same `calendar_event_id`), cancels the old reminder, enqueues a new one.
+
+```yaml
+name: shift_update
+description: >-
+  Move or resize an existing scheduled shift. Use when {{user}} says
+  things like "actually that's Thursday not Wednesday" or "they pushed
+  me to start at 6 instead of 5". Looks up the shift via shift_list
+  first to get the shift_id. Old row preserved as audit history
+  (active=0, superseded_by=new_id). Calendar event updated in place.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    shift_id:
+      type: integer
+      description: "ID of the active shift row (from shift_list)"
+    start:
+      type: string
+      description: "New start, ISO 8601 with offset. Omit to leave unchanged."
+    end:
+      type: string
+      description: "New end, ISO 8601 with offset. Omit to leave unchanged."
+    role:
+      type: string
+      description: "Updated role. Omit to leave unchanged."
+    reason:
+      type: string
+      description: "Why the change happened — stored in supersede_reason for audit (e.g. 'moved Wed to Thu')"
+  required: [shift_id, reason]
+```
+
+**Return:**
+```json
+{
+  "old_shift_id": 17,
+  "new_shift_id": 18,
+  "event_id": "ABC",          // same event, updated in place
+  "scheduled_hours": 8.0,
+  "warnings": ["overlaps with shift_id 19 (Panera 4-9p)"]
+}
+```
+
+#### `shift_cancel`
+
+Mark a shift cancelled (boss removed it). Row preserved. Calendar event renamed `[CANCELLED] <original title>` to keep history visible. Pending reminder cancelled.
+
+```yaml
+name: shift_cancel
+description: >-
+  Mark a scheduled shift as cancelled (e.g., boss took {{user}} off the
+  schedule). Does NOT delete the row — cancellations are part of work
+  history. Calendar event is renamed with [CANCELLED] prefix so it
+  stays visible. Pending reminder is cancelled. Use shift_log_time
+  with zero hours instead if {{user}} simply didn't show up.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    shift_id:
+      type: integer
+    reason:
+      type: string
+      description: "Optional reason, stored in notes (e.g. 'boss removed', 'store closed for snow')"
+  required: [shift_id]
+```
+
+#### `shift_log_time`
+
+Record actual clock-in/out for a shift. If `actual_start` omitted, defaults to `scheduled_start` (the common "showed up on time" case).
+
+```yaml
+name: shift_log_time
+description: >-
+  Record actual hours worked for a shift {{user}} has finished. If
+  actual_start is omitted, defaults to the shift's scheduled_start
+  (common case — they clocked in on time). Pass actual_start ==
+  actual_end to log a no-show (zero hours). Use this — not shift_cancel
+  — when {{user}} simply didn't go in.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    shift_id:
+      type: integer
+    actual_start:
+      type: string
+      description: "ISO 8601 with offset. Defaults to scheduled_start if omitted."
+    actual_end:
+      type: string
+      description: "ISO 8601 with offset. Required."
+    notes:
+      type: string
+      description: "Optional — 'stayed late to close', 'covered for Sam', etc."
+  required: [shift_id, actual_end]
+```
+
+**Behavior:** updates `actual_start`, `actual_end`, `notes` on the active row. Sets `status='worked'` (or `status='no_show'` if `actual_start == actual_end`). Returns the row with computed `actual_hours`.
+
+#### `shift_list`
+
+Query shifts. The agent's primary way to get `shift_id`s for editing or to answer "how many hours did I work last week."
+
+```yaml
+name: shift_list
+description: >-
+  List shifts in a date range with computed hours and totals. Use this
+  to answer "how much did I work" questions or to look up shift_ids
+  before calling shift_update / shift_cancel / shift_log_time. Returns
+  active rows by default; pass include_history=true to walk supersede
+  chains for audit.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    start:
+      type: string
+      description: "ISO 8601 with offset. Defaults to 30 days ago."
+    end:
+      type: string
+      description: "ISO 8601 with offset. Defaults to 7 days from now."
+    job:
+      type: string
+      description: "Filter to a specific job (case-insensitive, matches aliases)."
+    status:
+      type: string
+      description: "Filter: scheduled | worked | no_show | cancelled. Omit for all."
+    include_history:
+      type: boolean
+      description: "Include superseded (active=0) rows. Default false."
+  required: []
+```
+
+**Return:**
+```json
+{
+  "shifts": [
+    { "shift_id": 17, "job": "Panera", "role": "...",
+      "scheduled_start": "...", "scheduled_end": "...",
+      "actual_start": "...", "actual_end": "...",
+      "scheduled_hours": 8.0, "actual_hours": 9.0,
+      "status": "worked", "calendar_event_id": "ABC", "notes": "..." }
+  ],
+  "totals": {
+    "scheduled_hours": 40.0, "actual_hours": 41.5,
+    "by_status": { "scheduled": 0, "worked": 5, "no_show": 0, "cancelled": 0 }
+  }
+}
+```
+
+### Calendar tools (pure calendar, no DB)
+
+For events that aren't work shifts. Same Swift bridge underneath.
+
+#### `calendar_list`
+
+```yaml
+name: calendar_list
+description: >-
+  Read events from {{her}}'s configured calendar in a date range.
+  Use when the user asks "what's on my calendar" or for context like
+  "am I free Friday afternoon".
+parameters:
+  start: ISO 8601 with offset (required)
+  end:   ISO 8601 with offset (required)
+  calendar: optional, defaults to config.calendar.calendar_name
+```
+
+#### `calendar_create`
+
+```yaml
+name: calendar_create
+description: >-
+  Create one or more calendar events that are NOT work shifts (use
+  shift_schedule for those). Examples: dentist appointment, birthday,
+  meeting. Atomic-per-call.
+parameters:
+  events: array of { title, start, end, location?, notes? }
+  calendar: optional override
+```
+
+#### `calendar_update`
+
+```yaml
+name: calendar_update
+description: >-
+  Edit a calendar event in place by id. Get the id from calendar_list.
+  Pass only the fields you want to change.
+parameters:
+  event_id: required
+  title|start|end|location|notes: all optional
+```
+
+#### `calendar_delete`
+
+```yaml
+name: calendar_delete
+description: >-
+  Delete a calendar event by id. Use sparingly — for shifts, prefer
+  shift_cancel which preserves history.
+parameters:
+  event_id: required
+```
+
+### Tool count summary
+
+| Tool | Calendar | DB | Reminder |
+|---|---|---|---|
+| `shift_schedule` | create (batch) | insert | enqueue |
+| `shift_update` | update | supersede + insert | cancel + enqueue |
+| `shift_cancel` | rename `[CANCELLED]` | status update | cancel |
+| `shift_log_time` | — | update actuals | — |
+| `shift_list` | — | read | — |
+| `calendar_list` | read | — | — |
+| `calendar_create` | create (batch) | — | — |
+| `calendar_update` | update | — | — |
+| `calendar_delete` | delete | — | — |
+
+9 new tools, 1 category (`calendar`).
