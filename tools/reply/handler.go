@@ -41,6 +41,23 @@ func init() {
 // delivery to Telegram and TTS. Returns a preview of the reply so the
 // agent knows what was said.
 func Handle(argsJSON string, ctx *tools.Context) string {
+	// Hard cap on replies per turn. The agent's internal style/safety gates
+	// already handle retries — this prevents the agent model from calling
+	// reply in a self-correction loop (think→reply→think→reply with
+	// near-identical content). Default 2: enough for "let me look that up"
+	// followed by the actual answer.
+	maxReplies := ctx.Cfg.Agent.MaxRepliesPerTurn
+	if maxReplies <= 0 {
+		maxReplies = 2
+	}
+	if ctx.ReplyCount >= maxReplies {
+		log.Warn("reply: max replies reached", "count", ctx.ReplyCount, "max", maxReplies)
+		return fmt.Sprintf(
+			"rejected: you already sent %d replies this turn (max %d). "+
+				"Your earlier replies were delivered successfully. Call done now.",
+			ctx.ReplyCount, maxReplies)
+	}
+
 	// Reset fallback tracking from any previous reply call in this turn.
 	// Without this, a fallback on reply #1 would incorrectly flag reply #2.
 	ctx.ReplyUsedFallback = false
@@ -326,11 +343,18 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
 			resp = retryResp
 			ctx.ReplyCost += retryResp.CostUSD
-			log.Info("reply: style retry accepted", "preview", truncate(resp.Content, 80))
-			styleGateNote = fmt.Sprintf("[style: %s — retried (%s)]", styleSource, styleHint)
+			log.Info("reply: style retry accepted", "source", styleSource, "hint", styleHint,
+				"preview", truncate(resp.Content, 80))
+			// Report as clean to the agent — the issue was resolved internally.
+			// Exposing retry details causes the agent to self-correct in a loop.
+			// Full details are in the log line above for observability.
+			styleGateNote = "[style: clean]"
 		} else {
-			log.Warn("reply: style retry failed or invalid, delivering original")
-			styleGateNote = fmt.Sprintf("[style: %s — retry failed, delivered original (%s)]", styleSource, styleHint)
+			log.Warn("reply: style retry failed or invalid, delivering original",
+				"source", styleSource, "hint", styleHint)
+			// Same here — the original was delivered, so from the agent's
+			// perspective the reply is done. No need to signal a problem.
+			styleGateNote = "[style: clean]"
 		}
 	} else if styleGateNote == "" {
 		styleGateNote = "[style: clean]"
@@ -372,11 +396,18 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
 				resp = retryResp
 				ctx.ReplyCost += retryResp.CostUSD
-				log.Info("reply: safety retry accepted", "preview", truncate(resp.Content, 80))
-				safetyGateNote = fmt.Sprintf("[safety: %s — retried (%s)]", safetyVerdict.Type, safetyHint)
+				log.Info("reply: safety retry accepted",
+					"verdict", safetyVerdict.Type, "hint", safetyHint,
+					"preview", truncate(resp.Content, 80))
+				// Report as safe to the agent — the issue was resolved
+				// internally. Exposing the verdict type and hint caused
+				// the agent to self-correct by calling reply again with
+				// a softer instruction, producing near-duplicate messages.
+				safetyGateNote = "[safety: SAFE]"
 			} else {
-				log.Warn("reply: safety retry failed or invalid, delivering original")
-				safetyGateNote = fmt.Sprintf("[safety: %s — retry failed (%s)]", safetyVerdict.Type, safetyHint)
+				log.Warn("reply: safety retry failed or invalid, delivering original",
+					"verdict", safetyVerdict.Type, "hint", safetyHint)
+				safetyGateNote = "[safety: SAFE]"
 			}
 		}
 	}

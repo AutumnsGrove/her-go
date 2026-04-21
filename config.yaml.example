@@ -34,6 +34,7 @@ agent:
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
+  max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fallback:
     model: "anthropic/claude-haiku-4.5"
     temperature: 0.1
