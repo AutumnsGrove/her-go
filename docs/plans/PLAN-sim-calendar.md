@@ -2,9 +2,28 @@
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** ready for implementation
-**Depends on:** PLAN-calendar-bridge (bridge interface definition). Can start once the `Bridge` interface shape is defined, before all tools are complete.
-**Tracking:**
+**Status:** ready for Phase 1 - bridge interface extraction
+**Completed:** Calendar bridge is fully implemented with multi-calendar support, list_calendars tool, and all 4 CRUD operations working (commit 2ba807f). Can now extract Bridge interface and build FakeBridge.
+**Tracking:** GH issue #64
+
+---
+
+## Current State (2026-04-21)
+
+✅ **Complete:**
+- Swift EventKit bridge with multi-calendar support (comma-separated names, wildcard search)
+- Go tools: `list_calendars`, `calendar_list`, `calendar_create`, `calendar_update`, `calendar_delete`
+- Wire protocol: `Request{Command, Calendar, Args}` and `Response{OK, Result, Error, Message}`
+- All tools tested end-to-end with real Apple Calendar
+
+**Swift bridge commands:**
+- `list_calendars` (no args) → returns array of calendar names
+- `list` (calendar: "Cal1,Cal2" or "*", start, end) → returns events with calendar field
+- `create` (calendar: default, events: [{title, start, end, calendar?, ...}]) → returns event IDs
+- `update` (calendar: "*", id, event: {title?, start?, ...}) → returns updated ID
+- `delete` (calendar: "*", id) → returns deleted: true
+
+🎯 **Next:** Extract `Bridge` interface so `CLIBridge` (prod) and `FakeBridge` (sims) share the same contract.
 
 ---
 
@@ -19,10 +38,14 @@ Extend the sim harness to support calendar and shift testing: a bridge interface
 
 ## Part 1 -- Bridge interface extraction
 
-The prod bridge shells out to the Swift CLI. Sims need a fake that keeps events in memory. Extract a shared interface so tools don't care which implementation they're using.
+**Current code:** `calendar/bridge.go` has a concrete `Bridge` struct with `Call(ctx, Request) (Response, error)`. Request/Response are already well-defined. Need to:
+1. Extract `Bridge` as an interface
+2. Rename current implementation to `CLIBridge`
+3. Update `NewBridge()` → `NewCLIBridge()`
+4. Build `FakeBridge` for sims
 
 ```go
-// calendar/bridge.go
+// calendar/bridge.go (updated)
 
 // Bridge is the interface for calendar operations. Prod implementation
 // shells out to the Swift CLI; test/sim implementation is in-memory.
@@ -30,18 +53,42 @@ type Bridge interface {
     Call(ctx context.Context, req Request) (Response, error)
 }
 
-// CLIBridge is the production implementation.
-type CLIBridge struct { ... }
-
-// FakeBridge is the in-memory implementation for sims and tests.
-// calendar/bridge_fake.go
-type FakeBridge struct {
-    events map[string]Event  // keyed by event ID
-    mu     sync.Mutex
+// CLIBridge is the production implementation (existing Bridge struct renamed).
+type CLIBridge struct {
+    binaryPath string
+    cfg        *config.Config
+    logger     *log.Logger
 }
+
+func NewCLIBridge(cfg *config.Config, logger *log.Logger) *CLIBridge { ... }
+
+// calendar/bridge_fake.go (NEW)
+type FakeBridge struct {
+    events    map[string]*FakeEvent  // keyed by event ID
+    calendars []string                // available calendar names
+    counter   int                     // for generating FAKE-001, FAKE-002...
+    mu        sync.Mutex
+}
+
+type FakeEvent struct {
+    ID       string
+    Title    string
+    Start    time.Time
+    End      time.Time
+    Location string
+    Notes    string
+    Calendar string  // which calendar this event belongs to
+}
+
+func NewFakeBridge(calendars []string) *FakeBridge { ... }
 ```
 
-The fake supports all 4 commands (list, create, update, delete). Create generates deterministic IDs (`FAKE-<counter>`). List filters by time range. Update and delete operate on the in-memory map.
+**FakeBridge capabilities:**
+- `list_calendars`: returns the configured calendar list
+- `list`: filters by calendar name(s) and time range, returns matching events
+- `create`: generates deterministic IDs (`FAKE-001`, `FAKE-002`...), respects per-event calendar field
+- `update`: modifies in-memory event by ID (wildcard `"*"` searches all calendars)
+- `delete`: removes in-memory event by ID (wildcard supported)
 
 **Why a fake and not a mock per test:** sims drive the real agent end-to-end through real tools, and each tool internally calls the bridge. A single fake (shared process-wide for the sim run) means tools work unchanged and we see genuine tool-call sequences in the report.
 
@@ -51,9 +98,19 @@ The fake supports all 4 commands (list, create, update, delete). Create generate
 
 New fields on the sim spec struct, processed after memory seeding and before the message loop.
 
+**Design decision:** Shift metadata (job, role, scheduled_hours, actual_hours, status) will be stored in the calendar event's `notes` field as structured text. No new EventKit fields needed - just parse/format the notes on read/write. Example:
+```
+job=Panera
+role=Bake
+scheduled_hours=8.0
+actual_hours=9.0
+status=worked
+stayed late to close
+```
+
 ### `seed_shifts`
 
-Inserted directly into `work_shifts` with pre-assigned `calendar_event_id`s (no bridge call). Corresponding fake events are also created in the `FakeBridge` so `calendar_list` returns them.
+Inserted directly into `work_shifts` with pre-assigned `calendar_event_id`s (no bridge call). Corresponding fake events are also created in the `FakeBridge` so `calendar_list` returns them (with shift metadata in notes field).
 
 ```yaml
 seed_shifts:
@@ -199,12 +256,22 @@ CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
 
 ### Phase 1 -- Bridge interface extraction (prod vs fake)
 
-- Extract `Bridge` interface in `calendar/bridge.go`
-- Move existing (or planned) CLI implementation behind it
-- Implement `FakeBridge` in `calendar/bridge_fake.go`
-- Wire sim runner to use `FakeBridge` when in sim mode
+**Files to modify:**
+- `calendar/bridge.go` — Extract `Bridge` interface, rename existing `Bridge` struct → `CLIBridge`, rename `NewBridge()` → `NewCLIBridge()`
+- All tool handlers (`tools/*/handler.go`) — Change `calendar.NewBridge()` → `calendar.NewCLIBridge()` OR inject bridge via context
 
-**Done when:** existing calendar tools work with both implementations; `FakeBridge` passes the same logical tests as the CLI bridge.
+**Files to create:**
+- `calendar/bridge_fake.go` — Implement `FakeBridge` with in-memory event store
+- `calendar/bridge_fake_test.go` — Unit tests for FakeBridge (list, create, update, delete, list_calendars)
+
+**Sim runner integration:**
+- `cmd/sim.go` — Detect sim mode (env var or flag), use `NewFakeBridge(cfg.Calendar.Calendars)` instead of CLIBridge
+- Pass bridge instance through agent.RunParams (new field) so tools can access it
+
+**Done when:** 
+- All existing calendar tools work with both `CLIBridge` (prod) and `FakeBridge` (sim/test)
+- `FakeBridge` unit tests pass for all 5 commands (list_calendars, list, create, update, delete)
+- A simple sim with `seed_calendar_events` can run without Swift binary or EventKit permissions
 
 ### Phase 2 -- Sim YAML fields + seed logic
 
