@@ -2,12 +2,19 @@
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** Phase 1 complete, ready for Phase 2 - sim YAML fields
+**Status:** Phase 2 complete, ready for Phase 3 - sim.db schema
 **Completed:** 
 - Calendar bridge with multi-calendar support, list_calendars tool, and all 4 CRUD operations (commit 2ba807f)
 - Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test) (2026-04-21)
-- All tool handlers updated to use `NewCLIBridge()`
+- All tool handlers updated to use injected bridge (via `tools.Context.CalendarBridge`)
 - Comprehensive unit tests for FakeBridge (all 5 commands tested)
+- `seed_calendar_events` YAML field + seeding logic (inserts into DB + FakeBridge)
+- Shifts simplified: just calendar events with `job` field (aligned with PLAN-shifts.md)
+- `SeedCalendarEvent.Job` ready for PLAN-shifts.md Phase 1 schema migration
+
+**Dependencies:**
+- Full shift support requires PLAN-shifts.md Phase 1 (job column + InsertCalendarEvent signature update)
+
 **Tracking:** GH issue #64
 
 ---
@@ -100,124 +107,62 @@ func NewFakeBridge(calendars []string) *FakeBridge { ... }
 
 ## Part 2 -- Sim YAML seed fields
 
-New fields on the sim spec struct, processed after memory seeding and before the message loop.
+New field on the sim spec struct: `seed_calendar_events`. Processed after memory seeding and before the message loop.
 
-**Design decision:** Shift metadata (job, role, scheduled_hours, actual_hours, status) will be stored in the calendar event's `notes` field as structured text. No new EventKit fields needed - just parse/format the notes on read/write. Example:
-```
-job=Panera
-role=Bake
-scheduled_hours=8.0
-actual_hours=9.0
-status=worked
-stayed late to close
-```
-
-### `seed_shifts`
-
-Inserted directly into `work_shifts` with pre-assigned `calendar_event_id`s (no bridge call). Corresponding fake events are also created in the `FakeBridge` so `calendar_list` returns them (with shift metadata in notes field).
-
-```yaml
-seed_shifts:
-  - job: "Panera"
-    scheduled_start: "2026-04-13T05:00:00-04:00"
-    scheduled_end:   "2026-04-13T13:00:00-04:00"
-    actual_start:    "2026-04-13T05:00:00-04:00"
-    actual_end:      "2026-04-13T14:00:00-04:00"
-    status: "worked"
-    notes: "stayed late to close"
-  - job: "Panera"
-    scheduled_start: "2026-04-14T05:00:00-04:00"
-    scheduled_end:   "2026-04-14T13:00:00-04:00"
-    status: "scheduled"
-    reminder: false   # don't auto-enqueue a reminder for this seed
-```
+**Design decision:** Shifts ARE calendar events. No separate `work_shifts` seeding — just seed calendar events with shift metadata in the `notes` field. The calendar tools handle everything (create, list, update, delete). Shift-specific behavior is inferred from metadata like `type: shift` in the notes.
 
 ### `seed_calendar_events`
 
-Populates the `FakeBridge`'s in-memory store only (not the DB -- pure calendar events have no DB representation).
+Populates both SQLite (source of truth) and FakeBridge (EventKit simulation). Can represent any calendar event: meetings, shifts, appointments, etc.
 
 ```yaml
 seed_calendar_events:
-  - id: "FAKE-DENTIST-1"
+  - id: "SEED-001"
+    title: "Panera shift"
+    start: "2026-04-13T05:00:00-04:00"
+    end:   "2026-04-13T13:00:00-04:00"
+    job: "Panera"  # Marks this as a shift event (requires PLAN-shifts.md Phase 1 migration)
+    notes: |
+      position: Bake
+      trainer: Mike
+  - id: "SEED-002"
     title: "Dentist"
     start: "2026-04-22T14:00:00-04:00"
     end:   "2026-04-22T15:00:00-04:00"
+    location: "Main St Dental"
 ```
 
 ### Go-side changes
 
-Add to `cmd/sim.go`:
-
-```go
-type SeedShift struct {
-    Job            string `yaml:"job"`
-    ScheduledStart string `yaml:"scheduled_start"`
-    ScheduledEnd   string `yaml:"scheduled_end"`
-    ActualStart    string `yaml:"actual_start,omitempty"`
-    ActualEnd      string `yaml:"actual_end,omitempty"`
-    Status         string `yaml:"status"`
-    Notes          string `yaml:"notes,omitempty"`
-    Reminder       *bool  `yaml:"reminder,omitempty"`  // nil = default (true)
-}
-
-type SeedCalendarEvent struct {
-    ID       string `yaml:"id"`
-    Title    string `yaml:"title"`
-    Start    string `yaml:"start"`
-    End      string `yaml:"end"`
-    Location string `yaml:"location,omitempty"`
-    Notes    string `yaml:"notes,omitempty"`
-}
-```
-
-Seed loop: after memory seeding, iterate `seed_shifts` to insert DB rows + create matching fake bridge events. Then iterate `seed_calendar_events` to populate the fake bridge only.
-
-Sim runner picks the `FakeBridge` when `HER_SIM_MODE=1` (or a config flag).
+Already done in Phase 2:
+- `SeedCalendarEvent` struct in `cmd/sim.go` with `job` field for shift events
+- Seeding loop inserts into DB via `store.InsertCalendarEvent()` (job param requires PLAN-shifts.md Phase 1 migration)
+- Also seeds FakeBridge so `calendar_list` returns them
+- FakeBridge passed to agent via `CalendarBridge` field
+- Job field logged when seeding shift events
 
 ---
 
 ## Part 3 -- sim.db schema additions
 
-The sim results database currently snapshots memories, mood entries, metrics, and agent turns per run. Add parallel tables for shifts and scheduler jobs.
+The sim results database currently snapshots memories, mood entries, metrics, and agent turns per run. Add a table for calendar events.
 
 ```sql
-CREATE TABLE IF NOT EXISTS sim_shifts (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id              INTEGER NOT NULL REFERENCES sim_runs(id),
-    captured_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
-    shift_id            INTEGER,
-    job                 TEXT,
-    role                TEXT,
-    scheduled_start     TEXT,
-    scheduled_end       TEXT,
-    actual_start        TEXT,
-    actual_end          TEXT,
-    scheduled_hours     REAL,
-    actual_hours        REAL,
-    status              TEXT,
-    calendar_event_id   TEXT,
-    active              INTEGER,
-    superseded_by       INTEGER,
-    supersede_reason    TEXT,
-    notes               TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
+CREATE TABLE IF NOT EXISTS sim_calendar_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      INTEGER NOT NULL REFERENCES sim_runs(id),
     captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    job_id      INTEGER,
-    kind        TEXT,
-    fire_at     TEXT,
-    payload     TEXT,
-    status      TEXT,
-    attempts    INTEGER,
-    last_error  TEXT,
-    fired_at    TEXT
+    event_id    TEXT,      -- EventKit identifier
+    title       TEXT,
+    start       TEXT,      -- ISO8601
+    end         TEXT,      -- ISO8601
+    location    TEXT,
+    notes       TEXT,      -- May contain metadata like "type: shift\njob: Panera"
+    calendar    TEXT
 );
 ```
 
-**Snapshot point:** same place the runner currently snapshots memories (end of run). Fresh scan of `work_shifts` and `scheduler_jobs` from her.db, insert into sim.db keyed by `run_id`. Preserves audit history (superseded rows included).
+**Snapshot point:** same place the runner currently snapshots memories (end of run). Fresh scan of `calendar_events` from her.db, insert into sim.db keyed by `run_id`. Shows the state of the calendar after the sim completes.
 
 ---
 
@@ -227,17 +172,21 @@ CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
 
 ### Scenarios
 
-1. **Schedule drop** -- user pastes a 5-shift batch. Agent parses, calls `shift_schedule`, reports totals.
-2. **Clock out** -- user says "just got off work." Agent calls `shift_log_time` with implicit on-time start.
-3. **Shift moved** -- "Wed actually moved to Thu." Agent calls `shift_update`, supersede chain created.
-4. **Hours query** -- "How many hours last week?" Agent calls `shift_list`, reports totals from response.
+1. **Create events** -- user says "Add a dentist appointment tomorrow at 2pm." Agent calls `calendar_create`, confirms creation.
+2. **List events** -- "What's on my calendar this week?" Agent calls `calendar_list`, reports upcoming events.
+3. **Update event** -- "Actually move the dentist to Thursday." Agent calls `calendar_update`, confirms change.
+4. **Delete event** -- "Cancel that appointment." Agent calls `calendar_delete`, confirms deletion.
+
+Optional shift scenarios (if you want to test shift metadata parsing):
+5. **Create shift** -- "I work at Panera Monday 5am-1pm." Agent creates calendar event with `type: shift` metadata.
+6. **List shifts** -- "Show my shifts this week." Agent calls `calendar_list`, filters for `type: shift` in notes.
 
 ### Assertions
 
 - Tool-call sequences match expected patterns per scenario.
-- Reply mentions computed hours (not hallucinated).
-- Superseded rows visible in sim.db post-run.
-- No bridge errors (fake bridge should handle everything cleanly).
+- Events appear in `sim_calendar_events` table after the run.
+- Updated/deleted events reflect correct final state.
+- No bridge errors (FakeBridge handles all operations cleanly).
 
 ---
 
@@ -246,8 +195,8 @@ CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
 | Decision | Choice | Why |
 |---|---|---|
 | Fake vs mock | Single process-wide fake bridge | Sims drive the real agent through real tools. A shared fake means tools work unchanged; we see genuine tool-call sequences. |
-| Seed shifts create fake events | Yes, both DB + fake bridge | So `calendar_list` returns seeded shifts if the agent queries the calendar directly. Consistency. |
-| Sim.db snapshots include superseded rows | Yes | Lets you inspect how a shift evolved across turns in post-run analysis. |
+| Shifts are calendar events | Yes, no separate work_shifts table or seeding | Simplifies the model. A "shift" is just a calendar event with metadata like `type: shift`. Same CRUD tools for everything. |
+| Seed to both DB + FakeBridge | Yes | DB is source of truth (calendar_list reads from it). FakeBridge simulates EventKit for testing bridge operations. |
 
 ## Known Limitations (v1)
 
@@ -279,12 +228,12 @@ CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
 
 ### Phase 2 -- Sim YAML fields + seed logic
 
-- Add `SeedShift` and `SeedCalendarEvent` structs to sim spec
+- Add `SeedCalendarEvent` struct to sim spec
 - Implement seed loop in `cmd/sim.go` (after memory seeding, before message loop)
-- Seed shifts create both DB rows and fake bridge events
-- Seed calendar events populate fake bridge only
+- Seed calendar events insert into DB (SQLite) + populate FakeBridge
+- Calendar events can represent anything: shifts, meetings, appointments
 
-**Done when:** a sim spec with `seed_shifts` and `seed_calendar_events` populates state correctly before the message loop starts.
+**Done when:** a sim spec with `seed_calendar_events` populates both DB and FakeBridge correctly before the message loop starts.
 
 ### Phase 3 -- sim.db schema additions
 

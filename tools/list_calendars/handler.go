@@ -26,9 +26,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Args:     map[string]any{},
 	}
 
-	// Initialize bridge
+	// Get bridge (injected in sim mode, CLIBridge in production)
 	logger := log.Default()
-	bridge := calendar.NewCLIBridge(ctx.Cfg, logger)
+	bridge := ctx.CalendarBridge
+	if bridge == nil {
+		bridge = calendar.NewCLIBridge(ctx.Cfg, logger)
+	}
 
 	// Call with timeout
 	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

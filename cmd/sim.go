@@ -157,15 +157,15 @@ type suite struct {
 // SeedCalendarEvent represents a calendar event to populate in sims.
 // Stored in both the DB (SQLite source of truth) and FakeBridge (for EventKit simulation).
 // Can represent any calendar event — meetings, shifts, appointments, etc.
-// Use `type: shift` in notes or metadata to mark shift events.
 type SeedCalendarEvent struct {
 	ID       string `yaml:"id"`       // EventKit-style identifier (e.g., "SEED-001")
 	Title    string `yaml:"title"`    // Event title
 	Start    string `yaml:"start"`    // ISO8601 with timezone
 	End      string `yaml:"end"`      // ISO8601 with timezone
 	Location string `yaml:"location,omitempty"`
-	Notes    string `yaml:"notes,omitempty"` // Can include metadata like "type: shift\njob: Panera\n..."
+	Notes    string `yaml:"notes,omitempty"` // Can include shift metadata like "position: Bake\ntrainer: Mike\n..."
 	Calendar string `yaml:"calendar,omitempty"` // defaults to config.Calendar.DefaultCalendar
+	Job      string `yaml:"job,omitempty"`      // Job name (e.g., "Panera") — marks this as a shift event
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -841,6 +841,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 
 			// Insert into SQLite (source of truth)
+			// NOTE: seed.Job is parsed but not yet passed to InsertCalendarEvent.
+			// Once PLAN-shifts.md Phase 1 lands (job column migration), update
+			// InsertCalendarEvent signature to include job parameter.
 			dbID, err := store.InsertCalendarEvent(
 				seed.Title,
 				seed.Start,
@@ -849,6 +852,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				seed.Notes,
 				cal,
 				seed.ID, // EventKit identifier
+				// TODO: add seed.Job when InsertCalendarEvent signature updated
 			)
 			if err != nil {
 				log.Error("seed calendar event: DB insert failed", "err", err, "id", seed.ID)
@@ -869,7 +873,12 @@ func runSim(cmd *cobra.Command, args []string) error {
 				fakeEvents = append(fakeEvents, fakeEvent)
 			}
 
-			log.Infof("    seeded #%d: %s on %s (event %s)", dbID, seed.Title, start.Format("Jan 2"), seed.ID)
+			// Log with job indicator if this is a shift event
+			if seed.Job != "" {
+				log.Infof("    seeded #%d: %s [%s shift] on %s (event %s)", dbID, seed.Title, seed.Job, start.Format("Jan 2"), seed.ID)
+			} else {
+				log.Infof("    seeded #%d: %s on %s (event %s)", dbID, seed.Title, start.Format("Jan 2"), seed.ID)
+			}
 		}
 
 		if fakeBridge != nil && len(fakeEvents) > 0 {
