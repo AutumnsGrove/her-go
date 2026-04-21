@@ -1,0 +1,32 @@
+name: calendar_update
+agent: main
+description: >-
+  Edit a calendar event in place by ID. Get the event ID from calendar_list.
+  Pass only the fields you want to change — omitted fields are left unchanged.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    event_id:
+      type: string
+      description: "Event ID from calendar_list. Required."
+    title:
+      type: string
+      description: "New title (optional — omit to keep current)."
+    start:
+      type: string
+      description: "New start time as ISO 8601 with timezone offset (optional)."
+    end:
+      type: string
+      description: "New end time as ISO 8601 with timezone offset (optional)."
+    location:
+      type: string
+      description: "New location (optional)."
+    notes:
+      type: string
+      description: "New notes (optional)."
+  required: [event_id]
+trace:
+  emoji: "✏️"
+  format: "updated event {{.event_id | truncate 8}}"

@@ -11,3 +11,6 @@ search:
 
 context:
   hint: "User asks about weather, mentions the outdoors/commute, or wants to set their home location"
+
+calendar:
+  hint: "User mentions a work shift, schedule, calendar event, or asks about hours worked"

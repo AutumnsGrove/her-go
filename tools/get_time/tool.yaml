@@ -1,0 +1,17 @@
+name: get_time
+agent: main
+hint: "check the current date and time"
+description: >-
+  Return the current date and time in the configured timezone. Use this
+  when you need to check what time it is mid-turn — for example, to
+  calculate how far away a scheduled event is, or to confirm the current
+  day of the week before scheduling something. The time is also shown at
+  the top of the prompt, but may be hundreds of lines back as context grows.
+hot: true
+parameters:
+  type: object
+  properties: {}
+  required: []
+trace:
+  emoji: "🕐"
+  format: "checked the time"

@@ -1,0 +1,41 @@
+name: calendar_create
+agent: main
+description: >-
+  Create one or more calendar events that are NOT work shifts (use
+  shift_schedule for those in the future). Examples: dentist appointment,
+  birthday, meeting. Atomic-per-call: if any event fails, none are created.
+  Returns event IDs that can be used with calendar_update or calendar_delete.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    events:
+      type: array
+      description: "Array of events to create. All succeed or all fail (atomic)."
+      items:
+        type: object
+        properties:
+          title:
+            type: string
+            description: "Event title. Required."
+          start:
+            type: string
+            description: "ISO 8601 with timezone offset. Required."
+          end:
+            type: string
+            description: "ISO 8601 with timezone offset. Required."
+          location:
+            type: string
+            description: "Optional location/address."
+          notes:
+            type: string
+            description: "Optional notes/description."
+        required: [title, start, end]
+    calendar:
+      type: string
+      description: "Optional calendar name override. Defaults to config calendar_name."
+  required: [events]
+trace:
+  emoji: "➕"
+  format: "created {{.events | len}} event(s)"
