@@ -837,3 +837,74 @@ Add one column:
 ALTER TABLE work_shifts ADD COLUMN reminder_job_id INTEGER REFERENCES scheduler_jobs(id);
 ```
 (Or include in the initial CREATE TABLE if landing both at once.)
+
+---
+
+## Part 8 — Wiring (categories, agent prompt, cleanup)
+
+### `tools/categories.yaml`
+
+Add one entry:
+
+```yaml
+calendar:
+  hint: "User mentions a work shift, schedule, calendar event, or asks about hours worked"
+```
+
+That's it — the existing `RenderCategoryTable()` (`tools/loader.go:355`) picks it up automatically and the agent sees it in the deferred-tools table on next boot. No `main_agent_prompt.md` edit required (the table between markers is regenerated at load time).
+
+### Agent prompt
+
+The static text in `main_agent_prompt.md` doesn't strictly need new flows — the tool descriptions are detailed enough. But two small additions help the agent learn the pattern faster:
+
+1. Add an example flow under "Typical Flows":
+   ```
+   7. User pastes a work schedule:
+      think("schedule drop, parse into shifts") →
+      use_tools(["calendar"]) →
+      shift_schedule({job:"...", shifts:[...]}) →
+      reply("scheduled N shifts, total X hrs") → done
+   ```
+2. Add a one-line note under "Order of Operations" that the Current Time block is the source of truth for grounding "Tuesday at 5am" → an actual date.
+
+### Stale-code cleanup (from audit)
+
+Bundled with this work, since we're touching adjacent surface area:
+
+| File | Fix |
+|---|---|
+| `tools/loader.go:354` | Doc comment example references `get_current_time` (nonexistent). Replace with `get_weather, set_location` (the actual `context` category). |
+| `compact/agent_summary_prompt.md:4` | Tool names are stale: `save_fact, update_fact, remove_fact, create_reminder` → `save_memory, update_memory, remove_memory`. Drop `create_reminder` (still doesn't exist as a tool — and won't, post-this-plan, since reminders are scheduler-driven, not agent-driven). |
+| `sims/tool-a-thon.yaml:21` | References nonexistent `get_current_time`. Either remove the turn or rewrite to use `set_location` only. |
+| `docs/skills-architecture.md` lines 185, 921-934 | References nonexistent `log_mood` and `get_current_time`. Out of scope for this PR — flag for separate follow-up. |
+
+### `_junkdrawer/`
+
+Untouched. Old `get_current_time`, `set_location`, `weather.go`, etc. are dormant by directory name and don't affect live code.
+
+---
+
+## Part 9 — Design decisions log
+
+Pulled from the planning conversation, recorded for future-Autumn (and future-Claude) so the rationale doesn't get lost.
+
+| Decision | Choice | Why |
+|---|---|---|
+| Bridge transport | Single Swift CLI, JSON over stdin/stdout | Simplest. No daemon, no ports, no signing ceremony. macOS permission prompt fires on first manual Terminal run. |
+| Bridge install | Manual one-time setup | Triggering the EventKit permission prompt requires a GUI-attached process at least once; documented as a setup step. |
+| Batch atomicity | Partial success + report | Don't lose 4 good shifts because shift #5 had a bad timestamp. Failed ones returned in `failed[]`. |
+| Overlap policy | Warn but allow | Real life has overlapping commitments (a meeting during a shift). Surface the warning, let the user decide. |
+| Backfill of existing calendar events | Fresh start, no import | Lowest risk. Pre-existing calendar events stay untouched, just aren't tracked. Backfill becomes a future CLI command if needed. |
+| Time storage | ISO 8601 with offset (TEXT) | Readable in DB, round-trips losslessly, matches existing project conventions. Default tz lives in `config.calendar.default_timezone`. |
+| Shift edits | Full EventKit update via stored `calendar_event_id` | Cleaner than delete + recreate; preserves any reminders set in Apple Calendar itself. |
+| Audit history | Memory-style supersession (`active`, `superseded_by`, `supersede_reason`) | Mirrors `memory/store_facts.go:434`. Proven pattern in this codebase. |
+| Cancellation | Status flag + `[CANCELLED]` calendar prefix | Honors the no-delete principle; keeps history visible on the calendar itself. |
+| No-show | `shift_log_time` with zero hours, `status='no_show'` | Reuses the actuals path; doesn't conflate "I didn't show up" with "shift was cancelled." |
+| Per-category guide injection | Skipped | `LookupToolDefs` already passes full schemas (descriptions + per-param descriptions) to the LLM when a category loads. Tool descriptions alone are sufficient. |
+| Time tool | None — already a prompt layer | `layers/agent_time.go:23-24` injects current time + tz every turn. No tool needed. |
+| Tool naming | Generic (`shift_schedule`, not `schedule_panera`) | Per "code translates data, never defines it." Job names live in config. |
+| Drop `duration_between` | Yes | `shift_list` returns computed hours per row + totals. Tickets show totals on paper. No need. |
+| Reminder design | Specialized `shift_reminder` Handler + `scheduler_jobs` one-off table | Extends the scheduler rather than working around it. Generic infra usable by future features. |
+| Reminder timing | Per-job in config + agent override per-shift | Panera 5 min away vs Cava 35 min away; one knob doesn't fit. |
+| Reminder text | Templated in `task.yaml` | Same principle: prose lives in YAML, not Go. |
+| Reminder ↔ shift link | New `reminder_job_id` column on `work_shifts` | One DB lookup beats a JSON-substring scan over `scheduler_jobs.payload`. |
