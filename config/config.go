@@ -41,6 +41,7 @@ type Config struct {
 	Persona    PersonaConfig    `yaml:"persona"`
 	Voice      VoiceConfig      `yaml:"voice"`
 	Location   LocationConfig   `yaml:"location,omitempty"`
+	Calendar   CalendarConfig   `yaml:"calendar"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -56,6 +57,15 @@ type LocationConfig struct {
 	Name      string  `yaml:"name,omitempty"`       // display name from the last geocoding ("Portland, Oregon")
 	TempUnit  string  `yaml:"temp_unit,omitempty"`  // "fahrenheit" (default) or "celsius"
 	WindUnit  string  `yaml:"wind_unit,omitempty"`  // "mph" (default) or "kmh"
+}
+
+// CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
+// The bridge is optional — if missing at startup, calendar tools return clear
+// errors to the agent but don't block bot startup (fail-soft pattern).
+type CalendarConfig struct {
+	BridgePath      string `yaml:"bridge_path"`       // path to her-calendar Swift binary
+	CalendarName    string `yaml:"calendar_name"`     // which calendar to use in Apple Calendar
+	DefaultTimezone string `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into

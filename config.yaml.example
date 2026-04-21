@@ -147,3 +147,19 @@ voice:
     voice_id: "en_GB-southern_english_female-low"                  # voice preset
     speed: 1.0                                                    # speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
+
+calendar:
+  # Path to the Swift EventKit bridge binary. Relative paths are resolved from
+  # the project root. If missing at startup, calendar tools return errors but
+  # the bot continues running (fail-soft pattern).
+  bridge_path: "calendar/bridge/.build/release/her-calendar"
+
+  # Name of the calendar in Apple Calendar to read/write. Must already exist —
+  # her does not auto-create calendars. Errors on first calendar tool call if
+  # the calendar is not found.
+  calendar_name: "Work"
+
+  # Timezone for get_time tool and naive timestamp interpretation. Also used
+  # by agent_time layer when set (otherwise falls back to system timezone).
+  # Format: IANA timezone database name (e.g., "America/New_York", "Europe/London").
+  default_timezone: "America/New_York"

@@ -1,0 +1,18 @@
+name: calendar_delete
+agent: main
+description: >-
+  Delete a calendar event by ID. Get the event ID from calendar_list.
+  Use sparingly — for work shifts, prefer shift_cancel in the future which
+  preserves history. This is permanent deletion.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    event_id:
+      type: string
+      description: "Event ID from calendar_list. Required."
+  required: [event_id]
+trace:
+  emoji: "🗑️"
+  format: "deleted event {{.event_id | truncate 8}}"

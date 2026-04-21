@@ -62,6 +62,12 @@ The memory agent picks up inbox tasks automatically and handles the actual edits
 6. User asks to clean up or reorganize memories:
    think("user wants memory cleanup") → recall_memories("broad search for topic") → think("found duplicates #12, #14, compound memory #42") → send_task({task_type: "cleanup", note: "...", memory_ids: [12, 14, 42]}) → reply("tell user what you found and that cleanup is already underway in the background") → done
 
+7. User pastes a work schedule or asks to create calendar events:
+   think("schedule drop, parse into events") → use_tools(["calendar"]) → get_time() → calendar_create({"events": [...]}) → reply("scheduled N events, total X hours") → done
+
+8. User asks "am I free Friday afternoon?" or wants to check their schedule:
+   think("need to check calendar") → use_tools(["calendar"]) → get_time() → calendar_list({"start": "...", "end": "..."}) → think("evaluate availability") → reply("you're free/booked") → done
+
 ## Rules for reply
 
 - ALWAYS call reply AT LEAST ONCE. Never end a turn without replying.
