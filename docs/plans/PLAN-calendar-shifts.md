@@ -1014,12 +1014,102 @@ Mirrors the existing project conventions (`*_test.go` files, table-driven tests 
 - `tools/shift_*/handler_test.go` — each combo tool with mocked bridge + in-memory store; cover happy path, partial failure, overlap warning
 
 **Integration / sim:**
-- New `sims/calendar-a-thon.yaml` (parallels `sims/fact-a-thon.yaml`) walking the four scenarios from the interview:
+- New `sims/calendar-a-thon.yaml` walking the four scenarios from the interview:
   1. Schedule drop (5-shift batch, totals reported)
   2. Clock out with implicit on-time start
   3. "Wed actually moved to Thu" → supersede + new reminder
   4. "How many hours last week" → totals from `shift_list`
-- Use the existing sim harness; assert tool-call sequences and final reply shape.
+- **Style reference:** model on `sims/inbox-cleanup.yaml` (added in `9a8ebee`), not the older `sims/fact-a-thon.yaml`. The inbox sim demonstrates the current best-practice shape — rich `description`, `tags`, `seed_*` block, and multi-step flow assertions. Our calendar sim mirrors that structure closely (schedule drop → parse → batch tool call → reply, same general pipeline shape as inbox's recall → send_task → memory agent → notify flow).
+- Use the existing sim harness (extended per below); assert tool-call sequences and final reply shape.
+
+### Sim harness extensions (required)
+
+The sim runner already supports `seed_memories` (`cmd/sim.go:150,765`) which embeds and inserts memories before the message loop starts. We need parallel seeding for calendar state, plus a fake bridge so sims don't require EventKit permission or the Swift binary.
+
+**New YAML fields on the sim spec:**
+
+```yaml
+# sims/calendar-a-thon.yaml (sketch)
+seed_shifts:
+  # Inserted directly into work_shifts with pre-assigned calendar_event_ids
+  # (no bridge call). Each seed gets a reminder_job_id auto-enqueued unless
+  # reminder: false is set.
+  - job: "Panera"
+    scheduled_start: "2026-04-13T05:00:00-04:00"
+    scheduled_end:   "2026-04-13T13:00:00-04:00"
+    actual_start:    "2026-04-13T05:00:00-04:00"
+    actual_end:      "2026-04-13T14:00:00-04:00"
+    status: "worked"
+    notes: "stayed late to close"
+  - job: "Panera"
+    scheduled_start: "2026-04-14T05:00:00-04:00"
+    scheduled_end:   "2026-04-14T13:00:00-04:00"
+    status: "scheduled"
+    reminder: false
+
+seed_calendar_events:
+  # For sims exercising calendar_list / calendar_update on non-shift events.
+  # Lives only in the fake bridge's in-memory store — not in the DB.
+  - id: "FAKE-DENTIST-1"
+    title: "Dentist"
+    start: "2026-04-22T14:00:00-04:00"
+    end:   "2026-04-22T15:00:00-04:00"
+```
+
+**Go-side changes to support this:**
+
+1. **`cmd/sim.go`**: add `SeedShifts []SeedShift` and `SeedCalendarEvents []SeedEvent` fields on the sim spec struct. Seed loop runs after memory seeding, before the message loop.
+2. **`calendar/bridge.go`**: introduce a `Bridge` interface; prod impl shells out to the Swift CLI, test impl is an in-memory fake. Sim runner picks the fake when `HER_SIM_MODE=1` (or a config flag).
+3. **Fake bridge (`calendar/bridge_fake.go`)**: a minimal Go type that honors the same `Call()` signature and keeps events in a `map[string]Event`. Seeded events populate it pre-run. Supports all 4 commands.
+
+**Why a fake and not a mock per test:** sims drive the real agent end-to-end through real tools, and each shift_* tool internally calls the bridge. A single fake (shared process-wide for the sim run) means tools work unchanged and we see genuine tool-call sequences in the report.
+
+### `sim.db` schema additions (for results tracking)
+
+The sim results database (`sim.db`, schema at `cmd/sim.go:209`) currently snapshots `sim_memories`, `sim_mood_entries`, `sim_metrics`, `sim_agent_turns` per run. To make calendar sims reviewable in the same way (across runs, via the report + the `./sims query` subcommands if they exist), add parallel tables:
+
+```sql
+CREATE TABLE IF NOT EXISTS sim_shifts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              INTEGER NOT NULL REFERENCES sim_runs(id),
+    captured_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+    shift_id            INTEGER,                -- original id in her.db for this run
+    job                 TEXT,
+    role                TEXT,
+    scheduled_start     TEXT,
+    scheduled_end       TEXT,
+    actual_start        TEXT,
+    actual_end          TEXT,
+    scheduled_hours     REAL,
+    actual_hours        REAL,
+    status              TEXT,
+    calendar_event_id   TEXT,
+    active              INTEGER,
+    superseded_by       INTEGER,
+    supersede_reason    TEXT,
+    notes               TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sim_scheduler_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL REFERENCES sim_runs(id),
+    captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    job_id      INTEGER,                        -- original id in her.db for this run
+    kind        TEXT,
+    fire_at     TEXT,
+    payload     TEXT,
+    status      TEXT,
+    attempts    INTEGER,
+    last_error  TEXT,
+    fired_at    TEXT
+);
+```
+
+**Snapshot point:** same place the runner currently snapshots `sim_memories` (end of run). Fresh scan of `work_shifts` and `scheduler_jobs` from her.db → insert into sim.db keyed by `run_id`. Preserves audit history (superseded rows included) so you can inspect how a shift evolved across turns in post-run analysis.
+
+**Views (optional, mirror existing pattern):** `latest_sim_shifts` that filters to the most recent run, mirroring how `sim_memories` probably has one.
+
+Phase 6 of the implementation plan extends Phase 2's unit tests with sim-integration coverage once these harness changes land.
 
 **Manual smoke checklist:**
 - Build + grant permission flow on a fresh machine, following only the README
