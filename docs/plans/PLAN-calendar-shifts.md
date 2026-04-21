@@ -650,3 +650,190 @@ parameters:
 | `calendar_delete` | delete | — | — |
 
 9 new tools, 1 category (`calendar`).
+
+---
+
+## Part 6 — Scheduler enhancement (one-off jobs)
+
+The current scheduler (`scheduler/scheduler.go`) handles **recurring** tasks: one row per `Kind`, fires on a cron schedule. We extend it to also handle **one-offs**: many rows per `Kind`, each with a specific `fire_at` and payload.
+
+### Design
+
+**Same `Handler` interface, two source tables.**
+
+```go
+// scheduler/types.go — Handler stays unchanged
+type Handler interface {
+    Kind() string
+    ConfigPath() string                                       // empty string is fine for one-off-only handlers
+    Execute(ctx context.Context, payload json.RawMessage, deps *Deps) error
+}
+```
+
+A handler can register for one or both modes. `shift_reminder` is one-off-only (has no recurring schedule). The mood rollup is recurring-only. Nothing forbids a future handler from being both.
+
+**Tick loop changes (`scheduler.go:tick`):**
+
+```
+1. (existing) Process scheduler_tasks where next_fire <= now.
+2. (NEW) Process scheduler_jobs where status='pending' AND fire_at <= now,
+         ORDER BY fire_at ASC LIMIT N.
+   For each:
+     a. handler := lookup(row.kind)
+     b. if handler == nil: mark status='failed', last_error='unknown kind'
+     c. else: handler.Execute(ctx, row.payload, deps)
+     d. on success: status='done', fired_at=now, attempts++
+     e. on error: attempts++; if attempts < retry.MaxAttempts and retry policy
+        allows, update fire_at to now + RetryConfig.NextWait(attempts);
+        else status='failed'.
+```
+
+### New scheduler API
+
+```go
+// scheduler/jobs.go (new file)
+
+// EnqueueJob schedules a one-off task to fire at a specific time.
+// Returns the job id so callers can cancel it later.
+func (s *Scheduler) EnqueueJob(kind string, fireAt time.Time, payload any) (int64, error)
+
+// CancelJob marks a pending job as cancelled. Idempotent — already-fired
+// or already-cancelled jobs return nil without error.
+func (s *Scheduler) CancelJob(id int64) error
+
+// ListPendingJobs returns all pending jobs of a given kind, ordered by
+// fire_at. Used by maintenance/debug paths.
+func (s *Scheduler) ListPendingJobs(kind string) ([]Job, error)
+```
+
+The `Scheduler` struct itself doesn't change shape — these are methods on the existing receiver. The DB store gets matching `InsertJob`, `CancelJob`, `DueJobs(now)` methods on `memory.Store`.
+
+### Why this and not Path A or B from interview
+
+The interview offered three paths (generic queue / specialized handler / extend infra). Per Autumn's call: extend the infrastructure rather than work around it. This buys:
+
+- **One-offs available to any future feature** (dentist reminders, persona reflection trigger, weekly digests) without more plumbing.
+- **No semantic change** to existing recurring tasks. The mood rollup keeps working untouched.
+- **Same retry policy** (`RetryConfig` from `scheduler/types.go`) applies to both modes.
+
+### Concurrency note
+
+The existing tick loop is single-threaded (one goroutine, one `time.Ticker`). We keep that. If a tick processes both recurring and one-off rows, total tick time grows linearly with backlog size. With a 30s tick interval and per-call work measured in milliseconds, we have plenty of headroom — backlog of hundreds of due jobs would still complete inside one tick. Revisit if/when we have a feature firing thousands of one-offs.
+
+---
+
+## Part 7 — Reminders (`shift_reminder` handler)
+
+A single Handler that fires per-shift one-off jobs, sends a Telegram message, and marks the job done. Templated message text (per design principle: data in YAML, not Go).
+
+### Layout
+
+```
+scheduler/
+  shift_reminder/
+    handler.go               # implements scheduler.Handler
+    task.yaml                # message template + retry policy
+```
+
+### `task.yaml`
+
+This file is the source of truth for reminder phrasing. Hot-reloadable on next tick (the loader reads YAML on each fire — same pattern as the mood rollup).
+
+```yaml
+# scheduler/shift_reminder/task.yaml
+kind: shift_reminder
+
+# This handler is one-off only; cron is empty.
+cron: ""
+
+# Default message template. {{.Job}}, {{.MinutesAway}}, {{.StartTime}},
+# {{.Address}}, {{.Role}} are available. Plain Go text/template.
+message_template: |
+  🍞 {{.Job}} in {{.MinutesAway}} min — clock in at {{.StartTime}}{{if .Address}} ({{.Address}}){{end}}.
+
+# Retry on Telegram delivery failure (e.g., transient network).
+retry:
+  max_attempts: 3
+  backoff: exponential
+  initial_wait: 30s
+```
+
+A future enhancement: per-job message overrides (e.g., a different emoji per job). Out of scope for v1 — one template covers the case.
+
+### Handler
+
+```go
+// scheduler/shift_reminder/handler.go
+
+package shift_reminder
+
+import (
+    "context"
+    "encoding/json"
+    "her/memory"
+    "her/scheduler"
+    "text/template"
+)
+
+type Payload struct {
+    ShiftID int64 `json:"shift_id"`
+}
+
+type handler struct {
+    tmpl *template.Template
+    cfg  Config  // loaded from task.yaml
+}
+
+func init() {
+    scheduler.Register(&handler{ /* lazy-load tmpl on first Execute */ })
+}
+
+func (h *handler) Kind() string         { return "shift_reminder" }
+func (h *handler) ConfigPath() string   { return "scheduler/shift_reminder/task.yaml" }
+
+func (h *handler) Execute(ctx context.Context, raw json.RawMessage, deps *scheduler.Deps) error {
+    var p Payload
+    if err := json.Unmarshal(raw, &p); err != nil { return err }
+
+    store := deps.Store.(*memory.Store)
+    sh, err := store.GetShift(p.ShiftID)
+    if err != nil { return err }
+
+    // Skip if cancelled or already worked — don't ping for stale reminders.
+    if sh.Status != "scheduled" || sh.Active == 0 {
+        return nil  // success, no-op
+    }
+
+    msg := h.render(sh)
+    _, err = deps.Send(deps.ChatID, msg)
+    return err
+}
+```
+
+### Lifecycle wiring
+
+| Event | Reminder action |
+|---|---|
+| `shift_schedule` creates shift #17 | `EnqueueJob("shift_reminder", scheduled_start - reminder_minutes, {shift_id: 17})` → store returned `job_id` on shift row (new column? or query by payload? — see design call below) |
+| `shift_update` supersedes #17 → #18 | `CancelJob(old_job_id)`, `EnqueueJob` for the new row |
+| `shift_cancel` on #17 | `CancelJob(old_job_id)` |
+| Reminder fires | Handler re-checks shift status; skips if no longer scheduled |
+
+**Design call for the linkage:** how does `shift_update` find the pending reminder job to cancel? Two options:
+
+- **A — store `reminder_job_id` on `work_shifts`** (new column, FK to `scheduler_jobs.id`). One DB lookup. Simple.
+- **B — query `scheduler_jobs WHERE kind='shift_reminder' AND payload LIKE '%"shift_id":17%' AND status='pending'`.** No schema change but a JSON-substring scan — gross and brittle.
+
+Going with **A**. Add `reminder_job_id INTEGER` to `work_shifts` (also nullable so non-shift-using schedules still work).
+
+### Reminder cancellation safety
+
+`shift_reminder.handler` re-checks shift state on fire (status, active). So even if `CancelJob` races with the tick, we won't ping for a cancelled shift — the handler treats it as a no-op. Belt and suspenders.
+
+### Update to `work_shifts` schema
+
+Add one column:
+```sql
+ALTER TABLE work_shifts ADD COLUMN reminder_job_id INTEGER REFERENCES scheduler_jobs(id);
+```
+(Or include in the initial CREATE TABLE if landing both at once.)
