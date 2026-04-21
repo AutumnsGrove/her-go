@@ -1,14 +1,34 @@
 # Plan: Calendar Integration + Shift Tracking + One-Off Reminders
 
-Wire her into Apple Calendar via a small Swift EventKit bridge, give her a job-aware shift tracker (scheduled vs. actual hours, audit history), and extend the existing scheduler to fire one-off jobs so each shift gets a "leave for work" reminder.
+> **STATUS: SPLIT.** This monolithic plan has been split into 4 focused plans.
+> The content below is preserved as an archive/reference. For implementation,
+> use the focused plans:
+>
+> 1. **[PLAN-calendar-bridge.md](PLAN-calendar-bridge.md)** -- Swift EventKit bridge + Go wrapper + 4 calendar tools + `get_time` hot tool + `calendar` category
+> 2. **[PLAN-shifts.md](PLAN-shifts.md)** -- 5 shift tools + `work_shifts` schema + config jobs list + `shifts` category
+> 3. **[PLAN-scheduler-oneoffs.md](PLAN-scheduler-oneoffs.md)** -- `scheduler_jobs` table + one-off tick loop + `shift_reminder` handler + reminder lifecycle
+> 4. **[PLAN-sim-calendar.md](PLAN-sim-calendar.md)** -- Sim harness extensions (fake bridge, seed fields, sim.db tables, calendar-a-thon sim)
+>
+> **Key changes from the original plan:**
+> - Calendar work ships first; shifts layer on after the bridge is proven solid.
+> - `calendar` and `shifts` are separate tool categories (separate deferred loading).
+> - Added a `get_time` hot tool (time layer header gets buried as context grows).
+> - Stale-code cleanup items (Part 8) already fixed in commit `52428d3`.
+> - Original "no time tool" decision reversed based on real-world agent context length.
 
-**Status:** design locked via interview. Ready for implementation.
+**Status:** superseded -- split into focused plans (2026-04-20)
 
 **Branch:** `claude/schedule-calendar-integration-cASf7`
 
 **Related:**
-- `docs/plans/PLAN-mood-tracking-redesign.md` — the scheduler this plan extends
-- `REFACTOR.md` — confirms `get_current_time` was moved to a layer (no time tool needed)
+- `docs/plans/PLAN-mood-tracking-redesign.md` -- the scheduler this plan extends
+- `REFACTOR.md` -- confirms `get_current_time` was moved to a layer
+
+---
+
+*Original content preserved below as reference.*
+
+---
 
 ---
 
