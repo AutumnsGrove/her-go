@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"her/agent"
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -143,13 +144,28 @@ func init() {
 // suite represents the YAML file that defines a scripted conversation.
 // The struct tags tell the YAML parser which keys to look for.
 type suite struct {
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	Tags         []string `yaml:"tags"`
-	Messages     []string `yaml:"messages"`
-	SeedMemories []string `yaml:"seed_memories"` // pre-populated before message loop (with embeddings)
-	RunDream     bool     `yaml:"run_dream"`     // run a full dream cycle after all messages complete
-	RunRollup    bool     `yaml:"run_rollup"`    // force the daily mood rollup after all messages complete
+	Name               string              `yaml:"name"`
+	Description        string              `yaml:"description"`
+	Tags               []string            `yaml:"tags"`
+	Messages           []string            `yaml:"messages"`
+	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
+	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
+	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
+	RunRollup          bool                `yaml:"run_rollup"`           // force the daily mood rollup after all messages complete
+}
+
+// SeedCalendarEvent represents a calendar event to populate in sims.
+// Stored in both the DB (SQLite source of truth) and FakeBridge (for EventKit simulation).
+// Can represent any calendar event — meetings, shifts, appointments, etc.
+// Use `type: shift` in notes or metadata to mark shift events.
+type SeedCalendarEvent struct {
+	ID       string `yaml:"id"`       // EventKit-style identifier (e.g., "SEED-001")
+	Title    string `yaml:"title"`    // Event title
+	Start    string `yaml:"start"`    // ISO8601 with timezone
+	End      string `yaml:"end"`      // ISO8601 with timezone
+	Location string `yaml:"location,omitempty"`
+	Notes    string `yaml:"notes,omitempty"` // Can include metadata like "type: shift\njob: Panera\n..."
+	Calendar string `yaml:"calendar,omitempty"` // defaults to config.Calendar.DefaultCalendar
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -753,6 +769,19 @@ func runSim(cmd *cobra.Command, args []string) error {
 	cfg.Persona.PersonaFile = tmpPersonaPath
 
 	// ------------------------------------------------------------------
+	// 6.5. Create FakeBridge for calendar operations in sim mode
+	// ------------------------------------------------------------------
+
+	// Create an in-memory calendar bridge for sims. This bypasses the
+	// Swift EventKit binary requirement and lets us seed calendar state
+	// via YAML without permissions or external dependencies.
+	var fakeBridge *calendar.FakeBridge
+	if len(cfg.Calendar.Calendars) > 0 {
+		fakeBridge = calendar.NewFakeBridge(cfg.Calendar.Calendars)
+		log.Info("created FakeBridge for calendar operations", "calendars", cfg.Calendar.Calendars)
+	}
+
+	// ------------------------------------------------------------------
 	// 7. Message loop — send each message through the real pipeline
 	// ------------------------------------------------------------------
 
@@ -784,6 +813,69 @@ func runSim(cmd *cobra.Command, args []string) error {
 			log.Infof("    seeded #%d: %s", id, content[:min(len(content), 60)])
 		}
 		log.Info("  seeding complete")
+	}
+
+	// --- Seed calendar events (if configured) ---
+	// Pre-populate DB (SQLite = source of truth) + FakeBridge (EventKit simulation).
+	// Can be any type of event: meetings, shifts, appointments, etc.
+	if len(s.SeedCalendarEvents) > 0 {
+		log.Infof("  seeding %d calendar events...", len(s.SeedCalendarEvents))
+		var fakeEvents []*calendar.FakeEvent
+		for _, seed := range s.SeedCalendarEvents {
+			// Parse times
+			start, err := time.Parse(time.RFC3339, seed.Start)
+			if err != nil {
+				log.Error("seed calendar event: invalid start", "err", err, "id", seed.ID)
+				continue
+			}
+			end, err := time.Parse(time.RFC3339, seed.End)
+			if err != nil {
+				log.Error("seed calendar event: invalid end", "err", err, "id", seed.ID)
+				continue
+			}
+
+			// Default calendar if not specified
+			cal := seed.Calendar
+			if cal == "" {
+				cal = cfg.Calendar.DefaultCalendar
+			}
+
+			// Insert into SQLite (source of truth)
+			dbID, err := store.InsertCalendarEvent(
+				seed.Title,
+				seed.Start,
+				seed.End,
+				seed.Location,
+				seed.Notes,
+				cal,
+				seed.ID, // EventKit identifier
+			)
+			if err != nil {
+				log.Error("seed calendar event: DB insert failed", "err", err, "id", seed.ID)
+				continue
+			}
+
+			// Also seed the FakeBridge so calendar_list returns it
+			if fakeBridge != nil {
+				fakeEvent := &calendar.FakeEvent{
+					ID:       seed.ID,
+					Title:    seed.Title,
+					Start:    start,
+					End:      end,
+					Location: seed.Location,
+					Notes:    seed.Notes,
+					Calendar: cal,
+				}
+				fakeEvents = append(fakeEvents, fakeEvent)
+			}
+
+			log.Infof("    seeded #%d: %s on %s (event %s)", dbID, seed.Title, start.Format("Jan 2"), seed.ID)
+		}
+
+		if fakeBridge != nil && len(fakeEvents) > 0 {
+			fakeBridge.Seed(fakeEvents)
+		}
+		log.Info("  calendar event seeding complete")
 	}
 
 	// turnResults collects the bot's reply for each turn so we can build
@@ -880,6 +972,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			EmbedClient:         embedClient,
 			SimilarityThreshold: cfg.Embed.SimilarityThreshold,
 			TavilyClient:        tavilyClient,
+			CalendarBridge:      fakeBridge, // nil in production, FakeBridge in sims
 			Cfg:                 cfg,
 			ScrubbedUserMessage: scrubResult.Text,
 			ScrubVault:          scrubResult.Vault,
@@ -887,10 +980,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TriggerMsgID:        msgID,
 			StatusCallback:      statusCallback,
 			TraceCallback:       traceCallback,
-			TTSCallback:    nil, // no TTS in sim
-			ConfigPath:     cfgFile,
-			AgentEventCB:   agentEventCB,
-			Tracker:        tracker,
+			TTSCallback:         nil, // no TTS in sim
+			ConfigPath:          cfgFile,
+			AgentEventCB:        agentEventCB,
+			Tracker:             tracker,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)

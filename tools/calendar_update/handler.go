@@ -17,6 +17,7 @@ func init() {
 }
 
 // Handle updates an existing calendar event by ID.
+// SQLite is the source of truth — we update locally first, then sync to EventKit.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	// Parse arguments (all fields except event_id are optional)
 	var args struct {
@@ -37,7 +38,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: event_id is required"
 	}
 
-	// Build event update object (only include provided fields)
+	// Step 1: Look up the event in SQLite to get the database ID.
+	event, err := ctx.Store.GetCalendarEventByEventID(args.EventID)
+	if err != nil {
+		return fmt.Sprintf("error: failed to look up event: %v", err)
+	}
+	if event == nil {
+		return fmt.Sprintf("error: event %s not found in local database", args.EventID)
+	}
+
+	// Step 2: Update the local SQLite row (sparse update).
 	eventUpdate := make(map[string]any)
 	if args.Title != "" {
 		eventUpdate["title"] = args.Title
@@ -55,7 +65,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		eventUpdate["notes"] = args.Notes
 	}
 
-	// Build bridge request
+	if len(eventUpdate) > 0 {
+		if err := ctx.Store.UpdateCalendarEvent(event.ID, eventUpdate); err != nil {
+			return fmt.Sprintf("error: failed to update event locally: %v", err)
+		}
+	}
+
+	// Step 3: Sync the update to EventKit via the bridge.
 	req := calendar.Request{
 		Command:  "update",
 		Calendar: "*", // Search all configured calendars
@@ -65,17 +81,20 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		},
 	}
 
-	// Initialize bridge
 	logger := log.Default()
-	bridge := calendar.NewCLIBridge(ctx.Cfg, logger)
+	bridge := ctx.CalendarBridge
+	if bridge == nil {
+		bridge = calendar.NewCLIBridge(ctx.Cfg, logger)
+	}
 
-	// Call with timeout
 	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	resp, err := bridge.Call(callCtx, req)
 	if err != nil {
-		return fmt.Sprintf("error: %v", err)
+		// EventKit sync failed, but the local row is updated.
+		log.Warn("EventKit sync failed for update", "event_id", args.EventID, "error", err)
+		return fmt.Sprintf("warning: event updated locally but EventKit sync failed: %v", err)
 	}
 
 	// Format response as JSON for the agent

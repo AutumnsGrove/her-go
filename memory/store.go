@@ -87,6 +87,13 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying database connection. This is exposed for
+// advanced use cases like the sim command that need direct SQL access.
+// Most code should use the Store methods instead of raw SQL.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // initTables creates all the tables defined in the spec. Using
 // IF NOT EXISTS means this is safe to call every time the app starts —
 // existing tables won't be touched.
@@ -395,6 +402,37 @@ func (s *Store) initTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_pending_mood_status_expires
 			ON pending_mood_proposals(status, expires_at)`,
+
+		// Calendar events — local mirror of EventKit events. SQLite is the
+		// source of truth; EventKit is a sync target. event_id is nullable
+		// because events may fail to sync to EventKit but should still be
+		// tracked locally. This table lets the agent query events without
+		// shelling out to Swift on every read.
+		//
+		// start/end are ISO 8601 TEXT (YYYY-MM-DDTHH:MM:SS) — SQLite's
+		// standard datetime format, same as all other timestamp columns.
+		// location and notes are optional (NULL when not provided).
+		// calendar identifies which Apple Calendar the event belongs to
+		// (e.g., "Calendar", "Work", "Testing").
+		`CREATE TABLE IF NOT EXISTS calendar_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT,
+			title TEXT NOT NULL,
+			start TEXT NOT NULL,
+			end TEXT NOT NULL,
+			location TEXT,
+			notes TEXT,
+			calendar TEXT NOT NULL,
+			active BOOLEAN DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME
+		)`,
+		// Index for date range queries (calendar_list queries by start/end)
+		`CREATE INDEX IF NOT EXISTS idx_calendar_events_start_end
+			ON calendar_events(start, end)`,
+		// Index for event_id lookups (update/delete need to find by EventKit ID)
+		`CREATE INDEX IF NOT EXISTS idx_calendar_events_event_id
+			ON calendar_events(event_id)`,
 	}
 
 	// Pre-migration: detect and rebuild stale mood_entries table.
@@ -471,6 +509,11 @@ func (s *Store) initTables() error {
 		// captures tool call history and decisions. Existing rows default to
 		// "chat" since that's what they were before this column existed.
 		`ALTER TABLE summaries ADD COLUMN stream TEXT NOT NULL DEFAULT 'chat'`,
+
+		// active: soft-delete flag for calendar events (follows memory system pattern).
+		// Existing events default to active = 1 (visible). When an event is deleted,
+		// we set active = 0 instead of removing the row — preserves audit trail.
+		`ALTER TABLE calendar_events ADD COLUMN active BOOLEAN DEFAULT 1`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
