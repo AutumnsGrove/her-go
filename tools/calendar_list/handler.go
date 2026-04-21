@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"her/calendar"
@@ -16,29 +17,28 @@ func init() {
 	tools.Register("calendar_list", Handle)
 }
 
-// Handle lists calendar events in a date range.
+// Handle lists calendar events from all configured calendars in a date range.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	// Parse arguments
 	var args struct {
-		Start    string `json:"start"`
-		End      string `json:"end"`
-		Calendar string `json:"calendar,omitempty"`
+		Start string `json:"start"`
+		End   string `json:"end"`
 	}
 
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error: failed to parse arguments: %v", err)
 	}
 
-	// Use configured calendar if not overridden
-	calendarName := args.Calendar
-	if calendarName == "" {
-		calendarName = ctx.Cfg.Calendar.CalendarName
+	// Build comma-separated calendar list from config
+	calendarList := strings.Join(ctx.Cfg.Calendar.Calendars, ",")
+	if calendarList == "" {
+		return "error: no calendars configured (add calendars to config.yaml)"
 	}
 
 	// Build bridge request
 	req := calendar.Request{
 		Command:  "list",
-		Calendar: calendarName,
+		Calendar: calendarList, // e.g., "Calendar,Work,Testing"
 		Args: map[string]any{
 			"start": args.Start,
 			"end":   args.End,

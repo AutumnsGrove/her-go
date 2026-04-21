@@ -58,7 +58,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Build bridge request
 	req := calendar.Request{
 		Command:  "update",
-		Calendar: ctx.Cfg.Calendar.CalendarName,
+		Calendar: "*", // Search all configured calendars
 		Args: map[string]any{
 			"id":    args.EventID,
 			"event": eventUpdate,

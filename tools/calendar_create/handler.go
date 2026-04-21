@@ -17,11 +17,11 @@ func init() {
 }
 
 // Handle creates one or more calendar events (atomic).
+// Each event can optionally specify a calendar; otherwise uses default_calendar.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	// Parse arguments
 	var args struct {
-		Events   []map[string]any `json:"events"`
-		Calendar string           `json:"calendar,omitempty"`
+		Events []map[string]any `json:"events"`
 	}
 
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -33,16 +33,17 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: no events provided"
 	}
 
-	// Use configured calendar if not overridden
-	calendarName := args.Calendar
-	if calendarName == "" {
-		calendarName = ctx.Cfg.Calendar.CalendarName
+	// For each event, set default calendar if not specified
+	for i := range args.Events {
+		if _, hasCalendar := args.Events[i]["calendar"]; !hasCalendar {
+			args.Events[i]["calendar"] = ctx.Cfg.Calendar.DefaultCalendar
+		}
 	}
 
 	// Build bridge request
 	req := calendar.Request{
 		Command:  "create",
-		Calendar: calendarName,
+		Calendar: ctx.Cfg.Calendar.DefaultCalendar, // Swift uses this as fallback
 		Args: map[string]any{
 			"events": args.Events,
 		},

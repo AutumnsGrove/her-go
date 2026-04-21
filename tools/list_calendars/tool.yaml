@@ -1,0 +1,16 @@
+name: list_calendars
+agent: main
+hint: "discover available calendars"
+description: >-
+  List all available calendars that events can be added to. Use this to discover
+  which calendars exist before creating events with the calendar_create tool.
+  Returns calendar names that can be used in the calendar field of calendar_create.
+hot: true
+category: calendar
+parameters:
+  type: object
+  properties: {}
+  required: []
+trace:
+  emoji: "📋"
+  format: "listed calendars"

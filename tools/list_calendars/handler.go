@@ -1,4 +1,4 @@
-package calendar_delete
+package list_calendars
 
 import (
 	"context"
@@ -13,32 +13,17 @@ import (
 )
 
 func init() {
-	tools.Register("calendar_delete", Handle)
+	tools.Register("list_calendars", Handle)
 }
 
-// Handle deletes a calendar event by ID.
+// Handle lists all available calendars that events can be added to.
+// No parameters required — returns a list of calendar names.
 func Handle(argsJSON string, ctx *tools.Context) string {
-	// Parse arguments
-	var args struct {
-		EventID string `json:"event_id"`
-	}
-
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return fmt.Sprintf("error: failed to parse arguments: %v", err)
-	}
-
-	// Validate event_id is present
-	if args.EventID == "" {
-		return "error: event_id is required"
-	}
-
-	// Build bridge request
+	// Build bridge request (empty args for list_calendars)
 	req := calendar.Request{
-		Command:  "delete",
-		Calendar: "*", // Search all configured calendars
-		Args: map[string]any{
-			"id": args.EventID,
-		},
+		Command:  "list_calendars",
+		Calendar: "", // Not used for this command
+		Args:     map[string]any{},
 	}
 
 	// Initialize bridge
