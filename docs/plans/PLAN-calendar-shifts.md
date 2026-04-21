@@ -214,3 +214,135 @@ CREATE INDEX IF NOT EXISTS idx_jobs_due
 ```
 
 **No-delete rule applies here too.** Done jobs stay in the table. A maintenance task can prune `status IN ('done','cancelled') AND fired_at < now() - 90 days` later if the table grows; not in v1.
+
+---
+
+## Part 4 — Swift bridge (`her-calendar`)
+
+A single Swift CLI binary that speaks EventKit. Go never touches EventKit APIs directly — it shells out to `her-calendar` and pipes JSON in and out.
+
+### Why a CLI, not a daemon
+
+- **Simpler.** No HTTP server, no ports, no keepalive. One invocation per call.
+- **Sandbox-friendly.** The macOS permission prompt has to come from a GUI-attached process on first use. A Terminal-launched binary counts; a launchd daemon may not.
+- **Reproducible install.** `swift build -c release` produces one executable. No app bundle, no signing ceremony.
+
+### Layout
+
+```
+calendar/
+  bridge/
+    Package.swift
+    Sources/
+      her-calendar/
+        main.swift           # stdin/stdout dispatcher
+        Commands.swift       # list / create / update / delete
+        JSON.swift           # Codable models
+    README.md                # build + permission-grant steps
+    .gitignore               # .build/
+```
+
+### Wire protocol
+
+Single-shot: one JSON command on stdin, one JSON response on stdout, process exits. All commands share an envelope.
+
+**Request:**
+```json
+{
+  "command": "list" | "create" | "update" | "delete",
+  "calendar": "Work",
+  "args": { ... command-specific ... }
+}
+```
+
+**Response (success):**
+```json
+{ "ok": true, "result": { ... command-specific ... } }
+```
+
+**Response (error):**
+```json
+{ "ok": false, "error": "permission_denied" | "calendar_not_found" | "event_not_found" | "...", "message": "Human-readable detail." }
+```
+
+Exit codes: 0 = success, 1 = bridge error (bad JSON, no permission, etc.), 2 = calendar-side error (event not found, etc.). Go distinguishes them for retry decisions.
+
+### Commands
+
+**`list`** — events in a window:
+```json
+// args
+{ "start": "2026-04-20T00:00:00-04:00", "end": "2026-04-27T00:00:00-04:00" }
+// result
+{ "events": [
+    { "id": "ABC123", "title": "Panera 5a-1p", "start": "...", "end": "...",
+      "location": "3625 Spring Hill...", "notes": "..." }
+]}
+```
+
+**`create`** — one or many events atomic-per-call:
+```json
+// args
+{ "events": [
+    { "title": "Panera 5a-1p", "start": "...", "end": "...",
+      "location": "...", "notes": "..." }
+]}
+// result
+{ "events": [ { "id": "ABC123" } ] }
+```
+
+On EventKit failure mid-batch, the bridge attempts to delete anything it successfully created in this call, then returns the error. That gives the Go side a clean "nothing persisted" signal for retry decisions.
+
+**`update`** — in-place edit by id. Omitted fields are left unchanged:
+```json
+// args
+{ "id": "ABC123", "title": "...", "start": "...", "end": "...",
+  "location": "...", "notes": "..." }
+// result
+{ "id": "ABC123" }
+```
+
+**`delete`** — by id:
+```json
+// args
+{ "id": "ABC123" }
+// result
+{ "deleted": true }
+```
+
+### Install + permissions (Autumn's setup, one-time)
+
+Per-decision: manual one-time setup. README in `calendar/bridge/` walks through:
+
+1. `cd calendar/bridge && swift build -c release`
+2. Binary appears at `.build/release/her-calendar`.
+3. Run it once from Terminal: `echo '{"command":"list","calendar":"Work","args":{"start":"2026-04-20T00:00:00-04:00","end":"2026-04-21T00:00:00-04:00"}}' | .build/release/her-calendar`
+4. macOS shows the EventKit permission prompt. Click Allow.
+5. Subsequent invocations (including from her, running headless) use the granted permission.
+
+**If permission was denied**, System Settings → Privacy & Security → Calendars → enable `her-calendar`.
+
+### Bridge is optional at startup
+
+Her boots even if the bridge is missing or unbuildable. On startup:
+
+- `agent/agent.go` (or wherever tool init runs) checks `cfg.Calendar.BridgePath` exists and is executable.
+- If missing, log a single warning: `calendar bridge not found at <path>; calendar/shift tools will return errors if called`.
+- Tool handlers return a clear error message to the agent (`"calendar bridge not installed — see calendar/bridge/README.md"`) so it can tell the user.
+
+No panics, no startup failures. Consistent with how `get_weather` handles a missing API key.
+
+### Retry + backoff (Go side)
+
+Every Swift-bridge invocation from a tool goes through a shared helper:
+
+```go
+// calendar/bridge.go
+func (b *Bridge) Call(ctx context.Context, req Request) (Response, error) {
+    // 3 attempts: 0ms, 500ms, 1s, 2s backoff.
+    // Retry only on exit code 1 (bridge error) — calendar-side errors
+    // (event not found, calendar missing) fail fast.
+}
+```
+
+Retry budget per tool call: 3 attempts. Total worst-case latency: ~3.5s. Logged at each retry so flaky permissions/EventKit-locked-by-Calendar.app scenarios are visible in `logger`.
