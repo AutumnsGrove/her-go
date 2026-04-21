@@ -14,6 +14,7 @@
 package tools
 
 import (
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -119,6 +120,12 @@ type Context struct {
 	// TavilyClient provides web search and URL extraction. Nil if not
 	// configured.
 	TavilyClient *search.TavilyClient
+
+	// CalendarBridge provides calendar operations. In production this is
+	// a CLIBridge (shells out to Swift EventKit). In sims/tests it's a
+	// FakeBridge (in-memory). Nil means calendar tools fall back to creating
+	// a CLIBridge on demand (backward-compatible with existing code).
+	CalendarBridge calendar.Bridge
 
 	// --- Callbacks (all nil-safe) ---
 

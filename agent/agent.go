@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"her/calendar"
 	"her/layers"
 	"her/compact"
 	"her/config"
@@ -123,6 +124,7 @@ type RunParams struct {
 	EmbedClient               *embed.Client
 	SimilarityThreshold       float64
 	TavilyClient              *search.TavilyClient
+	CalendarBridge            calendar.Bridge // nil in prod (tools create CLIBridge), FakeBridge in sims
 	Cfg                       *config.Config
 	ScrubbedUserMessage       string
 	ScrubVault                *scrub.Vault
@@ -404,6 +406,7 @@ func Run(params RunParams) (*RunResult, error) {
 		VisionLLM:                 params.VisionLLM,
 		ClassifierLLM:             params.ClassifierLLM,
 		TavilyClient:              params.TavilyClient,
+		CalendarBridge:            params.CalendarBridge,
 		Cfg:                       params.Cfg,
 		ScrubVault:                params.ScrubVault,
 		ScrubbedUserMessage:       params.ScrubbedUserMessage,
