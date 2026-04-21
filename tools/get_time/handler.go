@@ -19,11 +19,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Load timezone from config (Calendar.DefaultTimezone)
 	// Fall back to system timezone if not configured
 	loc := time.Local
-	if ctx.Config.Calendar.DefaultTimezone != "" {
-		loadedLoc, err := time.LoadLocation(ctx.Config.Calendar.DefaultTimezone)
+	if ctx.Cfg.Calendar.DefaultTimezone != "" {
+		loadedLoc, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone)
 		if err != nil {
 			// Invalid timezone in config — warn but continue with system timezone
-			return fmt.Sprintf("error: invalid timezone %q in config: %v", ctx.Config.Calendar.DefaultTimezone, err)
+			return fmt.Sprintf("error: invalid timezone %q in config: %v", ctx.Cfg.Calendar.DefaultTimezone, err)
 		}
 		loc = loadedLoc
 	}

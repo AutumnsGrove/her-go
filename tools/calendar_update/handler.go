@@ -8,6 +8,8 @@ import (
 
 	"her/calendar"
 	"her/tools"
+
+	"github.com/charmbracelet/log"
 )
 
 func init() {
@@ -56,7 +58,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Build bridge request
 	req := calendar.Request{
 		Command:  "update",
-		Calendar: ctx.Config.Calendar.CalendarName,
+		Calendar: ctx.Cfg.Calendar.CalendarName,
 		Args: map[string]any{
 			"id":    args.EventID,
 			"event": eventUpdate,
@@ -64,7 +66,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Initialize bridge
-	bridge := calendar.NewBridge(ctx.Config, ctx.Logger)
+	logger := log.Default()
+	bridge := calendar.NewBridge(ctx.Cfg, logger)
 
 	// Call with timeout
 	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
