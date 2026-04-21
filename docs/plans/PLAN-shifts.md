@@ -1,297 +1,282 @@
-# Plan: Shift Tracking Tools
+# Plan: Shift Tracking (Calendar Extension)
 
-Five tools for tracking work shifts (`shift_schedule`, `shift_update`, `shift_cancel`, `shift_log_time`, `shift_list`), backed by a `work_shifts` SQLite table with audit history. Shifts are linked to calendar events via the bridge from PLAN-calendar-bridge. Job definitions live in config -- tools are generic, never job-named.
+Shift tracking built on top of the existing calendar tools and `calendar_events` SQLite table. No separate tools or tables -- shifts are calendar events with optional shift metadata. One new tool (`shift_hours`) for computing totals.
 
 **Status:** ready for implementation
-**Depends on:** PLAN-calendar-bridge (bridge wrapper, config struct, calendar category)
-**Tracking:**
+**Depends on:** Calendar DB mirror (commit 05a4346), config `CalendarConfig`
+**Supersedes:** Original 5-tool shift plan (dropped in favor of extending calendar tools)
 
 ---
 
 ## Goals
 
-- Track work shifts, not just calendar events. One row per shift with both scheduled and actual times, linked to the calendar event by id.
-- Audit-friendly. Edits don't overwrite -- they supersede, mirroring the memory pattern (`memory/store_facts.go`). Cancellations don't delete. Full history queryable.
-- Generic, not job-named. Tools are `shift_schedule` / `shift_list` etc., never `add_panera_shift`. Jobs (Panera, Cava, anything else) are config rows.
-- Hours computed in Go, not by the LLM.
+- Track work shifts using the same calendar infrastructure. One event = one potential shift. No parallel data system.
+- Shift metadata lives in the event's `notes` field as human-readable key: value pairs -- visible in Apple Calendar.
+- A nullable `job` column on `calendar_events` enables fast, indexed queries for shift-specific filtering without bloating regular events.
+- Hours computed in Go, never by the LLM. One dedicated `shift_hours` tool for totals.
+- Job definitions live in config -- tools are generic, never job-named.
 
 ---
 
-## Part 1 -- Config additions
+## Part 1 -- Config Additions
 
-Extends the `CalendarConfig` struct from PLAN-calendar-bridge with shift-specific fields.
+Extends `CalendarConfig` with a jobs list. Jobs define defaults the handler auto-fills when the agent passes a `job` param.
 
 ```yaml
 calendar:
-  # ... bridge_path, calendar_name, default_timezone from PLAN-calendar-bridge ...
+  # ... existing: bridge_path, calendars, default_calendar, default_timezone ...
 
-  # Default minutes-before-start for reminders when no per-job override
-  # exists and the agent doesn't specify one.
-  default_reminder_minutes: 30
-
-  # Generic job list. Add or remove freely -- code never references these
-  # by name. Match is case-insensitive against name + aliases.
   jobs:
     - name: "Panera"
       address: "3625 Spring Hill Pkwy SE, Smyrna, GA 30080"
-      default_role: ""              # blank = read role from schedule text
-      reminder_minutes: 45          # overrides default_reminder_minutes
+      default_role: ""              # blank = read from schedule/photo
       aliases: ["panera bread"]
 
     - name: "Cava"
       address: "855 Peachtree St NE, Atlanta, GA 30308"
       default_role: "Grill Cook"
-      reminder_minutes: 60
       aliases: []
 ```
 
 **Config struct additions:**
 
 ```go
-// Added to CalendarConfig from PLAN-calendar-bridge
+// Added to CalendarConfig
 type CalendarConfig struct {
-    // ... existing fields from PLAN-calendar-bridge ...
-    DefaultReminderMinutes int          `yaml:"default_reminder_minutes"`
-    Jobs                   []JobConfig  `yaml:"jobs"`
+    // ... existing fields ...
+    Jobs []JobConfig `yaml:"jobs"`
 }
 
 type JobConfig struct {
-    Name             string   `yaml:"name"`
-    Address          string   `yaml:"address"`
-    DefaultRole      string   `yaml:"default_role"`
-    ReminderMinutes  int      `yaml:"reminder_minutes"`  // 0 = use default
-    Aliases          []string `yaml:"aliases"`
+    Name        string   `yaml:"name"`
+    Address     string   `yaml:"address"`
+    DefaultRole string   `yaml:"default_role"`
+    Aliases     []string `yaml:"aliases"`
 }
 
 // MatchJob returns the job whose name or alias matches (case-insensitive),
-// or nil if no match. Used by shift_schedule to validate the job param.
+// or nil if no match. Used by calendar_create to validate and auto-fill.
 func (c *CalendarConfig) MatchJob(name string) *JobConfig { ... }
-
-// ReminderMinutesFor returns the per-job override or the default.
-func (c *CalendarConfig) ReminderMinutesFor(job string) int { ... }
 ```
 
 ---
 
-## Part 2 -- SQLite schema: `work_shifts`
+## Part 2 -- Schema: Add `job` Column
 
-Follows existing project conventions (`memory/store.go` style -- `IF NOT EXISTS` migrations, ISO 8601 timestamps as TEXT).
+One nullable column on the existing `calendar_events` table.
 
 ```sql
-CREATE TABLE IF NOT EXISTS work_shifts (
-    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    job                 TEXT NOT NULL,             -- matches config jobs[].name
-    role                TEXT,                      -- e.g. "Grill Cook", nullable
-    scheduled_start     TEXT NOT NULL,             -- ISO 8601 with offset
-    scheduled_end       TEXT NOT NULL,             -- ISO 8601 with offset
-    actual_start        TEXT,                      -- nullable until clocked
-    actual_end          TEXT,                      -- nullable until clocked
-    calendar_event_id   TEXT,                      -- EventKit event identifier
-    status              TEXT NOT NULL DEFAULT 'scheduled',
-                        -- scheduled | worked | no_show | cancelled
-    notes               TEXT,
-    active              INTEGER NOT NULL DEFAULT 1,
-    superseded_by       INTEGER REFERENCES work_shifts(id),
-    supersede_reason    TEXT,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_shifts_active_start
-    ON work_shifts(active, scheduled_start);
-CREATE INDEX IF NOT EXISTS idx_shifts_job_active
-    ON work_shifts(job, active);
-CREATE INDEX IF NOT EXISTS idx_shifts_event
-    ON work_shifts(calendar_event_id);
+ALTER TABLE calendar_events ADD COLUMN job TEXT;
+CREATE INDEX IF NOT EXISTS idx_calendar_events_job ON calendar_events(job);
 ```
 
-Note: the `reminder_job_id` column is NOT included here -- it's added in PLAN-scheduler-oneoffs when the `scheduler_jobs` table exists to reference.
+Added to `memory/store.go` migrations (same pattern as existing `ALTER TABLE ... ADD COLUMN` migrations -- silently ignored if column already exists).
 
-**Two orthogonal axes -- by design:**
-
-| Axis | Field(s) | Meaning |
-|---|---|---|
-| Lifecycle | `status` | What happened to the shift-as-event: scheduled, worked, no-show, cancelled. |
-| Version history | `active` + `superseded_by` + `supersede_reason` | Tracks edits to the shift's *definition* (time moved, hours changed). |
-
-**Examples:**
-- Cancelled shift: one row, `status='cancelled'`, `active=1`. Calendar event renamed `[CANCELLED] ...`.
-- No-show: one row, `status='no_show'`, `actual_start == actual_end`, hours=0.
-- Time moved Wed to Thu: two rows. Old row `active=0`, `superseded_by=<new_id>`, `supersede_reason='moved Wed to Thu'`. New row inherits `calendar_event_id` (same event, updated in place).
-
-**Store helpers (`memory/store_shifts.go`, mirroring `memory/store_facts.go`):**
+**CalendarEvent struct update:**
 
 ```go
-func (s *Store) InsertShift(sh Shift) (int64, error)
-func (s *Store) GetShift(id int64) (Shift, error)
-func (s *Store) ListShifts(filter ShiftFilter) ([]Shift, ShiftTotals, error)
-func (s *Store) UpdateShiftActuals(id int64, actualStart, actualEnd *time.Time, notes string) error
-func (s *Store) UpdateShiftStatus(id int64, status string) error
-func (s *Store) SupersedeShift(oldID, newID int64, reason string) error
-func (s *Store) ShiftHistory(currentID int64) ([]Shift, error)  // walk supersede chain backwards
-```
-
-`ListShifts` returns per-row `scheduled_hours` / `actual_hours` plus a `ShiftTotals{ScheduledHours, ActualHours, Count}` summary so the agent never has to do time math.
-
----
-
-## Part 3 -- Shift tools
-
-Five tools registered in a `shifts` category (separate from `calendar`). All follow the existing pattern: `tool.yaml` + `handler.go` in `tools/<name>/`.
-
-Add to `tools/categories.yaml`:
-
-```yaml
-shifts:
-  hint: "User mentions a work shift, schedule, hours worked, clocking in/out, or a specific job like Panera/Cava"
-```
-
-### `shift_schedule`
-
-Create one or more shifts for a job. Calendar events created first (via bridge, with retry); on success, DB rows inserted; on partial failure, persists what succeeded and reports the rest.
-
-```yaml
-name: shift_schedule
-description: >-
-  Schedule one or more work shifts for a known job. Creates calendar
-  events AND writes shift rows to the local DB so they can be tracked,
-  edited, and reminded about. Use when the user pastes a work schedule
-  or asks to add shifts. Always include the timezone offset in start/end
-  (use get_time if unsure). Returns shift_ids and event_ids per shift,
-  plus any failures with reasons.
-hot: false
-category: shifts
-parameters:
-  type: object
-  properties:
-    job:
-      type: string
-      description: "Job name from config (e.g. 'Panera'). Aliases match case-insensitively."
-    role:
-      type: string
-      description: "Optional role override. Defaults to job's default_role from config."
-    shifts:
-      type: array
-      description: "One or more shifts to schedule."
-      items:
-        type: object
-        properties:
-          start: { type: string, description: "ISO 8601 with offset" }
-          end: { type: string, description: "ISO 8601 with offset" }
-          notes: { type: string, description: "Optional per-shift notes" }
-          reminder_minutes: { type: integer, description: "Optional override of per-job reminder timing" }
-        required: [start, end]
-  required: [job, shifts]
-```
-
-**Return shape:**
-```json
-{
-  "scheduled": [
-    { "shift_id": 17, "event_id": "ABC", "start": "...", "end": "...",
-      "scheduled_hours": 8.0,
-      "warnings": ["overlaps with shift_id 14 (Cava 4-9p)"] }
-  ],
-  "failed": [
-    { "index": 2, "start": "...", "error": "calendar bridge timeout after 3 attempts" }
-  ],
-  "totals": { "shifts_scheduled": 4, "shifts_failed": 1, "scheduled_hours": 32.0 }
+type CalendarEvent struct {
+    // ... existing fields ...
+    Job string // nullable -- empty string for regular events
 }
 ```
 
-**Behavior:**
-- Partial success: successful shifts persist; failed ones returned in `failed[]`. Tool doesn't error unless ALL failed.
-- Overlap detection: warn but allow. For each new shift, query active `work_shifts` where ranges intersect. Append warning. Don't block.
-- Note: reminder enqueue is NOT part of this plan. When PLAN-scheduler-oneoffs lands, `shift_schedule` will be updated to enqueue reminders atomically with the shift insert.
+**Store helper updates:**
+- `InsertCalendarEvent`: add `job` parameter (empty string → NULL)
+- `UpdateCalendarEvent`: support `"job"` key in the updates map
+- `ListCalendarEvents`: add optional `job` filter parameter
+- `GetCalendarEventByEventID`: include `job` in SELECT
 
-### `shift_update`
+---
 
-Edit an existing shift's scheduled time. Creates a new row, supersedes the old one, updates the EventKit event in place (same `calendar_event_id`).
+## Part 3 -- Notes Format
 
-```yaml
-name: shift_update
-description: >-
-  Move or resize an existing scheduled shift. Use when the user says
-  "actually that's Thursday not Wednesday" or "they pushed me to 6
-  instead of 5". Old row preserved as audit history (active=0,
-  superseded_by=new_id). Calendar event updated in place.
-hot: false
-category: shifts
-parameters:
-  type: object
-  properties:
-    shift_id: { type: integer, description: "ID of the active shift row (from shift_list)" }
-    start: { type: string, description: "New start, ISO 8601. Omit to leave unchanged." }
-    end: { type: string, description: "New end, ISO 8601. Omit to leave unchanged." }
-    role: { type: string, description: "Updated role. Omit to leave unchanged." }
-    reason: { type: string, description: "Why the change happened (stored in supersede_reason)" }
-  required: [shift_id, reason]
+Shift metadata stored as key: value pairs in the event's `notes` field. Human-readable in Apple Calendar, parseable in Go.
+
+**Example notes for a shift event:**
+
+```
+position: Grill Cook
+trainer: Mike
+time chit: 6h 15m
+stayed late to close, covered for Sarah
 ```
 
-### `shift_cancel`
+**Keys (all optional):**
 
-Mark a shift cancelled. Row preserved. Calendar event renamed `[CANCELLED] <original title>`.
+| Key | Description | Example |
+|---|---|---|
+| `position` | Role/position worked | `Grill Cook` |
+| `trainer` | Training supervisor (temporary) | `Mike` |
+| `time chit` | Actual hours worked (from receipt photo) | `6h 15m`, `8h 0m` |
+
+Any text not in `key: value` format is treated as freeform notes -- sits at the bottom, no prefix needed.
+
+**Parsing rules:**
+- Lines matching `^(\w[\w ]*\w): (.+)$` are key: value pairs
+- Everything else is freeform notes
+- Parsing is only needed for `shift_hours` (extracting `time chit`) and `calendar_list` (enriching shift responses)
+
+**`time chit` format:** `Xh Ym` (e.g., `6h 15m`, `8h 0m`). Standardized for reliable Go parsing. The VLLM extracts this from time chit receipt photos; the agent prompt instructs it to output this format.
+
+---
+
+## Part 4 -- Extend Existing Calendar Tools
+
+### `calendar_create` -- Add Optional Shift Params
+
+New optional parameters in `tool.yaml`:
 
 ```yaml
-name: shift_cancel
-description: >-
-  Mark a scheduled shift as cancelled (e.g., boss took the user off the
-  schedule). Does NOT delete the row -- cancellations are part of work
-  history. Calendar event renamed with [CANCELLED] prefix. Use
-  shift_log_time with zero hours if the user simply didn't show up.
-hot: false
-category: shifts
-parameters:
-  type: object
-  properties:
-    shift_id: { type: integer }
-    reason: { type: string, description: "Optional, stored in notes" }
-  required: [shift_id]
+# Added to each event in the events array:
+job:
+  type: string
+  description: "Job name from config (e.g. 'Panera'). Triggers shift behavior. Optional."
+position:
+  type: string
+  description: "Role/position. Defaults to job's default_role if omitted."
+trainer:
+  type: string
+  description: "Training supervisor name. Optional."
 ```
 
-### `shift_log_time`
+**Handler changes:**
+- When `job` is present, run `MatchJob()` to validate + auto-fill:
+  - `location` ← job's `address` (if not explicitly provided)
+  - `position` ← job's `default_role` (if not explicitly provided)
+- Write `job` to the DB column
+- Serialize `position`, `trainer` as key: value lines in `notes`
+- Overlap detection: warn if new shift overlaps an existing shift for any job (query `calendar_events WHERE job IS NOT NULL AND active = 1` with overlapping time range). Warn but don't block.
 
-Record actual clock-in/out for a shift.
+**Updated description:** Remove the "NOT work shifts" language -- calendar_create now handles both.
+
+### `calendar_update` -- Add Shift Params
+
+New optional parameters:
 
 ```yaml
-name: shift_log_time
-description: >-
-  Record actual hours worked for a completed shift. If actual_start is
-  omitted, defaults to scheduled_start (common case -- clocked in on
-  time). Pass actual_start == actual_end to log a no-show (zero hours).
-hot: false
-category: shifts
-parameters:
-  type: object
-  properties:
-    shift_id: { type: integer }
-    actual_start: { type: string, description: "ISO 8601. Defaults to scheduled_start." }
-    actual_end: { type: string, description: "ISO 8601. Required." }
-    notes: { type: string, description: "Optional -- 'stayed late to close', etc." }
-  required: [shift_id, actual_end]
+job:
+  type: string
+  description: "Set or change the job for this event. Optional."
+position:
+  type: string
+  description: "Update position. Optional."
+trainer:
+  type: string
+  description: "Update trainer. Optional."
+time_chit:
+  type: string
+  description: "Actual hours worked, e.g. '6h 15m'. From time chit receipt. Optional."
+shift_notes:
+  type: string
+  description: "Freeform shift notes (e.g. 'stayed late to close'). Optional."
 ```
 
-### `shift_list`
+**Handler changes:**
+- When shift params are present, merge them into the event's `notes` field:
+  1. Parse existing notes into key: value pairs + freeform text
+  2. Update/add the provided keys
+  3. Reserialize back to the `key: value` format + freeform text at the bottom
+- Update `job` column in DB if provided
 
-Query shifts. Primary way to get `shift_id`s for editing or to answer "how many hours did I work."
+### `calendar_list` -- Add Shift Filtering
+
+New optional parameters:
 
 ```yaml
-name: shift_list
+job:
+  type: string
+  description: "Filter to events for this job only. Optional."
+shifts_only:
+  type: boolean
+  description: "Only return events that have a job set. Default false."
+```
+
+**Handler changes:**
+- Pass `job` filter to `ListCalendarEvents` store method
+- When `shifts_only` is true, add `WHERE job IS NOT NULL`
+- For shift events in the response, parse `notes` and include structured shift fields alongside the raw notes
+- Include `scheduled_hours` (computed from start/end) per shift event
+
+### `calendar_delete` -- No Changes
+
+Deleting a shift event is the same as deleting any event. Soft-delete via `active = 0` already preserves history.
+
+**Updated description:** Remove the "prefer shift_cancel" language -- it no longer exists.
+
+---
+
+## Part 5 -- New Tool: `shift_hours`
+
+One new a la carte tool for computing hour totals. This is a DB aggregation, not a calendar operation.
+
+```yaml
+name: shift_hours
+agent: main
 description: >-
-  List shifts in a date range with computed hours and totals. Use to
-  answer "how much did I work" or look up shift_ids before calling
-  shift_update / shift_cancel / shift_log_time.
+  Compute total hours worked over a time period. Parses time chit values
+  from shift events and returns per-job and overall totals. Use when the
+  user asks "how many hours did I work this week/month."
 hot: false
-category: shifts
+category: calendar
 parameters:
   type: object
   properties:
-    start: { type: string, description: "ISO 8601. Defaults to 30 days ago." }
-    end: { type: string, description: "ISO 8601. Defaults to 7 days from now." }
-    job: { type: string, description: "Filter to a specific job (case-insensitive)." }
-    status: { type: string, description: "Filter: scheduled | worked | no_show | cancelled" }
-    include_history: { type: boolean, description: "Include superseded rows. Default false." }
+    period:
+      type: string
+      description: "'week', 'month', 'year', or 'custom'. Defaults to 'month'."
+    start:
+      type: string
+      description: "ISO 8601. Required if period is 'custom'."
+    end:
+      type: string
+      description: "ISO 8601. Required if period is 'custom'."
+    job:
+      type: string
+      description: "Filter to one job. Omit for all jobs."
   required: []
+trace:
+  emoji: "🕐"
+  format: "{{.period}} hours{{if .job}} for {{.job}}{{end}}"
+```
+
+**Return shape:**
+
+```json
+{
+  "period": "Apr 1 – Apr 21, 2026",
+  "by_job": [
+    { "job": "Panera", "shifts": 8, "hours": "47h 30m" },
+    { "job": "Cava", "shifts": 5, "hours": "31h 45m" }
+  ],
+  "total": { "shifts": 13, "hours": "79h 15m" }
+}
+```
+
+**Implementation:**
+1. Resolve `period` to start/end timestamps (week = current Mon–Sun, month = 1st–last, year = Jan 1–Dec 31). Use `config.Calendar.DefaultTimezone`.
+2. Query `calendar_events WHERE job IS NOT NULL AND active = 1` in the date range, optionally filtered by `job`.
+3. For each event, parse `time chit` from notes. If no time chit, fall back to `scheduled_hours` (end - start).
+4. Sum per job, sum overall. Format as `Xh Ym`.
+5. All computation in Go -- the agent just relays the formatted result.
+
+**Store helper:**
+
+```go
+// ListShiftEvents returns active calendar events that have a job set,
+// filtered by date range and optionally by job name. Used by shift_hours.
+func (s *Store) ListShiftEvents(start, end, job string) ([]CalendarEvent, error)
+```
+
+---
+
+## Part 6 -- Update `categories.yaml`
+
+No new category needed. Shifts live in the `calendar` category. The hint already covers it:
+
+```yaml
+calendar:
+  hint: "User mentions a work shift, schedule, calendar event, or asks about hours worked"
 ```
 
 ---
@@ -300,47 +285,84 @@ parameters:
 
 | Decision | Choice | Why |
 |---|---|---|
+| No separate shift tools | Extend calendar tools | Shifts ARE calendar events. One interface, not two. |
+| `job` as a DB column | Nullable TEXT on `calendar_events` | Fast indexed queries. NULL for regular events -- no bloat. |
+| Shift metadata in `notes` | Key: value pairs | Human-readable in Apple Calendar. Parseable in Go. |
+| `time chit` format | `Xh Ym` | Dead simple to parse, VLLM can output it, human-readable. |
+| One new tool | `shift_hours` only | Hour totals need DB aggregation. Everything else rides on existing tools. |
+| No audit/supersession | Dropped | Soft-delete (`active = 0`) already preserves deleted events. Edit history not needed for v1. |
 | Overlap policy | Warn but allow | Real life has overlapping commitments. Surface the warning, let the user decide. |
-| Shift edits | Full EventKit update via stored `calendar_event_id` | Cleaner than delete + recreate; preserves any reminders set in Apple Calendar itself. |
-| Audit history | Memory-style supersession (`active`, `superseded_by`, `supersede_reason`) | Mirrors `memory/store_facts.go`. Proven pattern in this codebase. |
-| Cancellation | Status flag + `[CANCELLED]` calendar prefix | Honors the no-delete principle; keeps history visible on the calendar itself. |
-| No-show | `shift_log_time` with zero hours, `status='no_show'` | Reuses the actuals path; doesn't conflate "I didn't show up" with "shift was cancelled." |
-| Tool naming | Generic (`shift_schedule`, not `schedule_panera`) | Per "code translates data, never defines it." Job names live in config. |
-| Drop `duration_between` | Yes | `shift_list` returns computed hours per row + totals. No need for a separate duration tool. |
-| Separate category | `shifts` not merged with `calendar` | Different use cases. Calendar tools are for ad-hoc events; shift tools are for work tracking. Separate deferred loading keeps the tool set lean per-turn. |
 
-## Known Limitations (v1)
+## Comparison: Original Plan vs. Revised
 
-- **No two-way sync from Apple Calendar.** If Autumn edits a shift event directly in Apple Calendar, her doesn't know. The DB row stays with stale times. Agent always reads `shift_list` (DB) for shift state, not the calendar.
-- **No travel-time / "leave now" reminders.** Per-job `reminder_minutes` is a static heuristic. Routing-based estimates are future work.
-- **No conflict resolution UI.** Overlap warnings are surfaced in returns but no inline confirmation flow. Agent decides whether to relay to user.
+| Aspect | Original (5-tool plan) | Revised (calendar extension) |
+|---|---|---|
+| New tools | 5 (`shift_schedule`, `shift_update`, `shift_cancel`, `shift_log_time`, `shift_list`) | 1 (`shift_hours`) |
+| New tables | `work_shifts` (14 columns, 3 indexes) | 1 column + 1 index on existing table |
+| Store helpers | 7 new functions + `ShiftFilter` + `ShiftTotals` types | 1 new function (`ListShiftEvents`) + updates to existing helpers |
+| Complexity | Parallel data system with supersession chains | Flat extension of existing infrastructure |
 
 ---
 
 ## Phases
 
-### Phase 1 -- Config additions
+### Phase 1 -- Config + Schema
 
-- Add `DefaultReminderMinutes`, `Jobs`, `JobConfig` to `CalendarConfig`
-- Add `MatchJob()` and `ReminderMinutesFor()` helpers
-- Update `config.yaml.example` with documented `jobs:` block
-- Tests for `MatchJob` (case-insensitive, alias matching) and `ReminderMinutesFor` (per-job override, default fallback)
+- Add `Jobs []JobConfig` to `CalendarConfig`, add `JobConfig` struct
+- Add `MatchJob()` helper with case-insensitive + alias matching
+- Add `job TEXT` column migration to `memory/store.go`
+- Update `CalendarEvent` struct, store helpers
+- Update `config.yaml.example` with `jobs:` block
+- Tests: `MatchJob` matching, store helpers with `job` column
 
-**Done when:** config loads jobs cleanly, helpers pass tests.
+**Done when:** config loads jobs, `MatchJob` passes tests, migration applies cleanly.
 
-### Phase 2 -- `work_shifts` schema + store helpers
+### Phase 2 -- Extend Calendar Tools
 
-- `memory/store.go`: migration for `work_shifts` table
-- `memory/store_shifts.go`: full CRUD + supersession + history helpers
-- `memory/store_shifts_test.go`: insert, list with totals, supersede chain walk, status transitions
+- Update `calendar_create`: `job`, `position`, `trainer` params, auto-fill from config, notes serialization, overlap warnings
+- Update `calendar_update`: `time_chit`, `position`, `trainer`, `shift_notes` params, notes merge logic
+- Update `calendar_list`: `job` filter, `shifts_only` flag, structured shift fields in response
+- Update `calendar_delete`: description cleanup only
+- Notes parser: extract key: value pairs from notes text, reserialize after edits
+- Clean up tool.yaml descriptions (remove old shift_schedule/shift_cancel references)
 
-**Done when:** unit tests pass, migrations apply on fresh DB.
+**Done when:** handler tests pass. Agent can create a shift, update it with time chit, list shifts by job, delete a shift.
 
-### Phase 3 -- 5 shift tools + `shifts` category
+### Phase 3 -- `shift_hours` Tool
 
-- `tools/shift_schedule/`, `tools/shift_update/`, `tools/shift_cancel/`, `tools/shift_log_time/`, `tools/shift_list/`
-- Each: `tool.yaml` + `handler.go` + handler test with mocked bridge + real in-memory SQLite
-- Add `shifts` to `tools/categories.yaml`
-- Overlap detection in `shift_schedule` and `shift_update`
+- `tools/shift_hours/tool.yaml` + `handler.go`
+- `ListShiftEvents` store helper
+- Period resolution (week/month/year/custom)
+- Time chit parser (`Xh Ym` → minutes)
+- Summation + formatting logic
+- Handler tests with various period/job combinations
 
-**Done when:** all 5 tools pass handler tests. Agent can load `shifts` category and execute shift workflows end-to-end.
+**Done when:** `shift_hours` returns correct totals across jobs and periods. Agent can answer "how many hours did I work this month."
+
+## Workflow Example
+
+Autumn sends a photo of her Panera schedule:
+
+1. Agent calls `view_image` → VLLM extracts: "Panera shifts: Mon 9a-3p, Wed 11a-5p, Fri 7a-2p"
+2. Agent calls `calendar_create` with:
+   ```json
+   {
+     "events": [
+       {"title": "Panera", "start": "2026-04-27T09:00:00-04:00", "end": "2026-04-27T15:00:00-04:00", "job": "Panera"},
+       {"title": "Panera", "start": "2026-04-29T11:00:00-04:00", "end": "2026-04-29T17:00:00-04:00", "job": "Panera"},
+       {"title": "Panera", "start": "2026-05-01T07:00:00-04:00", "end": "2026-05-01T14:00:00-04:00", "job": "Panera"}
+     ]
+   }
+   ```
+   Handler auto-fills `location` from config. Events land in DB + Apple Calendar.
+
+3. After Monday's shift, Autumn sends a photo of her time chit receipt.
+4. Agent calls `view_image` → VLLM extracts: "clocked in 8:58a, clocked out 3:12p, 6h 14m"
+5. Agent calls `calendar_update` with:
+   ```json
+   {"event_id": "ABC-123", "time_chit": "6h 14m", "shift_notes": "stayed a few extra mins"}
+   ```
+   Handler merges `time chit: 6h 14m` into the event's notes.
+
+6. End of month, Autumn asks "how many hours did I work?"
+7. Agent calls `shift_hours` with `{"period": "month"}` → returns totals per job.
