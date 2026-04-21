@@ -43,7 +43,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Initialize bridge
 	logger := log.Default()
-	bridge := calendar.NewBridge(ctx.Cfg, logger)
+	bridge := calendar.NewCLIBridge(ctx.Cfg, logger)
 
 	// Call with timeout
 	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

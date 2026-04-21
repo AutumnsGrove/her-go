@@ -18,19 +18,26 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-// Bridge wraps the Swift her-calendar CLI with retry logic.
+// Bridge is the interface for calendar operations. The production implementation
+// (CLIBridge) shells out to the Swift EventKit binary. The test/sim implementation
+// (FakeBridge) is in-memory. Both satisfy this contract so tools work unchanged.
+type Bridge interface {
+	Call(ctx context.Context, req Request) (Response, error)
+}
+
+// CLIBridge wraps the Swift her-calendar CLI with retry logic.
 // Each method call spawns the Swift binary, pipes JSON in/out, and returns
 // the result. No daemon, no persistent state — just clean request/response.
-type Bridge struct {
+type CLIBridge struct {
 	binaryPath string
 	cfg        *config.Config
 	logger     *log.Logger
 }
 
-// NewBridge creates a Bridge instance. Checks if the binary exists and is
+// NewCLIBridge creates a CLIBridge instance. Checks if the binary exists and is
 // executable, but doesn't fail if it's missing (fail-soft pattern — tools
 // will return clear errors later).
-func NewBridge(cfg *config.Config, logger *log.Logger) *Bridge {
+func NewCLIBridge(cfg *config.Config, logger *log.Logger) *CLIBridge {
 	// Resolve relative paths from project root
 	binaryPath := cfg.Calendar.BridgePath
 	if !filepath.IsAbs(binaryPath) {
@@ -50,7 +57,7 @@ func NewBridge(cfg *config.Config, logger *log.Logger) *Bridge {
 			"hint", "Build it with: cd calendar/bridge && swift build -c release")
 	}
 
-	return &Bridge{
+	return &CLIBridge{
 		binaryPath: binaryPath,
 		cfg:        cfg,
 		logger:     logger,
@@ -79,7 +86,7 @@ type Response struct {
 // (bridge errors like permission flakes). Exit code 2 (calendar-side errors like
 // event not found) fails immediately. Returns an error if all retries fail or if
 // the bridge binary is missing.
-func (b *Bridge) Call(ctx context.Context, req Request) (Response, error) {
+func (b *CLIBridge) Call(ctx context.Context, req Request) (Response, error) {
 	// Check if binary exists
 	if _, err := os.Stat(b.binaryPath); os.IsNotExist(err) {
 		return Response{}, fmt.Errorf("calendar bridge not found at %s — see calendar/bridge/README.md for build instructions", b.binaryPath)
@@ -127,7 +134,7 @@ func (b *Bridge) Call(ctx context.Context, req Request) (Response, error) {
 
 // callOnce executes a single bridge call without retry logic.
 // Returns the response, exit code, and any error that occurred.
-func (b *Bridge) callOnce(ctx context.Context, req Request) (Response, int, error) {
+func (b *CLIBridge) callOnce(ctx context.Context, req Request) (Response, int, error) {
 	// Marshal request to JSON
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
