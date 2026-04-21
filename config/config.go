@@ -141,6 +141,14 @@ type AgentConfig struct {
 	// windows before giving up. Defaults: 15 iterations, 3 continuations (= 60 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
 	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 3
+
+	// MaxRepliesPerTurn caps how many reply tool calls the agent can make
+	// in a single user turn. Prevents the agent from self-correcting in a
+	// loop (think→reply→think→reply with near-identical content). The reply
+	// handler's internal style/safety gates already retry once — this cap
+	// is a hard ceiling on top of that. Default 2 (enough for "let me look
+	// that up" → "here's what I found").
+	MaxRepliesPerTurn int `yaml:"max_replies_per_turn"` // 0 = 2
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
