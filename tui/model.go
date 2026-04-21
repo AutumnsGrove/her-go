@@ -28,6 +28,8 @@ type Section struct {
 	ToolLines    []string // agent iterations + tool calls
 	ReplyLines   []string // reply metrics + mira's response
 	PersonaLines []string // reflection/rewrite events
+	MemoryLines  []string // memory agent tool calls (background)
+	MoodLines    []string // mood agent results (background)
 
 	// Turn-specific metadata for the collapsed one-line summary
 	UserMessage string
@@ -265,7 +267,16 @@ func (m *Model) handleEvent(e Event) {
 		m.appendToTurnGroup(ev.TurnID, "tools", renderAgentIterEvent(ev))
 
 	case ToolCallEvent:
-		m.appendToTurnGroup(ev.TurnID, "tools", renderToolCallEvent(ev))
+		// Route by Source — memory/mood agent events go to their own
+		// content groups so they don't inflate the main agent section.
+		group := "tools"
+		switch ev.Source {
+		case "memory":
+			group = "memory"
+		case "mood":
+			group = "mood"
+		}
+		m.appendToTurnGroup(ev.TurnID, group, renderToolCallEvent(ev))
 		m.incrementTurnToolCount(ev.TurnID)
 
 	case ReplyEvent:
@@ -278,6 +289,9 @@ func (m *Model) handleEvent(e Event) {
 
 	case PersonaEvent:
 		m.appendToTurnGroup(ev.TurnID, "persona", renderPersonaEvent(ev))
+
+	case MoodEvent:
+		m.appendToTurnGroup(ev.TurnID, "mood", renderMoodEvent(ev))
 
 	case SidecarEvent:
 		m.handleSidecarEvent(ev)
@@ -412,6 +426,10 @@ func (m *Model) appendToTurnGroup(turnID int64, group, line string) {
 		sec.ReplyLines = append(sec.ReplyLines, line)
 	case "persona":
 		sec.PersonaLines = append(sec.PersonaLines, line)
+	case "memory":
+		sec.MemoryLines = append(sec.MemoryLines, line)
+	case "mood":
+		sec.MoodLines = append(sec.MoodLines, line)
 	}
 	m.autoScroll()
 }
@@ -490,7 +508,7 @@ func (m *Model) sectionHeight(idx int) int {
 // embed \n within a single slice element, producing more rendered lines than len(group) suggests.
 func (m *Model) turnContentHeight(sec *Section) int {
 	height := 0
-	for _, group := range [][]string{sec.ContextLines, sec.ToolLines, sec.ReplyLines, sec.PersonaLines} {
+	for _, group := range [][]string{sec.ContextLines, sec.ToolLines, sec.ReplyLines, sec.PersonaLines, sec.MemoryLines, sec.MoodLines} {
 		if len(group) > 0 {
 			// Count real content lines — each element may contain \n
 			contentLines := 0

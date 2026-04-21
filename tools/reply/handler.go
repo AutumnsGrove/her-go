@@ -105,12 +105,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			log.Infof("  [chat layer] %s: ~%d tokens", lr.Name, lr.Tokens)
 		}
 		// Pass injected memories observability to the TUI.
-		if ctx.EventBus != nil {
-			for _, m := range lr.InjectedMemories {
-				memArgs := fmt.Sprintf("#%d %s", m.ID, m.Source)
-				if m.Distance > 0 {
-					memArgs = fmt.Sprintf("#%d %s dist=%.2f", m.ID, m.Source, m.Distance)
-				}
+		for _, m := range lr.InjectedMemories {
+			memArgs := fmt.Sprintf("#%d %s", m.ID, m.Source)
+			if m.Distance > 0 {
+				memArgs = fmt.Sprintf("#%d %s dist=%.2f", m.ID, m.Source, m.Distance)
+			}
+			if ctx.Phase != nil {
+				ctx.Phase.EmitToolCall("memory→chat", memArgs, truncate(m.Content, 80), false)
+			} else if ctx.EventBus != nil {
 				ctx.EventBus.Emit(tui.ToolCallEvent{
 					Time:     time.Now(),
 					TurnID:   ctx.TriggerMsgID,
@@ -234,17 +236,20 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	ctx.ReplyModel = resp.Model
 	log.Infof("  reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
-	if ctx.EventBus != nil {
-		ctx.EventBus.Emit(tui.ReplyEvent{
-			Time:             time.Now(),
-			TurnID:           ctx.TriggerMsgID,
-			Text:             truncate(resp.Content, 200),
-			PromptTokens:     resp.PromptTokens,
-			CompletionTokens: resp.CompletionTokens,
-			TotalTokens:      resp.TotalTokens,
-			CostUSD:          resp.CostUSD,
-			LatencyMs:        latencyMs,
-		})
+	replyEvent := tui.ReplyEvent{
+		Time:             time.Now(),
+		TurnID:           ctx.TriggerMsgID,
+		Text:             truncate(resp.Content, 200),
+		PromptTokens:     resp.PromptTokens,
+		CompletionTokens: resp.CompletionTokens,
+		TotalTokens:      resp.TotalTokens,
+		CostUSD:          resp.CostUSD,
+		LatencyMs:        latencyMs,
+	}
+	if ctx.Phase != nil {
+		ctx.Phase.Emit(replyEvent)
+	} else if ctx.EventBus != nil {
+		ctx.EventBus.Emit(replyEvent)
 	}
 
 	// Guard against degenerate responses. If the chat model returned
@@ -446,6 +451,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		// Do NOT save to DB or fire TTS — the message wasn't delivered.
 		log.Error("reply: Telegram send failed", "err", sendErr)
 		return fmt.Sprintf("error: send failed: %v", sendErr)
+	}
+
+	// Stop the typing indicator immediately now that the reply is visible.
+	// Without this, typing lingers until agent.Run returns (which involves
+	// cleanup, placeholder deletion, etc.) or even longer if there's a race
+	// with the typing refresh goroutine.
+	if ctx.StopTypingFn != nil {
+		ctx.StopTypingFn()
 	}
 
 	// Save to DB only after confirmed delivery.

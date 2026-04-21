@@ -125,6 +125,7 @@ func (e AgentIterEvent) EventSource() string  { return "agent" }
 type ToolCallEvent struct {
 	Time     time.Time
 	TurnID   int64
+	Source   string // "main" (default/empty), "memory", "mood" — routes to the correct TUI content group
 	ToolName string
 	Args     string // truncated JSON arguments
 	Result   string // truncated result string
@@ -185,6 +186,26 @@ type PersonaEvent struct {
 
 func (e PersonaEvent) EventTime() time.Time { return e.Time }
 func (e PersonaEvent) EventSource() string  { return "persona" }
+
+// ---------------------------------------------------------------------------
+// Mood events — background mood inference results
+// ---------------------------------------------------------------------------
+
+// MoodEvent fires when the mood agent completes its inference for a
+// turn. The action tells you what happened: auto_logged, proposal_emitted,
+// dropped_low_confidence, dropped_dedup, etc.
+type MoodEvent struct {
+	Time       time.Time
+	TurnID     int64
+	Action     string   // mood.Action as string (e.g. "auto_logged", "dropped_dedup")
+	Valence    int      // 1-7 scale, 0 if dropped before valence was determined
+	Labels     []string // emotion labels (e.g. ["focused", "curious"])
+	Confidence float64
+	Reason     string // human-readable reason (especially for drops)
+}
+
+func (e MoodEvent) EventTime() time.Time { return e.Time }
+func (e MoodEvent) EventSource() string  { return "mood" }
 
 // ---------------------------------------------------------------------------
 // Sidecar events — STT/TTS process output

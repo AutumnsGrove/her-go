@@ -21,7 +21,7 @@ import (
 	"her/agent"
 	"her/scrub"
 	"her/tools"
-	"her/tui"
+	"her/turn"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -111,23 +111,24 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 
 	// --- Typing indicator ---
 	// Telegram's typing indicator expires after ~5 seconds, so we
-	// refresh it every 4. The goroutine exits when we close the channel.
-	// Same pattern as Python's asyncio.create_task() — fire and forget,
-	// clean up via signal.
-	stopTyping := make(chan struct{})
-	go func() {
-		_ = c.Notify(tele.Typing)
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopTyping:
-				return
-			case <-ticker.C:
-				_ = c.Notify(tele.Typing)
-			}
-		}
-	}()
+	// refresh it every 4. The Tracker wraps the stop function in
+	// sync.Once, so it's safe to call from the reply tool (early stop),
+	// from the Tracker when all phases finish, or from the defer below
+	// (panic safety). No more leaked goroutines.
+	stopTypingFn := b.startTypingIndicator(c)
+
+	// --- Turn tracker ---
+	// The Tracker manages the full lifecycle of this message turn,
+	// including background agents. It emits TurnStartEvent now and
+	// TurnEndEvent when all phases (main, memory, mood) complete.
+	tracker := turn.NewTracker(
+		input.TriggerMsgID,
+		b.eventBus,
+		stopTypingFn,
+		truncate(input.UserMessage, 100),
+		input.ConversationID,
+	)
+	defer tracker.StopTyping() // panic safety — guarantees typing stops
 
 	// --- Trace callbacks ---
 	// Trace callbacks pull from a single per-turn trace.Board. Each
@@ -162,7 +163,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 
 	placeholder, sendErr := c.Bot().Send(c.Recipient(), placeholderText, placeholderOpts...)
 	if sendErr != nil {
-		close(stopTyping)
+		tracker.StopTyping()
 		log.Error("sending placeholder", "err", sendErr)
 		return c.Send("Sorry, I'm having trouble right now. Try again in a moment?")
 	}
@@ -247,19 +248,9 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 		streamCallback, stopStream = b.makeStreamCallback(c, func() *tele.Message { return placeholder })
 	}
 
-	// --- TUI events ---
-	turnStart := time.Now()
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnStartEvent{
-			Time:           turnStart,
-			TurnID:         input.TriggerMsgID,
-			UserMessage:    truncate(input.UserMessage, 100),
-			ConversationID: input.ConversationID,
-		})
-	}
-
 	// --- Run the agent ---
 	params := b.baseRunParams()
+	params.Tracker = tracker
 	params.ScrubbedUserMessage = scrubbedText
 	params.ScrubVault = vault
 	params.ConversationID = input.ConversationID
@@ -281,15 +272,15 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	result, err := agent.Run(params)
 	b.agentBusy.Store(false)
 
-	// Stop the stream ticker before closing stopTyping — both may try to
+	// Stop the stream ticker before stopping typing — both may try to
 	// edit the placeholder, and we want the authoritative StatusCallback
 	// edit (deanonymized text, already sent inside agent.Run) to be last.
 	if stopStream != nil {
 		stopStream()
 	}
-	close(stopTyping)
 
 	if err != nil {
+		tracker.StopTyping()
 		log.Error("agent error", "err", err)
 		_, _ = c.Bot().Edit(placeholder, "Sorry, I'm having trouble thinking right now. Try again in a moment?")
 		return nil
@@ -298,23 +289,13 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// Fire the mood agent in a goroutine. Runs parallel to the memory
-	// agent that agent.Run already launched; both are post-reply
-	// best-effort and never block the user. moodTraceCallback may be
-	// nil (traces disabled) — the launch is still safe.
-	b.launchMoodAgent(input.ConversationID, moodTraceCallback)
+	// Fire the mood agent in a goroutine. Begin the phase BEFORE
+	// launching the goroutine to prevent a race where all known phases
+	// finish and TurnEndEvent fires before the mood goroutine starts.
+	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker)
 
-	// --- TUI end event ---
-	if b.eventBus != nil {
-		b.eventBus.Emit(tui.TurnEndEvent{
-			Time:       time.Now(),
-			TurnID:     input.TriggerMsgID,
-			ElapsedMs:  time.Since(turnStart).Milliseconds(),
-			TotalCost:  result.TotalCost,
-			ToolCalls:  result.ToolCalls,
-			MemoriesSaved: result.MemoriesSaved,
-		})
-	}
+	// No manual TurnEndEvent here — the Tracker emits it when all
+	// phases (main, memory, mood) complete, with accumulated metrics.
 
 	return nil
 }
@@ -360,6 +341,30 @@ func (b *Bot) baseRunParams() agent.RunParams {
 			}
 		},
 	}
+}
+
+// startTypingIndicator launches the Telegram typing indicator goroutine
+// and returns a function that stops it. The returned function closes a
+// channel — it's safe to call via sync.Once (which the Tracker does).
+//
+// Extracted so runAgent doesn't own the channel directly — the Tracker
+// wraps this in sync.Once for panic-safe cleanup.
+func (b *Bot) startTypingIndicator(c tele.Context) func() {
+	stopTyping := make(chan struct{})
+	go func() {
+		_ = c.Notify(tele.Typing)
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopTyping:
+				return
+			case <-ticker.C:
+				_ = c.Notify(tele.Typing)
+			}
+		}
+	}()
+	return func() { close(stopTyping) }
 }
 
 // makeStreamCallback creates a streaming callback that funnels LLM tokens to

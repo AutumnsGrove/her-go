@@ -21,6 +21,7 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/tui"
+	"her/turn"
 )
 
 // ---------------------------------------------------------------------------
@@ -132,6 +133,17 @@ type Context struct {
 	// Nil means streaming is disabled for this turn — reply falls back to
 	// the existing non-streaming path automatically.
 	StreamCallback StreamCallback
+
+	// StopTypingFn stops the Telegram typing indicator. Called by the
+	// reply tool after successfully delivering a reply, so typing stops
+	// immediately instead of lingering until agent.Run returns. Nil-safe.
+	StopTypingFn func()
+
+	// Phase is the turn phase handle for the current agent. Used by
+	// tools to emit events (ReplyEvent, ToolCallEvent) that auto-route
+	// to the correct turn and content group. Nil-safe — falls back to
+	// direct EventBus emission when not set.
+	Phase *turn.PhaseHandle
 
 	// --- Conversation state ---
 
