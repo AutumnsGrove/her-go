@@ -144,6 +144,8 @@ func (m Model) renderTurnContent(sec *Section) []string {
 		{"agent", sec.ToolLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorCyan).Width(boxWidth).Padding(0, 1)},
 		{"reply", sec.ReplyLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorSuccess).Width(boxWidth).Padding(0, 1)},
 		{"persona", sec.PersonaLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
+		{"memory", sec.MemoryLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
+		{"mood", sec.MoodLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
 	}
 
 	for _, g := range groups {
@@ -459,6 +461,32 @@ func renderPersonaEvent(ev PersonaEvent) string {
 		icon = "✨"
 	}
 	return personaStyle.Render(fmt.Sprintf("%s %s %s", icon, ev.Action, ev.Detail))
+}
+
+func renderMoodEvent(ev MoodEvent) string {
+	icon := "🎭"
+	switch {
+	case strings.HasPrefix(ev.Action, "auto_logged"):
+		icon = "✅"
+	case strings.HasPrefix(ev.Action, "updated"):
+		icon = "♻️"
+	case strings.HasPrefix(ev.Action, "proposal"):
+		icon = "📩"
+	case strings.HasPrefix(ev.Action, "dropped"):
+		icon = "⏭"
+	case strings.HasPrefix(ev.Action, "errored"):
+		icon = "⚠️"
+	}
+
+	detail := ev.Action
+	if ev.Valence > 0 {
+		labels := strings.Join(ev.Labels, ", ")
+		detail = fmt.Sprintf("%s v=%d [%s] conf=%.2f", ev.Action, ev.Valence, labels, ev.Confidence)
+	}
+	if ev.Reason != "" && strings.HasPrefix(ev.Action, "dropped") {
+		detail += " — " + ev.Reason
+	}
+	return logInfoStyle.Render(fmt.Sprintf("%s %s", icon, detail))
 }
 
 func renderSidecarEvent(ev SidecarEvent) string {

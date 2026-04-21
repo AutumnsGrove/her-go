@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"her/layers"
@@ -20,6 +19,7 @@ import (
 	"her/tools"
 	"her/trace"
 	"her/tui"
+	"her/turn"
 
 	// Blank imports trigger init() registration for each tool's handler.
 	// Same pattern as database drivers: import _ "github.com/lib/pq"
@@ -50,6 +50,12 @@ var log = logger.WithPrefix("agent")
 func init() {
 	trace.Register(trace.Stream{Name: "main", Order: 100, Label: "🛠️ <b>main</b>"})
 	trace.Register(trace.Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
+
+	// Turn phase registration — same pattern as trace streams.
+	// "main" and "memory" register here because this package owns
+	// both the main agent loop and the memory agent launch.
+	turn.Register(turn.Phase{Name: "main", Order: 100, Label: "agent"})
+	turn.Register(turn.Phase{Name: "memory", Order: 200, Label: "memory"})
 }
 
 // Callback types and toolContext have been moved to the tools package
@@ -137,7 +143,7 @@ type RunParams struct {
 	EventBus                  *tui.Bus                    // nil-safe — emits rich typed events for the TUI
 	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
-	BackgroundWG              *sync.WaitGroup             // nil = fire-and-forget (production); non-nil = caller can wait for memory agent to finish (sim)
+	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -162,6 +168,16 @@ type RunResult struct {
 // since they don't affect the user's response.
 func Run(params RunParams) (*RunResult, error) {
 	log.Info("─── agent ───")
+
+	// Begin the main phase — the Tracker ref-counts active phases and
+	// emits TurnEndEvent when all of them (main, memory, mood) finish.
+	// The defer ensures Done fires even on early error returns; the
+	// explicit Done() later with real metrics takes precedence (once-guarded).
+	var mainPhase *turn.PhaseHandle
+	if params.Tracker != nil {
+		mainPhase = params.Tracker.Begin("main")
+		defer mainPhase.Done(turn.PhaseMetrics{})
+	}
 
 	// Helper for nil-safe event emission — avoids if-checks everywhere.
 	emit := func(e tui.Event) {
@@ -310,11 +326,19 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// Emit context event for the TUI
-	emit(tui.ContextEvent{
-		Time: time.Now(), TurnID: params.TriggerMsgID,
-		RelevantMemories: len(relevantMemories),
-	})
+	// Emit context event for the TUI — route through PhaseHandle when
+	// available so TurnID is centrally managed.
+	if mainPhase != nil {
+		mainPhase.Emit(tui.ContextEvent{
+			Time: time.Now(), TurnID: params.TriggerMsgID,
+			RelevantMemories: len(relevantMemories),
+		})
+	} else {
+		emit(tui.ContextEvent{
+			Time: time.Now(), TurnID: params.TriggerMsgID,
+			RelevantMemories: len(relevantMemories),
+		})
+	}
 
 	// Build the context message for the agent using the layer registry.
 	// Each layer (time, history, message, image, facts) lives in its own
@@ -394,6 +418,13 @@ func Run(params RunParams) (*RunResult, error) {
 		EventBus:                  params.EventBus,
 		ConfigPath:                params.ConfigPath,
 		PreApprovedRewrites:       make(map[string]bool),
+	}
+
+	// Wire turn tracker callbacks so tools can participate in the turn
+	// lifecycle without importing agent or bot packages.
+	if params.Tracker != nil {
+		tctx.StopTypingFn = params.Tracker.StopTyping
+		tctx.Phase = mainPhase
 	}
 
 	// Tool-calling loop. The model may return multiple tool calls,
@@ -523,11 +554,19 @@ outer:
 				traceLines = append(traceLines, fmt.Sprintf("⚡ <i>agent fallback: %s</i>", resp.Model))
 				sendTrace()
 			}
-			emit(tui.AgentIterEvent{
-				Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
-				PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
-				CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
-			})
+			if mainPhase != nil {
+				mainPhase.Emit(tui.AgentIterEvent{
+					Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
+					PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+					CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
+				})
+			} else {
+				emit(tui.AgentIterEvent{
+					Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
+					PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+					CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
+				})
+			}
 
 			// --- Check finish_reason to decide how to proceed ---
 			hasToolCalls := len(resp.ToolCalls) > 0
@@ -605,14 +644,23 @@ outer:
 				result := executeTool(tc, tctx)
 				isError := strings.HasPrefix(result, "error:")
 				log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
-				emit(tui.ToolCallEvent{
-					Time:     time.Now(),
-					TurnID:   params.TriggerMsgID,
-					ToolName: tc.Function.Name,
-					Args:     truncateLog(tc.Function.Arguments, 200),
-					Result:   truncateLog(result, 200),
-					IsError:  isError,
-				})
+				if mainPhase != nil {
+					mainPhase.EmitToolCall(
+						tc.Function.Name,
+						truncateLog(tc.Function.Arguments, 200),
+						truncateLog(result, 200),
+						isError,
+					)
+				} else {
+					emit(tui.ToolCallEvent{
+						Time:     time.Now(),
+						TurnID:   params.TriggerMsgID,
+						ToolName: tc.Function.Name,
+						Args:     truncateLog(tc.Function.Arguments, 200),
+						Result:   truncateLog(result, 200),
+						IsError:  isError,
+					})
+				}
 
 				// Build the trace line for this tool call.
 				if tracing {
@@ -724,25 +772,31 @@ outer:
 		MemoriesSaved: len(tctx.SavedMemories),
 	}
 
-	// --- Persona Evolution Triggers + Memory Agent ---
-	// These run AFTER the response has been sent to the user.
-	// They go in a goroutine because they don't affect the current turn.
-	//
-	// The chain: facts accumulate → triggers reflection →
-	//            reflections accumulate → triggers persona rewrite
-	// No concept of "conversations" needed — just fact and reflection counts.
-	go func() {
-		// Signal completion if a caller is waiting (sim mode).
-		// In production BackgroundWG is nil — this is a no-op.
-		if params.BackgroundWG != nil {
-			defer params.BackgroundWG.Done()
-		}
+	// Signal main phase completion — its cost gets accumulated into
+	// the Tracker's metrics. Done before launching background work.
+	if mainPhase != nil {
+		mainPhase.Done(turn.PhaseMetrics{
+			Cost:          result.TotalCost,
+			ToolCalls:     result.ToolCalls,
+			MemoriesSaved: result.MemoriesSaved,
+		})
+	}
 
-		// --- Memory agent ---
-		// Runs first — we want facts saved before the reflection trigger
-		// checks the fact count. This way a fact-rich turn can trigger
-		// reflection in the same goroutine run.
+	// --- Memory Agent ---
+	// Runs AFTER the response has been sent to the user in a goroutine.
+	// Begin the memory phase BEFORE launching the goroutine so the
+	// Tracker's ref count is correct (prevents premature TurnEndEvent).
+	var memPhase *turn.PhaseHandle
+	if params.Tracker != nil && params.MemoryAgentLLM != nil {
+		memPhase = params.Tracker.Begin("memory")
+	}
+
+	go func() {
 		if params.MemoryAgentLLM != nil {
+			// Defer memPhase.Done() so it fires even if RunMemoryAgent panics.
+			if memPhase != nil {
+				defer memPhase.Done(turn.PhaseMetrics{})
+			}
 			RunMemoryAgent(
 				MemoryAgentInput{
 					UserMessage:    params.ScrubbedUserMessage,
@@ -760,6 +814,7 @@ outer:
 					TraceCallback: params.MemoryTraceCallback,
 					EventBus:      params.EventBus,
 					AgentEventCB:  params.AgentEventCB,
+					Phase:         memPhase,
 				},
 			)
 		}

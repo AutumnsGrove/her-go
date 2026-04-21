@@ -11,6 +11,8 @@ import (
 
 	"her/memory"
 	"her/mood"
+	"her/tui"
+	"her/turn"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -235,11 +237,29 @@ func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
 // Called from runAgent after the main reply is sent. No-op when the
 // mood runner isn't configured. When trace is non-nil, decision-point
 // traces flow into its slot of the turn's TraceBoard.
-func (b *Bot) launchMoodAgent(convID string, trace func(string) error) {
+//
+// The tracker manages the phase lifecycle: Begin is called here
+// (before launching the goroutine to prevent a race) and Done fires
+// inside the goroutine when the mood agent finishes.
+func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *turn.Tracker) {
 	if b.moodRunner == nil || convID == "" {
 		return
 	}
+
+	// Begin the mood phase BEFORE launching the goroutine. This
+	// increments the Tracker's pending count so TurnEndEvent doesn't
+	// fire prematurely if the main + memory phases finish first.
+	var moodPhase *turn.PhaseHandle
+	if tracker != nil {
+		moodPhase = tracker.Begin("mood")
+	}
+
 	go func() {
+		// Ensure phase completion even if the mood agent panics.
+		if moodPhase != nil {
+			defer moodPhase.Done(turn.PhaseMetrics{})
+		}
+
 		// 60s timeout — mood agent does one LLM call plus an
 		// optional classifier pass. Safely past any reasonable
 		// round-trip.
@@ -253,8 +273,30 @@ func (b *Bot) launchMoodAgent(convID string, trace func(string) error) {
 				context.Background(), convID, 60*time.Second,
 			)
 		}
+
 		if res.Action == mood.ActionErrored {
 			log.Warn("mood agent errored", "reason", res.Reason)
+		}
+
+		// Emit a MoodEvent so the TUI shows what happened.
+		if moodPhase != nil {
+			var labels []string
+			var valence int
+			var confidence float64
+			if res.Inference != nil {
+				labels = res.Inference.Labels
+				valence = res.Inference.Valence
+				confidence = res.Confidence
+			}
+			moodPhase.Emit(tui.MoodEvent{
+				Time:       time.Now(),
+				TurnID:     moodPhase.TurnID(),
+				Action:     string(res.Action),
+				Valence:    valence,
+				Labels:     labels,
+				Confidence: confidence,
+				Reason:     res.Reason,
+			})
 		}
 	}()
 }

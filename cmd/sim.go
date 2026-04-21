@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"her/agent"
@@ -21,6 +20,7 @@ import (
 	"her/scheduler"
 	"her/scrub"
 	"her/search"
+	"her/turn"
 
 	// Underscore import: registers the SQLite driver with database/sql.
 	// We need this for the sim.db connection (separate from memory.Store
@@ -853,11 +853,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 
-		// Wire the background sync so we wait for the memory agent to
-		// finish before proceeding to the next turn. In production this
-		// is nil (fire-and-forget), but in sim we need deterministic ordering.
-		var bgWG sync.WaitGroup
-		bgWG.Add(1)
+		// Turn tracker — nil bus and nil stopTypingFn for sim mode.
+		// tracker.Wait() blocks until all phases (main, memory) finish,
+		// giving us deterministic ordering for sim assertions.
+		tracker := turn.NewTracker(msgID, nil, nil, "", conversationID)
 
 		// Capture any AgentEvent fired by notify_agent so we can run
 		// the follow-up synchronously after the memory agent finishes.
@@ -891,10 +890,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TTSCallback:    nil, // no TTS in sim
 			ConfigPath:     cfgFile,
 			AgentEventCB:   agentEventCB,
-			BackgroundWG:   &bgWG,
+			Tracker:        tracker,
 		})
 		if err != nil {
-			bgWG.Done() // release the WG so we don't deadlock
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
 			log.Errorf("  %s: [ERROR: %s]", cfg.Identity.Her, err)
 			turnResults = append(turnResults, simTurnResult{
@@ -909,9 +907,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Infof("  %s: %s", cfg.Identity.Her, result.ReplyText)
 		log.Infof("  (%s)", elapsed.Round(time.Millisecond))
 
-		// Wait for the memory agent goroutine to finish before checking
-		// for inbox events or proceeding to the next turn.
-		bgWG.Wait()
+		// Wait for all background agents (main, memory) to finish before
+		// checking for inbox events or proceeding to the next turn.
+		tracker.Wait()
 
 		// If the memory agent called notify_agent, handle the follow-up
 		// synchronously — either a direct message or a brief agent loop.

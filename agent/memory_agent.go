@@ -26,6 +26,7 @@ import (
 	"her/memory"
 	"her/tools"
 	"her/tui"
+	"her/turn"
 
 	// Blank imports register the memory tool handlers in tools.Execute's
 	// dispatch table. Same pattern as agent.go's blank imports — the init()
@@ -61,6 +62,7 @@ type MemoryAgentParams struct {
 	TraceCallback tools.TraceCallback    // nil = tracing disabled for memory agent
 	EventBus      *tui.Bus               // nil-safe — emits tool call events for the TUI
 	AgentEventCB  tools.AgentEventCallback // nil-safe — fires when notify_agent is called
+	Phase         *turn.PhaseHandle       // nil-safe — routes events to the parent turn's memory group
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
@@ -106,28 +108,6 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	// see the wrong context (it would reject "user built a grocery tool" because
 	// the snippet shows "user asked about cortisol research" from the next turn).
 	contextSnippet, _ := params.Store.RecentMessages(input.ConversationID, 2)
-
-	turnStart := time.Now()
-	if params.EventBus != nil {
-		params.EventBus.Emit(tui.TurnStartEvent{
-			Time:           turnStart,
-			TurnID:         input.TriggerMsgID + 1, // +1 distinguishes from the main agent's turn in the TUI
-			UserMessage:    "🧩 memory",
-			ConversationID: input.ConversationID,
-		})
-	}
-
-	emitEnd := func(memoriesSaved int, cost float64) {
-		if params.EventBus != nil {
-			params.EventBus.Emit(tui.TurnEndEvent{
-				Time:          time.Now(),
-				TurnID:        input.TriggerMsgID + 1,
-				ElapsedMs:     time.Since(turnStart).Milliseconds(),
-				TotalCost:     cost,
-				MemoriesSaved: memoriesSaved,
-			})
-		}
-	}
 
 	// Load the memory agent prompt (hot-reloadable like other prompt files).
 	promptContent := loadMemoryAgentPrompt(params.Cfg)
@@ -260,10 +240,19 @@ outer:
 					ToolCallID: tc.ID,
 				})
 
-				if params.EventBus != nil {
+				if params.Phase != nil {
+					params.Phase.EmitToolCall(
+						tc.Function.Name,
+						truncateLog(tc.Function.Arguments, 200),
+						truncateLog(result, 200),
+						isError,
+					)
+				} else if params.EventBus != nil {
+					// Fallback for callers that don't use the turn tracker yet.
 					params.EventBus.Emit(tui.ToolCallEvent{
 						Time:     time.Now(),
-						TurnID:   input.TriggerMsgID + 1,
+						TurnID:   input.TriggerMsgID,
+						Source:   "memory",
 						ToolName: tc.Function.Name,
 						Args:     truncateLog(tc.Function.Arguments, 200),
 						Result:   truncateLog(result, 200),
@@ -296,7 +285,19 @@ outer:
 	}
 
 	log.Infof("  memory agent: %d memories saved | $%.6f", len(tctx.SavedMemories), totalCost)
-	emitEnd(len(tctx.SavedMemories), totalCost)
+
+	// Update the phase metrics — the caller's deferred phase.Done() will
+	// merge these into the Tracker's accumulator. We update the deferred
+	// Done's metrics by calling Done here with the real values. The
+	// deferred Done in agent.go fires as a safety net with zero metrics
+	// if we crash, but if we reach here, this call takes precedence
+	// (PhaseHandle.Done is once-guarded).
+	if params.Phase != nil {
+		params.Phase.Done(turn.PhaseMetrics{
+			Cost:          totalCost,
+			MemoriesSaved: len(tctx.SavedMemories),
+		})
+	}
 }
 
 // loadMemoryAgentPrompt reads memory_agent_prompt.md from the same directory
