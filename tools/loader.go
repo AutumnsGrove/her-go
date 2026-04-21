@@ -351,7 +351,7 @@ func RenderHotToolsList() string {
 //
 //	| Category | Tools | When to use |
 //	|---|---|---|
-//	| **context** | get_current_time, set_location | You need precise time... |
+//	| **context** | get_weather, set_location | User asks about weather... |
 func RenderCategoryTable() string {
 	catNames := sortedCategoryNames()
 
