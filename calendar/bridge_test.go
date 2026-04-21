@@ -22,7 +22,7 @@ func TestBridgeMissingBinary(t *testing.T) {
 	logger := log.New(nil)
 	logger.SetLevel(log.FatalLevel) // Silence logs during test
 
-	bridge := NewBridge(cfg, logger)
+	bridge := NewCLIBridge(cfg, logger)
 
 	req := Request{
 		Command:  "list",

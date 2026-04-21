@@ -2,8 +2,12 @@
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** ready for Phase 1 - bridge interface extraction
-**Completed:** Calendar bridge is fully implemented with multi-calendar support, list_calendars tool, and all 4 CRUD operations working (commit 2ba807f). Can now extract Bridge interface and build FakeBridge.
+**Status:** Phase 1 complete, ready for Phase 2 - sim YAML fields
+**Completed:** 
+- Calendar bridge with multi-calendar support, list_calendars tool, and all 4 CRUD operations (commit 2ba807f)
+- Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test) (2026-04-21)
+- All tool handlers updated to use `NewCLIBridge()`
+- Comprehensive unit tests for FakeBridge (all 5 commands tested)
 **Tracking:** GH issue #64
 
 ---
