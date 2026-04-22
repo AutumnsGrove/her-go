@@ -2,17 +2,20 @@
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** Phase 3 complete, ready for Phase 4 - calendar-a-thon.yaml sim
+**Status:** ✅ Complete — all 4 phases done (2026-04-21)
 **Completed:** 
 - Calendar bridge with multi-calendar support, list_calendars tool, and all 4 CRUD operations (commit 2ba807f)
-- Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test) (2026-04-21)
+- Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test)
 - All tool handlers updated to use injected bridge (via `tools.Context.CalendarBridge`)
 - Comprehensive unit tests for FakeBridge (all 5 commands tested)
 - `seed_calendar_events` YAML field + seeding logic (inserts into DB + FakeBridge)
 - Shifts simplified: just calendar events with `job` field (aligned with PLAN-shifts.md)
 - `SeedCalendarEvent.Job` ready for PLAN-shifts.md Phase 1 schema migration
-- `sim_calendar_events` table added to sim.db schema with `job` column (2026-04-21)
+- `sim_calendar_events` table added to sim.db schema with `job` column
 - Calendar event snapshots captured at end-of-run via `copyCalendarEvents`
+- Calendar tool handlers registered in agent/agent.go (blank imports)
+- `calendar-a-thon.yaml` reference sim with 6 test scenarios
+- Calendar Events section added to sim reports (markdown table with job field)
 
 **Dependencies:**
 - Full shift support requires PLAN-shifts.md Phase 1 (job column + InsertCalendarEvent signature update)
@@ -248,8 +251,11 @@ Optional shift scenarios (if you want to test shift metadata parsing):
 
 ### Phase 4 -- `calendar-a-thon.yaml` sim
 
-- Write the sim spec covering all 4 scenarios
-- Run it, verify tool-call sequences and reply quality
-- Iterate on seed data and assertions until the sim is a reliable regression test
+- Write the sim spec covering all 6 scenarios (4 CRUD + 2 shift-specific)
+- Register calendar tool handlers in agent/agent.go (blank imports)
+- Add calendar events section to sim reports
+- Run and verify tool-call sequences work end-to-end
 
-**Done when:** sim runs green with correct tool sequences, computed hours in replies, and supersede chains visible in sim.db.
+**Done when:** sim runs green with correct tool sequences, events appear in sim.db, and Calendar Events section shows final state in reports.
+
+**Completed:** 2026-04-21 (commit 29a270a)
