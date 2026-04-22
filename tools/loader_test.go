@@ -10,7 +10,7 @@ func TestYAMLLoader(t *testing.T) {
 
 	// Check that all expected tools loaded from YAML.
 	// Update this count when tools are added or removed.
-	const expectedToolCount = 18
+	const expectedToolCount = 25
 	if len(toolDefs) != expectedToolCount {
 		t.Errorf("expected %d tools, got %d", expectedToolCount, len(toolDefs))
 	}

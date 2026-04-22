@@ -1,0 +1,27 @@
+name: shift_hours
+agent: main
+description: >-
+  Compute total hours worked over a time period. Parses time chit values
+  from shift events and returns per-job and overall totals. Use when the
+  user asks "how many hours did I work this week/month" or similar.
+hot: false
+category: calendar
+parameters:
+  type: object
+  properties:
+    period:
+      type: string
+      description: "'week', 'month', 'year', or 'custom'. Defaults to 'month'."
+    start:
+      type: string
+      description: "ISO 8601. Required if period is 'custom'."
+    end:
+      type: string
+      description: "ISO 8601. Required if period is 'custom'."
+    job:
+      type: string
+      description: "Filter to one job (e.g. 'Panera'). Omit for all jobs."
+  required: []
+trace:
+  emoji: "🕐"
+  format: "{{.period}} hours{{if .job}} for {{.job}}{{end}}"
