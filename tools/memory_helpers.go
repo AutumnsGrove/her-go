@@ -135,7 +135,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		limit = maxMemoryLength
 	}
 	if len(args.Memory) > limit {
-		memoryLog.Warn("blocked memory (too long)", "len", len(args.Memory), "memory", args.Memory[:100])
+		memoryLog.Warn("blocked memory (too long)", "len", len(args.Memory), "memory", args.Memory[:min(len(args.Memory), 100)])
 		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Memory), limit)
 	}
 
