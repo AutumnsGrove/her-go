@@ -2,9 +2,10 @@ name: calendar_list
 agent: main
 description: >-
   Read events from all configured calendars in a date range. Returns a unified
-  timeline with each event tagged with its source calendar. Use when the user asks
-  "what's on my calendar" or for context like "am I free Friday afternoon". Returns
-  event IDs that can be used with calendar_update or calendar_delete.
+  timeline with each event tagged with its source calendar. For shift events,
+  includes job name and computed scheduled_hours. Use when the user asks
+  "what's on my calendar" or "am I free Friday" or "what shifts do I have."
+  Returns event IDs for use with calendar_update or calendar_delete.
 hot: false
 category: calendar
 parameters:
@@ -16,6 +17,12 @@ parameters:
     end:
       type: string
       description: "ISO 8601 with timezone offset (e.g., '2026-04-27T23:59:59-04:00'). Required."
+    job:
+      type: string
+      description: "Filter to events for this job only (case-sensitive, must match DB value). Optional."
+    shifts_only:
+      type: boolean
+      description: "Only return events that have a job set (shifts). Default false."
   required: [start, end]
 trace:
   emoji: "📅"

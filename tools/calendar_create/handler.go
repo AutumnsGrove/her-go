@@ -18,9 +18,12 @@ func init() {
 
 // Handle creates one or more calendar events (atomic).
 // Each event can optionally specify a calendar; otherwise uses default_calendar.
+// When a "job" param is present, the handler auto-fills location and position
+// from config, serializes shift metadata into the notes field, and stores
+// the job in the DB column for fast querying.
+//
 // SQLite is the source of truth — we insert locally first, then sync to EventKit.
 func Handle(argsJSON string, ctx *tools.Context) string {
-	// Parse arguments
 	var args struct {
 		Events []map[string]any `json:"events"`
 	}
@@ -29,7 +32,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error: failed to parse arguments: %v", err)
 	}
 
-	// Validate we have events
 	if len(args.Events) == 0 {
 		return "error: no events provided"
 	}
@@ -41,9 +43,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Step 1: Insert events into SQLite (source of truth).
-	// Store the database IDs so we can update them with event_ids after syncing.
+	// Step 1: Process each event — apply shift defaults, build notes, insert to DB.
 	dbIDs := make([]int64, len(args.Events))
+	var warnings []string
+
 	for i, event := range args.Events {
 		title, _ := event["title"].(string)
 		start, _ := event["start"].(string)
@@ -52,8 +55,56 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		notes, _ := event["notes"].(string)
 		calendarName, _ := event["calendar"].(string)
 
-		// job is optional — empty string for regular events, job name for shifts.
+		// Shift fields — all optional
 		job, _ := event["job"].(string)
+		position, _ := event["position"].(string)
+		trainer, _ := event["trainer"].(string)
+
+		// When job is provided, apply config defaults and build shift notes.
+		// MatchJob does case-insensitive + alias lookup against the config's
+		// job list — similar to how Python's dict.get() works with a fallback,
+		// but here we return a pointer (nil = not found).
+		if job != "" {
+			jobCfg := ctx.Cfg.Calendar.MatchJob(job)
+			if jobCfg != nil {
+				// Normalize job name to the config's canonical form
+				// (e.g., "panera bread" → "Panera")
+				job = jobCfg.Name
+
+				// Auto-fill location from config if not explicitly provided
+				if location == "" && jobCfg.Address != "" {
+					location = jobCfg.Address
+					args.Events[i]["location"] = location
+				}
+
+				// Auto-fill position from config's default_role if not provided
+				if position == "" && jobCfg.DefaultRole != "" {
+					position = jobCfg.DefaultRole
+				}
+			}
+
+			// Build shift metadata into the notes field. Any existing notes
+			// text becomes freeform content below the key: value pairs.
+			notes = tools.BuildShiftNotes(position, trainer, notes)
+			args.Events[i]["notes"] = notes
+
+			// Check for overlapping shifts — warn but don't block.
+			// This queries active shift events that overlap with the new
+			// shift's time range. Overlaps are common in real life (e.g.,
+			// picking up a shift at one job while already scheduled at another).
+			if ctx.Store != nil && start != "" && end != "" {
+				overlaps, err := ctx.Store.ListShiftEvents(start, end, "")
+				if err == nil && len(overlaps) > 0 {
+					for _, o := range overlaps {
+						warnings = append(warnings, fmt.Sprintf(
+							"shift %d (%s %s–%s) overlaps with existing %s shift (id %d)",
+							i+1, title, start, end, o.Job,
+							o.ID,
+						))
+					}
+				}
+			}
+		}
 
 		// Insert with empty event_id (will be filled after EventKit sync)
 		dbID, err := ctx.Store.InsertCalendarEvent(title, start, end, location, notes, calendarName, "", job)
@@ -67,7 +118,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Step 2: Sync to EventKit via the bridge.
 	req := calendar.Request{
 		Command:  "create",
-		Calendar: ctx.Cfg.Calendar.DefaultCalendar, // Swift uses this as fallback
+		Calendar: ctx.Cfg.Calendar.DefaultCalendar,
 		Args: map[string]any{
 			"events": args.Events,
 		},
@@ -84,21 +135,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	resp, err := bridge.Call(callCtx, req)
 	if err != nil {
-		// EventKit sync failed, but events are saved locally with null event_id.
-		// Return an error but don't delete the local rows — they can be manually
-		// synced later or the user can retry.
 		log.Warn("EventKit sync failed, events saved locally only", "error", err)
 		return fmt.Sprintf("warning: events saved locally but EventKit sync failed: %v", err)
 	}
 
 	// Step 3: Update local rows with EventKit identifiers.
-	// The bridge returns {"events": [{"id": "..."}, ...]} — extract the ID strings.
 	if events, ok := resp.Result["events"].([]any); ok {
 		for i, eventItem := range events {
 			if i >= len(dbIDs) {
-				break // safety: don't index out of bounds
+				break
 			}
-			// Each event is a map with an "id" field
 			if eventMap, ok := eventItem.(map[string]any); ok {
 				if eventID, ok := eventMap["id"].(string); ok {
 					if err := ctx.Store.UpdateCalendarEventID(dbIDs[i], eventID); err != nil {
@@ -109,8 +155,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Format response as JSON for the agent
-	resultJSON, err := json.Marshal(resp.Result)
+	// Build response — include warnings if any overlaps were detected
+	result := resp.Result
+	if result == nil {
+		result = map[string]any{}
+	}
+	if len(warnings) > 0 {
+		result["warnings"] = warnings
+	}
+
+	resultJSON, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Sprintf("error: failed to marshal result: %v", err)
 	}

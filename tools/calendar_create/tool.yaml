@@ -1,10 +1,10 @@
 name: calendar_create
 agent: main
 description: >-
-  Create one or more calendar events that are NOT work shifts (use
-  shift_schedule for those in the future). Examples: dentist appointment,
-  birthday, meeting. Atomic-per-call: if any event fails, none are created.
-  Returns event IDs that can be used with calendar_update or calendar_delete.
+  Create one or more calendar events. Also handles work shifts — pass a "job"
+  param per event to auto-fill location and position from config, store the
+  shift in the DB, and sync to Apple Calendar. Returns event IDs for use with
+  calendar_update or calendar_delete.
 hot: false
 category: calendar
 parameters:
@@ -27,13 +27,22 @@ parameters:
             description: "ISO 8601 with timezone offset. Required."
           location:
             type: string
-            description: "Optional location/address."
+            description: "Optional location/address. Auto-filled from config when job is set."
           notes:
             type: string
-            description: "Optional notes/description."
+            description: "Optional freeform notes/description."
           calendar:
             type: string
-            description: "Which calendar to create this event in. Must be one of the configured calendars. If omitted, uses default_calendar from config."
+            description: "Which calendar to create this event in. If omitted, uses default_calendar from config."
+          job:
+            type: string
+            description: "Job name from config (e.g. 'Panera'). Triggers shift behavior — auto-fills location and position. Optional."
+          position:
+            type: string
+            description: "Role/position for this shift (e.g. 'Grill Cook'). Defaults to job's default_role if omitted. Only used when job is set."
+          trainer:
+            type: string
+            description: "Training supervisor name. Optional, only used when job is set."
         required: [title, start, end]
   required: [events]
 trace:
