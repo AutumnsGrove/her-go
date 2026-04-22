@@ -20,6 +20,7 @@ package tools
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -161,4 +162,36 @@ func BuildShiftNotes(position, trainer, existingNotes string) string {
 		Freeform: existingNotes,
 	}
 	return SerializeShiftNotes(sn)
+}
+
+// timeChitPattern matches the standardized time chit format: "Xh Ym".
+// Examples: "6h 15m", "8h 0m", "4h 30m". The hours and minutes parts
+// are both required for reliable parsing. Whitespace is flexible.
+var timeChitPattern = regexp.MustCompile(`(?i)^(\d+)\s*h\s+(\d+)\s*m$`)
+
+// ParseTimeChit converts a time chit string like "6h 15m" into total
+// minutes. Returns 0 and false if the format doesn't match. This is the
+// parsing half — FormatMinutes converts back to display format.
+//
+// In Python you'd probably use a regex with named groups and int().
+// In Go, FindStringSubmatch returns a slice where [0] is the full match
+// and [1], [2] are the capture groups.
+func ParseTimeChit(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	match := timeChitPattern.FindStringSubmatch(s)
+	if match == nil {
+		return 0, false
+	}
+
+	hours, _ := strconv.Atoi(match[1])
+	mins, _ := strconv.Atoi(match[2])
+	return hours*60 + mins, true
+}
+
+// FormatMinutes converts total minutes back to the "Xh Ym" display format.
+// This is used by shift_hours to format per-job and overall totals.
+func FormatMinutes(totalMinutes int) string {
+	h := totalMinutes / 60
+	m := totalMinutes % 60
+	return fmt.Sprintf("%dh %dm", h, m)
 }

@@ -208,3 +208,77 @@ func TestBuildShiftNotes(t *testing.T) {
 		t.Errorf("got:\n%s\n\nwant:\n%s", got, want)
 	}
 }
+
+// TestParseTimeChit covers the standardized "Xh Ym" format that the VLLM
+// outputs when extracting from time chit receipt photos.
+func TestParseTimeChit(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    int  // total minutes
+		wantOK  bool
+	}{
+		{"6h 15m", 375, true},
+		{"8h 0m", 480, true},
+		{"4h 30m", 270, true},
+		{"0h 45m", 45, true},
+		{"12h 0m", 720, true},
+		{"6H 15M", 375, true},          // case insensitive
+		{"6h  15m", 375, true},         // extra space
+		{"6h15m", 0, false},            // no space between h and m — doesn't match
+		{"6 hours 15 minutes", 0, false}, // wrong format
+		{"", 0, false},
+		{"abc", 0, false},
+		{"6h", 0, false},               // missing minutes part
+		{"15m", 0, false},              // missing hours part
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got, ok := ParseTimeChit(tc.input)
+			if ok != tc.wantOK {
+				t.Errorf("ParseTimeChit(%q) ok = %v, want %v", tc.input, ok, tc.wantOK)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("ParseTimeChit(%q) = %d, want %d", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatMinutes verifies the display format for hour totals.
+func TestFormatMinutes(t *testing.T) {
+	tests := []struct {
+		input int
+		want  string
+	}{
+		{375, "6h 15m"},
+		{480, "8h 0m"},
+		{45, "0h 45m"},
+		{0, "0h 0m"},
+		{4755, "79h 15m"}, // large total (multi-week)
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			got := FormatMinutes(tc.input)
+			if got != tc.want {
+				t.Errorf("FormatMinutes(%d) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestParseTimeChit_FormatMinutes_RoundTrip verifies that parse → format
+// is idempotent: "6h 15m" → 375 → "6h 15m".
+func TestParseTimeChit_FormatMinutes_RoundTrip(t *testing.T) {
+	original := "6h 15m"
+	mins, ok := ParseTimeChit(original)
+	if !ok {
+		t.Fatalf("ParseTimeChit(%q) failed", original)
+	}
+	got := FormatMinutes(mins)
+	if got != original {
+		t.Errorf("round trip: %q → %d → %q", original, mins, got)
+	}
+}
