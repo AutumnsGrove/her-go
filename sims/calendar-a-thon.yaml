@@ -1,0 +1,87 @@
+name: "Calendar-a-thon — full CRUD + shift workflows"
+description: >
+  Comprehensive test of the calendar system: all 4 CRUD operations (create,
+  list, update, delete) plus shift-specific scenarios using the job field.
+  Tests both CLIBridge (prod) path and FakeBridge (sim) implementation.
+
+  Seeds 4 calendar events (2 regular appointments, 1 meeting, 1 shift with
+  job field) to provide baseline state. The message flow exercises:
+  1. List existing events (calendar_list)
+  2. Create new event (calendar_create)
+  3. Update existing event (calendar_update)
+  4. Delete event (calendar_delete)
+  5. List shifts specifically (job field filtering)
+  6. Create a shift event with job metadata
+
+  What to look for in the report:
+  - Agent loads calendar tools via use_tools (they're deferred)
+  - calendar_list returns seeded events with correct dates/times
+  - calendar_create generates event IDs (FAKE-001, FAKE-002...)
+  - calendar_update modifies existing events cleanly
+  - calendar_delete soft-deletes events (active=0 in DB, removed from bridge)
+  - Shift events include job field in responses
+  - sim_calendar_events table shows final calendar state (created/updated/deleted)
+  - No FakeBridge errors or crashes
+
+  Expected final state in sim.db:
+  - Dentist appointment (seeded, should be updated to Thursday)
+  - Team standup (seeded, unchanged)
+  - Panera shift (seeded, unchanged)
+  - Coffee appointment (created during sim)
+  - Book club (deleted during sim, won't appear in snapshot)
+tags: ["calendar", "crud", "shifts", "reference"]
+
+seed_calendar_events:
+  # Regular appointment - will be updated during sim
+  - id: "SEED-001"
+    title: "Dentist appointment"
+    start: "2026-04-22T14:00:00-04:00"
+    end: "2026-04-22T15:00:00-04:00"
+    location: "Main St Dental"
+    notes: "6-month checkup"
+    calendar: "Calendar"
+
+  # Meeting - will remain unchanged
+  - id: "SEED-002"
+    title: "Team standup"
+    start: "2026-04-23T09:00:00-04:00"
+    end: "2026-04-23T09:30:00-04:00"
+    calendar: "Work"
+
+  # Regular event - will be deleted during sim
+  - id: "SEED-003"
+    title: "Book club"
+    start: "2026-04-24T19:00:00-04:00"
+    end: "2026-04-24T20:30:00-04:00"
+    location: "Java Cafe"
+    calendar: "Calendar"
+
+  # Shift event with job field - unchanged
+  - id: "SEED-004"
+    title: "Panera shift"
+    start: "2026-04-25T05:00:00-04:00"
+    end: "2026-04-25T13:00:00-04:00"
+    job: "Panera"
+    notes: |
+      position: Bake
+      trainer: Mike
+    calendar: "Calendar"
+
+messages:
+  # 1. List existing events
+  - "hey, what's on my calendar this week?"
+
+  # 2. Create new event
+  - "can you add coffee with Alex on Wednesday at 10am? should be about an hour"
+
+  # 3. Update existing event
+  - "actually, can you move my dentist appointment to Thursday at 2pm instead?"
+
+  # 4. Delete event
+  - "i need to cancel book club on Thursday - can you remove that from my calendar?"
+
+  # 5. Shift-specific query (tests job field filtering)
+  - "show me just my work shifts this week"
+
+  # 6. Create a shift (tests job field on create)
+  - "i picked up a Panera shift on Saturday 6am to 2pm"

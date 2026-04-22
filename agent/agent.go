@@ -26,8 +26,13 @@ import (
 	// Same pattern as database drivers: import _ "github.com/lib/pq"
 	// Each import causes the package's init() to run, which calls
 	// tools.Register("name", Handle) to add the handler to the registry.
+	_ "her/tools/calendar_create"
+	_ "her/tools/calendar_delete"
+	_ "her/tools/calendar_list"
+	_ "her/tools/calendar_update"
 	_ "her/tools/done"
 	_ "her/tools/get_weather"
+	_ "her/tools/list_calendars"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
 	_ "her/tools/search_books"
