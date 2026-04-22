@@ -3,6 +3,8 @@ agent: main
 description: >-
   Edit a calendar event in place by ID. Get the event ID from calendar_list.
   Pass only the fields you want to change — omitted fields are left unchanged.
+  For shifts, use time_chit to record actual hours worked (from time chit
+  receipt photo) and shift_notes for freeform shift comments.
 hot: false
 category: calendar
 parameters:
@@ -25,7 +27,22 @@ parameters:
       description: "New location (optional)."
     notes:
       type: string
-      description: "New notes (optional)."
+      description: "New freeform notes — replaces existing freeform text but preserves shift metadata (optional)."
+    job:
+      type: string
+      description: "Set or change the job for this event (optional)."
+    position:
+      type: string
+      description: "Update position/role (optional)."
+    trainer:
+      type: string
+      description: "Update trainer name (optional)."
+    time_chit:
+      type: string
+      description: "Actual hours worked, e.g. '6h 15m'. From time chit receipt photo. Optional."
+    shift_notes:
+      type: string
+      description: "Freeform shift-specific notes (e.g. 'stayed late to close'). Replaces existing freeform text in notes. Optional."
   required: [event_id]
 trace:
   emoji: "✏️"
