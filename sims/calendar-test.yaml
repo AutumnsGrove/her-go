@@ -1,0 +1,39 @@
+name: "Calendar — Phase 3 snapshot test"
+description: >
+  Minimal test for Phase 3 sim.db calendar event snapshots.
+  Seeds 3 calendar events (2 regular events + 1 shift with job field),
+  sends a simple message, then verifies that sim_calendar_events table
+  contains all 3 events after the run completes.
+
+  What to verify:
+  - sim_calendar_events has 3 rows for this run_id
+  - Regular events have NULL job field
+  - Shift event has job = "Panera"
+tags: ["calendar", "phase-3", "test"]
+
+seed_calendar_events:
+  - id: "TEST-001"
+    title: "Dentist appointment"
+    start: "2026-04-22T14:00:00-04:00"
+    end: "2026-04-22T15:00:00-04:00"
+    location: "Main St Dental"
+    calendar: "Calendar"
+
+  - id: "TEST-002"
+    title: "Coffee with Alex"
+    start: "2026-04-23T10:00:00-04:00"
+    end: "2026-04-23T11:00:00-04:00"
+    calendar: "Calendar"
+
+  - id: "TEST-003"
+    title: "Panera shift"
+    start: "2026-04-24T05:00:00-04:00"
+    end: "2026-04-24T13:00:00-04:00"
+    job: "Panera"
+    notes: |
+      position: Bake
+      trainer: Mike
+    calendar: "Calendar"
+
+messages:
+  - "what's on my calendar this week?"

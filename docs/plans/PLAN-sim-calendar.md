@@ -2,7 +2,7 @@
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** Phase 2 complete, ready for Phase 3 - sim.db schema
+**Status:** Phase 3 complete, ready for Phase 4 - calendar-a-thon.yaml sim
 **Completed:** 
 - Calendar bridge with multi-calendar support, list_calendars tool, and all 4 CRUD operations (commit 2ba807f)
 - Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test) (2026-04-21)
@@ -11,6 +11,8 @@ Extend the sim harness to support calendar and shift testing: a bridge interface
 - `seed_calendar_events` YAML field + seeding logic (inserts into DB + FakeBridge)
 - Shifts simplified: just calendar events with `job` field (aligned with PLAN-shifts.md)
 - `SeedCalendarEvent.Job` ready for PLAN-shifts.md Phase 1 schema migration
+- `sim_calendar_events` table added to sim.db schema with `job` column (2026-04-21)
+- Calendar event snapshots captured at end-of-run via `copyCalendarEvents`
 
 **Dependencies:**
 - Full shift support requires PLAN-shifts.md Phase 1 (job column + InsertCalendarEvent signature update)
@@ -157,8 +159,9 @@ CREATE TABLE IF NOT EXISTS sim_calendar_events (
     start       TEXT,      -- ISO8601
     end         TEXT,      -- ISO8601
     location    TEXT,
-    notes       TEXT,      -- May contain metadata like "type: shift\njob: Panera"
-    calendar    TEXT
+    notes       TEXT,      -- May contain shift metadata like "position: Bake\ntrainer: Mike"
+    calendar    TEXT,
+    job         TEXT       -- Shift job name (e.g., "Panera") — NULL for regular events
 );
 ```
 
@@ -237,10 +240,11 @@ Optional shift scenarios (if you want to test shift metadata parsing):
 
 ### Phase 3 -- sim.db schema additions
 
-- Add `sim_shifts` and `sim_scheduler_jobs` tables to sim.db migrations
-- Add snapshot logic at end-of-run to capture shift and scheduler job state
+- Add `sim_calendar_events` table to sim.db schema (includes `job` column for shifts)
+- Add `copyCalendarEvents` function to snapshot calendar state at end-of-run
+- Call `copyCalendarEvents` in the copy sequence after mood entries
 
-**Done when:** post-run sim.db contains accurate snapshots of all shift and scheduler job rows from the run.
+**Done when:** post-run sim.db contains accurate snapshots of all calendar events (both regular events and shifts) from the run.
 
 ### Phase 4 -- `calendar-a-thon.yaml` sim
 

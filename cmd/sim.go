@@ -315,6 +315,23 @@ CREATE TABLE IF NOT EXISTS sim_run_labels (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Calendar events captured from the sim run. Shows the final state of the
+-- calendar after the sim completes — useful for verifying shift scheduling,
+-- event creation/update/delete operations, and calendar-related agent behavior.
+CREATE TABLE IF NOT EXISTS sim_calendar_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
+	captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	event_id TEXT,
+	title TEXT,
+	start TEXT,
+	end TEXT,
+	location TEXT,
+	notes TEXT,
+	calendar TEXT,
+	job TEXT
+);
+
 -- latest_runs: the most recent run for each suite name.
 -- Usage: SELECT * FROM latest_runs;
 -- Usage: SELECT * FROM sim_memories WHERE run_id = (SELECT id FROM latest_runs WHERE suite_name = 'Getting to Know You');
@@ -1120,6 +1137,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Error("failed to copy mood entries", "err", err)
 	}
 
+	// Copy calendar events
+	if err := copyCalendarEvents(tmpDB, simDB, runID); err != nil {
+		log.Error("failed to copy calendar events", "err", err)
+	}
+
 	// Copy metrics and calculate total cost
 	totalCost, err := copyMetrics(tmpDB, simDB, runID)
 	if err != nil {
@@ -1438,6 +1460,42 @@ func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_mood_entry: %w", err)
+		}
+	}
+	return rows.Err()
+}
+
+// copyCalendarEvents copies all calendar events from the temp DB into
+// sim_calendar_events. This captures the final state of the calendar after
+// the sim run completes — useful for verifying shift scheduling, event CRUD
+// operations, and calendar-related agent behavior.
+func copyCalendarEvents(tmpDB, simDB *sql.DB, runID int64) error {
+	rows, err := tmpDB.Query(
+		`SELECT COALESCE(event_id, ''), title, start, end,
+		        COALESCE(location, ''), COALESCE(notes, ''),
+		        calendar, COALESCE(job, '')
+		 FROM calendar_events
+		 WHERE active = 1
+		 ORDER BY start ASC`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying calendar events: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var eventID, title, start, end, location, notes, calendar, job string
+		if err := rows.Scan(&eventID, &title, &start, &end, &location, &notes, &calendar, &job); err != nil {
+			return fmt.Errorf("scanning calendar event: %w", err)
+		}
+		_, err := simDB.Exec(
+			`INSERT INTO sim_calendar_events
+			   (run_id, event_id, title, start, end, location, notes, calendar, job)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, eventID, title, start, end, location, notes, calendar, job,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting sim_calendar_event: %w", err)
 		}
 	}
 	return rows.Err()
