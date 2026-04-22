@@ -34,7 +34,7 @@ A phased testing strategy using the beaver-build methodology. Each package is ca
 
 ## Current Coverage (as of 2026-04-22)
 
-**20 packages passing, 32 packages with no test files, 51 test files total.**
+**30 packages passing, 22 packages with no test files, 63 test files total.**
 
 All tests pass with `-race`.
 
@@ -49,14 +49,24 @@ All tests pass with `-race`.
 | `embed/` | 1 file | IsAvailable (up, down, server error) |
 | `layers/` | 1 file | Chat mood layer (8 cases: empty, single, inject, source tag, rollup, humanTime) |
 | `llm/` | 1 file | Streaming (single tool call, batched abort, truncated JSON, token delivery, stream flag) |
-| `memory/` | 4 files | Calendar events CRUD, inbox send/consume, mood entries (15+ cases), scheduler tasks |
+| `memory/` | **7 files** | Calendar, inbox, mood (15+), scheduler, **messages CRUD (11)**, **facts/memories (22)**, **core: summaries, PII vault, metrics, agent turns, confirmations, locations (17)** |
 | `mood/` | 8 files | Agent, graph, prompt, proposal, rollup task, signals, sweeper, vocab |
 | `scheduler/` | 4 files | Loader (config parsing, cron computation), registry (upsert, kind mismatch, cron changes), retry, runner |
+| `scrub/` | **1 file** | **Tier 1 redaction (SSN, cards, API keys, bearer, passwords, bank numbers), Tier 2 tokenization (phone 4 formats, email, IP), dedup, mixed content, deanonymize round-trip, vault ops, no false positives (24 cases)** |
 | `search/` | 1 file | Book search |
 | `tools/` (shared) | 6 files | Dispatch (unknown tool, malformed JSON), YAML loader, style/length gates, render (hot tools, categories), shift notes, trace |
+| `tools/done/` | **1 file** | **DoneCalled flag, idempotent, empty args** |
+| `tools/get_time/` | **1 file** | **Timezone config, fallback to Local, invalid timezone error, RFC3339 validation, JSON structure** |
+| `tools/notify_agent/` | **1 file** | **Inbox round-trip, AgentEventCB called/nil, DoneCalled always set, inbox failure resilience** |
+| `tools/recall_memories/` | **1 file** | **Nil embed guard, zero dimension guard, invalid JSON, limit defaults/caps** |
 | `tools/remove_memory/` | 1 file | Handler test |
 | `tools/reply/` | 1 file | Style test |
+| `tools/save_memory/` | **1 file** | **Happy path, subject="user", style gate (4 patterns), em dash, length gate, custom limit, nil store, nil classifier/embed, SavedMemories tracking, multiple saves (17 cases)** |
+| `tools/save_self_memory/` | **1 file** | **Happy path, subject="self" verification, style gate, nil store, user/self isolation (10 cases)** |
 | `tools/send_task/` | 1 file | Handler test |
+| `tools/split_memory/` | **1 file** | **Happy path, original deactivated, inherits metadata, too few facts, not found, empty strings skipped, SavedMemories tracking (10 cases)** |
+| `tools/think/` | **1 file** | **Valid thought, empty thought, malformed JSON (5 variants), nil context** |
+| `tools/update_memory/` | **1 file** | **Happy path, supersession chain, inherits subject, not found, style gate (4 patterns), length gate, em dash, nil classifier/embed (11 cases)** |
 | `trace/` | 3 files | Board, advanced board, registry |
 | `turn/` | 2 files | Registry, tracker |
 | `weather/` | 1 file | Weather tests |
@@ -76,32 +86,29 @@ These are the highest-risk packages. If they break, the bot is brain-damaged.
 **Risk:** Critical. Every conversation, fact, and metric flows through here.
 **Test type:** Integration (real temp SQLite)
 **Priority:** P0
-**Status:** Partially covered — calendar, inbox, mood, scheduler store tests exist. Core CRUD is untested.
+**Status:** Core CRUD fully covered. 99 passing tests across 7 test files.
 
-Tests needed:
-- [ ] `TestStore_Init` — Schema creation on fresh DB, WAL mode enabled
-- [ ] `TestStore_SaveMessage` — Insert + retrieve, raw vs scrubbed content
-- [ ] `TestStore_SaveFact` — Basic save, duplicate detection via embedding similarity
-- [ ] `TestStore_UpdateFact` — Modify existing fact, verify old content gone
-- [ ] `TestStore_RemoveFact` — Soft/hard delete behavior
-- [ ] `TestStore_GetContextFacts` — KNN semantic search returns relevant facts
-- [ ] `TestStore_ZettelkastenLinking` — Auto-link creates 1-hop neighbor relationships
-- [ ] `TestStore_SaveSummary` — Compaction summary persistence
-- [ ] `TestStore_LatestSummary` — Retrieves most recent summary for conversation
-- [ ] `TestStore_PIIVault` — Token ↔ value round-trip
-- [ ] `TestStore_Metrics` — Token count / cost recording
-- [ ] `TestStore_AgentTurns` — Audit trail persistence
-- [ ] `TestStore_PendingConfirmations` — Confirmation flow lifecycle
+Tests completed:
+- [x] `TestStore_Init` — Schema creation, WAL mode, idempotent re-open, vec dimension *(store_core_test.go)*
+- [x] `TestStore_SaveMessage` — Insert + retrieve, raw vs scrubbed, ordering, conversation isolation, limits *(store_messages_test.go, 11 cases)*
+- [x] `TestStore_SaveFact` — Basic save, subject defaults, self-subject, round-trip, embeddings *(store_facts_test.go)*
+- [x] `TestStore_UpdateFact` — Modify content/category/importance/tags *(store_facts_test.go)*
+- [x] `TestStore_RemoveFact` — Soft-delete, excluded from queries *(store_facts_test.go)*
+- [x] `TestStore_GetContextFacts` — KNN semantic search, excludes inactive *(store_facts_test.go)*
+- [x] `TestStore_ZettelkastenLinking` — Bidirectional links, dedup, inactive exclusion *(store_facts_test.go)*
+- [x] `TestStore_SaveSummary` — Persistence + stream isolation *(store_core_test.go)*
+- [x] `TestStore_LatestSummary` — Newest wins, empty returns "" *(store_core_test.go)*
+- [x] `TestStore_PIIVault` — Token ↔ value round-trip *(store_core_test.go)*
+- [x] `TestStore_Metrics` — SaveMetric, GetStats, GetUsageReport *(store_core_test.go)*
+- [x] `TestStore_AgentTurns` — Save + paired retrieval *(store_core_test.go)*
+- [x] `TestStore_PendingConfirmations` — Full lifecycle: create → get → resolve → gone *(store_core_test.go)*
 - [x] `TestStore_ScheduledTasks` — CRUD for reminders/cron jobs *(store_scheduler_test.go)*
 - [x] `TestStore_MoodEntries` — Insert + query mood ratings/tags *(store_mood_test.go, 15+ cases)*
 - [x] `TestStore_CalendarEvents` — CRUD + filters *(store_calendar_test.go)*
 - [x] `TestStore_Inbox` — Send + consume lifecycle *(store_inbox_test.go)*
-
-**Helpers to build:**
-- `testStore(t *testing.T) *Store` — creates a temp DB, runs migrations, returns Store, auto-cleanup
-  *(Note: individual store test files may already have local helpers — consolidate if so)*
-
-**Note:** The embed client dependency (for vector search) will need a stub — this is one of the few places where we mock our own code, because the embedding model is an external HTTP service.
+- [x] Embedding serialization/deserialization round-trip *(store_facts_test.go)*
+- [x] Supersession chains (SupersedeMemory + MemoryHistory) *(store_facts_test.go)*
+- [x] Location history, searches, classifier log *(store_core_test.go)*
 
 ### 1.2 `memory/context.go` — Context Assembly
 
@@ -154,17 +161,24 @@ Additional tests:
 **Risk:** High (security-critical). This is the privacy layer.
 **Test type:** Unit (pattern matching)
 **Priority:** P0
-**Status:** No tests.
+**Status:** Fully covered (24 test cases).
 
-Tests needed:
-- [ ] `TestScrub_SSN` — Hard identifiers fully redacted
-- [ ] `TestScrub_CreditCard` — Card numbers redacted
-- [ ] `TestScrub_PhoneNumber` — Phone tokenized (reversible)
-- [ ] `TestScrub_Email` — Email tokenized (reversible)
-- [ ] `TestScrub_NoFalsePositives` — Normal text passes through unchanged
-- [ ] `TestScrub_Deanonymize` — Tokens replaced with originals in replies
-- [ ] `TestScrub_Unicode` — Non-ASCII content handled correctly
-- [ ] `TestScrub_MixedContent` — Text with multiple PII types
+Tests completed:
+- [x] `TestScrub_SSN` — With/without dashes
+- [x] `TestScrub_CreditCard` — With spaces, with dashes
+- [x] `TestScrub_APIKey` — OpenAI, GitHub PAT, AWS access key, Bearer token
+- [x] `TestScrub_Password` — password=, passwd:, pwd= (table-driven)
+- [x] `TestScrub_BankRouting` / `BankAccount` — Routing + account numbers
+- [x] `TestScrub_PhoneNumber` — 4 formats: parens, dashes, dots, +1 (table-driven)
+- [x] `TestScrub_Email` — Tokenized + vault entry verified
+- [x] `TestScrub_IP` — IPv4 tokenized
+- [x] `TestScrub_DuplicatePhone` — Same number gets same token, single vault entry
+- [x] `TestScrub_MultiplePhones` — Different numbers get different tokens
+- [x] `TestScrub_NoFalsePositives` — 5 normal text inputs pass through unchanged
+- [x] `TestScrub_MixedContent` — SSN + phone + email in one string
+- [x] `TestScrub_Tier1BeforeTier2` — Card not matched as phone
+- [x] `TestDeanonymize` — Round-trip, multiple tokens, empty vault pass-through
+- [x] `TestVault` — FindByOriginal, CountByType
 
 ### 2.2 `classifier/` — Memory + Reply Quality Gate
 
@@ -214,7 +228,7 @@ Additional tests:
 **Risk:** High. Tools are user-facing actions.
 **Test type:** Unit (pure logic) + Integration (DB-touching tools)
 **Priority:** P1
-**Status:** 3 of 26 tool handler directories have tests. Shared tools package well covered.
+**Status:** 12 of 26 tool handler directories have tests. Shared tools package well covered.
 
 Shared tools coverage (already done):
 - [x] Dispatch — unknown tool, malformed JSON
@@ -225,24 +239,20 @@ Shared tools coverage (already done):
 - [x] Trace specs
 
 Per-tool handler coverage:
+- [x] `done/` — DoneCalled flag, idempotent, empty args
+- [x] `get_time/` — Timezone config, Local fallback, invalid timezone error, RFC3339, JSON structure
+- [x] `notify_agent/` — Inbox round-trip, AgentEventCB called/nil, DoneCalled resilience, inbox failure
+- [x] `recall_memories/` — Nil embed guard, zero dimension, invalid JSON, limit defaults/caps
 - [x] `remove_memory/` — handler test
 - [x] `reply/` — style test
+- [x] `save_memory/` — 17 cases: happy path, subject, style gate (4), em dash, length gate, custom limit, nil store/classifier/embed, SavedMemories, multiple saves
+- [x] `save_self_memory/` — 10 cases: happy path, subject verification, style gate, nil store, user/self isolation
 - [x] `send_task/` — handler test
+- [x] `split_memory/` — 10 cases: happy path, deactivation, metadata inheritance, too few facts, not found, empty strings, SavedMemories
+- [x] `think/` — valid/empty thought, malformed JSON (5 variants), nil context
+- [x] `update_memory/` — 11 cases: happy path, supersession chain, subject inheritance, not found, style gate (4), length, em dash
 
-**Uncovered tool handlers (23):**
-Each needs at minimum a happy-path test. Grouped by priority:
-
-#### P1 — Memory tools (touch the DB, high risk)
-- [ ] `save_memory/` — Calls classifier, writes to DB on ACCEPT
-- [ ] `save_self_memory/` — Bot's self-knowledge storage
-- [ ] `update_memory/` — Modifies existing fact
-- [ ] `recall_memories/` — Returns relevant facts for query
-- [ ] `split_memory/` — Splits compound facts
-
-#### P1 — Communication tools (pure logic, quick wins)
-- [ ] `think/` — Returns structured thinking output
-- [ ] `done/` — Signals loop termination
-- [ ] `notify_agent/` — Cross-agent notification
+**Uncovered tool handlers (14):**
 
 #### P2 — Calendar tools (DB + logic)
 - [ ] `calendar_create/` — Creates calendar event
@@ -253,7 +263,6 @@ Each needs at minimum a happy-path test. Grouped by priority:
 - [ ] `shift_hours/` — Shift time tracking
 
 #### P2 — Context & utility tools
-- [ ] `get_time/` — Returns formatted time
 - [ ] `get_weather/` — Weather lookup
 - [ ] `set_location/` — Updates config location
 - [ ] `view_image/` — Vision API call (httptest mock)
@@ -429,10 +438,11 @@ Additional tests:
 ## Execution Order (Updated)
 
 ```
-Next up:  Phase 1 — memory/store core tests (SaveFact, SaveMessage, GetContextFacts, PIIVault, etc.)
-          Phase 2 — scrub/ tests (security-critical, zero coverage)
-Then:     Phase 3 — tool handler tests (start with P1 memory + communication tools)
-          Phase 1 — memory/context.go, memory/extract.go
+DONE:     Phase 1 — memory/store core tests ✓ (99 cases)
+          Phase 2 — scrub/ tests ✓ (24 cases)
+          Phase 3 — P1 tool handlers ✓ (9 tool packages, ~80 cases)
+Next up:  Phase 1 — memory/context.go, memory/extract.go
+          Phase 3 — P2 tool handlers (calendar, weather, search, utility)
 Later:    Phase 4 — LLM client expansion, embed client expansion
           Phase 5 — config loading, layers expansion, scheduler expansion
 Low pri:  Remaining tool handlers, persona, tui, vision, voice
@@ -470,5 +480,5 @@ Each step should end with `go test -race ./...` passing and `go vet ./...` clean
 - **Full buildout:** `go test ./...` runs in under 30 seconds, covers all packages with .go files
 - **Ongoing:** Every bug fix ships with a regression test
 
-**Current score:** 20/52 packages tested (38%)
+**Current score:** 30/52 packages tested (58%)
 **Target:** 40+/52 packages tested (77%+) — some packages (logger, tui, voice) may stay untested if they're thin wrappers
