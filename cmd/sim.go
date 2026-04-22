@@ -841,9 +841,6 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 
 			// Insert into SQLite (source of truth)
-			// NOTE: seed.Job is parsed but not yet passed to InsertCalendarEvent.
-			// Once PLAN-shifts.md Phase 1 lands (job column migration), update
-			// InsertCalendarEvent signature to include job parameter.
 			dbID, err := store.InsertCalendarEvent(
 				seed.Title,
 				seed.Start,
@@ -852,7 +849,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				seed.Notes,
 				cal,
 				seed.ID, // EventKit identifier
-				// TODO: add seed.Job when InsertCalendarEvent signature updated
+				seed.Job,
 			)
 			if err != nil {
 				log.Error("seed calendar event: DB insert failed", "err", err, "id", seed.ID)

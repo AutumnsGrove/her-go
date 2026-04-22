@@ -63,10 +63,45 @@ type LocationConfig struct {
 // The bridge is optional — if missing at startup, calendar tools return clear
 // errors to the agent but don't block bot startup (fail-soft pattern).
 type CalendarConfig struct {
-	BridgePath      string   `yaml:"bridge_path"`       // path to her-calendar Swift binary
-	Calendars       []string `yaml:"calendars"`         // which calendars to monitor (reads from all)
-	DefaultCalendar string   `yaml:"default_calendar"`  // default calendar for creating events
-	DefaultTimezone string   `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
+	BridgePath      string      `yaml:"bridge_path"`       // path to her-calendar Swift binary
+	Calendars       []string    `yaml:"calendars"`         // which calendars to monitor (reads from all)
+	DefaultCalendar string      `yaml:"default_calendar"`  // default calendar for creating events
+	DefaultTimezone string      `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
+	Jobs            []JobConfig `yaml:"jobs"`              // known jobs for shift tracking (optional)
+}
+
+// JobConfig defines a known job for shift tracking. When the agent passes
+// a "job" param to calendar_create, MatchJob validates the name and auto-fills
+// defaults like location and role. Add or remove jobs freely in config.yaml —
+// code never references these by name.
+//
+// This is like a Python dataclass with default values — the struct holds the
+// data and the config methods use it for lookups.
+type JobConfig struct {
+	Name        string   `yaml:"name"`         // display name (e.g., "Panera")
+	Address     string   `yaml:"address"`      // work address — auto-fills event location
+	DefaultRole string   `yaml:"default_role"` // default position/role (blank = read from schedule)
+	Aliases     []string `yaml:"aliases"`      // alternative names (e.g., ["panera bread"])
+}
+
+// MatchJob returns the job whose name or alias matches the given string
+// (case-insensitive), or nil if no match. Used by calendar_create to
+// validate and auto-fill shift defaults from config.
+//
+// strings.EqualFold is Go's Unicode-aware case-insensitive compare —
+// like Python's .lower() == .lower() but handles edge cases better.
+func (c *CalendarConfig) MatchJob(name string) *JobConfig {
+	for i := range c.Jobs {
+		if strings.EqualFold(c.Jobs[i].Name, name) {
+			return &c.Jobs[i]
+		}
+		for _, alias := range c.Jobs[i].Aliases {
+			if strings.EqualFold(alias, name) {
+				return &c.Jobs[i]
+			}
+		}
+	}
+	return nil
 }
 
 // IdentityConfig holds the bot and owner names. These get injected into

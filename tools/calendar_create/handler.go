@@ -52,8 +52,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		notes, _ := event["notes"].(string)
 		calendarName, _ := event["calendar"].(string)
 
+		// job is optional — empty string for regular events, job name for shifts.
+		job, _ := event["job"].(string)
+
 		// Insert with empty event_id (will be filled after EventKit sync)
-		dbID, err := ctx.Store.InsertCalendarEvent(title, start, end, location, notes, calendarName, "")
+		dbID, err := ctx.Store.InsertCalendarEvent(title, start, end, location, notes, calendarName, "", job)
 		if err != nil {
 			log.Warn("failed to insert calendar event to DB", "error", err)
 			return fmt.Sprintf("error: failed to save event locally: %v", err)

@@ -290,3 +290,90 @@ func TestFormatFloat(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchJob verifies case-insensitive matching against job names and
+// aliases. MatchJob is the lookup path for calendar_create's shift support —
+// when the agent passes "panera bread" or "CAVA", it needs to resolve to the
+// right JobConfig from the config.
+//
+// Table-driven tests again — same pattern as TestFormatFloat. Each case tests
+// one matching rule: exact name, alias, case insensitivity, or no match.
+func TestMatchJob(t *testing.T) {
+	cfg := &CalendarConfig{
+		Jobs: []JobConfig{
+			{
+				Name:        "Panera",
+				Address:     "3625 Spring Hill Pkwy SE",
+				DefaultRole: "",
+				Aliases:     []string{"panera bread", "panera cafe"},
+			},
+			{
+				Name:        "Cava",
+				Address:     "855 Peachtree St NE",
+				DefaultRole: "Grill Cook",
+				Aliases:     []string{},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		wantName string // empty = expect nil
+	}{
+		{name: "exact name", input: "Panera", wantName: "Panera"},
+		{name: "exact name (other job)", input: "Cava", wantName: "Cava"},
+		{name: "case insensitive name", input: "panera", wantName: "Panera"},
+		{name: "all caps", input: "CAVA", wantName: "Cava"},
+		{name: "mixed case", input: "pAnErA", wantName: "Panera"},
+		{name: "alias match", input: "panera bread", wantName: "Panera"},
+		{name: "alias case insensitive", input: "Panera Bread", wantName: "Panera"},
+		{name: "alias second entry", input: "panera cafe", wantName: "Panera"},
+		{name: "no match", input: "McDonalds", wantName: ""},
+		{name: "empty string", input: "", wantName: ""},
+		{name: "partial match (not supported)", input: "Pan", wantName: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cfg.MatchJob(tc.input)
+			if tc.wantName == "" {
+				if got != nil {
+					t.Errorf("MatchJob(%q) = %q, want nil", tc.input, got.Name)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("MatchJob(%q) = nil, want %q", tc.input, tc.wantName)
+			}
+			if got.Name != tc.wantName {
+				t.Errorf("MatchJob(%q).Name = %q, want %q", tc.input, got.Name, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestMatchJob_ReturnsPointerToOriginal verifies that MatchJob returns a
+// pointer to the actual JobConfig in the slice, not a copy. This matters
+// because callers read fields like Address and DefaultRole from the result —
+// if it were a copy, mutations to the config wouldn't propagate (though we
+// don't mutate, having the pointer is the correct Go pattern for "reference
+// to an element in a collection").
+func TestMatchJob_ReturnsPointerToOriginal(t *testing.T) {
+	cfg := &CalendarConfig{
+		Jobs: []JobConfig{
+			{Name: "Panera", Address: "123 Main St"},
+		},
+	}
+
+	got := cfg.MatchJob("panera")
+	if got == nil {
+		t.Fatal("MatchJob returned nil")
+	}
+
+	// Verify it points to the same memory as the slice element.
+	// &cfg.Jobs[0] is the address of the first element in the slice.
+	if got != &cfg.Jobs[0] {
+		t.Error("MatchJob returned a copy, not a pointer to the original slice element")
+	}
+}

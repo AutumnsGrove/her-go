@@ -423,6 +423,7 @@ func (s *Store) initTables() error {
 			location TEXT,
 			notes TEXT,
 			calendar TEXT NOT NULL,
+			job TEXT,
 			active BOOLEAN DEFAULT 1,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME
@@ -433,6 +434,9 @@ func (s *Store) initTables() error {
 		// Index for event_id lookups (update/delete need to find by EventKit ID)
 		`CREATE INDEX IF NOT EXISTS idx_calendar_events_event_id
 			ON calendar_events(event_id)`,
+		// Index for job-based shift queries (shift_hours, calendar_list with job filter)
+		`CREATE INDEX IF NOT EXISTS idx_calendar_events_job
+			ON calendar_events(job)`,
 	}
 
 	// Pre-migration: detect and rebuild stale mood_entries table.
@@ -514,6 +518,11 @@ func (s *Store) initTables() error {
 		// Existing events default to active = 1 (visible). When an event is deleted,
 		// we set active = 0 instead of removing the row — preserves audit trail.
 		`ALTER TABLE calendar_events ADD COLUMN active BOOLEAN DEFAULT 1`,
+
+		// job: nullable job name for shift tracking. NULL for regular calendar
+		// events, populated (e.g., "Panera") for work shifts. Enables fast
+		// indexed queries like "all Panera shifts this month" without parsing notes.
+		`ALTER TABLE calendar_events ADD COLUMN job TEXT`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore errors (column already exists)
