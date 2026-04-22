@@ -1673,6 +1673,9 @@ func generateReport(
 	// Mood section
 	writeMoodSection(&b, simDB, runID)
 
+	// Calendar events section
+	writeCalendarSection(&b, simDB, runID)
+
 	// Compaction summaries section
 	writeSummariesSection(&b, simDB, runID)
 
@@ -1967,6 +1970,65 @@ func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		assocs := renderJSONArray(m.associations)
 		fmt.Fprintf(b, "| %s | %s | %d | %s | %s | %s | %s | %.2f |\n",
 			m.ts, m.kind, m.valence, labels, assocs, m.note, m.source, m.confidence)
+	}
+	b.WriteString("\n")
+}
+
+// writeCalendarSection writes the final calendar state to the report.
+// Shows all active calendar events at the end of the sim run, including
+// both regular events and shifts (identified by non-empty job field).
+func writeCalendarSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	rows, err := simDB.Query(
+		`SELECT title, start, end, location, notes, calendar, job
+		 FROM sim_calendar_events WHERE run_id = ? ORDER BY start ASC`, runID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type calRow struct {
+		title, start, end, location, notes, calendar, job string
+	}
+	var events []calRow
+	for rows.Next() {
+		var e calRow
+		if err := rows.Scan(&e.title, &e.start, &e.end, &e.location, &e.notes, &e.calendar, &e.job); err != nil {
+			continue
+		}
+		events = append(events, e)
+	}
+
+	fmt.Fprintf(b, "## Calendar Events (%d)\n\n", len(events))
+	if len(events) == 0 {
+		b.WriteString("_No calendar events captured this run._\n\n")
+		return
+	}
+
+	b.WriteString("| Title | Start | End | Calendar | Job | Location | Notes |\n")
+	b.WriteString("|-------|-------|-----|----------|-----|----------|-------|\n")
+	for _, e := range events {
+		// Format timestamps to be more readable (just date + time, drop seconds)
+		start := strings.Replace(e.start, "T", " ", 1)
+		start = start[:16] // Trim to YYYY-MM-DD HH:MM
+		end := strings.Replace(e.end, "T", " ", 1)
+		end = end[:16]
+
+		job := e.job
+		if job == "" {
+			job = "—"
+		}
+		location := e.location
+		if location == "" {
+			location = "—"
+		}
+		notes := strings.ReplaceAll(e.notes, "\n", " / ") // Collapse multiline notes
+		if notes == "" {
+			notes = "—"
+		}
+
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %s |\n",
+			e.title, start, end, e.calendar, job, location, notes)
 	}
 	b.WriteString("\n")
 }
