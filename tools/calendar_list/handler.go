@@ -26,7 +26,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Query SQLite for events in the date range.
 	// This is MUCH faster than shelling out to Swift + EventKit on every list.
-	events, err := ctx.Store.ListCalendarEvents(args.Start, args.End)
+	events, err := ctx.Store.ListCalendarEvents(args.Start, args.End, "", false)
 	if err != nil {
 		return fmt.Sprintf("error: failed to query events: %v", err)
 	}

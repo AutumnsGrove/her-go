@@ -171,3 +171,18 @@ calendar:
   # by agent_time layer when set (otherwise falls back to system timezone).
   # Format: IANA timezone database name (e.g., "America/New_York", "Europe/London").
   default_timezone: "America/New_York"
+
+  # Known jobs for shift tracking. When the agent passes a "job" param to
+  # calendar_create, the handler validates the name against this list and
+  # auto-fills defaults (address → location, default_role → position).
+  # Add or remove freely — code never references these by name.
+  jobs:
+    - name: "Panera"
+      address: "3625 Spring Hill Pkwy SE, Smyrna, GA 30080"
+      default_role: ""              # blank = read role from schedule text
+      aliases: ["panera bread"]
+
+    - name: "Cava"
+      address: "855 Peachtree St NE, Atlanta, GA 30308"
+      default_role: "Grill Cook"
+      aliases: []

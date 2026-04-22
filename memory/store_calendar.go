@@ -21,17 +21,19 @@ type CalendarEvent struct {
 	Location  string
 	Notes     string
 	Calendar  string // which calendar it belongs to (e.g., "Calendar", "Work")
+	Job       string // nullable — empty for regular events, job name for shifts (e.g., "Panera")
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
 // InsertCalendarEvent inserts a new event into the local SQLite mirror.
 // eventID is the EventKit identifier — pass an empty string if the event
-// hasn't synced to EventKit yet. Returns the database row ID.
+// hasn't synced to EventKit yet. job is the shift job name — pass an empty
+// string for regular (non-shift) events. Returns the database row ID.
 //
 // This is the first step in the calendar_create handler: write locally,
 // then sync to EventKit, then update the row with the returned event_id.
-func (s *Store) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID string) (int64, error) {
+func (s *Store) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error) {
 	// In SQL, we use NULL to represent "no value yet" for optional fields.
 	// In Go, we convert empty strings to nil (interface{}) so SQLite stores NULL.
 	// This is a common pattern — like Python's None vs. "" distinction.
@@ -50,10 +52,15 @@ func (s *Store) InsertCalendarEvent(title, start, end, location, notes, calendar
 		notesVal = nil
 	}
 
+	var jobVal interface{} = job
+	if job == "" {
+		jobVal = nil
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO calendar_events (event_id, title, start, end, location, notes, calendar)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		eventIDVal, title, start, end, locationVal, notesVal, calendar,
+		`INSERT INTO calendar_events (event_id, title, start, end, location, notes, calendar, job)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		eventIDVal, title, start, end, locationVal, notesVal, calendar, jobVal,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("inserting calendar event: %w", err)
@@ -107,13 +114,15 @@ func (s *Store) UpdateCalendarEvent(id int64, updates map[string]any) error {
 			query += "notes = ?"
 		case "event_id":
 			query += "event_id = ?"
+		case "job":
+			query += "job = ?"
 		default:
 			// Skip unknown fields (defensive — shouldn't happen in practice)
 			continue
 		}
 
 		// Convert empty strings to NULL for optional fields
-		if (field == "location" || field == "notes") && value == "" {
+		if (field == "location" || field == "notes" || field == "job") && value == "" {
 			args = append(args, nil)
 		} else {
 			args = append(args, value)
@@ -161,23 +170,37 @@ func (s *Store) DeleteCalendarEvent(id int64) error {
 	return nil
 }
 
-// ListCalendarEvents returns all events in the given date range.
+// ListCalendarEvents returns active events in the given date range.
 // start and end should be ISO 8601 date strings (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
+// job is an optional filter — if non-empty, only returns events with that job.
+// If shiftsOnly is true, only returns events that have a job set (any job).
+//
 // This is the primary read path for calendar_list — querying SQLite instead of
 // shelling out to EventKit on every list operation.
 //
 // The query uses string comparison on TEXT columns, which works correctly for
 // ISO 8601 dates because they sort lexicographically (2026-04-21 < 2026-04-22).
-func (s *Store) ListCalendarEvents(start, end string) ([]CalendarEvent, error) {
-	rows, err := s.db.Query(
-		`SELECT id, COALESCE(event_id, ''), title, start, end,
-		        COALESCE(location, ''), COALESCE(notes, ''), calendar,
-		        created_at, COALESCE(updated_at, '')
-		 FROM calendar_events
-		 WHERE active = 1 AND start >= ? AND end <= ?
-		 ORDER BY start ASC`,
-		start, end,
-	)
+func (s *Store) ListCalendarEvents(start, end, job string, shiftsOnly bool) ([]CalendarEvent, error) {
+	// Build the query dynamically based on optional filters. In Go we build
+	// the WHERE clause and args slice together — similar to how you'd use
+	// a query builder in Python (like SQLAlchemy's filter chain).
+	query := `SELECT id, COALESCE(event_id, ''), title, start, end,
+	                 COALESCE(location, ''), COALESCE(notes, ''), calendar,
+	                 COALESCE(job, ''), created_at, COALESCE(updated_at, '')
+	          FROM calendar_events
+	          WHERE active = 1 AND start >= ? AND end <= ?`
+	args := []interface{}{start, end}
+
+	if job != "" {
+		query += " AND job = ?"
+		args = append(args, job)
+	} else if shiftsOnly {
+		query += " AND job IS NOT NULL"
+	}
+
+	query += " ORDER BY start ASC"
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying calendar events: %w", err)
 	}
@@ -196,7 +219,8 @@ func (s *Store) ListCalendarEvents(start, end string) ([]CalendarEvent, error) {
 		// converts NULL to empty string so we can scan into string types.
 		if err := rows.Scan(
 			&e.ID, &e.EventID, &e.Title, &startStr, &endStr,
-			&e.Location, &e.Notes, &e.Calendar, &createdAtStr, &updatedAtStr,
+			&e.Location, &e.Notes, &e.Calendar, &e.Job,
+			&createdAtStr, &updatedAtStr,
 		); err != nil {
 			return nil, fmt.Errorf("scanning calendar event row: %w", err)
 		}
@@ -222,16 +246,16 @@ func (s *Store) ListCalendarEvents(start, end string) ([]CalendarEvent, error) {
 // handlers to find the database ID from the event_id the agent provides.
 func (s *Store) GetCalendarEventByEventID(eventID string) (*CalendarEvent, error) {
 	var e CalendarEvent
-	var startStr, endStr, createdAtStr, updatedAtStr string
-	var locationVal, notesVal sql.NullString
+	var startStr, endStr, createdAtStr string
+	var locationVal, notesVal, jobVal, updatedAtVal sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, event_id, title, start, end, location, notes, calendar, created_at, updated_at
+		`SELECT id, event_id, title, start, end, location, notes, calendar, job, created_at, updated_at
 		 FROM calendar_events WHERE event_id = ? AND active = 1`,
 		eventID,
 	).Scan(
 		&e.ID, &e.EventID, &e.Title, &startStr, &endStr,
-		&locationVal, &notesVal, &e.Calendar, &createdAtStr, &updatedAtStr,
+		&locationVal, &notesVal, &e.Calendar, &jobVal, &createdAtStr, &updatedAtVal,
 	)
 
 	// sql.ErrNoRows means the query returned zero rows — this is not an error
@@ -252,14 +276,29 @@ func (s *Store) GetCalendarEventByEventID(eventID string) (*CalendarEvent, error
 	if notesVal.Valid {
 		e.Notes = notesVal.String
 	}
+	if jobVal.Valid {
+		e.Job = jobVal.String
+	}
 
 	// Parse timestamps
 	e.Start, _ = time.Parse("2006-01-02 15:04:05", startStr)
 	e.End, _ = time.Parse("2006-01-02 15:04:05", endStr)
 	e.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
-	if updatedAtStr != "" {
-		e.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAtStr)
+	if updatedAtVal.Valid {
+		e.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAtVal.String)
 	}
 
 	return &e, nil
+}
+
+// ListShiftEvents returns active calendar events that have a job set,
+// filtered by date range and optionally by job name. This is the primary
+// query path for the shift_hours tool — it only returns shift events
+// (job IS NOT NULL), never regular calendar events.
+//
+// This is essentially ListCalendarEvents with shiftsOnly hardcoded to true,
+// extracted as a separate method for clarity. The shift_hours handler calls
+// this directly instead of passing flags through the general-purpose method.
+func (s *Store) ListShiftEvents(start, end, job string) ([]CalendarEvent, error) {
+	return s.ListCalendarEvents(start, end, job, true)
 }
