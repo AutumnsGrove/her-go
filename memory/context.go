@@ -20,15 +20,6 @@ type InjectedMemory struct {
 	Source   string  // "semantic" or "linked" — how this memory got selected
 }
 
-// conversationRedundancyThreshold controls how similar a memory must be to
-// a recent message before it's considered redundant. This is cosine
-// SIMILARITY (not distance) — 1.0 = identical, 0.0 = unrelated.
-// 0.60 is intentionally lower than the memory-vs-memory dedup threshold
-// (0.85) because we're comparing structured memories against freeform
-// conversation text, which naturally score lower on cosine similarity
-// even when they convey the same information.
-const conversationRedundancyThreshold = 0.60
-
 // FilterRedundantMemories removes memories whose content is already present in
 // the recent conversation history. This prevents "context echo" — where
 // a memory and a recent message both say the same thing, causing the chat
@@ -96,7 +87,7 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 			if sim > bestSim {
 				bestSim = sim
 			}
-			if sim >= conversationRedundancyThreshold {
+			if sim >= embed.ConversationRedundancyThreshold {
 				redundant = true
 				break
 			}
