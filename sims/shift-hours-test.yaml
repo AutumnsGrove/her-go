@@ -1,0 +1,156 @@
+name: "Shift Hours — calculation & aggregation test"
+description: >
+  Comprehensive test of the shift_hours tool and time chit parsing.
+  Seeds multiple shifts across different jobs and time periods, with a mix
+  of completed shifts (time chit present) and future shifts (fallback to
+  scheduled hours).
+
+  Tests covered:
+  1. Time chit parsing ("6h 15m" format)
+  2. Fallback to scheduled hours when time chit is missing
+  3. Per-job aggregation (Panera vs Starbucks)
+  4. Period queries (week, month, custom range)
+  5. Job-specific filtering ("how many hours at Panera?")
+  6. Malformed time chit handling (should fall back gracefully)
+
+  What to verify in the report:
+  - shift_hours returns correct totals per job
+  - Time chit parsing works for "Xh Ym" format
+  - Scheduled hours used when time chit is absent
+  - Per-job breakdowns match expectations
+  - Agent loads shift_hours via use_tools (it's deferred)
+  - No panics or errors on malformed time chits
+tags: ["shifts", "hours", "time-chit", "calendar", "phase-3"]
+
+seed_calendar_events:
+  # --- Week 1: April 14-20 (PAST shifts with time chits) ---
+
+  # Panera shift - worked longer than scheduled
+  - id: "SHIFT-001"
+    title: "Panera Bake shift"
+    start: "2026-04-14T05:00:00-04:00"
+    end: "2026-04-14T13:00:00-04:00"   # 8h scheduled
+    job: "Panera"
+    notes: |
+      position: Bake
+      trainer: Mike
+      time chit: 8h 30m
+
+      Stayed late to help with closing prep
+    calendar: "Work"
+
+  # Starbucks shift - left early
+  - id: "SHIFT-002"
+    title: "Starbucks morning shift"
+    start: "2026-04-15T06:00:00-04:00"
+    end: "2026-04-15T14:00:00-04:00"   # 8h scheduled
+    job: "Starbucks"
+    notes: |
+      position: Barista
+      time chit: 7h 15m
+
+      Left early, slow day
+    calendar: "Work"
+
+  # Panera shift - exact match
+  - id: "SHIFT-003"
+    title: "Panera Counter shift"
+    start: "2026-04-16T11:00:00-04:00"
+    end: "2026-04-16T17:00:00-04:00"   # 6h scheduled
+    job: "Panera"
+    notes: |
+      position: Counter
+      time chit: 6h 0m
+    calendar: "Work"
+
+  # Starbucks shift - standard 4h
+  - id: "SHIFT-004"
+    title: "Starbucks closing"
+    start: "2026-04-18T16:00:00-04:00"
+    end: "2026-04-18T20:00:00-04:00"   # 4h scheduled
+    job: "Starbucks"
+    notes: |
+      position: Shift Lead
+      time chit: 4h 0m
+    calendar: "Work"
+
+  # --- Week 2: April 21-27 (CURRENT week - mix of completed and future) ---
+
+  # Panera shift - completed, has time chit
+  - id: "SHIFT-005"
+    title: "Panera Bake shift"
+    start: "2026-04-21T05:00:00-04:00"
+    end: "2026-04-21T13:00:00-04:00"   # 8h scheduled
+    job: "Panera"
+    notes: |
+      position: Bake
+      trainer: Mike
+      time chit: 8h 15m
+    calendar: "Work"
+
+  # Starbucks shift - completed, has time chit
+  - id: "SHIFT-006"
+    title: "Starbucks morning"
+    start: "2026-04-22T07:00:00-04:00"
+    end: "2026-04-22T12:00:00-04:00"   # 5h scheduled
+    job: "Starbucks"
+    notes: |
+      position: Barista
+      time chit: 5h 0m
+    calendar: "Work"
+
+  # Panera shift - FUTURE (no time chit, should use scheduled 8h)
+  - id: "SHIFT-007"
+    title: "Panera shift"
+    start: "2026-04-24T05:00:00-04:00"
+    end: "2026-04-24T13:00:00-04:00"   # 8h scheduled
+    job: "Panera"
+    notes: |
+      position: Bake
+      trainer: Mike
+    calendar: "Work"
+
+  # Starbucks shift - FUTURE (no time chit, should use scheduled 6h)
+  - id: "SHIFT-008"
+    title: "Starbucks weekend"
+    start: "2026-04-26T08:00:00-04:00"
+    end: "2026-04-26T14:00:00-04:00"   # 6h scheduled
+    job: "Starbucks"
+    notes: |
+      position: Barista
+    calendar: "Work"
+
+  # --- Edge case: malformed time chit (should fallback to scheduled) ---
+  - id: "SHIFT-009"
+    title: "Panera shift"
+    start: "2026-04-17T11:00:00-04:00"
+    end: "2026-04-17T16:00:00-04:00"   # 5h scheduled
+    job: "Panera"
+    notes: |
+      position: Counter
+      time chit: six hours and change
+
+      Forgot to check the receipt, rough estimate
+    calendar: "Work"
+
+messages:
+  # 1. Overall this week (should include completed + future shifts)
+  - "how many hours did I work this week?"
+
+  # 2. Job-specific query for current week
+  - "how many hours at Panera this week?"
+
+  # 3. Last week query (should use time chits only)
+  - "what about last week? how many hours total?"
+
+  # 4. Per-job breakdown for last week
+  - "break down last week's hours by job"
+
+  # 5. Month-to-date query
+  - "how many hours have I worked this month so far?"
+
+  # 6. Starbucks-specific for the month
+  - "how many Starbucks hours this month?"
+
+  # 7. Custom date range (all of April 14-20)
+  - "can you give me my hours for April 14th through April 20th?"
