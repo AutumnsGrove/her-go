@@ -949,6 +949,16 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Error("failed to copy mood entries", "err", err)
 	}
 
+	// Copy classifier verdicts (memory quality, reply safety, style gates)
+	if err := copyClassifierLog(tmpDB, simDB, runID); err != nil {
+		log.Error("failed to copy classifier log", "err", err)
+	}
+
+	// Copy inter-agent communication (send_task, notify_agent inbox)
+	if err := copyInboxMessages(tmpDB, simDB, runID); err != nil {
+		log.Error("failed to copy inbox messages", "err", err)
+	}
+
 	// Copy calendar events
 	if err := copyCalendarEvents(tmpDB, simDB, runID); err != nil {
 		log.Error("failed to copy calendar events", "err", err)
@@ -1171,10 +1181,14 @@ func copyMessages(tmpDB, simDB *sql.DB, runID int64, convID string) error {
 	return rows.Err()
 }
 
-// copyMemories copies all memories from the temp DB into sim_memories.
+// copyMemories copies all memories from the temp DB into sim_memories,
+// including supersession tracking (superseded_by, supersede_reason), tags,
+// context, and source message ID for full observability.
 func copyMemories(tmpDB, simDB *sql.DB, runID int64) error {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, memory, category, COALESCE(subject, 'user'), importance, active
+		`SELECT timestamp, memory, category, COALESCE(subject, 'user'), importance, active,
+		        superseded_by, supersede_reason, COALESCE(tags, ''), COALESCE(context, ''),
+		        source_message_id
 		 FROM memories ORDER BY id ASC`,
 	)
 	if err != nil {
@@ -1184,15 +1198,21 @@ func copyMemories(tmpDB, simDB *sql.DB, runID int64) error {
 
 	for rows.Next() {
 		var ts, mem, category, subject string
+		var tags, context, supersede_reason sql.NullString
 		var importance int
 		var active bool
-		if err := rows.Scan(&ts, &mem, &category, &subject, &importance, &active); err != nil {
+		var superseded_by, source_message_id sql.NullInt64
+		if err := rows.Scan(&ts, &mem, &category, &subject, &importance, &active,
+			&superseded_by, &supersede_reason, &tags, &context, &source_message_id); err != nil {
 			return fmt.Errorf("scanning memory: %w", err)
 		}
 		_, err := simDB.Exec(
-			`INSERT INTO sim_memories (run_id, timestamp, memory, category, subject, importance, active)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO sim_memories
+			 (run_id, timestamp, memory, category, subject, importance, active,
+			  superseded_by, supersede_reason, tags, context, source_message_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			runID, ts, mem, category, subject, importance, active,
+			superseded_by, supersede_reason, tags, context, source_message_id,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_memory: %w", err)
@@ -1272,6 +1292,79 @@ func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_mood_entry: %w", err)
+		}
+	}
+	return rows.Err()
+}
+
+// copyClassifierLog copies all classifier verdicts from the temp DB into
+// sim_classifier_log. This captures memory quality gates (LOW_VALUE, SPLIT),
+// reply safety gates (ESCALATION, DRASTIC_ENDORSEMENT, PURE_VALIDATION),
+// reply style gates (STYLE_ISSUE), and soft verdict rewrites. Essential for
+// debugging false positives and understanding what gets rejected vs accepted.
+func copyClassifierLog(tmpDB, simDB *sql.DB, runID int64) error {
+	rows, err := tmpDB.Query(
+		`SELECT timestamp, COALESCE(conversation_id, ''), write_type, verdict,
+		        content, COALESCE(reason, ''), COALESCE(rewrite, ''), accepted
+		 FROM classifier_log ORDER BY id ASC`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying classifier_log: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts, convID, writeType, verdict, content, reason, rewrite string
+		var accepted sql.NullBool
+		if err := rows.Scan(&ts, &convID, &writeType, &verdict, &content, &reason, &rewrite, &accepted); err != nil {
+			return fmt.Errorf("scanning classifier_log: %w", err)
+		}
+		_, err := simDB.Exec(
+			`INSERT INTO sim_classifier_log
+			   (run_id, timestamp, conversation_id, write_type, verdict, content, reason, rewrite, accepted)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, convID, writeType, verdict, content, reason, rewrite, accepted,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting sim_classifier_log: %w", err)
+		}
+	}
+	return rows.Err()
+}
+
+// copyInboxMessages copies inter-agent communication logs from the temp DB
+// into sim_inbox_messages. This captures send_task calls (cleanup, split, update)
+// and notify_agent events — critical for understanding how the memory agent
+// responds to lifecycle events and processes background tasks.
+func copyInboxMessages(tmpDB, simDB *sql.DB, runID int64) error {
+	rows, err := tmpDB.Query(
+		`SELECT timestamp, task_type, COALESCE(note, ''), COALESCE(memory_ids, ''),
+		        processed, COALESCE(result, '')
+		 FROM inbox_messages ORDER BY id ASC`,
+	)
+	if err != nil {
+		// Inbox table might not exist in older temp DBs — fail gracefully
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return fmt.Errorf("querying inbox_messages: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts, taskType, note, memoryIDs, result string
+		var processed bool
+		if err := rows.Scan(&ts, &taskType, &note, &memoryIDs, &processed, &result); err != nil {
+			return fmt.Errorf("scanning inbox_message: %w", err)
+		}
+		_, err := simDB.Exec(
+			`INSERT INTO sim_inbox_messages
+			   (run_id, timestamp, task_type, note, memory_ids, processed, result)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, taskType, note, memoryIDs, processed, result,
+		)
+		if err != nil {
+			return fmt.Errorf("inserting sim_inbox_message: %w", err)
 		}
 	}
 	return rows.Err()
@@ -1479,8 +1572,14 @@ func generateReport(
 		b.WriteString("---\n\n")
 	}
 
-	// Facts section
+	// Memories section (with supersession chains)
 	writeMemoriesSection(&b, simDB, runID)
+
+	// Classifier verdicts (memory quality, reply safety, style gates)
+	writeClassifierSection(&b, simDB, runID)
+
+	// Inter-agent communication (send_task, notify_agent)
+	writeInboxSection(&b, simDB, runID)
 
 	// Mood section
 	writeMoodSection(&b, simDB, runID)
@@ -1700,7 +1799,8 @@ func writeAgentTrace(b *strings.Builder, simDB *sql.DB, runID int64, turnNum int
 // writeMemoriesSection writes the memories table to the report.
 func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	rows, err := simDB.Query(
-		`SELECT id, memory, category, subject, importance
+		`SELECT id, memory, category, subject, importance, active,
+		        superseded_by, supersede_reason
 		 FROM sim_memories WHERE run_id = ? ORDER BY id ASC`, runID,
 	)
 	if err != nil {
@@ -1709,33 +1809,208 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type memoryRow struct {
-		id         int64
-		memory     string
-		category   sql.NullString
-		subject    string
-		importance int
+		id              int64
+		memory          string
+		category        sql.NullString
+		subject         string
+		importance      int
+		active          bool
+		superseded_by   sql.NullInt64
+		supersede_reason sql.NullString
 	}
 	var memories []memoryRow
+	var activeCount, supersededCount int
 	for rows.Next() {
 		var m memoryRow
-		if err := rows.Scan(&m.id, &m.memory, &m.category, &m.subject, &m.importance); err != nil {
+		if err := rows.Scan(&m.id, &m.memory, &m.category, &m.subject, &m.importance,
+			&m.active, &m.superseded_by, &m.supersede_reason); err != nil {
 			continue
 		}
 		memories = append(memories, m)
+		if m.active {
+			activeCount++
+		} else {
+			supersededCount++
+		}
 	}
 
-	fmt.Fprintf(b, "## Memories Saved (%d)\n\n", len(memories))
+	// Header with active/superseded breakdown
+	fmt.Fprintf(b, "## Memories (%d total: %d active, %d superseded)\n\n",
+		len(memories), activeCount, supersededCount)
+
 	if len(memories) > 0 {
-		b.WriteString("| ID | Memory | Category | Subject | Importance |\n")
-		b.WriteString("|----|--------|----------|---------|------------|\n")
+		b.WriteString("| ID | Memory | Category | Subject | Active | Superseded By |\n")
+		b.WriteString("|----|--------|----------|---------|--------|---------------|\n")
 		for _, m := range memories {
 			cat := ""
 			if m.category.Valid {
 				cat = m.category.String
 			}
-			fmt.Fprintf(b, "| %d | %s | %s | %s | %d |\n",
-				m.id, m.memory, cat, m.subject, m.importance)
+			activeIcon := "✅"
+			if !m.active {
+				activeIcon = "❌"
+			}
+			supersededBy := ""
+			if m.superseded_by.Valid {
+				supersededBy = fmt.Sprintf("#%d", m.superseded_by.Int64)
+			}
+			fmt.Fprintf(b, "| %d | %s | %s | %s | %s | %s |\n",
+				m.id, m.memory, cat, m.subject, activeIcon, supersededBy)
 		}
+		b.WriteString("\n")
+
+		// Supersession chains section
+		if supersededCount > 0 {
+			b.WriteString("### Supersession Chains\n\n")
+			b.WriteString("Memories that were updated or corrected:\n\n")
+			b.WriteString("| Old ID | Old Memory | → New ID | Reason |\n")
+			b.WriteString("|--------|------------|----------|--------|\n")
+			for _, m := range memories {
+				if !m.active && m.superseded_by.Valid {
+					reason := "updated"
+					if m.supersede_reason.Valid && m.supersede_reason.String != "" {
+						reason = m.supersede_reason.String
+					}
+					// Truncate old memory to 80 chars for readability
+					oldMem := m.memory
+					if len(oldMem) > 80 {
+						oldMem = oldMem[:77] + "..."
+					}
+					fmt.Fprintf(b, "| %d | %s | #%d | %s |\n",
+						m.id, oldMem, m.superseded_by.Int64, reason)
+				}
+			}
+			b.WriteString("\n")
+		}
+	}
+}
+
+// writeClassifierSection writes the classifier verdicts table to the report.
+// Shows all memory quality gates, reply safety gates, and style gates with
+// their verdicts, reasons, and soft verdict rewrites. Critical for debugging
+// false positives and understanding what gets rejected.
+func writeClassifierSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	rows, err := simDB.Query(
+		`SELECT write_type, verdict, content, reason, rewrite
+		 FROM sim_classifier_log WHERE run_id = ? ORDER BY id ASC`, runID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type classifierRow struct {
+		write_type string
+		verdict    string
+		content    string
+		reason     string
+		rewrite    string
+	}
+	var verdicts []classifierRow
+	var rejectCount, softVerdictCount int
+	for rows.Next() {
+		var v classifierRow
+		if err := rows.Scan(&v.write_type, &v.verdict, &v.content, &v.reason, &v.rewrite); err != nil {
+			continue
+		}
+		verdicts = append(verdicts, v)
+		// Count rejections (anything not SAVE/PASS/SAFE)
+		if v.verdict != "SAVE" && v.verdict != "PASS" && v.verdict != "SAFE" {
+			rejectCount++
+		}
+		if v.rewrite != "" {
+			softVerdictCount++
+		}
+	}
+
+	if len(verdicts) == 0 {
+		b.WriteString("## Classifier Verdicts (0)\n\n_No classifier checks logged._\n\n")
+		return
+	}
+
+	fmt.Fprintf(b, "## Classifier Verdicts (%d checks: %d rejected, %d soft rewrites)\n\n",
+		len(verdicts), rejectCount, softVerdictCount)
+
+	b.WriteString("| Type | Verdict | Content | Reason | Rewrite |\n")
+	b.WriteString("|------|---------|---------|--------|----------|\n")
+	for _, v := range verdicts {
+		// Truncate content to 60 chars for readability
+		content := v.content
+		if len(content) > 60 {
+			content = content[:57] + "..."
+		}
+		reason := v.reason
+		if len(reason) > 50 {
+			reason = reason[:47] + "..."
+		}
+		rewrite := v.rewrite
+		if len(rewrite) > 60 {
+			rewrite = rewrite[:57] + "..."
+		}
+		if rewrite == "" {
+			rewrite = "—"
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n",
+			v.write_type, v.verdict, content, reason, rewrite)
+	}
+	b.WriteString("\n")
+}
+
+// writeInboxSection writes the inter-agent communication log to the report.
+// Shows send_task calls (cleanup, split, update) and notify_agent events.
+// Critical for understanding how the memory agent processes background tasks.
+func writeInboxSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	rows, err := simDB.Query(
+		`SELECT task_type, note, memory_ids, processed, result
+		 FROM sim_inbox_messages WHERE run_id = ? ORDER BY id ASC`, runID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type inboxRow struct {
+		task_type  string
+		note       string
+		memory_ids string
+		processed  bool
+		result     string
+	}
+	var tasks []inboxRow
+	for rows.Next() {
+		var t inboxRow
+		if err := rows.Scan(&t.task_type, &t.note, &t.memory_ids, &t.processed, &t.result); err != nil {
+			continue
+		}
+		tasks = append(tasks, t)
+	}
+
+	if len(tasks) == 0 {
+		b.WriteString("## Inter-Agent Communication (0)\n\n_No inbox messages logged._\n\n")
+		return
+	}
+
+	fmt.Fprintf(b, "## Inter-Agent Communication (%d messages)\n\n", len(tasks))
+	b.WriteString("| Task Type | Note | Memory IDs | Processed | Result |\n")
+	b.WriteString("|-----------|------|------------|-----------|--------|\n")
+	for _, t := range tasks {
+		note := t.note
+		if len(note) > 80 {
+			note = note[:77] + "..."
+		}
+		result := t.result
+		if len(result) > 60 {
+			result = result[:57] + "..."
+		}
+		if result == "" {
+			result = "—"
+		}
+		processedIcon := "✅"
+		if !t.processed {
+			processedIcon = "❌"
+		}
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n",
+			t.task_type, note, t.memory_ids, processedIcon, result)
 	}
 	b.WriteString("\n")
 }
