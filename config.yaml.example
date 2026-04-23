@@ -24,7 +24,7 @@ chat:
   provider:
     order: ["Groq"]                  # pin to Groq for speed and consistency
   fallback:
-    model: "anthropic/claude-haiku-4.5"
+    model: "google/gemini-3.1-flash-lite-preview"
     temperature: 0.85
     max_tokens: 4096
 
@@ -36,7 +36,7 @@ agent:
   trace: false                                   # show agent thinking traces in chat (/traces to toggle)
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fallback:
-    model: "anthropic/claude-haiku-4.5"
+    model: "google/gemini-3.1-flash-lite-preview"
     temperature: 0.1
     max_tokens: 2048
 
@@ -58,7 +58,7 @@ vision:
   temperature: 0.3                         # low temp for accurate descriptions
   max_tokens: 512
   fallback:
-    model: "anthropic/claude-haiku-4.5"
+    model: "google/gemini-3.1-flash-lite-preview"
     temperature: 0.3
     max_tokens: 512
 
