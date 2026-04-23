@@ -18,6 +18,7 @@ import (
 	"her/classifier"
 	"her/embed"
 	"her/logger"
+	"her/memory"
 )
 
 // memoryLog is a logger for memory-saving operations.
@@ -76,13 +77,6 @@ var styleBlocklist = []string{
 // The SPLIT classifier is the primary gate for packed memories — this hard
 // limit is a last resort for genuinely run-on sentences.
 const maxMemoryLength = 300
-
-// sameDayContextThreshold is a tighter duplicate threshold for "context"
-// category memories. Multiple snapshots of the same day ("at Bolivar feeling
-// low", "at Bolivar doing grounding exercise") are situational duplicates
-// that the normal tag-based threshold misses. 0.70 catches these while
-// still allowing genuinely different contexts on the same day.
-const sameDayContextThreshold = 0.70
 
 // StyleBlocklist returns the style blocklist so tools/update_memory can apply
 // the same gates without importing agent (which would create a circular import).
@@ -175,7 +169,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			// Same-day context memories use a tighter threshold.
 			threshold := ctx.SimilarityThreshold
 			if args.Category == "context" {
-				threshold = sameDayContextThreshold
+				threshold = embed.ContextMemorySimilarityThreshold
 			}
 
 			if duplicate, existingID, existingContent, sim, source := checkMemoryDuplicate(newVec, textVec, subject, threshold, ctx); duplicate {
@@ -332,17 +326,19 @@ func checkMemoryDuplicate(newTagVec, newTextVec []float32, subject string, thres
 		return false, 0, "", 0, ""
 	}
 
-	var bestSim float64
-	var bestID int64
-	var bestContent string
-	var bestSource string
+	// Build candidate maps with backfill.
+	// Backfill side effects (computing and persisting missing embeddings) happen
+	// in this loop, preserving the original behavior where embeddings are populated
+	// on first duplicate check.
+	tagCandidates := make(map[int64][]float32)
+	textCandidates := make(map[int64][]float32)
 
 	for _, existing := range existingMemories {
 		if existing.Subject != subject {
 			continue
 		}
 
-		// --- Tag-based similarity (topical dedup) ---
+		// --- Tag vector backfill ---
 		existTagVec := existing.Embedding
 		if len(existTagVec) == 0 {
 			embedText := existing.Tags
@@ -357,16 +353,9 @@ func checkMemoryDuplicate(newTagVec, newTextVec []float32, subject string, thres
 			_ = ctx.Store.UpdateMemoryEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
 			memoryLog.Debug("backfilled tag embedding for memory", "memory_id", existing.ID)
 		}
+		tagCandidates[existing.ID] = existTagVec
 
-		tagSim := embed.CosineSimilarity(newTagVec, existTagVec)
-		if tagSim > bestSim {
-			bestSim = tagSim
-			bestID = existing.ID
-			bestContent = existing.Content
-			bestSource = "tags"
-		}
-
-		// --- Text-based similarity (semantic dedup) ---
+		// --- Text vector backfill (only if we have a new text vector to compare) ---
 		if len(newTextVec) > 0 {
 			existTextVec := existing.EmbeddingText
 			if len(existTextVec) == 0 {
@@ -377,18 +366,51 @@ func checkMemoryDuplicate(newTagVec, newTextVec []float32, subject string, thres
 				_ = ctx.Store.UpdateMemoryEmbedding(existing.ID, existing.Embedding, existTextVec)
 				memoryLog.Debug("backfilled text embedding for memory", "memory_id", existing.ID)
 			}
-			textSim := embed.CosineSimilarity(newTextVec, existTextVec)
-			if textSim > bestSim {
-				bestSim = textSim
-				bestID = existing.ID
-				bestContent = existing.Content
-				bestSource = "text"
-			}
+			textCandidates[existing.ID] = existTextVec
 		}
 	}
 
+	// Find best matches using helper.
+	// Note: We don't pass threshold here because we need to compare tag vs text
+	// and return the overall best. The threshold check happens at the end.
+	tagID, tagSim, _ := embed.FindBestMatch(newTagVec, tagCandidates, 0)
+	textID, textSim, _ := embed.FindBestMatch(newTextVec, textCandidates, 0)
+
+	// Determine overall best match.
+	var bestID int64
+	var bestSim float64
+	var bestSource string
+
+	if textSim > tagSim {
+		bestID = textID
+		bestSim = textSim
+		bestSource = "text"
+	} else if tagSim > 0 {
+		bestID = tagID
+		bestSim = tagSim
+		bestSource = "tags"
+	}
+
+	// Return duplicate if best similarity exceeds threshold.
 	if bestSim >= threshold {
+		bestContent, found := lookupMemoryContent(existingMemories, bestID)
+		if !found {
+			memoryLog.Warn("best match memory not found in list", "memory_id", bestID)
+			return false, 0, "", 0, ""
+		}
 		return true, bestID, bestContent, bestSim, bestSource
 	}
+
 	return false, 0, "", 0, ""
+}
+
+// lookupMemoryContent finds a memory's content by ID from the loaded memory slice.
+// This avoids an N² lookup when we only have the ID from FindBestMatch.
+func lookupMemoryContent(memories []memory.Memory, id int64) (string, bool) {
+	for _, m := range memories {
+		if m.ID == id {
+			return m.Content, true
+		}
+	}
+	return "", false
 }
