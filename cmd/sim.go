@@ -1332,36 +1332,56 @@ func copyClassifierLog(tmpDB, simDB *sql.DB, runID int64) error {
 	return rows.Err()
 }
 
-// copyInboxMessages copies inter-agent communication logs from the temp DB
-// into sim_inbox_messages. This captures send_task calls (cleanup, split, update)
-// and notify_agent events — critical for understanding how the memory agent
-// responds to lifecycle events and processes background tasks.
+// copyInboxMessages copies inter-agent communication logs from the temp DB's
+// inbox table into sim_inbox_messages. This captures send_task calls (cleanup,
+// split, update) and notify_agent events — critical for understanding how the
+// memory agent responds to lifecycle events and processes background tasks.
 func copyInboxMessages(tmpDB, simDB *sql.DB, runID int64) error {
+	// The production schema uses the `inbox` table with sender/recipient/msg_type.
+	// We extract msg_type as task_type and payload as note for the sim report.
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, task_type, COALESCE(note, ''), COALESCE(memory_ids, ''),
-		        processed, COALESCE(result, '')
-		 FROM inbox_messages ORDER BY id ASC`,
+		`SELECT timestamp, msg_type, COALESCE(payload, ''), status
+		 FROM inbox ORDER BY id ASC`,
 	)
 	if err != nil {
 		// Inbox table might not exist in older temp DBs — fail gracefully
 		if strings.Contains(err.Error(), "no such table") {
 			return nil
 		}
-		return fmt.Errorf("querying inbox_messages: %w", err)
+		return fmt.Errorf("querying inbox: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var ts, taskType, note, memoryIDs, result string
-		var processed bool
-		if err := rows.Scan(&ts, &taskType, &note, &memoryIDs, &processed, &result); err != nil {
-			return fmt.Errorf("scanning inbox_message: %w", err)
+		var ts, msgType, payload, status string
+		if err := rows.Scan(&ts, &msgType, &payload, &status); err != nil {
+			return fmt.Errorf("scanning inbox message: %w", err)
 		}
+
+		// Parse the payload JSON to extract memory_ids if present
+		var payloadData struct {
+			MemoryIDs []int64 `json:"memory_ids"`
+			Note      string  `json:"note"`
+		}
+		memoryIDs := ""
+		note := payload
+		if err := json.Unmarshal([]byte(payload), &payloadData); err == nil {
+			if len(payloadData.MemoryIDs) > 0 {
+				idsBytes, _ := json.Marshal(payloadData.MemoryIDs)
+				memoryIDs = string(idsBytes)
+			}
+			if payloadData.Note != "" {
+				note = payloadData.Note
+			}
+		}
+
+		processed := status == "consumed"
+
 		_, err := simDB.Exec(
 			`INSERT INTO sim_inbox_messages
 			   (run_id, timestamp, task_type, note, memory_ids, processed, result)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			runID, ts, taskType, note, memoryIDs, processed, result,
+			runID, ts, msgType, note, memoryIDs, processed, "",
 		)
 		if err != nil {
 			return fmt.Errorf("inserting sim_inbox_message: %w", err)
