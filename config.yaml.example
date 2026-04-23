@@ -63,12 +63,12 @@ vision:
     max_tokens: 512
 
 embed:
-  base_url: "http://localhost:1234/v1"                          # LM Studio / Ollama / any OpenAI-compatible embedding server
-  model: "text-embedding-nomic-embed-text-v1.5@q8_0"           # local embedding model
+  base_url: "http://localhost:11434/v1"                         # Ollama (recommended) or any OpenAI-compatible embedding server
+  model: "nomic-embed-text"                                    # Ollama model name (run: ollama pull nomic-embed-text)
   dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
   max_semantic_distance: 0.45                                   # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter.
-  # start_command: "lms load text-embedding-nomic-embed-text-v1.5@q8_0"  # optional: auto-start the embed server on startup if not already running
+  # For LM Studio instead: base_url: "http://localhost:1234/v1", model: "text-embedding-nomic-embed-text-v1.5@q8_0"
 
 search:
   tavily_api_key: "${TAVILY_API_KEY}"
