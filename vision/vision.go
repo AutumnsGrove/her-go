@@ -24,6 +24,7 @@ type DescribeResult struct {
 	TotalTokens      int
 	CostUSD          float64
 	Model            string
+	UsedFallback     bool // true if primary vision model failed and fallback was used
 }
 
 // Describe sends an image to the VLM and returns a natural language
@@ -74,5 +75,6 @@ func Describe(client *llm.Client, imageBase64, imageMIME, prompt string) (*Descr
 		TotalTokens:      resp.TotalTokens,
 		CostUSD:          resp.CostUSD,
 		Model:            resp.Model,
+		UsedFallback:     resp.UsedFallback,
 	}, nil
 }

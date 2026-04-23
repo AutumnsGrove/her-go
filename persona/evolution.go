@@ -88,7 +88,7 @@ func Reflect(
 	}
 
 	// Log metrics for the reflection call.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	log.Info("reflection saved", "preview", truncate(resp.Content, 120))
 	return nil
@@ -181,7 +181,7 @@ func MaybeRewrite(
 	}
 
 	// Log metrics.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	log.Info("persona rewritten", "version_id", versionID, "reflections_used", len(reflections))
 	log.Info("new persona preview", "preview", truncate(resp.Content, 200))
@@ -244,7 +244,7 @@ func ExtractTraits(
 		return fmt.Errorf("trait extraction LLM call: %w", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	// Parse the JSON response.
 	var scores struct {
@@ -421,7 +421,7 @@ func NightlyReflect(
 		return fmt.Errorf("nightly reflection LLM call: %w", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	content := strings.TrimSpace(resp.Content)
 	if content == "NOTHING_NOTABLE" {
@@ -540,7 +540,7 @@ func GatedRewrite(
 		return false, fmt.Errorf("gated rewrite LLM call: %w", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	content := strings.TrimSpace(resp.Content)
 	if strings.HasPrefix(content, "UNCHANGED") {
@@ -606,7 +606,7 @@ func GatedRewrite(
 		log.Warn("failed to update last_rewrite_at", "err", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 	log.Info("dream rewrite complete", "version_id", versionID, "reflections_used", len(reflections))
 
 	// Extract and save trait scores for the new persona version.

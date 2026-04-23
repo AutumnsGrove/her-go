@@ -554,7 +554,7 @@ outer:
 			}
 
 			// Log agent metrics and accumulate cost for RunResult.
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID)
+			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID, resp.UsedFallback)
 			totalCost += resp.CostUSD
 			log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
 				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)

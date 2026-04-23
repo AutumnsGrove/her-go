@@ -71,6 +71,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			result.CostUSD,
 			0, // latency — not tracked at this level
 			ctx.TriggerMsgID,
+			result.UsedFallback,
 		); err != nil {
 			log.Error("saving vision metric", "err", err)
 		}

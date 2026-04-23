@@ -1,0 +1,15 @@
+name: "Vision Pipeline Test"
+description: >
+  Tests the view_image tool with mixed image + text turns. Verifies that the
+  agent calls view_image when a photo is present, that Gemini Flash produces
+  a description, and that the reply references the image content. Place test
+  images in sims/assets/ and update the paths below.
+tags: ["vision", "image", "pipeline"]
+
+messages:
+  - "hey! check out this photo from my hike yesterday"
+  - image: sims/assets/aspen-grove.jpg
+  - "what do you think of the view? those aspens were incredible"
+  - text: "and here's what i had for lunch after"
+    image: sims/assets/sandwich.jpg
+  - "it was so good, definitely going back there"

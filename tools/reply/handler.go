@@ -468,7 +468,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID)
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback)
 	}
 
 	// TTS fires only for delivered messages — no point synthesizing audio

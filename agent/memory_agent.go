@@ -212,7 +212,7 @@ outer:
 			}
 
 			// Log cost and metrics — same as main agent.
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID)
+			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID, resp.UsedFallback)
 			totalCost += resp.CostUSD
 			log.Infof("  [memory] tokens: %d prompt + %d completion | $%.6f | finish=%s",
 				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
