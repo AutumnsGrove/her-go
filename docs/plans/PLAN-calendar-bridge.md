@@ -1,6 +1,6 @@
 ---
 title: "Calendar Bridge + Calendar Tools"
-status: ready
+status: complete
 created: 2026-04-20
 updated: 2026-04-20
 category: features
