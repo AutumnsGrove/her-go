@@ -1,13 +1,20 @@
 ---
 title: "Embedding Similarity Consolidation"
-status: planning
+status: completed
 created: 2026-03-31
-updated: 2026-03-31
+updated: 2026-04-23
+completed: 2026-04-23
 category: refactor
 priority: low
+branch: refactor/similarity-consolidation
+commits: a3c2094, 39ebb2b, 4e6ea3c
 ---
 
 # Plan: Consolidate Embedding Similarity Helpers
+
+## ✅ COMPLETED — 2026-04-23
+
+All three phases complete on branch `refactor/similarity-consolidation`. All similarity comparison patterns now use centralized helpers with explicit performance vs accuracy tradeoffs.
 
 ## Problem
 
@@ -107,10 +114,73 @@ Worth noting: cosine **similarity** (1.0 = identical) vs cosine **distance** (0.
 - Fact dedup's backfill logic — this is specific to the dedup use case (populating missing embeddings on old facts). Don't try to generalize it.
 - Skill registry's pre-caching — loading skill embeddings at startup is a different pattern from on-the-fly comparison
 
+## Implementation Summary
+
+### Phase 1: Foundation (Commit a3c2094)
+**Added helpers and consolidated thresholds:**
+- ✅ Added threshold constants: `DefaultSimilarityThreshold` (0.85), `ContextMemorySimilarityThreshold` (0.70), `ConversationRedundancyThreshold` (0.60)
+- ✅ Added `FindBestMatch(query, candidates, threshold, earlyExit)` — consolidates "loop and track best" pattern
+- ✅ Added `SimilarText(a, b)` — fire-and-forget comparison wrapper
+- ✅ Updated `memory/context.go` to use centralized constant
+- ✅ Created `embed/similarity_test.go` with comprehensive coverage (15 tests)
+- **Stats:** +373 lines, -10 lines across 3 files
+
+### Phase 2: Fact Dedup Migration (Commit 39ebb2b)
+**Refactored memory deduplication:**
+- ✅ Refactored `checkMemoryDuplicate()` to build candidate maps with backfill
+- ✅ Uses `FindBestMatch()` for both tag and text comparisons
+- ✅ Added `lookupMemoryContent()` helper to avoid N² lookups
+- ✅ Replaced `sameDayContextThreshold` constant with centralized version
+- ✅ Preserved all backfill side effects (critical!)
+- **Stats:** +51 lines, -29 lines in `tools/memory_helpers.go`
+
+### Phase 3: Conversation Echo + Early Exit (Commit 4e6ea3c)
+**Enhanced helper and refactored conversation filtering:**
+- ✅ Added `earlyExit` parameter to `FindBestMatch()` for performance optimization
+- ✅ Refactored `FilterRedundantMemories` to use `FindBestMatch` with early exit
+- ✅ Fixed efficiency: build message candidate map once, reuse for all memories
+- ✅ Added tests for early-exit behavior
+- ✅ Updated all existing callers to pass `earlyExit` parameter
+- **Stats:** +108 lines, -23 lines across 4 files
+
+### Final Scope Adjustment
+
+**Original plan:** All 5 call sites  
+**Actual implementation:** 3 active call sites (sites #4 and #5 moved to `_junkdrawer/` — deprecated code, skipped)
+
+**Active sites consolidated:**
+1. ✅ Fact dedup (tags) — `tools/memory_helpers.go`
+2. ✅ Fact dedup (text) — `tools/memory_helpers.go`
+3. ✅ Conversation echo — `memory/context.go`
+
+### What Was Delivered
+
+**New API:**
+```go
+// Threshold constants (centralized)
+embed.DefaultSimilarityThreshold = 0.85
+embed.ContextMemorySimilarityThreshold = 0.70
+embed.ConversationRedundancyThreshold = 0.60
+
+// Find best match with optional early exit
+id, sim, matched := embed.FindBestMatch(query, candidates, threshold, earlyExit)
+
+// Fire-and-forget comparison
+sim, err := embedClient.SimilarText("text A", "text B")
+```
+
+**Benefits:**
+- All similarity patterns use centralized, tested helpers
+- Performance vs accuracy tradeoff is explicit (`earlyExit` parameter)
+- Thresholds documented in one place with clear semantics
+- Future features (retry budget) can reuse without reimplementing
+- Zero behavior changes — all backfill preserved, thresholds identical
+
 ## Decisions
 
-- **Thresholds:** Hybrid — hardcoded defaults in code, config.yaml can override. Works out of the box, tunable when needed.
-- **Scope:** All three tiers in one pass. Full cleanup.
+- **Thresholds:** Hybrid — hardcoded defaults in code, config.yaml can override. Works out of the box, tunable when needed. ✅ Implemented
+- **Scope:** Active code only (3 sites) after discovering 2 sites moved to junkdrawer. ✅ Completed
+- **Early exit:** Added as optional parameter to support both performance and accuracy use cases. ✅ Enhanced beyond original plan
 
 ## Implementation Order
 
