@@ -1,8 +1,18 @@
+---
+title: "Apple Reminders Bridge"
+status: ready
+created: 2026-04-21
+updated: 2026-04-21
+category: features
+priority: medium
+related:
+  - PLAN-calendar-bridge.md
+---
+
 # Plan: Apple Reminders Bridge + Reminder Tools
 
 Build a Swift EventKit bridge for Apple Reminders, wrap it in Go with the same CLIBridge pattern as the calendar bridge, ship 4 consolidated agent tools (`reminder_lists`, `reminder_query`, `reminder_create`, `reminder_manage`), and mirror bot-created reminders in SQLite. The architecture mirrors the calendar bridge exactly -- JSON over stdin/stdout, SQLite as source of truth, EventKit as secondary sync target.
 
-**Status:** ready for implementation
 **Depends on:** calendar bridge (for shared Swift library extraction)
 **Tracking:**
 

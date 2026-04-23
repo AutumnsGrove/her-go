@@ -1,3 +1,12 @@
+---
+title: "Zettelkasten Memory Improvements"
+status: planning
+created: 2026-03-31
+updated: 2026-03-31
+category: features
+priority: low
+---
+
 # Plan: Zettelkasten-Style Memory Improvements
 
 Inspired by [ScottRBK/forgetful](https://github.com/ScottRBK/forgetful) — a Zettelkasten-based MCP memory server.

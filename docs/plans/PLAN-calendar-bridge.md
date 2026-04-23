@@ -1,8 +1,19 @@
+---
+title: "Calendar Bridge + Calendar Tools"
+status: ready
+created: 2026-04-20
+updated: 2026-04-20
+category: features
+priority: medium
+related:
+  - PLAN-shifts.md
+  - PLAN-scheduler-oneoffs.md
+---
+
 # Plan: Calendar Bridge + Calendar Tools + get_time
 
 Build the Swift EventKit bridge, wrap it in Go with retry, ship the 4 pure calendar tools (`calendar_list`, `calendar_create`, `calendar_update`, `calendar_delete`), add a `get_time` hot tool so the agent can re-check the clock mid-turn, and register the `calendar` category. This is the foundation layer -- shifts, reminders, and sim extensions all depend on this being solid.
 
-**Status:** ready for implementation
 **Depends on:** none
 **Tracking:**
 

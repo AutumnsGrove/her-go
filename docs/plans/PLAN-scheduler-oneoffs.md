@@ -1,8 +1,18 @@
+---
+title: "Scheduler One-Off Jobs"
+status: ready
+created: 2026-04-20
+updated: 2026-04-20
+category: features
+priority: medium
+related:
+  - PLAN-shifts.md
+---
+
 # Plan: Scheduler One-Off Jobs + Shift Reminders
 
 Extend the existing scheduler to handle one-off jobs (fire-once-at-a-specific-time) alongside recurring tasks. Use this to power per-shift "leave for work" reminders delivered via Telegram. Same `Handler` interface, new sibling table.
 
-**Status:** ready for implementation
 **Depends on:** PLAN-shifts (work_shifts schema, shift store helpers, shift tools)
 **Tracking:**
 

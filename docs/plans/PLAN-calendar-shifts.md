@@ -1,3 +1,16 @@
+---
+title: "Calendar Integration (SUPERSEDED)"
+status: superseded
+created: 2026-04-19
+updated: 2026-04-20
+category: features
+superseded_by:
+  - PLAN-calendar-bridge.md
+  - PLAN-shifts.md
+  - PLAN-scheduler-oneoffs.md
+  - PLAN-sim-calendar.md
+---
+
 # Plan: Calendar Integration + Shift Tracking + One-Off Reminders
 
 > **STATUS: SPLIT.** This monolithic plan has been split into 4 focused plans.
@@ -15,8 +28,6 @@
 > - Added a `get_time` hot tool (time layer header gets buried as context grows).
 > - Stale-code cleanup items (Part 8) already fixed in commit `52428d3`.
 > - Original "no time tool" decision reversed based on real-world agent context length.
-
-**Status:** superseded -- split into focused plans (2026-04-20)
 
 **Branch:** `claude/schedule-calendar-integration-cASf7`
 

@@ -1,8 +1,22 @@
+---
+title: "Coding Agent Architecture (her-coding-agent)"
+status: planning
+created: 2026-04-23
+updated: 2026-04-23
+category: infrastructure
+priority: high
+phases:
+  - credential-vault
+  - limited-user-sandbox
+  - coding-agent-toolset
+  - integration-with-main-agent
+related:
+  - docs/skills-architecture.md
+---
+
 # Coding Agent Architecture Plan
 
 > Design document for the `her-coding-agent` — a sandboxed coding agent that can build, fix, and iterate on skills for the her-go project.
->
-> **Status:** Planning (2026-04-23)
 >
 > **Core Principle:** Restrict the environment, not the tools. Run the agent in a limited macOS user sandbox where there's nothing to steal, then give it a curated tool set with scoped permissions.
 
