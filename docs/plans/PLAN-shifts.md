@@ -1,6 +1,6 @@
 ---
 title: "Shift Tracking"
-status: ready
+status: complete
 created: 2026-04-21
 updated: 2026-04-21
 category: features
