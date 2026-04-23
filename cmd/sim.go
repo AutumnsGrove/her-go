@@ -1340,7 +1340,7 @@ func copyInboxMessages(tmpDB, simDB *sql.DB, runID int64) error {
 	// The production schema uses the `inbox` table with sender/recipient/msg_type.
 	// We extract msg_type as task_type and payload as note for the sim report.
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, msg_type, COALESCE(payload, ''), status
+		`SELECT created_at, msg_type, COALESCE(payload, ''), status
 		 FROM inbox ORDER BY id ASC`,
 	)
 	if err != nil {
