@@ -22,6 +22,28 @@ import (
 // Set this based on your model; it's used to size the sqlite-vec virtual table.
 const DefaultDimension = 768
 
+// Threshold constants for different similarity use cases.
+// These define the cosine similarity cutoffs (0.0-1.0, where 1.0 = identical)
+// for various deduplication and filtering operations.
+const (
+	// DefaultSimilarityThreshold is the standard duplicate detection threshold.
+	// Used for tag-based and text-based memory deduplication when no category-
+	// specific override applies. Configurable via config.yaml embed.similarity_threshold.
+	DefaultSimilarityThreshold = 0.85
+
+	// ContextMemorySimilarityThreshold is a lower threshold for "context"
+	// category memories (same-day situational snapshots). Catches duplicates
+	// like "at Bolivar feeling low" vs "at Bolivar doing grounding exercise"
+	// that tag-based comparison misses.
+	ContextMemorySimilarityThreshold = 0.70
+
+	// ConversationRedundancyThreshold controls how similar a memory must be
+	// to a recent message before it's filtered out as redundant. Lower than
+	// memory-vs-memory dedup because we're comparing structured memories
+	// against freeform conversation text.
+	ConversationRedundancyThreshold = 0.60
+)
+
 // Client wraps an HTTP client configured to talk to an embedding API.
 // It's similar in shape to llm.Client — base URL + model name.
 //
@@ -177,6 +199,44 @@ func (c *Client) Embed(text string) ([]float32, error) {
 	return vec, nil
 }
 
+// SimilarText embeds two strings and computes their cosine similarity in one shot.
+// This is a convenience wrapper for one-off comparisons where vectors won't be
+// stored ("fire-and-forget" pattern).
+//
+// Use this when:
+//   - You have two strings to compare and don't need to cache the vectors
+//   - You're doing a one-time similarity check (e.g., retry budget tracking)
+//
+// Don't use this when:
+//   - Vectors are already computed (use CosineSimilarity directly)
+//   - Vectors need to be persisted (call Embed, save to DB, then compare)
+//   - You're comparing one vector against many (build candidate map, use FindBestMatch)
+//
+// Returns similarity (0.0-1.0) and any embedding error from either text.
+//
+// Example:
+//
+//	sim, err := embedClient.SimilarText("User has a dog", "User owns a dog")
+//	if err != nil {
+//	    return err
+//	}
+//	if sim > 0.85 {
+//	    fmt.Println("These are semantically similar")
+//	}
+func (c *Client) SimilarText(a, b string) (float64, error) {
+	vecA, err := c.Embed(a)
+	if err != nil {
+		return 0, fmt.Errorf("embedding text A: %w", err)
+	}
+
+	vecB, err := c.Embed(b)
+	if err != nil {
+		return 0, fmt.Errorf("embedding text B: %w", err)
+	}
+
+	return CosineSimilarity(vecA, vecB), nil
+}
+
 // CosineSimilarity computes the cosine similarity between two float32 vectors.
 // Returns a value between -1.0 and 1.0, where:
 //   - 1.0 means identical direction (semantically identical)
@@ -211,4 +271,52 @@ func CosineSimilarity(a, b []float32) float64 {
 	}
 
 	return dot / denominator
+}
+
+// FindBestMatch scans a collection of candidate vectors and returns the best
+// match that exceeds the threshold. This consolidates the "loop over candidates,
+// track best similarity, check threshold" pattern used throughout memory dedup
+// and conversation filtering.
+//
+// The caller is responsible for providing pre-computed or backfilled vectors.
+// This function only handles the comparison logic — it doesn't load embeddings
+// from the database or compute missing ones.
+//
+// Parameters:
+//   - query: the vector to compare against all candidates
+//   - candidates: map of ID → vector for all items to check
+//   - threshold: minimum similarity score to consider a match (0.0-1.0)
+//
+// Returns:
+//   - bestID: the ID of the highest-scoring candidate (0 if no match)
+//   - bestSim: the cosine similarity score of the best match (0.0-1.0)
+//   - matched: true if bestSim >= threshold, false otherwise
+//
+// Example usage (fact deduplication):
+//
+//	tagCandidates := make(map[int64][]float32)
+//	for _, existing := range memories {
+//	    tagCandidates[existing.ID] = existing.Embedding
+//	}
+//	id, sim, matched := embed.FindBestMatch(newTagVec, tagCandidates, 0.85)
+//	if matched {
+//	    fmt.Printf("Duplicate found: memory #%d with similarity %.3f\n", id, sim)
+//	}
+func FindBestMatch(query []float32, candidates map[int64][]float32, threshold float64) (bestID int64, bestSim float64, matched bool) {
+	if len(query) == 0 || len(candidates) == 0 {
+		return 0, 0, false
+	}
+
+	var maxSim float64
+	var maxID int64
+
+	for id, vec := range candidates {
+		sim := CosineSimilarity(query, vec)
+		if sim > maxSim {
+			maxSim = sim
+			maxID = id
+		}
+	}
+
+	return maxID, maxSim, maxSim >= threshold
 }
