@@ -199,7 +199,7 @@ func blendMemories(store *Store, subject string, maxMemories int, relevantMemori
 				}
 				injected = append(injected, InjectedMemory{
 					ID: m.ID, Content: m.Content, Category: m.Category,
-					Subject: m.Subject,
+					Subject:  m.Subject,
 					Distance: m.Distance, Source: source,
 				})
 			}
