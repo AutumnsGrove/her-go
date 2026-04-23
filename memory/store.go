@@ -19,12 +19,14 @@ import (
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 
 	// golang-migrate provides forward-only database migrations.
-	// We use file-based migrations (migrations/*.up.sql) and track applied
-	// migrations in a schema_migrations table. This is the Go equivalent of
-	// Wrangler's D1 migration system.
+	// We use embedded migrations (compiled into the binary via //go:embed)
+	// so tests work regardless of working directory. The iofs source reads
+	// from an embed.FS instead of the filesystem.
+	"her/migrations"
+
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/sqlite3"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
 // Store wraps a SQLite database connection and provides methods for
@@ -107,14 +109,27 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
-// initTables runs database migrations from the migrations/ directory.
+// initTables runs database migrations from the embedded SQL files.
 // Migrations are numbered sequentially (000001, 000002, etc.) and tracked
 // in a schema_migrations table. This is forward-only — no rollbacks.
 // Think of it as the Go equivalent of Wrangler's D1 migration system.
+//
+// The migrations are compiled into the binary via //go:embed (see
+// migrations/embed.go), so they work regardless of working directory.
+// This is what makes `go test ./memory` work — without embedding, the
+// relative "file://migrations" path would fail from the package directory.
 func (s *Store) initTables() error {
-	// Run SQL migrations
-	m, err := migrate.New(
-		"file://migrations",
+	// Create an iofs source from the embedded migration files. This
+	// reads from the compiled-in embed.FS rather than the filesystem,
+	// so no path resolution issues. The "." means "root of the FS" since
+	// the embed directive already scoped to the migrations directory.
+	source, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		return fmt.Errorf("creating migration source: %w", err)
+	}
+
+	m, err := migrate.NewWithSourceInstance(
+		"iofs", source,
 		"sqlite3://"+s.dbPath+"?_journal_mode=WAL&_foreign_keys=on",
 	)
 	if err != nil {

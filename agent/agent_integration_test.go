@@ -7,7 +7,7 @@ package agent
 //   - chatSrv:  simulates the ChatLLM (generates the user-visible reply)
 //
 // The agent loop itself (compaction, layer building, tool dispatch) runs
-// against a real in-memory SQLite store — same approach as memory_agent_test.go.
+// against a real temp-file SQLite store — same approach as memory_agent_test.go.
 // We don't mock the store because it's cheap and testing against a real DB
 // catches schema issues that a mock would silently swallow.
 //
@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -83,10 +84,12 @@ func minimalCfg() *config.Config {
 // is set, the text is delivered here (simulating editing the Telegram placeholder).
 func buildRunParams(t *testing.T, agentURL, chatURL string, captured *string) RunParams {
 	t.Helper()
-	store, err := memory.NewStore(":memory:", 0)
+	dbPath := filepath.Join(t.TempDir(), "agent_integration_test.db")
+	store, err := memory.NewStore(dbPath, 0)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	return RunParams{
 		AgentLLM:            llm.NewClient(agentURL, "test-key", "test-model", 0.1, 4096),
 		ChatLLM:             llm.NewClient(chatURL, "test-key", "test-model", 0.1, 4096),
