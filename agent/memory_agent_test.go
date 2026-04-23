@@ -14,14 +14,15 @@ package agent
 //     the classifier is not configured. This keeps the test focused on the
 //     agent loop itself, not the classifier.
 //
-//  2. memory.NewStore(":memory:", 0) gives us a fully functional SQLite DB
-//     with zero teardown — SQLite destroys the in-memory DB when the
-//     connection closes. No temp files, no cleanup code needed.
+//  2. memory.NewStore(t.TempDir()+"/test.db", 0) gives us a fully functional
+//     SQLite DB with automatic cleanup — Go's test framework removes the
+//     temp directory when the test finishes.
 
 import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -84,10 +85,12 @@ func TestRunMemoryAgent_SavesMemoryAndCallsDone(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	store, err := memory.NewStore(":memory:", 0)
+	dbPath := filepath.Join(t.TempDir(), "memory_agent_test.db")
+	store, err := memory.NewStore(dbPath, 0)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+	defer store.Close()
 
 	cfg := &config.Config{
 		Identity: config.IdentityConfig{Her: "Mira", User: "Autumn"},
@@ -139,7 +142,8 @@ func TestRunMemoryAgent_SavesMemoryAndCallsDone(t *testing.T) {
 // TestRunMemoryAgent_NilLLM verifies the nil guard — calling RunMemoryAgent
 // with no LLM configured should return immediately without panicking.
 func TestRunMemoryAgent_NilLLM(t *testing.T) {
-	store, _ := memory.NewStore(":memory:", 0)
+	dbPath := filepath.Join(t.TempDir(), "nil_llm_test.db")
+	store, _ := memory.NewStore(dbPath, 0)
 	RunMemoryAgent(
 		MemoryAgentInput{UserMessage: "test"},
 		MemoryAgentParams{
