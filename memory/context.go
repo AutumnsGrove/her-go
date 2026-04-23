@@ -20,15 +20,6 @@ type InjectedMemory struct {
 	Source   string  // "semantic" or "linked" — how this memory got selected
 }
 
-// conversationRedundancyThreshold controls how similar a memory must be to
-// a recent message before it's considered redundant. This is cosine
-// SIMILARITY (not distance) — 1.0 = identical, 0.0 = unrelated.
-// 0.60 is intentionally lower than the memory-vs-memory dedup threshold
-// (0.85) because we're comparing structured memories against freeform
-// conversation text, which naturally score lower on cosine similarity
-// even when they convey the same information.
-const conversationRedundancyThreshold = 0.60
-
 // FilterRedundantMemories removes memories whose content is already present in
 // the recent conversation history. This prevents "context echo" — where
 // a memory and a recent message both say the same thing, causing the chat
@@ -71,6 +62,13 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 		return memories
 	}
 
+	// Build candidate map from message vectors once, reuse for all memories.
+	// We use message index as ID since we only care about similarity, not which message.
+	msgCandidates := make(map[int64][]float32, len(msgVecs))
+	for i, vec := range msgVecs {
+		msgCandidates[int64(i)] = vec
+	}
+
 	var filtered []Memory
 	for _, m := range memories {
 		// Use the cached text embedding when available (populated by SaveMemory
@@ -89,18 +87,11 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 			}
 		}
 
-		redundant := false
-		var bestSim float64
-		for _, msgVec := range msgVecs {
-			sim := embed.CosineSimilarity(memVec, msgVec)
-			if sim > bestSim {
-				bestSim = sim
-			}
-			if sim >= conversationRedundancyThreshold {
-				redundant = true
-				break
-			}
-		}
+		// Use FindBestMatch with earlyExit=true for performance.
+		// Chat latency matters, so we return as soon as we find ANY message that
+		// exceeds the threshold. We don't need to know which message or the exact
+		// best similarity — just "is this memory redundant?"
+		_, bestSim, redundant := embed.FindBestMatch(memVec, msgCandidates, embed.ConversationRedundancyThreshold, true)
 
 		if redundant {
 			memPreview := m.Content
@@ -208,7 +199,7 @@ func blendMemories(store *Store, subject string, maxMemories int, relevantMemori
 				}
 				injected = append(injected, InjectedMemory{
 					ID: m.ID, Content: m.Content, Category: m.Category,
-					Subject: m.Subject,
+					Subject:  m.Subject,
 					Distance: m.Distance, Source: source,
 				})
 			}
