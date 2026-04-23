@@ -1,8 +1,16 @@
+---
+title: "Sim Harness Calendar Extensions"
+status: complete
+created: 2026-04-20
+updated: 2026-04-21
+category: infrastructure
+completed: 2026-04-21
+---
+
 # Plan: Sim Harness Extensions for Calendar Testing
 
 Extend the sim harness to support calendar and shift testing: a bridge interface with a fake implementation for sims, seed fields for shifts and calendar events, sim.db schema additions for results tracking, and a `calendar-a-thon.yaml` sim spec.
 
-**Status:** ✅ Complete — all 4 phases done (2026-04-21)
 **Completed:** 
 - Calendar bridge with multi-calendar support, list_calendars tool, and all 4 CRUD operations (commit 2ba807f)
 - Bridge interface extraction: `Bridge` interface + `CLIBridge` (prod) + `FakeBridge` (sim/test)

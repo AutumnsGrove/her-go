@@ -1,8 +1,15 @@
+---
+title: "Mood Tracking Redesign"
+status: ready
+created: 2026-04-19
+updated: 2026-04-19
+category: features
+priority: medium
+---
+
 # Plan: Mood Tracking Redesign + Scheduler Revival
 
 Replaces the legacy 1–5 rating mood system (now in `_junkdrawer/`) with an Apple State-of-Mind-style tracker, and revives a lean, extension-based scheduler package to power it.
-
-**Status:** design locked via interview. Ready for implementation.
 
 **Branch:** `claude/mood-tracking-redesign-TJ9qV`
 

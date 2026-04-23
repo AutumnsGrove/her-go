@@ -1,8 +1,18 @@
+---
+title: "Shift Tracking"
+status: ready
+created: 2026-04-21
+updated: 2026-04-21
+category: features
+priority: medium
+related:
+  - PLAN-calendar-bridge.md
+---
+
 # Plan: Shift Tracking (Calendar Extension)
 
 Shift tracking built on top of the existing calendar tools and `calendar_events` SQLite table. No separate tools or tables -- shifts are calendar events with optional shift metadata. One new tool (`shift_hours`) for computing totals.
 
-**Status:** ready for implementation
 **Depends on:** Calendar DB mirror (commit 05a4346), config `CalendarConfig`
 **Supersedes:** Original 5-tool shift plan (dropped in favor of extending calendar tools)
 

@@ -1,8 +1,15 @@
+---
+title: "Test Infrastructure Buildout"
+status: in-progress
+created: 2026-04-22
+updated: 2026-04-22
+category: infrastructure
+priority: high
+---
+
 # her-go Test Buildout Plan
 
 A phased testing strategy using the beaver-build methodology. Each package is categorized by risk, assigned a test type, and prioritized.
-
-**Last updated:** 2026-04-22
 
 ---
 

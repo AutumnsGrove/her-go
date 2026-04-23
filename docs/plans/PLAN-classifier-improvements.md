@@ -1,3 +1,12 @@
+---
+title: "Classifier Improvements"
+status: planning
+created: 2026-03-31
+updated: 2026-03-31
+category: refactor
+priority: low
+---
+
 # Plan: Classifier Improvements
 
 ## Problem
