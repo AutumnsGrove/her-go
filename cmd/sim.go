@@ -23,6 +23,14 @@ import (
 	"her/search"
 	"her/turn"
 
+	// golang-migrate provides forward-only database migrations, same as
+	// memory.Store uses for her.db. The file source reads .up.sql files
+	// from migrations/sim/ and the sqlite3 database driver handles the
+	// connection. Both underscore imports register their drivers via init().
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/sqlite3"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+
 	// Underscore import: registers the SQLite driver with database/sql.
 	// We need this for the sim.db connection (separate from memory.Store
 	// which handles its own driver registration via sqlite-vec).
@@ -212,158 +220,6 @@ type simDreamResult struct {
 }
 
 // --------------------------------------------------------------------------
-// sim.db schema — separate from the production her.db
-// --------------------------------------------------------------------------
-
-// simDBSchema contains the CREATE TABLE and CREATE VIEW statements for the
-// simulation results database. This is a different database from her.db — it
-// stores results across many sim runs so you can compare them.
-//
-// Schema design: every child table has run_id as a foreign key, so all data
-// is already isolated per run. The views below are query shortcuts — they
-// don't move data, they just make common queries easier to write.
-const simDBSchema = `
-CREATE TABLE IF NOT EXISTS sim_runs (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	suite_name TEXT NOT NULL,
-	suite_path TEXT NOT NULL,
-	chat_model TEXT,
-	agent_model TEXT,
-	embed_model TEXT,
-	total_messages INTEGER,
-	total_cost_usd REAL,
-	duration_ms INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS sim_messages (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	turn_number INTEGER,
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	role TEXT NOT NULL,
-	content TEXT NOT NULL,
-	conversation_id TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sim_memories (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	memory TEXT NOT NULL,
-	category TEXT,
-	subject TEXT DEFAULT 'user',
-	importance INTEGER DEFAULT 5,
-	active BOOLEAN DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS sim_mood_entries (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-	kind TEXT NOT NULL,
-	valence INTEGER NOT NULL,
-	labels TEXT NOT NULL DEFAULT '[]',
-	associations TEXT NOT NULL DEFAULT '[]',
-	note TEXT,
-	source TEXT NOT NULL,
-	confidence REAL NOT NULL DEFAULT 0,
-	conversation_id TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sim_metrics (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	model TEXT NOT NULL,
-	prompt_tokens INTEGER,
-	completion_tokens INTEGER,
-	total_tokens INTEGER,
-	cost_usd REAL,
-	latency_ms INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS sim_agent_turns (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	turn_number INTEGER,
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	turn_index INTEGER,
-	role TEXT NOT NULL,
-	tool_name TEXT,
-	tool_args TEXT,
-	content TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sim_summaries (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-	conversation_id TEXT,
-	summary TEXT NOT NULL,
-	messages_summarized INTEGER
-);
-
--- Labels let you tag any run with a human-readable name for easy reference.
--- Example: INSERT INTO sim_run_labels (run_id, label) VALUES (38, 'baseline-post-refactor');
--- Then query: SELECT * FROM sim_memories WHERE run_id = (SELECT run_id FROM sim_run_labels WHERE label = 'baseline-post-refactor');
-CREATE TABLE IF NOT EXISTS sim_run_labels (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	label TEXT NOT NULL UNIQUE,
-	note TEXT,
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Calendar events captured from the sim run. Shows the final state of the
--- calendar after the sim completes — useful for verifying shift scheduling,
--- event creation/update/delete operations, and calendar-related agent behavior.
-CREATE TABLE IF NOT EXISTS sim_calendar_events (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-	captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-	event_id TEXT,
-	title TEXT,
-	start TEXT,
-	end TEXT,
-	location TEXT,
-	notes TEXT,
-	calendar TEXT,
-	job TEXT
-);
-
--- latest_runs: the most recent run for each suite name.
--- Usage: SELECT * FROM latest_runs;
--- Usage: SELECT * FROM sim_memories WHERE run_id = (SELECT id FROM latest_runs WHERE suite_name = 'Getting to Know You');
-CREATE VIEW IF NOT EXISTS latest_runs AS
-SELECT r.*
-FROM sim_runs r
-INNER JOIN (
-	SELECT suite_name, MAX(id) AS max_id
-	FROM sim_runs
-	GROUP BY suite_name
-) latest ON r.id = latest.max_id;
-
--- run_summary: one row per run with fact count, message count, and cost.
--- Usage: SELECT * FROM run_summary ORDER BY id DESC LIMIT 20;
-CREATE VIEW IF NOT EXISTS run_summary AS
-SELECT
-	r.id,
-	r.timestamp,
-	r.suite_name,
-	r.agent_model,
-	r.chat_model,
-	r.total_cost_usd,
-	r.duration_ms,
-	COUNT(DISTINCT f.id) AS memories_saved,
-	COUNT(DISTINCT m.id) / 2 AS turns
-FROM sim_runs r
-LEFT JOIN sim_memories f ON f.run_id = r.id
-LEFT JOIN sim_messages m ON m.run_id = r.id AND m.role = 'user'
-GROUP BY r.id;
-`
-
-// --------------------------------------------------------------------------
 // Main command logic
 // --------------------------------------------------------------------------
 
@@ -471,76 +327,32 @@ func runSim(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating sims directory: %w", err)
 	}
 
+	// golang-migrate handles sim.db schema the same way memory.Store
+	// handles her.db — file-based SQL migrations applied in order.
+	// The "file://" source reads from migrations/sim/, and each .up.sql
+	// file runs exactly once. The schema_migrations table tracks which
+	// migrations have been applied so it's safe to run every startup.
+	m, err := migrate.New(
+		"file://migrations/sim",
+		"sqlite3://sims/sim.db?_journal_mode=WAL&_foreign_keys=on",
+	)
+	if err != nil {
+		return fmt.Errorf("creating sim migrator: %w", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("applying sim migrations: %w", err)
+	}
+
+	// Close the migrator before opening our own connection — golang-migrate
+	// holds a database handle internally, and SQLite only allows one writer.
+	m.Close()
+
 	simDB, err := sql.Open("sqlite3", "sims/sim.db?_journal_mode=WAL&_foreign_keys=on")
 	if err != nil {
 		return fmt.Errorf("opening sim.db: %w", err)
 	}
 	defer simDB.Close()
-
-	// Execute all CREATE TABLE statements. We split on semicolons and
-	// run each one individually because sql.Exec only runs one statement
-	// per call in the go-sqlite3 driver.
-	for _, stmt := range strings.Split(simDBSchema, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" {
-			continue
-		}
-		if _, err := simDB.Exec(stmt); err != nil {
-			return fmt.Errorf("initializing sim.db schema: %w", err)
-		}
-	}
-
-	// ── sim.db migrations ─────────────────────────────────────────────
-	// Each ALTER is idempotent-safe: SQLite returns "duplicate column" or
-	// "no such table" if already done, and we ignore the error. Run order
-	// doesn't matter as long as each statement is independent.
-
-	// v1: add embed_model to sim_runs.
-	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN embed_model TEXT`)
-
-	// v2: rename sim_facts → sim_memories, fact column → memory.
-	// The old table may not exist if this is a fresh DB (CREATE TABLE
-	// already uses the new name), so we ignore errors.
-	simDB.Exec(`ALTER TABLE sim_facts RENAME TO sim_memories`)
-	simDB.Exec(`ALTER TABLE sim_memories RENAME COLUMN fact TO memory`)
-
-	// v3: rebuild sim_mood_entries — the pre-redesign schema (rating,
-	// note, tags) is structurally incompatible with the Apple-style
-	// schema (ts, kind, valence, labels, associations, confidence).
-	// Drop the old table and let CREATE TABLE IF NOT EXISTS above
-	// recreate it with the correct schema. Old mood sim data was
-	// never successfully populated anyway (the copy always failed).
-	//
-	// We detect the old schema by checking for the "rating" column —
-	// if it exists, this is the stale table.
-	var hasRating int
-	err = simDB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sim_mood_entries') WHERE name = 'rating'`).Scan(&hasRating)
-	if err == nil && hasRating > 0 {
-		simDB.Exec(`DROP TABLE sim_mood_entries`)
-		// Re-run just the mood entries CREATE from the schema above.
-		simDB.Exec(`CREATE TABLE IF NOT EXISTS sim_mood_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id INTEGER NOT NULL REFERENCES sim_runs(id),
-			ts DATETIME DEFAULT CURRENT_TIMESTAMP,
-			kind TEXT NOT NULL,
-			valence INTEGER NOT NULL,
-			labels TEXT NOT NULL DEFAULT '[]',
-			associations TEXT NOT NULL DEFAULT '[]',
-			note TEXT,
-			source TEXT NOT NULL,
-			confidence REAL NOT NULL DEFAULT 0,
-			conversation_id TEXT
-		)`)
-	}
-
-	// v4: add memory_model and mood_model columns to sim_runs.
-	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN memory_model TEXT`)
-	simDB.Exec(`ALTER TABLE sim_runs ADD COLUMN mood_model TEXT`)
-
-	// v5: recreate views — DROP + CREATE so they pick up renamed tables.
-	// Views are cheap metadata; dropping them loses nothing.
-	simDB.Exec(`DROP VIEW IF EXISTS run_summary`)
-	simDB.Exec(`DROP VIEW IF EXISTS latest_runs`)
 
 	// Insert a new run row. We'll update it with totals at the end.
 	agentModel := cfg.Agent.Model
