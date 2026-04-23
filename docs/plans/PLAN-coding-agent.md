@@ -1,5 +1,5 @@
 ---
-title: "Coding Agent Architecture (her-coding-agent)"
+title: "Coding Agent Architecture (sam)"
 status: planning
 created: 2026-04-23
 updated: 2026-04-23
@@ -16,7 +16,7 @@ related:
 
 # Coding Agent Architecture Plan
 
-> Design document for the `her-coding-agent` — a sandboxed coding agent that can build, fix, and iterate on skills for the her-go project.
+> Design document for `sam` — a sandboxed coding agent that can build, fix, and iterate on skills for the her-go project.
 >
 > **Core Principle:** Restrict the environment, not the tools. Run the agent in a limited macOS user sandbox where there's nothing to steal, then give it a curated tool set with scoped permissions.
 
@@ -119,10 +119,10 @@ Then give it a **tool set** (not raw bash) that mirrors the main agent's archite
 
 **Pattern:** Alcoholless-style user isolation
 
-Create a dedicated macOS user (`her-coding-agent`) with:
+Create a dedicated macOS user (`sam`) with:
 - No admin privileges
 - No Keychain access
-- Home directory is `/Users/her-coding-agent/` (the sandbox)
+- Home directory is `/Users/sam/` (the sandbox)
 - Cannot read `/Users/autumn/` files (OS-enforced)
 - No secrets in environment variables
 
@@ -135,26 +135,26 @@ Create a dedicated macOS user (`her-coding-agent`) with:
 **Setup:**
 ```bash
 # Create limited user (scripted, one-time setup)
-sudo dscl . -create /Users/her-coding-agent
-sudo dscl . -create /Users/her-coding-agent UserShell /bin/bash
-sudo dscl . -create /Users/her-coding-agent RealName "Her Coding Agent"
-sudo dscl . -create /Users/her-coding-agent UniqueID 502
-sudo dscl . -create /Users/her-coding-agent PrimaryGroupID 20
-sudo dscl . -create /Users/her-coding-agent NFSHomeDirectory /Users/her-coding-agent
-sudo dscl . -passwd /Users/her-coding-agent ""  # No password (can only su from autumn)
-sudo createhomedir -c -u her-coding-agent
+sudo dscl . -create /Users/sam
+sudo dscl . -create /Users/sam UserShell /bin/bash
+sudo dscl . -create /Users/sam RealName "Her Coding Agent"
+sudo dscl . -create /Users/sam UniqueID 502
+sudo dscl . -create /Users/sam PrimaryGroupID 20
+sudo dscl . -create /Users/sam NFSHomeDirectory /Users/sam
+sudo dscl . -passwd /Users/sam ""  # No password (can only su from autumn)
+sudo createhomedir -c -u sam
 ```
 
 **Execution:**
 ```bash
 # Main harness (running as autumn) prepares sandbox
-rsync -a skills/job_tracker/ /Users/her-coding-agent/workspace/job_tracker/
+rsync -a skills/job_tracker/ /Users/sam/workspace/job_tracker/
 
 # Run coding agent as limited user
-su her-coding-agent -c "cd ~/workspace/job_tracker && /usr/local/bin/her-coding-agent 'build a job tracker skill'"
+su sam -c "cd ~/workspace/job_tracker && /usr/local/bin/sam 'build a job tracker skill'"
 
 # Copy results back
-rsync -a /Users/her-coding-agent/workspace/job_tracker/ skills/job_tracker/
+rsync -a /Users/sam/workspace/job_tracker/ skills/job_tracker/
 ```
 
 #### Layer 2: Scoped Tools (Inner Ring)
@@ -165,7 +165,7 @@ rsync -a /Users/her-coding-agent/workspace/job_tracker/ skills/job_tracker/
 # coding-tools/search_code/tool.yaml
 name: search_code
 permissions:
-  scope: workspace_only  # Cannot search outside /Users/her-coding-agent/workspace/<skill>/
+  scope: workspace_only  # Cannot search outside /Users/sam/workspace/<skill>/
   max_results: 100
 ```
 
@@ -188,9 +188,9 @@ Even if the agent tries `read_file("../../../../.ssh/id_rsa")`, the tool rejects
 
 ```
 # /etc/pf.conf additions
-# Allow her-coding-agent user to reach docs sites only
-pass out proto tcp from any to { pkg.go.dev, docs.rs, pypi.org, anthropic.com } port 443 user her-coding-agent
-block out proto tcp from any to any user her-coding-agent
+# Allow sam user to reach docs sites only
+pass out proto tcp from any to { pkg.go.dev, docs.rs, pypi.org, anthropic.com } port 443 user sam
+block out proto tcp from any to any user sam
 ```
 
 The coding agent can:
@@ -242,7 +242,7 @@ See [§6 Credential Vault](#6-credential-vault) for details.
 │ │ Coding Task Queue                       │           │
 │ │                                         │           │
 │ │ 1. Prepare sandbox (rsync skill dir)   │           │
-│ │ 2. su her-coding-agent -c "..."         │           │
+│ │ 2. su sam -c "..."         │           │
 │ │ 3. Monitor progress                     │           │
 │ │ 4. Rsync results back                   │           │
 │ │ 5. Validate + emit CodingComplete       │           │
@@ -254,9 +254,9 @@ See [§6 Credential Vault](#6-credential-vault) for details.
 └─────────────────────────────────────────────────────────┘
               ↕ rsync skill directory
 ┌─────────────────────────────────────────────────────────┐
-│ Sandbox (limited user: her-coding-agent)                │
+│ Sandbox (limited user: sam)                │
 │                                                         │
-│ /Users/her-coding-agent/                                │
+│ /Users/sam/                                │
 │ ├── workspace/                                          │
 │ │   └── job_tracker/          ← Skill being built      │
 │ │       ├── skill.yaml                                 │
@@ -267,7 +267,7 @@ See [§6 Credential Vault](#6-credential-vault) for details.
 │ └── docs-cache/                ← MCP cache (ro)        │
 │                                                         │
 │ ┌───────────────────────────────────────┐              │
-│ │ her-coding-agent (Go binary)          │              │
+│ │ sam (Go binary)          │              │
 │ │                                       │              │
 │ │ Agent Loop:                           │              │
 │ │   LLM → Tool Calls → Iterate          │              │
@@ -308,15 +308,15 @@ See [§6 Credential Vault](#6-credential-vault) for details.
 3. **Main harness (background goroutine):**
    ```go
    // Create workspace
-   workspaceDir := "/Users/her-coding-agent/workspace/job_tracker"
+   workspaceDir := "/Users/sam/workspace/job_tracker"
    os.MkdirAll(workspaceDir, 0755)
    
    // Copy skillkit reference
    rsync("skills/skillkit/go/", workspaceDir+"/skillkit/")
    
    // Run coding agent as limited user
-   cmd := exec.Command("su", "her-coding-agent", "-c", 
-       fmt.Sprintf("cd %s && /usr/local/bin/her-coding-agent '%s'", 
+   cmd := exec.Command("su", "sam", "-c", 
+       fmt.Sprintf("cd %s && /usr/local/bin/sam '%s'", 
            workspaceDir, task.Instruction))
    
    // Monitor progress (parse stdout for status updates)
@@ -885,7 +885,7 @@ When the skill runs, the harness:
 
 ### 7.1 macOS pf.conf Firewall (Outer Layer)
 
-**Goal:** The `her-coding-agent` user can only reach documentation sites and the LLM API. All other network access is blocked.
+**Goal:** The `sam` user can only reach documentation sites and the LLM API. All other network access is blocked.
 
 **/etc/pf.conf additions:**
 ```
@@ -898,11 +898,11 @@ table <coding_agent_allowed> { \
     openrouter.ai \
 }
 
-# Allow her-coding-agent user to reach allowed domains on 443 only
-pass out proto tcp from any to <coding_agent_allowed> port 443 user her-coding-agent
+# Allow sam user to reach allowed domains on 443 only
+pass out proto tcp from any to <coding_agent_allowed> port 443 user sam
 
-# Block all other outbound traffic from her-coding-agent
-block out proto tcp from any to any user her-coding-agent
+# Block all other outbound traffic from sam
+block out proto tcp from any to any user sam
 ```
 
 **Activation (one-time setup):**
@@ -932,7 +932,7 @@ sudo pfctl -ef /etc/pf.conf
 **Seatbelt profile for testing:**
 
 ```scheme
-# /Users/her-coding-agent/test.sb
+# /Users/sam/test.sb
 (version 1)
 (deny default)
 (allow file-read*)                          ; Can read workspace
@@ -962,7 +962,7 @@ func (t *RunTestIsolatedTool) Execute(args ToolArgs, ctx ToolContext) ToolResult
     
     // Run with timeout + sandbox
     cmd := exec.Command("gtimeout", "--kill-after=6s", "5s",
-        "sandbox-exec", "-f", "/Users/her-coding-agent/test.sb",
+        "sandbox-exec", "-f", "/Users/sam/test.sb",
         binary,
     )
     cmd.Args = append(cmd.Args, testArgs...)
@@ -1006,7 +1006,7 @@ brew install coreutils  # Provides gtimeout
 For finer-grained control, we could add an HTTP proxy (like the existing skills network proxy):
 
 ```
-her-coding-agent process
+sam process
     ↓
 HTTP_PROXY=http://127.0.0.1:8888 (running in main harness)
     ↓
@@ -1210,7 +1210,7 @@ CREATE TABLE coding_tasks (
 
 ```go
 func prepareSandbox(skillName string) string {
-    workspaceDir := "/Users/her-coding-agent/workspace/" + skillName
+    workspaceDir := "/Users/sam/workspace/" + skillName
     
     // 1. Create workspace
     os.MkdirAll(workspaceDir, 0755)
@@ -1218,7 +1218,7 @@ func prepareSandbox(skillName string) string {
     // 2. Initialize git repo (if first time)
     if !isGitRepo(workspaceDir) {
         exec.Command("git", "-C", workspaceDir, "init").Run()
-        exec.Command("git", "-C", workspaceDir, "config", "user.name", "her-coding-agent").Run()
+        exec.Command("git", "-C", workspaceDir, "config", "user.name", "sam").Run()
         exec.Command("git", "-C", workspaceDir, "config", "user.email", "coding-agent@local").Run()
     }
     
@@ -1396,7 +1396,7 @@ The agent can then:
 **Goal:** Coding agent runs in an isolated user account.
 
 - [ ] Write setup script: `scripts/setup-coding-sandbox.sh`
-  - Creates `her-coding-agent` user
+  - Creates `sam` user
   - Sets up home directory structure
   - Installs Go toolchain (read-only)
   - Installs uv/Python (read-only)
@@ -1409,13 +1409,13 @@ The agent can then:
 - [ ] Test: sandbox user cannot reach `curl https://google.com`
 - [ ] Test: sandbox user CAN reach `pkg.go.dev`
 
-**Deliverable:** `her-coding-agent` user exists, network filtered, file access restricted.
+**Deliverable:** `sam` user exists, network filtered, file access restricted.
 
 ---
 
 ### Phase 3: Coding Agent Tool Set (1 week)
 
-**Goal:** Build the `her-coding-agent` binary with scoped tools.
+**Goal:** Build the `sam` binary with scoped tools.
 
 - [ ] Tool definitions: `coding-tools/<name>/tool.yaml` for each tool
 - [ ] Tool implementations:
@@ -1429,10 +1429,10 @@ The agent can then:
   - LLM iteration (call Opus/Gemini)
   - Tool dispatch
   - Progress reporting (emit to stdout, main harness captures)
-- [ ] Build binary: `go build -o /usr/local/bin/her-coding-agent cmd/coding-agent/main.go`
+- [ ] Build binary: `go build -o /usr/local/bin/sam cmd/coding-agent/main.go`
 - [ ] Test: manually run agent on a simple task ("create a hello world skill")
 
-**Deliverable:** `her-coding-agent` binary that can iterate on code in a workspace.
+**Deliverable:** `sam` binary that can iterate on code in a workspace.
 
 ---
 
@@ -1486,7 +1486,7 @@ Simpler to implement and debug. LLM API rate limits won't be hit. Easier to moni
 **Decision:** Yes, run skills in nested sandbox
 
 Coding agent CAN execute skills during build for testing, but only in a nested sandbox:
-- Limited user (`her-coding-agent`) is outer layer
+- Limited user (`sam`) is outer layer
 - `sandbox-exec` with read-only fs + no network is inner layer  
 - `gtimeout` enforces 5-second hard limit
 - See [§7 Network Isolation](#7-network-isolation) for seatbelt profile
