@@ -21,7 +21,7 @@ func TestFindBestMatch_SingleCandidateAboveThreshold(t *testing.T) {
 		101: {1, 0.1, 0}, // cosine similarity ≈ 0.995 (very similar)
 	}
 
-	id, sim, matched := FindBestMatch(query, candidates, 0.90)
+	id, sim, matched := FindBestMatch(query, candidates, 0.90, false)
 
 	if !matched {
 		t.Errorf("FindBestMatch matched = false, want true when similarity %.3f > threshold 0.90", sim)
@@ -44,7 +44,7 @@ func TestFindBestMatch_MultipleCandidatesBestBelowThreshold(t *testing.T) {
 		102: {0, 1, 0},     // cosine sim = 0 (orthogonal)
 	}
 
-	id, sim, matched := FindBestMatch(query, candidates, 0.90)
+	id, sim, matched := FindBestMatch(query, candidates, 0.90, false)
 
 	if matched {
 		t.Errorf("FindBestMatch matched = true, want false when best similarity %.3f < threshold 0.90", sim)
@@ -66,7 +66,7 @@ func TestFindBestMatch_EmptyQuery(t *testing.T) {
 		101: {1, 0, 0},
 	}
 
-	id, sim, matched := FindBestMatch(query, candidates, 0.85)
+	id, sim, matched := FindBestMatch(query, candidates, 0.85, false)
 
 	if matched {
 		t.Error("FindBestMatch matched = true, want false for empty query")
@@ -85,7 +85,7 @@ func TestFindBestMatch_EmptyCandidates(t *testing.T) {
 	query := []float32{1, 0, 0}
 	candidates := map[int64][]float32{}
 
-	id, sim, matched := FindBestMatch(query, candidates, 0.85)
+	id, sim, matched := FindBestMatch(query, candidates, 0.85, false)
 
 	if matched {
 		t.Error("FindBestMatch matched = true, want false for empty candidates")
@@ -106,7 +106,7 @@ func TestFindBestMatch_IdenticalVectors(t *testing.T) {
 		101: {1, 2, 3}, // identical → cosine similarity = 1.0
 	}
 
-	id, sim, matched := FindBestMatch(query, candidates, 0.85)
+	id, sim, matched := FindBestMatch(query, candidates, 0.85, false)
 
 	if !matched {
 		t.Error("FindBestMatch matched = false, want true for identical vectors")
@@ -116,6 +116,58 @@ func TestFindBestMatch_IdenticalVectors(t *testing.T) {
 	}
 	if sim != 1.0 {
 		t.Errorf("FindBestMatch sim = %.3f, want 1.0 for identical vectors", sim)
+	}
+}
+
+// TestFindBestMatch_EarlyExit verifies that FindBestMatch with earlyExit=true
+// returns immediately when threshold is exceeded, potentially not finding the
+// true best match (but that's the intended behavior for performance).
+func TestFindBestMatch_EarlyExit(t *testing.T) {
+	query := []float32{1, 0, 0}
+	candidates := map[int64][]float32{
+		101: {0.9, 0.1, 0},  // sim ≈ 0.995 (very high)
+		102: {1.0, 0.0, 0},  // sim = 1.0 (perfect match, but might not be returned)
+		103: {0.85, 0.5, 0}, // sim ≈ 0.86 (above threshold)
+	}
+
+	// With early exit, we should get A match >= threshold, but not necessarily
+	// the BEST match (because map iteration order is random in Go).
+	id, sim, matched := FindBestMatch(query, candidates, 0.85, true)
+
+	if !matched {
+		t.Error("FindBestMatch with earlyExit=true matched = false, want true when candidates exceed threshold")
+	}
+	if sim < 0.85 {
+		t.Errorf("FindBestMatch with earlyExit=true sim = %.3f, want >= 0.85", sim)
+	}
+	// We can't assert which ID we got because map iteration is randomized,
+	// but we can verify it's one of our candidates
+	if _, exists := candidates[id]; !exists {
+		t.Errorf("FindBestMatch returned ID %d which is not in candidates", id)
+	}
+}
+
+// TestFindBestMatch_NoEarlyExit verifies that FindBestMatch with earlyExit=false
+// always returns the true best match even when an earlier candidate exceeded threshold.
+func TestFindBestMatch_NoEarlyExit(t *testing.T) {
+	query := []float32{1, 0, 0}
+	candidates := map[int64][]float32{
+		101: {0.9, 0.1, 0},  // sim ≈ 0.995
+		102: {1.0, 0.0, 0},  // sim = 1.0 (perfect match, should be returned)
+		103: {0.85, 0.5, 0}, // sim ≈ 0.86
+	}
+
+	// Without early exit, we should get the true best match (ID 102, sim=1.0)
+	id, sim, matched := FindBestMatch(query, candidates, 0.85, false)
+
+	if !matched {
+		t.Error("FindBestMatch with earlyExit=false matched = false, want true")
+	}
+	if id != 102 {
+		t.Errorf("FindBestMatch with earlyExit=false id = %d, want 102 (perfect match)", id)
+	}
+	if sim != 1.0 {
+		t.Errorf("FindBestMatch with earlyExit=false sim = %.3f, want 1.0", sim)
 	}
 }
 
@@ -132,7 +184,7 @@ func TestFindBestMatch_ThresholdBoundary(t *testing.T) {
 	}
 
 	// Use threshold slightly below calculated value to account for float32 precision
-	id, sim, matched := FindBestMatch(query, candidates, 0.849)
+	id, sim, matched := FindBestMatch(query, candidates, 0.849, false)
 
 	// Should match since sim >= threshold
 	if !matched {

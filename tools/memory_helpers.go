@@ -373,8 +373,9 @@ func checkMemoryDuplicate(newTagVec, newTextVec []float32, subject string, thres
 	// Find best matches using helper.
 	// Note: We don't pass threshold here because we need to compare tag vs text
 	// and return the overall best. The threshold check happens at the end.
-	tagID, tagSim, _ := embed.FindBestMatch(newTagVec, tagCandidates, 0)
-	textID, textSim, _ := embed.FindBestMatch(newTextVec, textCandidates, 0)
+	// earlyExit=false: we need the true best match for accurate logging/debugging.
+	tagID, tagSim, _ := embed.FindBestMatch(newTagVec, tagCandidates, 0, false)
+	textID, textSim, _ := embed.FindBestMatch(newTextVec, textCandidates, 0, false)
 
 	// Determine overall best match.
 	var bestID int64
