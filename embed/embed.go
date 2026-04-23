@@ -286,23 +286,48 @@ func CosineSimilarity(a, b []float32) float64 {
 //   - query: the vector to compare against all candidates
 //   - candidates: map of ID → vector for all items to check
 //   - threshold: minimum similarity score to consider a match (0.0-1.0)
+//   - earlyExit: if true, return immediately when threshold is exceeded (performance optimization)
+//
+// Early exit behavior:
+//   - earlyExit=false: scans ALL candidates, returns the highest similarity (the true "best")
+//   - earlyExit=true: returns as soon as ANY candidate exceeds threshold (the first "good enough")
+//
+// Use earlyExit=true when:
+//   - You only care if there's a match, not which is best
+//   - Performance matters (e.g., chat latency)
+//   - Threshold is well-tuned (any match above it is equivalent)
+//
+// Use earlyExit=false when:
+//   - You need to know the actual best match for logging/debugging
+//   - Candidates are few (performance difference negligible)
 //
 // Returns:
 //   - bestID: the ID of the highest-scoring candidate (0 if no match)
 //   - bestSim: the cosine similarity score of the best match (0.0-1.0)
 //   - matched: true if bestSim >= threshold, false otherwise
 //
-// Example usage (fact deduplication):
+// Example usage (fact deduplication - needs true best):
 //
 //	tagCandidates := make(map[int64][]float32)
 //	for _, existing := range memories {
 //	    tagCandidates[existing.ID] = existing.Embedding
 //	}
-//	id, sim, matched := embed.FindBestMatch(newTagVec, tagCandidates, 0.85)
+//	id, sim, matched := embed.FindBestMatch(newTagVec, tagCandidates, 0.85, false)
 //	if matched {
 //	    fmt.Printf("Duplicate found: memory #%d with similarity %.3f\n", id, sim)
 //	}
-func FindBestMatch(query []float32, candidates map[int64][]float32, threshold float64) (bestID int64, bestSim float64, matched bool) {
+//
+// Example usage (conversation filtering - early exit for performance):
+//
+//	msgCandidates := make(map[int64][]float32)
+//	for i, msgVec := range messageVectors {
+//	    msgCandidates[int64(i)] = msgVec
+//	}
+//	_, sim, redundant := embed.FindBestMatch(memVec, msgCandidates, 0.60, true)
+//	if redundant {
+//	    // Filter out this memory, it echoes a recent message
+//	}
+func FindBestMatch(query []float32, candidates map[int64][]float32, threshold float64, earlyExit bool) (bestID int64, bestSim float64, matched bool) {
 	if len(query) == 0 || len(candidates) == 0 {
 		return 0, 0, false
 	}
@@ -315,6 +340,13 @@ func FindBestMatch(query []float32, candidates map[int64][]float32, threshold fl
 		if sim > maxSim {
 			maxSim = sim
 			maxID = id
+		}
+
+		// Early exit optimization: return as soon as we find a match above threshold.
+		// This is useful for conversation echo filtering where we only care "is it
+		// redundant?" not "what's the best match?" — saves comparisons in chat path.
+		if earlyExit && sim >= threshold {
+			return maxID, sim, true
 		}
 	}
 
