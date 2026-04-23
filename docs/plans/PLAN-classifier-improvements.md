@@ -1,10 +1,11 @@
 ---
 title: "Classifier Improvements"
-status: planning
+status: complete
 created: 2026-03-31
-updated: 2026-03-31
+updated: 2026-04-23
 category: refactor
 priority: low
+resolution: "Implemented via verdict removal (better than planned soft verdicts). FICTIONAL/INFERRED removed due to 40-50% false positive rates. Rewrite infrastructure built for reply gates. Retry budget unnecessary after removing panic-inducing verdicts."
 ---
 
 # Plan: Classifier Improvements
@@ -149,6 +150,105 @@ This is a **safety net**, not the primary fix. It prevents the 8-tool-call panic
 | `config/config.yaml.example` | Document `max_fact_retries` |
 | `agent_prompt.md` | Fact quality guidance (fiction, updates, patterns) |
 | `memory/store.go` | New `classifier_log` table + insert method |
+
+---
+
+## Resolution (2026-04-23)
+
+**Status: COMPLETE** — Implemented via a simpler, more effective solution than originally planned.
+
+### What Was Done
+
+#### 1. Verdict Removal (Better than "Soft" Verdicts)
+Instead of making FICTIONAL/INFERRED "soft" with rewrite suggestions, **removed them entirely**:
+- **FICTIONAL** — 40-50% false positive rate made it harmful (plan's own evidence)
+- **INFERRED** — Memory agent reads raw conversation, reasonable summarization is fine
+- **MOOD_NOT_FACT** — Mood tracking moved to junk drawer per REFACTOR.md
+- **EXTERNAL** — Overlapped with FICTIONAL, removed together
+
+This is **better than the plan** because:
+- No rewrite prompt engineering needed for problematic verdicts
+- Agent model's judgment (via tool prompt) handles fiction filtering effectively
+- Kimi K2.5 stress test (run 10) showed 1 rejection vs Mercury's 15 — **agent model matters more than classifier**
+
+#### 2. Rewrite Infrastructure Built (For Reply Gates)
+Even though FICTIONAL/INFERRED were removed, the soft verdict + rewrite system was **fully implemented** and is actively used by **reply safety classifiers**:
+
+**Code locations:**
+- `classifier/classifier.go:34` — `Verdict.Rewrite` field
+- `classifier/classifier.go:312-323` — `extractRewrite()` parser
+- `classifier/classifier.go:292-294` — soft verdicts populate rewrite
+- `tools/context.go:269-274` — `PreApprovedRewrites` map
+- `tools/memory_helpers.go:191-192, 209-210` — bypass logic prevents self-contradiction bug
+
+**Active soft verdicts:**
+- `ESCALATION` (reply safety) — suggests toning down language
+- `DRASTIC_ENDORSEMENT` (reply safety) — suggests exploration over endorsement
+- `PURE_VALIDATION` (reply safety) — suggests adding nuance
+- `STYLE_ISSUE` (reply style) — suggests rephrasing AI-isms
+
+#### 3. Tool Prompt Guidance (Fiction vs Preferences)
+Implemented exactly as planned in `tools/save_memory/tool.yaml:7-9`:
+> User preferences ABOUT fiction are real memories (favorite genre, playstyle, characters they love). In-game events are NOT (beat a boss, found a location).
+
+This addresses the Cyberpunk stress test case where "plays as female V" (real preference) was incorrectly flagged as FICTIONAL.
+
+#### 4. Classifier Logging (Full Observability)
+Implemented exactly as planned:
+- `migrations/000004_metrics_and_logs.up.sql:48-58` — `classifier_log` table
+- Columns: `id`, `timestamp`, `conversation_id`, `write_type`, `verdict`, `content`, `reason`, `rewrite`, `accepted`
+- `memory/store_agent.go` — `SaveClassifierLog()` method
+- `tools/memory_helpers.go:206-208` — logs every classifier check
+
+#### 5. Retry Budget NOT Implemented (Not Needed)
+**Intentionally skipped** because:
+- FICTIONAL/INFERRED removals eliminated the panic-retry loops
+- Dedup gate no longer deadlocks with classifier (problematic verdicts gone)
+- Agent can accept "use update_memory" suggestion and move on
+- Run 16's 8-tool-call deadlock was caused by FICTIONAL rejecting the update — fixed by removing FICTIONAL
+
+### Evidence of Success
+
+**Before (stress test run 16, Mercury 2 agent):**
+- 15 rejections (12 classifier + 3 dedup)
+- 8 tool calls, 0 saves (dedup → classifier deadlock)
+- 5 false positives + 3 borderline
+
+**After (Kimi K2.5 agent + FICTIONAL removed):**
+- 1 rejection (borderline emotional coloring)
+- Immediate recovery with cleaner rewrite
+- Agent self-filtered before calling save_memory
+
+### Related Work Complete
+- ✅ **Consolidate embedding similarity helpers** — Done in PR #66 (commit a289381)
+  - `embed/similarity.go` — `FindBestMatch()` helper
+  - Multi-tier thresholds: default 0.87, context memories 0.92
+  - Dedup, autolink, and retry detection all use shared helper
+
+### Files Changed
+| Status | File | Change |
+|--------|------|--------|
+| ✅ | `classifier/classifiers.yaml` | Removed FICTIONAL/INFERRED/MOOD_NOT_FACT/EXTERNAL, added removal rationale |
+| ✅ | `classifier/classifier.go` | Added `Verdict.Rewrite` field, `extractRewrite()`, soft verdict handling |
+| ✅ | `tools/context.go` | Added `PreApprovedRewrites` map |
+| ✅ | `tools/memory_helpers.go` | Rewrite bypass logic, classifier logging calls |
+| ✅ | `tools/save_memory/tool.yaml` | Gaming/fiction guidance |
+| ✅ | `migrations/000004_metrics_and_logs.up.sql` | `classifier_log` table |
+| ❌ | `config/config.go` | MaxFactRetries NOT added (not needed) |
+
+### Lessons Learned
+1. **Removing a bad gate is better than making it "smart"** — FICTIONAL had a 40-50% false positive rate. No amount of prompt engineering would fix that without access to full conversation context (which would make it too slow/expensive).
+
+2. **Agent model selection matters more than gates** — Kimi K2.5's judgment outperformed Mercury 2 + classifier. The tool prompt guidance was enough.
+
+3. **Soft verdicts are valuable for style, not facts** — Rewrites work great for reply tone (ESCALATION, STYLE_ISSUE) where the fix is rephrasing. For memory facts, the binary is simpler: either the fact is worth saving or it isn't.
+
+4. **Fail-open design proved correct** — Classifier is down? Writes proceed. This prevented the "all memory broken because Haiku is rate-limited" scenario.
+
+### Remaining Opportunities (Future Plans)
+- **Consolidate similarity helpers** — ✅ Done in PR #66
+- **Close resolved issues** — #7, #8, #9 per plan (separate task)
+- **Stress test with current setup** — Validate FICTIONAL removal under new agent models (Trinity Large Thinking, Qwen3 235B)
 
 ### Related Work (Separate Issues)
 
