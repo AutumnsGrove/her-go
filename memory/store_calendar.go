@@ -225,14 +225,14 @@ func (s *Store) ListCalendarEvents(start, end, job string, shiftsOnly bool) ([]C
 			return nil, fmt.Errorf("scanning calendar event row: %w", err)
 		}
 
-		// Parse ISO 8601 timestamps into time.Time. Go's time package uses
-		// a reference timestamp (2006-01-02 15:04:05) as the format string —
-		// this is Go's quirky alternative to strftime format codes.
-		e.Start, _ = time.Parse("2006-01-02 15:04:05", startStr)
-		e.End, _ = time.Parse("2006-01-02 15:04:05", endStr)
-		e.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+		// Parse ISO 8601 timestamps into time.Time. We use time.RFC3339
+		// because the database stores full ISO 8601 with timezone
+		// (e.g., "2026-04-14T05:00:00-04:00"), not just date+time.
+		e.Start, _ = time.Parse(time.RFC3339, startStr)
+		e.End, _ = time.Parse(time.RFC3339, endStr)
+		e.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
 		if updatedAtStr != "" {
-			e.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAtStr)
+			e.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAtStr)
 		}
 
 		events = append(events, e)
