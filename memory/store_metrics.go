@@ -20,15 +20,17 @@ type Metric struct {
 
 // SaveMetric logs token usage and cost data for an LLM call.
 // If messageID is 0, it's stored as NULL (e.g., for agent calls).
-func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64) error {
+// isFallback is true when the primary model failed and the fallback
+// model handled the request (the "Haiku tax" — see issue #68).
+func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error {
 	var msgID interface{} = messageID
 	if messageID == 0 {
 		msgID = nil
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID,
+		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID, isFallback,
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)

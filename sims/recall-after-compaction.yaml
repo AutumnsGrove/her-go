@@ -1,0 +1,32 @@
+name: "Recall After Compaction"
+description: >
+  Tests whether the agent uses recall_memories after compaction removes
+  original messages from context. The first 8 turns establish facts, then
+  forced compaction at turn 8 replaces them with a summary. The remaining
+  turns ask questions that require recalling specific details from the
+  compacted turns — the agent should call recall_memories since the
+  original text is no longer visible.
+tags: ["recall", "compaction", "memory"]
+
+seed_memories:
+  - "Autumn's favorite programming language is Python but she's learning Go"
+  - "Autumn has two cats named Mochi and Bean"
+
+compact_after: 8
+
+messages:
+  # Phase 1: Establish facts (turns 1-8, will be compacted)
+  - "hey! so i've been thinking about redecorating my apartment"
+  - "i want to paint the bedroom walls sage green, it's my favorite color"
+  - "and i found this amazing vintage bookshelf at a flea market last weekend for $45"
+  - "it's solid oak, probably from the 1970s based on the hardware"
+  - "i'm also thinking about getting a third cat, maybe a calico"
+  - "oh and i started a new book — the left hand of darkness by ursula k le guin"
+  - "i'm about halfway through, it's really good so far"
+  - "anyway i have a dentist appointment tomorrow at 2pm, kind of dreading it"
+
+  # Phase 2: After compaction — these should trigger recall
+  - "wait, what color did i say i wanted to paint my bedroom?"
+  - "and how much was that bookshelf i found?"
+  - "remind me, what book am i reading right now?"
+  - "what kind of cat was i thinking about getting?"

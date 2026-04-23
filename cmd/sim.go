@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 	"her/agent"
 	"her/calendar"
+	"her/compact"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -107,6 +110,20 @@ var chatProviderFlag string
 // Example: --classifier-model "google/gemini-2.5-flash-lite"
 var classifierModelFlag string
 
+// fallbackModelFlag overrides the fallback model for chat, agent, memory,
+// and mood roles. When free-tier primary models hit rate limits (16 req/min
+// on OpenRouter), the system silently falls back to this model. Defaults
+// to Claude Haiku in config — this flag lets you test cheaper alternatives
+// like Gemini Flash Lite without editing config.yaml.
+// Example: --fallback-model "google/gemini-2.5-flash-lite"
+var fallbackModelFlag string
+
+// fallbackVisionModelFlag overrides the fallback model for the vision role
+// only, kept separate from --fallback-model because vision fallbacks have
+// different requirements (must support multi-modal input).
+// Example: --fallback-vision-model "google/gemini-2.5-flash-lite"
+var fallbackVisionModelFlag string
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -139,6 +156,8 @@ func init() {
 	simCmd.Flags().StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model for this run (e.g., anthropic/claude-haiku-4.5)")
 	simCmd.Flags().StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated (e.g., \"Groq\" or \"Groq,Together\")")
 	simCmd.Flags().StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model for this run (e.g., google/gemini-2.5-flash-lite)")
+	simCmd.Flags().StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for chat/agent/memory/mood (e.g., google/gemini-2.5-flash-lite)")
+	simCmd.Flags().StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision only (must support multi-modal)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -155,9 +174,10 @@ type suite struct {
 	Name               string              `yaml:"name"`
 	Description        string              `yaml:"description"`
 	Tags               []string            `yaml:"tags"`
-	Messages           []string            `yaml:"messages"`
+	Messages           []simMessage        `yaml:"messages"`
 	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
+	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
 	RunRollup          bool                `yaml:"run_rollup"`           // force the daily mood rollup after all messages complete
 }
@@ -174,6 +194,66 @@ type SeedCalendarEvent struct {
 	Notes    string `yaml:"notes,omitempty"` // Can include shift metadata like "position: Bake\ntrainer: Mike\n..."
 	Calendar string `yaml:"calendar,omitempty"` // defaults to config.Calendar.DefaultCalendar
 	Job      string `yaml:"job,omitempty"`      // Job name (e.g., "Panera") — marks this as a shift event
+}
+
+// simMessage represents a single message in a sim suite. It can be either
+// a plain text string or a structured message with an image path. The custom
+// UnmarshalYAML lets both forms coexist in the same YAML list:
+//
+//	messages:
+//	  - "hey, look at this photo"          # plain string → Text only
+//	  - image: sims/assets/sunset.jpg      # image-only → Image path only
+//	  - text: "what do you think?"          # explicit text form (also works)
+//	    image: sims/assets/sunset.jpg       # can combine text + image
+//
+// This is similar to Python's Union[str, dict] pattern, but in Go we use
+// a struct with a custom unmarshal method. The YAML library calls
+// UnmarshalYAML, which tries string first (fast path), then falls back
+// to the struct form.
+type simMessage struct {
+	Text  string `yaml:"text"`
+	Image string `yaml:"image"` // path to local image file (relative to working dir)
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler so a simMessage can be decoded
+// from either a plain string or a mapping with text/image keys. node.Decode
+// is how go-yaml lets you try multiple interpretations of the same YAML node.
+func (m *simMessage) UnmarshalYAML(node *yaml.Node) error {
+	// Fast path: plain string → text-only message.
+	if node.Kind == yaml.ScalarNode {
+		m.Text = node.Value
+		return nil
+	}
+
+	// Slow path: mapping with text/image keys.
+	// Use a type alias to avoid infinite recursion — without this,
+	// node.Decode(&m) would call UnmarshalYAML again forever.
+	type rawMsg simMessage
+	var raw rawMsg
+	if err := node.Decode(&raw); err != nil {
+		return fmt.Errorf("decoding sim message: %w", err)
+	}
+	m.Text = raw.Text
+	m.Image = raw.Image
+	return nil
+}
+
+// IsImage returns true if this message includes an image attachment.
+func (m simMessage) IsImage() bool { return m.Image != "" }
+
+// DisplayText returns the user-visible text for this message. For image-only
+// messages this mirrors what Telegram sends: "[User sent a photo]".
+func (m simMessage) DisplayText() string {
+	if m.Text != "" {
+		if m.Image != "" {
+			return "[User sent a photo] " + m.Text
+		}
+		return m.Text
+	}
+	if m.Image != "" {
+		return "[User sent a photo]"
+	}
+	return ""
 }
 
 // simTurnResult captures the outcome of one conversation turn during a
@@ -257,6 +337,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if s.Description != "" {
 		log.Infof("  %s", s.Description)
 	}
+	if s.CompactAfter > 0 {
+		log.Infof("  forced compaction after turn %d", s.CompactAfter)
+	}
 
 	// ------------------------------------------------------------------
 	// 2. Load config (skip Telegram + LLM key checks)
@@ -315,6 +398,39 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if embedDimensionFlag > 0 {
 		log.Info("Embed dimension overridden via --embed-dimension", "dimension", embedDimensionFlag)
 		cfg.Embed.Dimension = embedDimensionFlag
+	}
+
+	// --fallback-model overrides the fallback for chat, agent, memory, and
+	// mood roles. This mutates the FallbackConfig on each role — creating
+	// one if it didn't exist. Temperature and max_tokens are preserved from
+	// the existing config when available, otherwise sensible defaults apply.
+	if fallbackModelFlag != "" {
+		log.Info("Fallback model overridden via --fallback-model", "model", fallbackModelFlag)
+
+		// Helper: ensure a FallbackConfig exists, then swap the model.
+		// Keeps existing temperature/max_tokens so only the model changes.
+		setFallback := func(fb **config.FallbackConfig) {
+			if *fb == nil {
+				*fb = &config.FallbackConfig{Temperature: 0.3, MaxTokens: 512}
+			}
+			(*fb).Model = fallbackModelFlag
+		}
+
+		setFallback(&cfg.Chat.Fallback)
+		setFallback(&cfg.Agent.Fallback)
+		setFallback(&cfg.MemoryAgent.Fallback)
+		setFallback(&cfg.MoodAgent.Fallback)
+	}
+
+	// --fallback-vision-model overrides the vision fallback separately.
+	// Vision fallbacks need multi-modal support, so they're independent
+	// from the general --fallback-model flag.
+	if fallbackVisionModelFlag != "" {
+		log.Info("Vision fallback model overridden via --fallback-vision-model", "model", fallbackVisionModelFlag)
+		if cfg.Vision.Fallback == nil {
+			cfg.Vision.Fallback = &config.FallbackConfig{Temperature: 0.3, MaxTokens: 512}
+		}
+		cfg.Vision.Fallback.Model = fallbackVisionModelFlag
 	}
 
 	// ------------------------------------------------------------------
@@ -473,6 +589,19 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
 		log.Info("classifier enabled for sim", "model", cfg.Classifier.Model)
+	}
+
+	// --- Vision client (optional) ---
+	// Mirrors cmd/run.go: create a vision LLM if the config section is set.
+	// This lets sim suites include image messages that flow through the real
+	// view_image → Gemini Flash pipeline. Nil when vision isn't configured.
+	var visionClient *llm.Client
+	if cfg.Vision.Model != "" {
+		visionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
+		if cfg.Vision.Fallback != nil {
+			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
+		}
+		log.Info("vision enabled for sim", "model", cfg.Vision.Model)
 	}
 
 	var embedClient *embed.Client
@@ -731,17 +860,46 @@ func runSim(cmd *cobra.Command, args []string) error {
 	for i, msg := range messages {
 		turnStart := time.Now()
 
-		log.Infof("[%d/%d] %s: %s", i+1, total, cfg.Identity.User, msg)
+		// Build the user-visible text. For image messages this includes
+		// the "[User sent a photo]" prefix, mirroring Telegram's behavior
+		// in bot/handlers_media.go.
+		userText := msg.DisplayText()
+
+		log.Infof("[%d/%d] %s: %s", i+1, total, cfg.Identity.User, userText)
+
+		// If this message includes an image, read it from disk and
+		// base64-encode it — same pipeline as bot/handlers_media.go.
+		// http.DetectContentType sniffs the MIME from the first 512 bytes.
+		var imageBase64, imageMIME string
+		if msg.IsImage() {
+			imgBytes, err := os.ReadFile(msg.Image)
+			if err != nil {
+				log.Error("failed to read image file", "err", err, "path", msg.Image)
+				turnResults = append(turnResults, simTurnResult{
+					userMsg:  userText,
+					botReply: fmt.Sprintf("[ERROR: could not read image %s: %s]", msg.Image, err),
+					elapsed:  time.Since(turnStart),
+				})
+				continue
+			}
+			imageBase64 = base64.StdEncoding.EncodeToString(imgBytes)
+			imageMIME = http.DetectContentType(imgBytes)
+			log.Infof("  image: %s (%s, %d bytes)", msg.Image, imageMIME, len(imgBytes))
+
+			if visionClient == nil {
+				log.Warn("image message but no vision model configured — view_image tool will return an error")
+			}
+		}
 
 		// Save the user message to the temp store.
-		msgID, err := store.SaveMessage("user", msg, "", conversationID)
+		msgID, err := store.SaveMessage("user", userText, "", conversationID)
 		if err != nil {
 			log.Error("failed to save message", "err", err)
 			continue
 		}
 
 		// Scrub PII from the message, just like the real pipeline does.
-		scrubResult := scrub.Scrub(msg)
+		scrubResult := scrub.Scrub(userText)
 		if err := store.UpdateMessageScrubbed(msgID, scrubResult.Text); err != nil {
 			log.Error("failed to update scrubbed content", "err", err)
 		}
@@ -801,8 +959,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			AgentLLM:            agentClient,
 			MemoryAgentLLM:      memoryAgentClient, // nil if not configured — memory agent skips
 			ChatLLM:             chatClient,
-			VisionLLM:           nil, // no image support in sim
-			ClassifierLLM:       classifierClient, // nil if not configured, active if classifier section in config
+			VisionLLM:           visionClient,      // nil if no vision model configured
+			ClassifierLLM:       classifierClient,   // nil if not configured, active if classifier section in config
+			ImageBase64:         imageBase64,         // empty if no image this turn
+			ImageMIME:           imageMIME,           // empty if no image this turn
 			Store:               store,
 			EmbedClient:         embedClient,
 			SimilarityThreshold: cfg.Embed.SimilarityThreshold,
@@ -824,7 +984,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
 			log.Errorf("  %s: [ERROR: %s]", cfg.Identity.Her, err)
 			turnResults = append(turnResults, simTurnResult{
-				userMsg:  msg,
+				userMsg:  userText,
 				botReply: fmt.Sprintf("[ERROR: %s]", err),
 				elapsed:  time.Since(turnStart),
 			})
@@ -878,7 +1038,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		turnResults = append(turnResults, simTurnResult{
-			userMsg:       msg,
+			userMsg:       userText,
 			botReply:      result.ReplyText,
 			followUpReply: followUpReply,
 			elapsed:       elapsed,
@@ -905,6 +1065,41 @@ func runSim(cmd *cobra.Command, args []string) error {
 				fmt.Printf("       [mood] classifier rejected: %s\n", moodRes.Reason)
 			case mood.ActionErrored:
 				fmt.Printf("       [mood] error: %s\n", moodRes.Reason)
+			}
+		}
+
+		// --- Forced compaction ---
+		// When compact_after is set in the suite YAML, force compaction
+		// after that turn by calling MaybeCompact with maxHistoryTokens=1.
+		// This makes the 75% threshold effectively 0, guaranteeing that
+		// compaction fires. The result: earlier messages become a summary,
+		// and the agent can no longer see the original text. This creates
+		// the conditions where recall_memories genuinely adds value.
+		if s.CompactAfter > 0 && (i+1) == s.CompactAfter {
+			log.Infof("  [compact] forced compaction after turn %d (compact_after: %d)", i+1, s.CompactAfter)
+
+			// Load all messages for this conversation — same as the
+			// agent does before its compaction check.
+			allMsgs, err := store.RecentMessages(conversationID, 1000)
+			if err != nil {
+				log.Error("forced compaction: failed to load messages", "err", err)
+			} else {
+				// maxHistoryTokens=1 forces the threshold to 0, so any
+				// content triggers compaction. This goes through the real
+				// code path — LLM summarization, summary storage, the works.
+				cr, err := compact.MaybeCompact(
+					chatClient, store, conversationID,
+					allMsgs, 1, // maxHistoryTokens=1 → threshold=0 → always compact
+					cfg.Identity.Her, cfg.Identity.User,
+				)
+				if err != nil {
+					log.Error("forced compaction failed", "err", err)
+				} else if cr.DidCompact {
+					log.Infof("  [compact] compacted %d messages into summary (%d tokens before → %d after)",
+						cr.Summarized, cr.TokensBefore, cr.TokensAfter)
+				} else {
+					log.Warn("  [compact] compaction triggered but did not run (not enough unsummarized messages — need at least 7)")
+				}
 			}
 		}
 
@@ -1430,7 +1625,7 @@ func copyCalendarEvents(tmpDB, simDB *sql.DB, runID int64) error {
 // the total cost across all LLM calls in this run.
 func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms
+		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, COALESCE(is_fallback, 0)
 		 FROM metrics ORDER BY id ASC`,
 	)
 	if err != nil {
@@ -1443,14 +1638,15 @@ func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 		var ts, model string
 		var promptTok, completionTok, totalTok, latencyMs int
 		var costUSD float64
-		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs); err != nil {
+		var isFallback bool
+		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs, &isFallback); err != nil {
 			return totalCost, fmt.Errorf("scanning metric: %w", err)
 		}
 		totalCost += costUSD
 		_, err := simDB.Exec(
-			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs,
+			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, is_fallback)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs, isFallback,
 		)
 		if err != nil {
 			return totalCost, fmt.Errorf("inserting sim_metric: %w", err)
@@ -1615,6 +1811,9 @@ func generateReport(
 
 	// Forced daily rollup section (only present when run_rollup: true).
 	writeRollupSection(&b, rollup)
+
+	// Fallback events (only appears if any calls fell back)
+	writeFallbackSection(&b, simDB, runID)
 
 	// Cost summary
 	writeCostSection(&b, simDB, runID)
@@ -2194,7 +2393,58 @@ func writeSummariesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	}
 }
 
-// writeCostSection writes the cost summary table grouped by model.
+// writeFallbackSection writes the fallback events summary — how many calls
+// fell back, which models were involved, and the cost impact. This is the
+// "Haiku tax" detector: when free-tier models hit rate limits, the system
+// silently falls back to a paid model. Without this section, you'd never
+// know your "free" run cost $0.13 in surprise Haiku calls.
+func writeFallbackSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	// Get total calls and fallback calls for the percentage.
+	var totalCalls, fallbackCalls int
+	var fallbackCost float64
+	simDB.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END), 0),
+		        COALESCE(SUM(CASE WHEN is_fallback = 1 THEN cost_usd ELSE 0 END), 0)
+		 FROM sim_metrics WHERE run_id = ?`, runID,
+	).Scan(&totalCalls, &fallbackCalls, &fallbackCost)
+
+	if fallbackCalls == 0 {
+		return // no fallback events — skip the section entirely
+	}
+
+	b.WriteString("## Fallback Events\n\n")
+	fmt.Fprintf(b, "**%d of %d calls (%.0f%%) used the fallback model** — $%.4f in fallback costs\n\n",
+		fallbackCalls, totalCalls,
+		float64(fallbackCalls)/float64(totalCalls)*100,
+		fallbackCost,
+	)
+
+	// Breakdown by model: show which models were used as fallbacks.
+	rows, err := simDB.Query(
+		`SELECT model, COUNT(*) as calls, SUM(cost_usd) as cost
+		 FROM sim_metrics WHERE run_id = ? AND is_fallback = 1
+		 GROUP BY model ORDER BY cost DESC`, runID,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	b.WriteString("| Fallback Model | Calls | Cost |\n")
+	b.WriteString("|----------------|-------|------|\n")
+	for rows.Next() {
+		var model string
+		var calls int
+		var cost float64
+		if rows.Scan(&model, &calls, &cost) == nil {
+			fmt.Fprintf(b, "| %s | %d | $%.4f |\n", model, calls, cost)
+		}
+	}
+	b.WriteString("\n")
+}
+
+// writeCostSection writes the cost summary table grouped by model,
+// with primary vs fallback breakdown.
 func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	rows, err := simDB.Query(
 		`SELECT model,
@@ -2202,7 +2452,8 @@ func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		        SUM(prompt_tokens) as prompt,
 		        SUM(completion_tokens) as completion,
 		        SUM(total_tokens) as total,
-		        SUM(cost_usd) as cost
+		        SUM(cost_usd) as cost,
+		        SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END) as fallback_calls
 		 FROM sim_metrics WHERE run_id = ?
 		 GROUP BY model ORDER BY cost DESC`, runID,
 	)
@@ -2212,17 +2463,18 @@ func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type costRow struct {
-		model      string
-		calls      int
-		prompt     int
-		completion int
-		total      int
-		cost       float64
+		model         string
+		calls         int
+		prompt        int
+		completion    int
+		total         int
+		cost          float64
+		fallbackCalls int
 	}
 	var costs []costRow
 	for rows.Next() {
 		var c costRow
-		if err := rows.Scan(&c.model, &c.calls, &c.prompt, &c.completion, &c.total, &c.cost); err != nil {
+		if err := rows.Scan(&c.model, &c.calls, &c.prompt, &c.completion, &c.total, &c.cost, &c.fallbackCalls); err != nil {
 			continue
 		}
 		costs = append(costs, c)
@@ -2230,11 +2482,15 @@ func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 
 	b.WriteString("## Cost Summary\n\n")
 	if len(costs) > 0 {
-		b.WriteString("| Model | Calls | Prompt | Completion | Total | Cost |\n")
-		b.WriteString("|-------|-------|--------|------------|-------|------|\n")
+		b.WriteString("| Model | Calls | Fallback | Prompt | Completion | Total | Cost |\n")
+		b.WriteString("|-------|-------|----------|--------|------------|-------|------|\n")
 		for _, c := range costs {
-			fmt.Fprintf(b, "| %s | %d | %d | %d | %d | $%.4f |\n",
-				c.model, c.calls, c.prompt, c.completion, c.total, c.cost)
+			fallbackLabel := "-"
+			if c.fallbackCalls > 0 {
+				fallbackLabel = fmt.Sprintf("%d", c.fallbackCalls)
+			}
+			fmt.Fprintf(b, "| %s | %d | %s | %d | %d | %d | $%.4f |\n",
+				c.model, c.calls, fallbackLabel, c.prompt, c.completion, c.total, c.cost)
 		}
 	}
 	b.WriteString("\n")

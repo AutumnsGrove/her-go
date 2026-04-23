@@ -202,7 +202,7 @@ func TestPIIVault_RoundTrip(t *testing.T) {
 func TestSaveMetric_RoundTrip(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	err := store.SaveMetric("gpt-4", 100, 50, 150, 0.003, 500, 0)
+	err := store.SaveMetric("gpt-4", 100, 50, 150, 0.003, 500, 0, false)
 	if err != nil {
 		t.Fatalf("SaveMetric: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestSaveMetric_WithMessageID(t *testing.T) {
 	store := newCoreTestStore(t)
 
 	msgID, _ := store.SaveMessage("user", "hello", "", "conv-1")
-	err := store.SaveMetric("model-x", 10, 20, 30, 0.001, 200, msgID)
+	err := store.SaveMetric("model-x", 10, 20, 30, 0.001, 200, msgID, false)
 	if err != nil {
 		t.Fatalf("SaveMetric with msgID: %v", err)
 	}
@@ -251,9 +251,9 @@ func TestGetStats_Empty(t *testing.T) {
 func TestGetUsageReport(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	store.SaveMetric("model-a", 100, 50, 150, 0.003, 500, 0)
-	store.SaveMetric("model-b", 200, 100, 300, 0.006, 300, 0)
-	store.SaveMetric("model-a", 50, 25, 75, 0.001, 400, 0)
+	store.SaveMetric("model-a", 100, 50, 150, 0.003, 500, 0, false)
+	store.SaveMetric("model-b", 200, 100, 300, 0.006, 300, 0, false)
+	store.SaveMetric("model-a", 50, 25, 75, 0.001, 400, 0, false)
 
 	report, err := store.GetUsageReport()
 	if err != nil {

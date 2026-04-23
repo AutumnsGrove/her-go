@@ -246,7 +246,7 @@ func MaybeCompact(
 	log.Infof("  summary: %s", truncate(newSummary, 200))
 
 	// Log metrics for the summarization call.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	return &CompactResult{
 		Summary:      newSummary,
@@ -424,7 +424,7 @@ func MaybeCompactAgent(
 		len(toSummarize), tokensBefore, newTokens, tokensBefore-newTokens)
 	log.Infof("  agent summary: %s", truncate(newSummary, 200))
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0)
+	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
 
 	return &AgentCompactResult{
 		Summary:       newSummary,
