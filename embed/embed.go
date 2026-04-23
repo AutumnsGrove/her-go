@@ -42,6 +42,29 @@ const (
 	// memory-vs-memory dedup because we're comparing structured memories
 	// against freeform conversation text.
 	ConversationRedundancyThreshold = 0.60
+
+	// HighSimilarityThreshold is the "nearly identical" tier for multi-level
+	// deduplication systems. Content above this threshold is typically dropped
+	// as a duplicate without storing.
+	//
+	// Used by: mood agent (drop duplicate mood entries), future expense tracking,
+	// reminder deduplication.
+	//
+	// Pattern: drop vs update vs new
+	//   ≥HighSimilarityThreshold   → DROP (nearly identical, don't store)
+	//   ≥MediumSimilarityThreshold → UPDATE (same entity, refine with new details)
+	//   <MediumSimilarityThreshold → NEW (clearly different, create new entry)
+	HighSimilarityThreshold = 0.80
+
+	// MediumSimilarityThreshold is the "same topic, different details" tier for
+	// multi-level deduplication systems. Content in this range represents the
+	// same entity with refinements or additions — update rather than duplicate.
+	//
+	// Used by: mood agent (update existing mood with new details), future expense
+	// tracking (refine "$5 coffee" → "$5.00 Starbucks coffee + tip").
+	//
+	// See HighSimilarityThreshold for the full tier pattern.
+	MediumSimilarityThreshold = 0.55
 )
 
 // Client wraps an HTTP client configured to talk to an embedding API.

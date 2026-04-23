@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"her/embed"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -112,10 +113,10 @@ func (c AgentConfig) withDefaults() AgentConfig {
 		c.DedupWindow = 2 * time.Hour
 	}
 	if c.DedupSimilarity <= 0 {
-		c.DedupSimilarity = 0.80
+		c.DedupSimilarity = embed.HighSimilarityThreshold
 	}
 	if c.UpdateSimilarity <= 0 {
-		c.UpdateSimilarity = 0.55
+		c.UpdateSimilarity = embed.MediumSimilarityThreshold
 	}
 	if c.UpdateMaxValenceDrift <= 0 {
 		c.UpdateMaxValenceDrift = 1
