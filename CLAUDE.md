@@ -30,6 +30,29 @@ go run main.go run
 go build -o her && ./her run
 ```
 
+## Database Migrations
+
+**Forward-only migrations** using golang-migrate. Files in `migrations/*.up.sql`, numbered sequentially (Wrangler D1 style).
+
+### Adding a Migration
+
+```bash
+# Create next numbered file
+touch migrations/000009_add_feature.up.sql
+
+# Write SQL changes
+echo "ALTER TABLE messages ADD COLUMN new_field TEXT;" > migrations/000009_add_feature.up.sql
+
+# Runs automatically on next startup
+go run main.go run
+```
+
+**Key points:**
+- Forward-only (no `.down.sql` files - fix issues with new migrations)
+- Tracked in `schema_migrations` table
+- Runs automatically via `memory.NewStore()`
+- Use `IF NOT EXISTS` for safety
+
 ## Primary Design Principle
 
 > **Code translates data. It never defines it.**
