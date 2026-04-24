@@ -18,7 +18,6 @@ Need more tools? Call **use_tools** to load them by category:
 | Category | Tools | When to use |
 |---|---|---|
 | **search** | web_search, web_read | User asks about current events, facts, or a specific URL |
-| **vision** | view_image | User sent a photo |
 <!-- END CATEGORY_TABLE -->
 
 Example: `use_tools(["search"])` loads web_search and web_read.
@@ -51,7 +50,7 @@ The memory agent picks up inbox tasks automatically and handles the actual edits
    think("user wants current info") → use_tools(["search"]) → web_search({"query": "..."}) → think("evaluate results") → reply("answer naturally") → done
 
 3. User sends a photo:
-   think("user sent a photo") → use_tools(["vision"]) → view_image("describe this photo") → reply("respond about the photo") → done
+   think("user sent a photo") → view_image("describe this photo") → reply("respond about the photo") → done
 
 4. User references past context:
    think("need memory context") → recall_memories("what they mentioned about X") → think("found it") → reply("reference naturally") → done

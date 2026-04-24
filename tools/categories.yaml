@@ -1,10 +1,7 @@
-# Category hints for the deferred-tools table in main_agent_prompt.md.
-# Each category has a "hint" that tells the agent when to load it.
-# This is the single source of truth — the table in main_agent_prompt.md
+# Category hints for the deferred-tools table in driver_agent_prompt.md.
+# Each category has a "hint" that tells the driver agent when to load it.
+# This is the single source of truth — the table in driver_agent_prompt.md
 # is auto-generated from this file at prompt load time.
-
-vision:
-  hint: "User sent a photo"
 
 search:
   hint: "User asks about current events, facts you don't know, a specific book/author, or shares a link to read"
