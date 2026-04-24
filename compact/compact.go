@@ -343,16 +343,16 @@ func MaybeCompactAgent(
 		agentContextBudget = 16000 // default
 	}
 
-	// Load existing agent summary.
-	existingSummary, _, err := store.LatestSummary(conversationID, "agent")
+	// Load existing driver summary.
+	existingSummary, _, err := store.LatestSummary(conversationID, "driver")
 	if err != nil {
-		return nil, fmt.Errorf("loading agent summary: %w", err)
+		return nil, fmt.Errorf("loading driver summary: %w", err)
 	}
 
 	// Check if we need to compact.
 	estTokens := estimateActionTokens(existingSummary, actions)
 	threshold := int(float64(agentContextBudget) * compactionThreshold)
-	log.Infof("  agent compaction check: %d actions, ~%d tokens (threshold: %d, budget: %d)",
+	log.Infof("  driver compaction check: %d actions, ~%d tokens (threshold: %d, budget: %d)",
 		len(actions), estTokens, threshold, agentContextBudget)
 
 	if estTokens < threshold {
@@ -406,13 +406,13 @@ func MaybeCompactAgent(
 
 	newSummary := resp.Content
 
-	// Store with stream="agent". We use the first/last action's message IDs
+	// Store with stream="driver". We use the first/last action's message IDs
 	// as the range markers (same concept as chat compaction).
 	startID := toSummarize[0].MessageID
 	endID := toSummarize[len(toSummarize)-1].MessageID
-	_, err = store.SaveSummary(conversationID, newSummary, startID, endID, "agent")
+	_, err = store.SaveSummary(conversationID, newSummary, startID, endID, "driver")
 	if err != nil {
-		log.Error("failed to save agent summary", "err", err)
+		log.Error("failed to save driver summary", "err", err)
 		return &AgentCompactResult{
 			Summary:       existingSummary,
 			RecentActions: actions,

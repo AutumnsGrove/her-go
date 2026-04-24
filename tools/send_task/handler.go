@@ -1,11 +1,11 @@
 // Package send_task implements the send_task tool — delegates memory work to
 // the background memory agent via the inter-agent inbox.
 //
-// The main agent uses this after doing research (recall_memories) to package
+// The driver agent uses this after doing research (recall_memories) to package
 // up instructions for the memory agent. The memory agent picks up inbox
 // messages automatically when it starts its post-reply run.
 //
-// This is a one-way handoff: the main agent fires and forgets. The memory
+// This is a one-way handoff: the driver agent fires and forgets. The memory
 // agent can optionally send results back via notify_agent, which triggers
 // a follow-up message to the user.
 package send_task

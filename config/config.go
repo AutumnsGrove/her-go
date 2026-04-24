@@ -28,7 +28,7 @@ type Config struct {
 	Telegram      TelegramConfig      `yaml:"telegram"`
 	LLM           LLMConfig           `yaml:"llm"`
 	Chat          ChatConfig          `yaml:"chat"`
-	Agent         AgentConfig         `yaml:"agent"`
+	Driver        DriverConfig        `yaml:"driver"`
 	Vision        VisionConfig        `yaml:"vision"`
 	Classifier    ClassifierConfig    `yaml:"classifier"`
 	MemoryAgent   MemoryAgentConfig   `yaml:"memory_agent"`
@@ -162,10 +162,10 @@ type ChatConfig struct {
 	Streaming   bool            `yaml:"streaming"` // stream reply tokens to Telegram for a live typing effect (default false)
 }
 
-// AgentConfig holds settings for the background tool-calling agent.
-// This runs a separate, lightweight model (Liquid LFM) that handles
-// memory management and can trigger follow-up messages.
-type AgentConfig struct {
+// DriverConfig holds settings for the driver agent — the orchestrator that
+// receives user messages and decides which tools to call (think, recall, search,
+// reply, done). This is the primary model in the conversation loop.
+type DriverConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
@@ -210,7 +210,7 @@ type ClassifierConfig struct {
 }
 
 // MemoryAgentConfig holds settings for the post-turn background memory agent.
-// This model runs after the main agent delivers its reply — it reviews the
+// This model runs after the driver agent delivers its reply — it reviews the
 // conversation turn and extracts facts to save. Runs in a goroutine so it
 // never blocks the user. A strong narrative-language model is recommended for nuanced fact extraction.
 type MemoryAgentConfig struct {
@@ -221,7 +221,7 @@ type MemoryAgentConfig struct {
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 
-	// Loop tuning — same as AgentConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
+	// Loop tuning — same as DriverConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
 	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 2
 }
@@ -292,7 +292,7 @@ type MemoryConfig struct {
 	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
 	ExtractionInterval int     `yaml:"extraction_interval"`
 	MaxHistoryTokens    int     `yaml:"max_history_tokens"`    // history token budget for compaction — both triggers fire at 75% of this
-	AgentContextBudget  int     `yaml:"agent_context_budget"`  // agent model total prompt budget for action history compaction; 0 = use 6000 default
+	DriverContextBudget int     `yaml:"driver_context_budget"` // driver model total prompt budget for action history compaction; 0 = use 6000 default
 	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
 	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
 	MaxMemoryLength    int     `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
@@ -438,7 +438,7 @@ func Load(path string) (*Config, error) {
 // be complex and fragile. Since we only need to toggle one boolean,
 // a line-level edit is the pragmatic choice.
 func (c *Config) SetTrace(configPath string, enabled bool) error {
-	c.Agent.Trace = enabled
+	c.Driver.Trace = enabled
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {

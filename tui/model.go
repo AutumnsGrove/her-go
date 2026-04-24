@@ -268,7 +268,7 @@ func (m *Model) handleEvent(e Event) {
 
 	case ToolCallEvent:
 		// Route by Source — memory/mood agent events go to their own
-		// content groups so they don't inflate the main agent section.
+		// content groups so they don't inflate the driver agent section.
 		group := "tools"
 		switch ev.Source {
 		case "memory":
@@ -298,8 +298,8 @@ func (m *Model) handleEvent(e Event) {
 
 	case CompactStartEvent:
 		label := "chat"
-		if ev.Stream == "agent" {
-			label = "agent"
+		if ev.Stream == "driver" {
+			label = "driver"
 		}
 		m.appendToTurnGroup(0, "compact",
 			fmt.Sprintf("📦 compacting %s history...", label))

@@ -153,7 +153,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	log.Info("SESSION_START",
 		"date", time.Now().Format("2006-01-02"),
 		"time", time.Now().Format("15:04:05"),
-		"agent_model", cfg.Agent.Model,
+		"driver_model", cfg.Driver.Model,
 		"chat_model", cfg.Chat.Model,
 		"classifier_model", cfg.Classifier.Model,
 	)
@@ -218,15 +218,15 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.Chat.Model})
 	}
 
-	agentClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Agent.Model, cfg.Agent.Temperature, cfg.Agent.MaxTokens)
-	if cfg.Agent.Timeout > 0 {
-		agentClient.WithTimeout(time.Duration(cfg.Agent.Timeout) * time.Second)
+	driverClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
+	if cfg.Driver.Timeout > 0 {
+		driverClient.WithTimeout(time.Duration(cfg.Driver.Timeout) * time.Second)
 	}
-	if cfg.Agent.Fallback != nil {
-		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: cfg.Agent.Model + " (fallback: " + cfg.Agent.Fallback.Model + ")"})
+	if cfg.Driver.Fallback != nil {
+		driverClient.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "driver", Status: "ready", Detail: cfg.Driver.Model + " (fallback: " + cfg.Driver.Fallback.Model + ")"})
 	} else {
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "agent", Status: "ready", Detail: cfg.Agent.Model})
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "driver", Status: "ready", Detail: cfg.Driver.Model})
 	}
 
 	var visionClient *llm.Client
@@ -242,7 +242,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Classifier client (optional) ---
 	// Small, fast model that validates memory writes before they hit the DB.
-	// Catches fictional content (game events, etc.) that the agent model
+	// Catches fictional content (game events, etc.) that the driver model
 	// mistakes for real user facts.
 	var classifierClient *llm.Client
 	if cfg.Classifier.Model != "" {
@@ -400,7 +400,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, agentClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()

@@ -42,7 +42,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// fallbackSimAgentModel is used in sim reports when cfg.Agent.Model is empty.
+// fallbackSimAgentModel is used in sim reports when cfg.Driver.Model is empty.
 // The real default lives in config.yaml.example; this is a last-resort label
 // for display purposes only, not used to make actual LLM calls.
 const fallbackSimAgentModel = "liquid/lfm-2.5-1.2b-instruct:free"
@@ -58,13 +58,13 @@ var limitFlag int
 // delayFlag is the pause between turns in seconds. Defaults to 5s.
 // In real usage, messages are minutes apart so rate limits aren't an issue.
 // In sim mode we fire back-to-back, which can hit free-tier rate limits
-// on the agent model. A few seconds between turns fixes this.
+// on the driver agent model. A few seconds between turns fixes this.
 var delayFlag int
 
-// agentModelFlag overrides the agent model from config.yaml for this run.
+// driverModelFlag overrides the driver agent model from config.yaml for this run.
 // Useful for comparing different models without editing the config file.
-// Example: --agent-model "qwen/qwen3-235b-a22b-2507"
-var agentModelFlag string
+// Example: --driver-model "qwen/qwen3-235b-a22b-2507"
+var driverModelFlag string
 
 // embedModelFlag overrides the embedding model from config.yaml for this run.
 // Each embedding model lives in its own vector space, so swapping models
@@ -147,7 +147,7 @@ func init() {
 	simCmd.Flags().StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
 	simCmd.Flags().IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
 	simCmd.Flags().IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
-	simCmd.Flags().StringVar(&agentModelFlag, "agent-model", "", "override agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
+	simCmd.Flags().StringVar(&driverModelFlag, "driver-model", "", "override driver agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
 	simCmd.Flags().StringVar(&embedModelFlag, "embed-model", "", "override embedding model for this run (e.g., voyage-4-nano)")
 	simCmd.Flags().StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL (e.g., https://openrouter.ai/api/v1)")
 	simCmd.Flags().StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs (defaults to LLM API key if empty)")
@@ -361,11 +361,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Warn("LLM API key not set — agent calls will fail")
 	}
 
-	// --agent-model flag overrides the config value. This mutates cfg so
+	// --driver-model flag overrides the config value. This mutates cfg so
 	// both the run logic and report generator see the same model name.
-	if agentModelFlag != "" {
-		log.Info("Agent model overridden via --agent-model", "model", agentModelFlag)
-		cfg.Agent.Model = agentModelFlag
+	if driverModelFlag != "" {
+		log.Info("Driver agent model overridden via --driver-model", "model", driverModelFlag)
+		cfg.Driver.Model = driverModelFlag
 	}
 	if memoryModelFlag != "" {
 		log.Info("Memory agent model overridden via --memory-model", "model", memoryModelFlag)
@@ -417,7 +417,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		setFallback(&cfg.Chat.Fallback)
-		setFallback(&cfg.Agent.Fallback)
+		setFallback(&cfg.Driver.Fallback)
 		setFallback(&cfg.MemoryAgent.Fallback)
 		setFallback(&cfg.MoodAgent.Fallback)
 	}
@@ -471,7 +471,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	defer simDB.Close()
 
 	// Insert a new run row. We'll update it with totals at the end.
-	agentModel := cfg.Agent.Model
+	agentModel := cfg.Driver.Model
 	if agentModel == "" {
 		agentModel = fallbackSimAgentModel
 	}
@@ -556,23 +556,23 @@ func runSim(cmd *cobra.Command, args []string) error {
 		log.Info("chat model provider pinned via --chat-provider", "providers", providers)
 	}
 
-	agentTemp := cfg.Agent.Temperature
+	agentTemp := cfg.Driver.Temperature
 	if agentTemp == 0 {
 		agentTemp = 0.1
 	}
-	agentMaxTokens := cfg.Agent.MaxTokens
+	agentMaxTokens := cfg.Driver.MaxTokens
 	if agentMaxTokens == 0 {
 		agentMaxTokens = 512
 	}
-	agentClient := llm.NewClient(
+	driverClient := llm.NewClient(
 		cfg.LLM.BaseURL,
 		cfg.LLM.APIKey,
 		agentModel,
 		agentTemp,
 		agentMaxTokens,
 	)
-	if cfg.Agent.Fallback != nil {
-		agentClient.WithFallback(cfg.Agent.Fallback.Model, cfg.Agent.Fallback.Temperature, cfg.Agent.Fallback.MaxTokens)
+	if cfg.Driver.Fallback != nil {
+		driverClient.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
 	}
 
 	// --- Classifier client (optional) ---
@@ -956,8 +956,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
-			AgentLLM:            agentClient,
-			MemoryAgentLLM:      memoryAgentClient, // nil if not configured — memory agent skips
+			DriverLLM:            driverClient,
+			MemoryAgentLLM:       memoryAgentClient, // nil if not configured — memory agent skips
 			ChatLLM:             chatClient,
 			VisionLLM:           visionClient,      // nil if no vision model configured
 			ClassifierLLM:       classifierClient,   // nil if not configured, active if classifier section in config
@@ -1014,7 +1014,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 						"this is a follow-up, not a new conversation.",
 					inboxEvent.Summary)
 				followUpResult, followUpErr := agent.Run(agent.RunParams{
-					AgentLLM:            agentClient,
+					DriverLLM:            driverClient,
 					ChatLLM:             chatClient,
 					Store:               store,
 					EmbedClient:         embedClient,
@@ -1729,7 +1729,7 @@ func generateReport(
 	// strings in Go are immutable (each += creates a new string).
 	var b strings.Builder
 
-	agentModel := cfg.Agent.Model
+	agentModel := cfg.Driver.Model
 	if agentModel == "" {
 		agentModel = fallbackSimAgentModel
 	}
@@ -1931,11 +1931,11 @@ func writeAgentTrace(b *strings.Builder, simDB *sql.DB, runID int64, turnNum int
 	}
 
 	if len(steps) == 0 {
-		// No agent trace = the agent model likely failed (rate limit,
+		// No driver trace = the driver model likely failed (rate limit,
 		// error, etc.) and the fallback reply kicked in. Flag it loudly.
-		b.WriteString("> **⚠ NO AGENT TRACE** — the agent model produced no tool calls for this turn.\n")
+		b.WriteString("> **⚠ NO DRIVER TRACE** — the driver model produced no tool calls for this turn.\n")
 		b.WriteString("> The reply above was generated by the fallback path (direct chat model call).\n")
-		b.WriteString("> This usually means the agent model was rate-limited or returned an error.\n\n")
+		b.WriteString("> This usually means the driver model was rate-limited or returned an error.\n\n")
 		return
 	}
 

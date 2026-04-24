@@ -3,7 +3,7 @@ package agent
 // Integration tests for agent.Run() — the main conversation loop.
 //
 // These tests spin up two real HTTP servers via net/http/httptest:
-//   - agentSrv: simulates the AgentLLM (think/reply/done orchestration)
+//   - driverSrv: simulates the DriverLLM (think/reply/done orchestration)
 //   - chatSrv:  simulates the ChatLLM (generates the user-visible reply)
 //
 // The agent loop itself (compaction, layer building, tool dispatch) runs
@@ -82,7 +82,7 @@ func minimalCfg() *config.Config {
 //
 // The StatusCallback is the first-reply path in execReply — before ReplyCalled
 // is set, the text is delivered here (simulating editing the Telegram placeholder).
-func buildRunParams(t *testing.T, agentURL, chatURL string, captured *string) RunParams {
+func buildRunParams(t *testing.T, driverURL, chatURL string, captured *string) RunParams {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "agent_integration_test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -91,7 +91,7 @@ func buildRunParams(t *testing.T, agentURL, chatURL string, captured *string) Ru
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return RunParams{
-		AgentLLM:            llm.NewClient(agentURL, "test-key", "test-model", 0.1, 4096),
+		DriverLLM:           llm.NewClient(driverURL, "test-key", "test-model", 0.1, 4096),
 		ChatLLM:             llm.NewClient(chatURL, "test-key", "test-model", 0.1, 4096),
 		Store:               store,
 		Cfg:                 minimalCfg(),
@@ -114,7 +114,7 @@ func buildRunParams(t *testing.T, agentURL, chatURL string, captured *string) Ru
 func TestRun_BasicTurn(t *testing.T) {
 	var agentCallCount atomic.Int32
 
-	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	driverSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
 		switch n {
 		case 1:
@@ -125,7 +125,7 @@ func TestRun_BasicTurn(t *testing.T) {
 			writeMockSSEToolCall(w, "done", `{}`)
 		}
 	}))
-	defer agentSrv.Close()
+	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -134,7 +134,7 @@ func TestRun_BasicTurn(t *testing.T) {
 	defer chatSrv.Close()
 
 	var captured string
-	params := buildRunParams(t, agentSrv.URL, chatSrv.URL, &captured)
+	params := buildRunParams(t, driverSrv.URL, chatSrv.URL, &captured)
 
 	result, err := Run(params)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestRun_BasicTurn(t *testing.T) {
 func TestRun_ToolFailureTurn(t *testing.T) {
 	var agentCallCount atomic.Int32
 
-	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	driverSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
 		switch n {
 		case 1:
@@ -175,7 +175,7 @@ func TestRun_ToolFailureTurn(t *testing.T) {
 			writeMockSSEToolCall(w, "done", `{}`)
 		}
 	}))
-	defer agentSrv.Close()
+	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -183,7 +183,7 @@ func TestRun_ToolFailureTurn(t *testing.T) {
 	}))
 	defer chatSrv.Close()
 
-	result, err := Run(buildRunParams(t, agentSrv.URL, chatSrv.URL, nil))
+	result, err := Run(buildRunParams(t, driverSrv.URL, chatSrv.URL, nil))
 	if err != nil {
 		t.Fatalf("Run returned error after tool failure: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestRun_ToolFailureTurn(t *testing.T) {
 func TestRun_ContinuationTurn(t *testing.T) {
 	var agentCallCount atomic.Int32
 
-	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	driverSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := int(agentCallCount.Add(1))
 		switch {
 		case n <= 15:
@@ -220,7 +220,7 @@ func TestRun_ContinuationTurn(t *testing.T) {
 			writeMockSSEToolCall(w, "done", `{}`)
 		}
 	}))
-	defer agentSrv.Close()
+	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -228,7 +228,7 @@ func TestRun_ContinuationTurn(t *testing.T) {
 	}))
 	defer chatSrv.Close()
 
-	result, err := Run(buildRunParams(t, agentSrv.URL, chatSrv.URL, nil))
+	result, err := Run(buildRunParams(t, driverSrv.URL, chatSrv.URL, nil))
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRun_ContinuationTurn(t *testing.T) {
 	// Verify the continuation actually fired: window 0 used 15 calls,
 	// window 1 used at least 2 more (reply + done) = 17 total minimum.
 	if got := int(agentCallCount.Load()); got < 17 {
-		t.Errorf("AgentLLM call count = %d, want ≥17 (15 window-0 + reply + done)", got)
+		t.Errorf("DriverLLM call count = %d, want ≥17 (15 window-0 + reply + done)", got)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestRun_ContinuationTurn(t *testing.T) {
 func TestRun_DeferredSearchLoad(t *testing.T) {
 	var agentCallCount atomic.Int32
 
-	agentSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	driverSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := agentCallCount.Add(1)
 		switch n {
 		case 1:
@@ -269,7 +269,7 @@ func TestRun_DeferredSearchLoad(t *testing.T) {
 			writeMockSSEToolCall(w, "done", `{}`)
 		}
 	}))
-	defer agentSrv.Close()
+	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -277,7 +277,7 @@ func TestRun_DeferredSearchLoad(t *testing.T) {
 	}))
 	defer chatSrv.Close()
 
-	result, err := Run(buildRunParams(t, agentSrv.URL, chatSrv.URL, nil))
+	result, err := Run(buildRunParams(t, driverSrv.URL, chatSrv.URL, nil))
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}

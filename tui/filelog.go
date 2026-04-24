@@ -58,7 +58,7 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 				)
 
 			case AgentIterEvent:
-				logger.WithPrefix("agent").Info(
+				logger.WithPrefix("driver").Info(
 					fmt.Sprintf("tokens: %d prompt + %d completion | $%.6f | finish=%s",
 						e.PromptTokens, e.CompletionTokens, e.CostUSD, e.FinishReason),
 					"turn_id", e.TurnID,
@@ -70,20 +70,20 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 				if e.IsError {
 					prefix = "✗"
 				}
-				logger.WithPrefix("agent").Info(
+				logger.WithPrefix("driver").Info(
 					fmt.Sprintf("%s %s: %s", prefix, e.ToolName, e.Result),
 					"turn_id", e.TurnID,
 					"is_error", e.IsError,
 				)
 
 			case ContextEvent:
-				logger.WithPrefix("agent").Info(
+				logger.WithPrefix("driver").Info(
 					fmt.Sprintf("semantic: %d relevant memories", e.RelevantMemories),
 					"turn_id", e.TurnID,
 				)
 
 			case ReplyEvent:
-				logger.WithPrefix("agent").Info(
+				logger.WithPrefix("driver").Info(
 					fmt.Sprintf("reply: %d+%d=%d | $%.6f | %dms",
 						e.PromptTokens, e.CompletionTokens, e.TotalTokens, e.CostUSD, e.LatencyMs),
 					"turn_id", e.TurnID,

@@ -36,7 +36,7 @@ const (
 	EventDDLDetected
 
 	// EventInboxReady fires when a background agent (memory, mood) has
-	// left results in the inbox for the main agent. The main agent wakes
+	// left results in the inbox for the driver agent. The driver agent wakes
 	// up, reads the inbox, and sends a brief follow-up message to the user.
 	// Uses: Summary, DirectMessage (optional).
 	EventInboxReady

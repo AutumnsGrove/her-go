@@ -23,7 +23,7 @@ import (
 
 // Stream identifies which model a layer belongs to.
 // A layer tagged StreamChat only runs when building the reply-model prompt.
-// A layer tagged StreamAgent only runs when building the main agent context.
+// A layer tagged StreamAgent only runs when building the driver agent context.
 type Stream int
 
 const (

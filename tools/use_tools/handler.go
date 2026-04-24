@@ -39,7 +39,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Only allow loading by category name — not by individual tool name.
-	// This prevents the main agent from loading memory-only tools (save_memory, etc.)
+	// This prevents the driver agent from loading memory-only tools (save_memory, etc.)
 	// by bypassing the active-tool gate with use_tools(["save_memory"]).
 	validCats := tools.Categories()
 	var catNames []string

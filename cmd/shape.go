@@ -46,12 +46,12 @@ func runShape(cmd *cobra.Command, args []string) error {
 
 	if len(args) > 0 {
 		switch args[0] {
-		case "agent":
+		case "driver":
 			showChat = false
 		case "chat":
 			showAgent = false
 		default:
-			return fmt.Errorf("unknown stream %q — use 'agent' or 'chat'", args[0])
+			return fmt.Errorf("unknown stream %q — use 'driver' or 'chat'", args[0])
 		}
 	}
 
@@ -109,8 +109,8 @@ func runShape(cmd *cobra.Command, args []string) error {
 			ctx.ConversationSummary = summary
 		}
 
-		// Get the latest agent action summary and recent actions.
-		agentSummary, _, err := store.LatestSummary("", "agent")
+		// Get the latest driver action summary and recent actions.
+		agentSummary, _, err := store.LatestSummary("", "driver")
 		if err == nil {
 			ctx.AgentActionSummary = agentSummary
 		}
@@ -124,7 +124,7 @@ func runShape(cmd *cobra.Command, args []string) error {
 	ctx.ScrubbedUserMessage = "(sample message for shape estimation)"
 
 	if showAgent {
-		printStreamShape("Agent", cfg.Agent.Model, layers.StreamAgent, ctx, cfg)
+		printStreamShape("Driver", cfg.Driver.Model, layers.StreamAgent, ctx, cfg)
 	}
 
 	if showAgent && showChat {
@@ -177,10 +177,10 @@ func printStreamShape(name, model string, stream layers.Stream, ctx *layers.Laye
 
 	// Show budget and headroom. For chat, the effective budget is
 	// scaffolding + max_history_tokens (what compaction actually uses).
-	// For agent, it's the agent_context_budget directly.
+	// For driver, it's the driver_context_budget directly.
 	var budget int
 	if stream == layers.StreamAgent {
-		budget = cfg.Memory.AgentContextBudget
+		budget = cfg.Memory.DriverContextBudget
 	} else {
 		// Derive total budget: current scaffolding + history budget.
 		// This reflects what the prompt will look like at compaction threshold.

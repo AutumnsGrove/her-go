@@ -1,8 +1,8 @@
 name: "Inbox — bulk memory cleanup"
 description: >
-  Tests the full inbox pipeline: main agent recalls memories, finds
+  Tests the full inbox pipeline: driver agent recalls memories, finds
   duplicates and a compound memory, delegates via send_task, memory agent
-  executes (split + batch remove), calls notify_agent, main agent wakes
+  executes (split + batch remove), calls notify_agent, driver agent wakes
   up with a follow-up message.
 
   Seeds 6 memories — including intentional duplicates and one compound
@@ -10,8 +10,8 @@ description: >
   cleanup, triggering the send_task → inbox → memory agent → notify flow.
 
   What to look for in the report:
-  - Main agent calls recall_memories and identifies problems
-  - Main agent calls send_task (check the trace)
+  - Driver agent calls recall_memories and identifies problems
+  - Driver agent calls send_task (check the trace)
   - Memory agent trace shows split_memory and/or batch remove_memory
   - Memory agent calls notify_agent
   - A follow-up reply appears after the main reply

@@ -1,6 +1,6 @@
 name: "Core Loop & Dream"
 description: >
-  Comprehensive test of the main agent loop (think → recall → reply → done)
+  Comprehensive test of the driver agent loop (think → recall → reply → done)
   and the full dreaming pipeline (NightlyReflect + GatedRewrite).
 
   The conversation is designed to generate rich material for dreaming:
