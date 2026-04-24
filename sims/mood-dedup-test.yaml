@@ -1,0 +1,28 @@
+name: "Mood Dedup Test"
+description: "Tests that mood agent correctly deduplicates similar moods and skips non-emotional content"
+tags: ["mood", "dedup", "test"]
+
+messages:
+  # Baseline: establish initial mood
+  - "hey i'm feeling really anxious about this presentation tomorrow"
+
+  # Should dedup: same anxiety, slightly different framing
+  - "i'm still worried about the presentation. what if i mess up?"
+
+  # Should dedup: still the same core anxiety
+  - "my hands are shaking just thinking about it. feeling anxious"
+
+  # Emotional shift: should log (anxiety → relief)
+  - "oh wait, just got an email - presentation is postponed! i'm so relieved"
+
+  # Should skip: phatic/factual
+  - "anyway how's your day going?"
+
+  # New emotional state: should log (relief → frustration about different topic)
+  - "ugh my landlord just raised the rent again. i'm so frustrated"
+
+  # Should dedup: same frustration
+  - "i can barely afford it as is. where am i supposed to find an extra $200/month?"
+
+  # Should skip: wrapping up
+  - "ok i need to go deal with this. talk later"

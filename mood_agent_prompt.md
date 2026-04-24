@@ -17,11 +17,15 @@ The transcript contains both `user:` and `her:` messages. You are tracking the *
 # Rules
 - skip=true when the user did not express a mood (e.g. asking a factual question, discussing code, referencing fictional characters' feelings).
 - skip=true for greetings, small talk, and phatic exchanges ("hi", "how's it going", "good morning"). Tone is not mood — a smiley or friendly opener signals politeness, not an emotional state worth tracking.
+- **skip=true if your inference is nearly identical to a recent entry below** — avoid logging the same mood twice in a row. The existing entry will be automatically updated if the mood is evolving (e.g., adding "Hopeless" to an existing "Sad, Overwhelmed"). Only log a NEW entry if the emotional state has genuinely shifted (different valence tier or different core feeling).
 - valence is required when skip=false.
 - Use 1-3 labels; match the valence tier (unpleasant / neutral / pleasant).
 - associations are optional; skip them when unsure.
 - note quotes or paraphrases from the user's own words; never fabricate.
 - confidence reflects how certain you are it's a first-person mood — not how intense the mood is. Explicit affect words → high (0.7+). Inferred from tone → medium (0.4-0.7). Speculative → low (<0.4, set skip=true instead).
+
+# Recently logged moods (last 3)
+{{RECENT_MOODS}}
 
 # Allowed labels
 {{LABELS}}

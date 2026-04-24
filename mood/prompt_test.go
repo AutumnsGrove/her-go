@@ -14,7 +14,8 @@ func TestBuildPrompt_IncludesVocabAndTranscript(t *testing.T) {
 	// Try loading the real .md file from the project root (one level up
 	// from the mood/ package directory). Fall back to default if absent.
 	template := loadMoodPrompt("..")
-	p := buildPrompt(template, v, turns)
+	recentMoods := []string{"#5: valence 3, [Stressed, Tired]"}
+	p := buildPrompt(template, v, turns, recentMoods)
 
 	// Vocabulary is injected so the model can only pick known labels.
 	if !strings.Contains(p, "Stressed") {
@@ -37,6 +38,25 @@ func TestBuildPrompt_IncludesVocabAndTranscript(t *testing.T) {
 		if !strings.Contains(p, marker) {
 			t.Errorf("prompt missing schema marker %q", marker)
 		}
+	}
+
+	// Recent moods should appear in the prompt.
+	if !strings.Contains(p, "#5: valence 3, [Stressed, Tired]") {
+		t.Errorf("prompt missing recent mood context")
+	}
+}
+
+func TestBuildPrompt_EmptyRecentMoods(t *testing.T) {
+	v := Default()
+	turns := []Turn{
+		{Role: "user", ScrubbedContent: "I feel great!"},
+	}
+	template := loadMoodPrompt("..")
+	p := buildPrompt(template, v, turns, nil)
+
+	// When no recent moods, should show "None yet".
+	if !strings.Contains(p, "None yet") {
+		t.Errorf("prompt with empty recent moods should show 'None yet'")
 	}
 }
 

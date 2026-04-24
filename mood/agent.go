@@ -94,6 +94,14 @@ type AgentConfig struct {
 	// ProposalExpiry is how long a medium-confidence proposal stays
 	// tappable before the sweeper edits it to "expired". Default 30m.
 	ProposalExpiry time.Duration
+
+	// SignalThreshold is the minimum ScoreSignals() score required to
+	// proceed to the LLM call. Turns below this threshold are dropped
+	// immediately without inference (cheap filter for greetings,
+	// factual questions, etc.). Default 0.15 (catches bare affect words
+	// like "stressed" but skips neutral turns). Set to 0 to disable.
+	// When left unset (0 or negative), defaults to 0.15.
+	SignalThreshold float64
 }
 
 // withDefaults returns a copy of c with every zero-value field filled
@@ -123,6 +131,9 @@ func (c AgentConfig) withDefaults() AgentConfig {
 	}
 	if c.ProposalExpiry <= 0 {
 		c.ProposalExpiry = 30 * time.Minute
+	}
+	if c.SignalThreshold <= 0 {
+		c.SignalThreshold = 0.15
 	}
 	return c
 }
@@ -239,8 +250,39 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	var tb traceBuf
 	tb.emit(deps.Trace, "thinking…")
 
+	// Pre-gate: cheap heuristic check for mood signals. If the score
+	// is below the threshold, skip the LLM call entirely — saves API
+	// cost on greetings, factual questions, etc. The LLM is the final
+	// authority, but this filters obvious non-emotional turns.
+	heuristicScore := ScoreSignals(turns)
+	if heuristicScore < cfg.SignalThreshold {
+		reason := fmt.Sprintf("heuristic signal score %.2f below threshold %.2f", heuristicScore, cfg.SignalThreshold)
+		tb.line(fmt.Sprintf("⏭️ pre-gate: score %.2f < %.2f — skipped", heuristicScore, cfg.SignalThreshold))
+		tb.flush(deps.Trace)
+		return Result{
+			Action: ActionDroppedNoSignal,
+			Reason: reason,
+		}
+	}
+	tb.line(fmt.Sprintf("pre-gate: score %.2f ≥ %.2f — proceeding", heuristicScore, cfg.SignalThreshold))
+	tb.flush(deps.Trace)
+
+	// Query the 3 most recent momentary moods to show the LLM what was
+	// already logged. This helps it skip near-duplicates. Errors are
+	// non-fatal — we just proceed without context if the query fails.
+	var recentMoodLines []string
+	recentEntries, err := deps.Store.RecentMoodEntries(memory.MoodKindMomentary, 3)
+	if err == nil && len(recentEntries) > 0 {
+		for _, e := range recentEntries {
+			// Format: "#10: valence 2, [Sad, Overwhelmed, Hopeless]"
+			labelStr := strings.Join(e.Labels, ", ")
+			line := fmt.Sprintf("#%d: valence %d, [%s]", e.ID, e.Valence, labelStr)
+			recentMoodLines = append(recentMoodLines, line)
+		}
+	}
+
 	// 1. Ask the LLM.
-	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns, deps.PromptDir)
+	inference, err := callLLM(ctx, deps.LLM, deps.Vocab, turns, deps.PromptDir, recentMoodLines)
 	if err != nil {
 		log.Error("mood agent LLM call failed", "err", err)
 		tb.line(fmt.Sprintf("⚠️ llm error: %s", err))
