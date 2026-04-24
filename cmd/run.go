@@ -217,6 +217,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "llm", Status: "ready", Detail: cfg.Chat.Model})
 	}
+	if cfg.Chat.Reasoning != nil && cfg.Chat.Reasoning.Enabled != nil {
+		llmClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Chat.Reasoning.Enabled})
+	}
 
 	driverClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
 	if cfg.Driver.Timeout > 0 {
@@ -227,6 +230,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "driver", Status: "ready", Detail: cfg.Driver.Model + " (fallback: " + cfg.Driver.Fallback.Model + ")"})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "driver", Status: "ready", Detail: cfg.Driver.Model})
+	}
+	if cfg.Agent.Reasoning != nil && cfg.Agent.Reasoning.Enabled != nil {
+		agentClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Agent.Reasoning.Enabled})
 	}
 
 	var visionClient *llm.Client
@@ -273,6 +279,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model + " (fallback: " + cfg.MemoryAgent.Fallback.Model + ")"})
 		} else {
 			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "ready", Detail: cfg.MemoryAgent.Model})
+		}
+		if cfg.MemoryAgent.Reasoning != nil && cfg.MemoryAgent.Reasoning.Enabled != nil {
+			memoryAgentClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.MemoryAgent.Reasoning.Enabled})
 		}
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "memory_agent", Status: "skipped"})
