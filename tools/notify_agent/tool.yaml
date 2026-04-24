@@ -1,7 +1,7 @@
 name: notify_agent
 agent: memory
 description: >-
-  Send results back to the main agent and trigger a follow-up message to the
+  Send results back to the driver agent and trigger a follow-up message to the
   user. Call this instead of done when you completed inbox tasks and the user
   should be told what happened. Calling notify_agent also ends your turn
   (no need to call done separately).
@@ -19,4 +19,4 @@ parameters:
     - summary
 trace:
   emoji: "📬"
-  format: "→ main: {{.summary | escape | truncate 80}}"
+  format: "→ driver: {{.summary | escape | truncate 80}}"

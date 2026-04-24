@@ -239,7 +239,7 @@ func TestHandle_TableDriven(t *testing.T) {
 			name:            "empty object — no fields",
 			argsJSON:        `{}`,
 			wantDone:        true,  // empty args are valid; summary just happens to be ""
-			wantContains:   "notified main agent",
+			wantContains:   "notified driver agent",
 		},
 	}
 

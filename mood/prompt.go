@@ -32,7 +32,7 @@ const promptFilename = "mood_agent_prompt.md"
 // loadMoodPrompt reads mood_agent_prompt.md from the same directory as
 // the main prompt file (cfg.Persona.PromptFile). Falls back to the
 // hardcoded default if the file is missing or empty — same pattern as
-// the main agent and memory agent prompts.
+// the driver agent and memory agent prompts.
 func loadMoodPrompt(promptDir string) string {
 	path := filepath.Join(promptDir, promptFilename)
 	data, err := os.ReadFile(path)

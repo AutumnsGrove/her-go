@@ -113,7 +113,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 			"  Cost: $%.4f\n\n"+
 			"<b>Chat ID:</b> <code>%d</code>",
 		uptime, managedBy, runtime.Version(), convID,
-		b.cfg.Chat.Model, b.cfg.Agent.Model, b.cfg.Vision.Model,
+		b.cfg.Chat.Model, b.cfg.Driver.Model, b.cfg.Vision.Model,
 		embedStatus, tavilyStatus, visionStatus,
 		sttStatus, b.cfg.Voice.STT.Model,
 		ttsStatus, b.cfg.Voice.TTS.VoiceID,

@@ -9,7 +9,7 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **Config:** config.yaml (copy from config.yaml.example, gitignored)
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
-- **Agent prompt:** main_agent_prompt.md (agent orchestration rules, hot-reloadable)
+- **Agent prompt:** driver_agent_prompt.md (driver agent orchestration rules, hot-reloadable)
 - **Agent model:** Qwen3 235B (qwen/qwen3-235b-a22b-2507) via OpenRouter
 - **Memory model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter → Groq
 - **Chat model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter

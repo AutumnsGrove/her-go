@@ -28,12 +28,12 @@ chat:
     temperature: 0.85
     max_tokens: 4096
 
-agent:
+driver:
   model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
-  trace: false                                   # show agent thinking traces in chat (/traces to toggle)
+  trace: false                                   # show driver agent thinking traces in chat (/traces to toggle)
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fallback:
     model: "google/gemini-3.1-flash-lite-preview"
@@ -106,7 +106,7 @@ memory:
   max_facts_in_context: 10       # top-K facts to inject
   extraction_interval: 10        # extract facts every N messages
   max_history_tokens: 8000       # message history token budget — compaction fires at 75% of this (6000 tokens). System prompt excluded.
-  agent_context_budget: 16000    # agent model (Kimi K2.5) action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
+  driver_context_budget: 16000   # driver model action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
   auto_link_count: 3             # max links per new memory (0 = disabled). Links connect related memories into a knowledge graph.
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
   max_memory_length: 300         # hard character limit per memory. The SPLIT classifier catches packed memories before this fires.
@@ -119,7 +119,7 @@ scrub:
 persona:
   prompt_file: "./prompt.md"
   persona_file: "./persona.md"
-  agent_prompt_file: "./main_agent_prompt.md"
+  agent_prompt_file: "./driver_agent_prompt.md"
   rewrite_every_n_reflections: 3     # legacy — unused once dreamer is running, kept for /reflect command
   reflection_memory_threshold: 8     # legacy — unused once dreamer is running
   max_trait_shift: 0.1               # max trait score change per rewrite cycle

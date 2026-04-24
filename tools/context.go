@@ -72,7 +72,7 @@ type DeletePlaceholderCallback func() error
 type StreamCallback func(chunk string) error
 
 // AgentEventCallback fires a system event that can trigger an agent run
-// without a user message. Used by notify_agent to wake up the main agent
+// without a user message. Used by notify_agent to wake up the driver agent
 // after the memory agent finishes background work.
 //
 // The callback is defined here (not in agent/) to avoid circular imports.
@@ -254,8 +254,8 @@ type Context struct {
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
 
-	// AgentEventCB fires an event that wakes up the main agent after
-	// background work completes. Nil when not wired (e.g., tests, main agent).
+	// AgentEventCB fires an event that wakes up the driver agent after
+	// background work completes. Nil when not wired (e.g., tests, driver agent).
 	// The memory agent's notify_agent tool calls this.
 	AgentEventCB AgentEventCallback
 
@@ -263,7 +263,7 @@ type Context struct {
 	// classifier. When set, the memory helpers use it instead of querying the DB
 	// lazily — this matters for the memory agent, which captures the snippet
 	// at goroutine launch time before subsequent turns can dirty the DB.
-	// Nil in the main agent path (lazy query is fine there).
+	// Nil in the driver agent path (lazy query is fine there).
 	ClassifierSnippet []memory.Message
 
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that

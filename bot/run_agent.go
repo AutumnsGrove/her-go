@@ -139,7 +139,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	var traceCallback tools.TraceCallback
 	var memoryTraceCallback tools.TraceCallback
 	var moodTraceCallback tools.TraceCallback
-	if b.cfg.Agent.Trace {
+	if b.cfg.Driver.Trace {
 		getTrace := b.makeTraceCallbacks(c)
 		traceCallback = getTrace("main")
 		memoryTraceCallback = getTrace("memory")
@@ -310,8 +310,8 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 // full UI machinery.
 func (b *Bot) baseRunParams() agent.RunParams {
 	return agent.RunParams{
-		AgentLLM:            b.agentLLM,
-		MemoryAgentLLM:      b.memoryAgentLLM,
+		DriverLLM:            b.driverLLM,
+		MemoryAgentLLM:       b.memoryAgentLLM,
 		ChatLLM:             b.llm,
 		VisionLLM:           b.visionLLM,
 		ClassifierLLM:       b.classifierLLM,
@@ -323,7 +323,7 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
 		// Wire the agent event callback so the memory agent's notify_agent
-		// tool can wake up the main agent for a follow-up message.
+		// tool can wake up the driver agent for a follow-up message.
 		// Non-blocking send: if the channel is full (16 buffered events),
 		// drop the event rather than deadlocking the memory agent goroutine.
 		AgentEventCB: func(summary, directMessage string) {

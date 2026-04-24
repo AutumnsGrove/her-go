@@ -35,7 +35,7 @@ var log = logger.WithPrefix("bot")
 type Bot struct {
 	tb               *tele.Bot
 	llm              *llm.Client          // conversational model (chat)
-	agentLLM         *llm.Client          // tool-calling orchestrator
+	driverLLM         *llm.Client          // tool-calling orchestrator
 	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
 	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
 	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
@@ -120,7 +120,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -160,7 +160,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, agentLLM 
 	bot := &Bot{
 		tb:             tb,
 		llm:            llmClient,
-		agentLLM:       agentLLM,
+		driverLLM:       driverLLM,
 		memoryAgentLLM: memoryAgentLLM,
 		moodAgentLLM:   moodAgentLLM,
 		visionLLM:      visionLLM,

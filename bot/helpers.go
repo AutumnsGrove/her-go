@@ -136,7 +136,7 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCa
 // When enabled, Mira sends a separate message before each reply showing
 // the agent's tool calls, thinking, and decision-making process.
 func (b *Bot) handleTraces(c tele.Context) error {
-	newState := !b.cfg.Agent.Trace
+	newState := !b.cfg.Driver.Trace
 	if err := b.cfg.SetTrace(b.configPath, newState); err != nil {
 		log.Error("/traces: failed to update config", "err", err)
 		return c.Send(fmt.Sprintf("Failed to update config: %v", err))

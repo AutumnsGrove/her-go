@@ -109,7 +109,7 @@ func (r *Runner) RunForConversationWithTimeout(parent context.Context, convID st
 
 // RunForConversationWithTrace is like the timeout variant but also
 // swaps in a per-turn trace callback. Used by the bot when
-// cfg.Agent.Trace is on so each turn's mood agent lights up a named
+// cfg.Driver.Trace is on so each turn's mood agent lights up a named
 // slot on the turn's TraceBoard.
 func (r *Runner) RunForConversationWithTrace(parent context.Context, convID string, timeout time.Duration, trace func(string) error) Result {
 	if timeout <= 0 {

@@ -25,7 +25,7 @@ go build -o her && ./her run
 ## Architecture
 
 ```
-You (Telegram) → her binary → main agent (Qwen3, orchestrates the turn)
+You (Telegram) → her binary → driver agent (Qwen3, orchestrates the turn)
                                 ├── think (reason about what to do)
                                 ├── recall_memories (semantic fact search)
                                 ├── use_tools → search  (web_search, web_read, search_books)
@@ -46,7 +46,7 @@ You (Telegram) → her binary → main agent (Qwen3, orchestrates the turn)
                                 └── mood_daily_rollup at 21:00 local
 ```
 
-Every message goes through the main agent first — it decides whether to think, search, recall memories, or reply. The reply model generates the natural-language response when the agent calls `reply`. After the reply is sent, the memory and mood agents run **in parallel** in background goroutines, both writing into a shared **trace inbox** if `/traces` is on. The user never waits for either.
+Every message goes through the driver agent first — it decides whether to think, search, recall memories, or reply. The reply model generates the natural-language response when the agent calls `reply`. After the reply is sent, the memory and mood agents run **in parallel** in background goroutines, both writing into a shared **trace inbox** if `/traces` is on. The user never waits for either.
 
 For a deep dive into model calls, data flow, and the dual compaction system, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For the mood + scheduler + trace design, see [docs/plans/PLAN-mood-tracking-redesign.md](docs/plans/PLAN-mood-tracking-redesign.md).
 
@@ -135,7 +135,7 @@ Copy `config.yaml.example` to `config.yaml` and fill in:
 | File | Purpose | Who edits it |
 |---|---|---|
 | `prompt.md` | Mira's personality, tone, boundaries | You |
-| `main_agent_prompt.md` | Main agent orchestration rules, tool usage patterns | You |
+| `driver_agent_prompt.md` | Driver agent orchestration rules, tool usage patterns | You |
 | `memory_agent_prompt.md` | Memory agent instructions, fact quality rules | You |
 | `mood/vocab.yaml` | Apple-style mood vocab (valence buckets, labels, associations) | You |
 | `mood/task.yaml` | Daily rollup cron + retry config | You |
@@ -148,7 +148,7 @@ All prompts are hot-reloaded from disk on every message.
 ```
 her-go/
 ├── cmd/              # CLI commands (Cobra): run, sim, shape, logs
-├── agent/            # Main agent + memory agent + classifier + tool dispatch
+├── agent/            # Driver agent + memory agent + classifier + tool dispatch
 ├── bot/              # Telegram bot, message pipeline, mood wizard, trace wiring
 ├── compact/          # Dual compaction (chat conversations + agent action history)
 ├── config/           # YAML config loading + env var substitution

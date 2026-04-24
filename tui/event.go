@@ -81,7 +81,7 @@ func (e LogEvent) EventSource() string  { return e.Source }
 // (DB, LLM clients, sidecars, Telegram) emits one when it starts/finishes.
 type StartupEvent struct {
 	Time   time.Time
-	Phase  string // "db", "llm", "agent", "vision", "embed", "stt", "tts", "skills", "proxy", "telegram", "scheduler"
+	Phase  string // "db", "llm", "driver", "vision", "embed", "stt", "tts", "skills", "proxy", "telegram", "scheduler"
 	Status string // "starting", "ready", "skipped", "failed"
 	Detail string // e.g. "model=deepseek-v3.2", "path=her.db"
 }
@@ -118,7 +118,7 @@ type AgentIterEvent struct {
 }
 
 func (e AgentIterEvent) EventTime() time.Time { return e.Time }
-func (e AgentIterEvent) EventSource() string  { return "agent" }
+func (e AgentIterEvent) EventSource() string  { return "driver" }
 
 // ToolCallEvent fires when the agent executes a tool (think, reply,
 // save_fact, web_search, etc.).
@@ -133,7 +133,7 @@ type ToolCallEvent struct {
 }
 
 func (e ToolCallEvent) EventTime() time.Time { return e.Time }
-func (e ToolCallEvent) EventSource() string  { return "agent" }
+func (e ToolCallEvent) EventSource() string  { return "driver" }
 
 // ContextEvent fires after the agent builds its context (facts, semantic
 // search results) at the start of a turn.
@@ -144,7 +144,7 @@ type ContextEvent struct {
 }
 
 func (e ContextEvent) EventTime() time.Time { return e.Time }
-func (e ContextEvent) EventSource() string  { return "agent" }
+func (e ContextEvent) EventSource() string  { return "driver" }
 
 // ReplyEvent fires when the reply tool completes — the chat model has
 // generated the actual user-facing response.
@@ -160,7 +160,7 @@ type ReplyEvent struct {
 }
 
 func (e ReplyEvent) EventTime() time.Time { return e.Time }
-func (e ReplyEvent) EventSource() string  { return "agent" }
+func (e ReplyEvent) EventSource() string  { return "driver" }
 
 // TurnEndEvent fires when agent.Run() completes for a message turn.
 // Updates the turn section header with totals.
@@ -240,7 +240,7 @@ func (e DDLEvent) EventSource() string  { return "dbproxy" }
 // tell if the bot is compacting, thinking, or crashed.
 type CompactStartEvent struct {
 	Time   time.Time
-	Stream string // "chat" or "agent"
+	Stream string // "chat" or "driver"
 }
 
 func (e CompactStartEvent) EventTime() time.Time { return e.Time }

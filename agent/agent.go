@@ -60,9 +60,9 @@ func init() {
 	trace.Register(trace.Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
 
 	// Turn phase registration — same pattern as trace streams.
-	// "main" and "memory" register here because this package owns
-	// both the main agent loop and the memory agent launch.
-	turn.Register(turn.Phase{Name: "main", Order: 100, Label: "agent"})
+	// "driver" and "memory" register here because this package owns
+	// both the driver agent loop and the memory agent launch.
+	turn.Register(turn.Phase{Name: "driver", Order: 100, Label: "driver"})
 	turn.Register(turn.Phase{Name: "memory", Order: 200, Label: "memory"})
 }
 
@@ -122,7 +122,7 @@ func replaceBetweenMarkers(content, tag, replacement string) string {
 // In Python you might use **kwargs or a dataclass. In Go, a params struct
 // is the idiomatic way to handle functions with many inputs.
 type RunParams struct {
-	AgentLLM                  *llm.Client
+	DriverLLM                 *llm.Client
 	MemoryAgentLLM            *llm.Client // post-turn background memory agent — nil if not configured
 	ChatLLM                   *llm.Client
 	VisionLLM                 *llm.Client // vision language model — nil if not configured
@@ -278,7 +278,7 @@ func Run(params RunParams) (*RunResult, error) {
 		emit(tui.CompactStartEvent{Time: time.Now(), Stream: "agent"})
 		acr, compactErr := compact.MaybeCompactAgent(
 			params.ChatLLM, params.Store, params.ConversationID,
-			agentActions, params.Cfg.Memory.AgentContextBudget,
+			agentActions, params.Cfg.Memory.DriverContextBudget,
 			params.Cfg.Identity.Her,
 		)
 		if compactErr != nil {
@@ -496,11 +496,11 @@ func Run(params RunParams) (*RunResult, error) {
 	// The outer loop provides continuation windows: if the agent runs out
 	// of iterations without calling done, it gets a fresh window with a
 	// summary of progress injected as context.
-	iterationsPerWindow := params.Cfg.Agent.IterationsPerWindow
+	iterationsPerWindow := params.Cfg.Driver.IterationsPerWindow
 	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 15
 	}
-	maxContinuations := params.Cfg.Agent.MaxContinuations
+	maxContinuations := params.Cfg.Driver.MaxContinuations
 	if maxContinuations <= 0 {
 		maxContinuations = 3
 	}
@@ -533,14 +533,14 @@ outer:
 		for i := 0; i < iterationsPerWindow; i++ {
 			// Nudge on the first iteration only: tool_choice="required"
 			// forces the model into the tool-calling flow. Without this,
-			// The main agent occasionally skips tools entirely and outputs plain
+			// the driver agent occasionally skips tools entirely and outputs plain
 			// text on iter 0. After the first call, "auto" lets the model
 			// drive naturally (it exits via the done tool).
 			var toolChoice interface{}
 			if i == 0 && window == 0 {
 				toolChoice = "required"
 			}
-			resp, err := params.AgentLLM.ChatCompletionWithTools(messages, toolDefs, toolChoice)
+			resp, err := params.DriverLLM.ChatCompletionWithTools(messages, toolDefs, toolChoice)
 			if err != nil {
 				// The LLM client handles fallback automatically on retriable
 				// errors (429, 500-503, timeout). If we still get an error here,
@@ -853,7 +853,7 @@ func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
 		//
 		// Because memory_agent.go imports save_memory/save_self_memory/etc. in the
 		// same package, those handlers are registered in the global tools.Execute
-		// registry. Without this check, the main agent can call them by
+		// registry. Without this check, the driver agent can call them by
 		// hallucinating tool calls for tools not in its schema — the handlers exist
 		// so Execute succeeds, but the action is wrong (memory writes belong to the memory agent).
 		//

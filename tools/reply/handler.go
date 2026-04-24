@@ -46,7 +46,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// reply in a self-correction loop (think→reply→think→reply with
 	// near-identical content). Default 2: enough for "let me look that up"
 	// followed by the actual answer.
-	maxReplies := ctx.Cfg.Agent.MaxRepliesPerTurn
+	maxReplies := ctx.Cfg.Driver.MaxRepliesPerTurn
 	if maxReplies <= 0 {
 		maxReplies = 2
 	}

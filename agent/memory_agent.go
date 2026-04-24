@@ -1,11 +1,11 @@
 // Package agent — post-turn background memory agent.
 //
-// After the main agent delivers its reply, RunMemoryAgent runs in a goroutine
+// After the driver agent delivers its reply, RunMemoryAgent runs in a goroutine
 // to review the conversation turn and extract facts. The user already has
 // their reply before any fact-saving work begins.
 //
 // This separates two concerns that used to be tangled:
-//   - Main agent: orchestrate the turn, reply, done. No memory writes.
+//   - Driver agent: orchestrate the turn, reply, done. No memory writes.
 //   - Memory agent: read the turn transcript, decide what to save.
 //
 // The memory agent uses the same tool registry (tools.Execute) and the
@@ -40,12 +40,12 @@ import (
 	_ "her/tools/update_memory"
 )
 
-// MemoryAgentInput is the turn transcript passed from the main agent loop
+// MemoryAgentInput is the turn transcript passed from the driver agent loop
 // after the reply has been sent. Contains everything the memory agent needs
 // to decide what to save.
 type MemoryAgentInput struct {
 	UserMessage    string   // scrubbed user message
-	ThinkTraces    []string // contents of every think() call made by the main agent
+	ThinkTraces    []string // contents of every think() call made by the driver agent
 	ReplyText      string   // the text actually sent to the user
 	TriggerMsgID   int64    // message ID that triggered this turn
 	ConversationID string
@@ -116,7 +116,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	transcript := buildMemoryTranscript(input, params.Store)
 
 	// Pre-approved rewrites: shared between ClassifyWriteFunc (which populates it)
-	// and the tool handlers (which check it). Same pattern as the main agent.
+	// and the tool handlers (which check it). Same pattern as the driver agent.
 	preApproved := make(map[string]bool)
 
 	// Build a minimal tools.Context — only the fields memory tools actually use.
@@ -152,7 +152,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	var totalCost float64
 
 	// Memory agent loop limits — read from config with sensible defaults.
-	// Same continuation window pattern as the main agent. If the memory
+	// Same continuation window pattern as the driver agent. If the memory
 	// agent exhausts its iterations without calling done (e.g. during a
 	// bulk cleanup), it gets a fresh window with a progress summary
 	// injected.
@@ -185,7 +185,7 @@ outer:
 		if window > 0 {
 			// Exhausted the previous window without a done signal.
 			// Inject a continuation context so the model knows where it
-			// left off. Reuses the same summary builder as the main agent.
+			// left off. Reuses the same summary builder as the driver agent.
 			summary := buildContinuationSummary(traceLines)
 			messages = append(messages, llm.ChatMessage{
 				Role: "system",
@@ -211,7 +211,7 @@ outer:
 				break outer
 			}
 
-			// Log cost and metrics — same as main agent.
+			// Log cost and metrics — same as driver agent.
 			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID, resp.UsedFallback)
 			totalCost += resp.CostUSD
 			log.Infof("  [memory] tokens: %d prompt + %d completion | $%.6f | finish=%s",
@@ -338,12 +338,12 @@ func buildMemoryTranscript(input MemoryAgentInput, store *memory.Store) string {
 		b.WriteString("\n\n")
 	}
 
-	// Check the inbox for tasks delegated by the main agent (via send_task).
+	// Check the inbox for tasks delegated by the driver agent (via send_task).
 	// Consumed atomically — once read here, they won't appear again.
 	inboxMsgs, err := store.ConsumeInbox("memory")
 	if err == nil && len(inboxMsgs) > 0 {
-		b.WriteString("## Inbox — tasks from the main agent\n")
-		b.WriteString("The main agent has delegated these tasks to you. Handle them alongside your normal memory work.\n\n")
+		b.WriteString("## Inbox — tasks from the driver agent\n")
+		b.WriteString("The driver agent has delegated these tasks to you. Handle them alongside your normal memory work.\n\n")
 		for _, msg := range inboxMsgs {
 			fmt.Fprintf(&b, "### Task: %s\n%s\n\n", msg.MsgType, msg.Payload)
 		}
