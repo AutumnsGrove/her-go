@@ -14,13 +14,16 @@ import (
 // defaultMoodPrompt is a minimal fallback if mood_agent_prompt.md can't be
 // loaded. The real prompt lives in mood_agent_prompt.md at the project root —
 // edit that file to change the prompt without recompiling.
-const defaultMoodPrompt = `You are a mood-inference system. Output JSON with: skip, reason, valence (1-7), labels, associations, note, confidence (0-1), signals. Use only labels/associations from the allowed lists. skip=true when no mood expressed.
+const defaultMoodPrompt = `You are a mood-inference system. Output JSON with: skip, reason, valence (1-7), labels, associations, note, confidence (0-1), signals. Use only labels/associations from the allowed lists. skip=true when no mood expressed or when your inference is nearly identical to a recent entry.
 
 # Allowed labels
 {{LABELS}}
 
 # Allowed associations
 {{ASSOCIATIONS}}
+
+# Recently logged moods
+{{RECENT_MOODS}}
 
 # Conversation
 {{TRANSCRIPT}}`
@@ -46,7 +49,7 @@ func loadMoodPrompt(promptDir string) string {
 // buildPrompt substitutes the vocab and transcript placeholders in
 // the loaded template. The template is read from mood_agent_prompt.md
 // at call time so edits take effect without recompiling.
-func buildPrompt(template string, v *Vocab, turns []Turn) string {
+func buildPrompt(template string, v *Vocab, turns []Turn, recentMoods []string) string {
 	labelList := strings.Join(v.AllLabels(), ", ")
 	assocList := strings.Join(v.Associations(), ", ")
 
@@ -59,9 +62,16 @@ func buildPrompt(template string, v *Vocab, turns []Turn) string {
 		fmt.Fprintf(&b, "%s: %s\n\n", role, t.ScrubbedContent)
 	}
 
+	// Format recent moods as a bulleted list, or "None yet" if empty.
+	recentMoodsText := "None yet"
+	if len(recentMoods) > 0 {
+		recentMoodsText = "- " + strings.Join(recentMoods, "\n- ")
+	}
+
 	prompt := template
 	prompt = strings.ReplaceAll(prompt, "{{LABELS}}", labelList)
 	prompt = strings.ReplaceAll(prompt, "{{ASSOCIATIONS}}", assocList)
+	prompt = strings.ReplaceAll(prompt, "{{RECENT_MOODS}}", recentMoodsText)
 	prompt = strings.ReplaceAll(prompt, "{{TRANSCRIPT}}", strings.TrimSpace(b.String()))
 	return prompt
 }
@@ -92,9 +102,14 @@ func parseInference(raw string) (*Inference, error) {
 // buildPrompt / parseInference separately from the runAgent flow.
 // promptDir is the directory containing mood_agent_prompt.md — typically
 // the project root (same dir as prompt.md). Empty string uses the default.
-func callLLM(ctx context.Context, client *llm.Client, vocab *Vocab, turns []Turn, promptDir string) (*Inference, error) {
+//
+// recentMoodLines is an optional list of pre-formatted recent mood strings
+// to show the agent what was already logged. When empty, the prompt shows
+// "None yet". The formatting happens in RunAgent so this function stays
+// decoupled from the memory package.
+func callLLM(ctx context.Context, client *llm.Client, vocab *Vocab, turns []Turn, promptDir string, recentMoodLines []string) (*Inference, error) {
 	template := loadMoodPrompt(promptDir)
-	prompt := buildPrompt(template, vocab, turns)
+	prompt := buildPrompt(template, vocab, turns, recentMoodLines)
 	resp, err := client.ChatCompletion([]llm.ChatMessage{
 		{Role: "user", Content: prompt},
 	})

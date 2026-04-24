@@ -141,10 +141,11 @@ func TestRunAgent_EmitsProposalForMediumConfidence(t *testing.T) {
 		return 42, 9001, nil
 	}
 
-	// Neutral turn, no affect words in user text.
+	// Subtle affect ("disappointed") passes pre-gate (0.25) but LLM
+	// rates it medium confidence (0.55).
 	turns := []Turn{{
 		Role:            "user",
-		ScrubbedContent: "my code reviewer sent the PR back again",
+		ScrubbedContent: "my code reviewer sent the PR back again. disappointed but whatever",
 		Timestamp:       time.Now(),
 	}}
 
@@ -187,7 +188,8 @@ func TestRunAgent_LowConfidenceDropped(t *testing.T) {
 	server := newScriptedServer(t, reply)
 	deps := testDeps(t, server, newAgentTestStore(t))
 
-	turns := []Turn{{Role: "user", ScrubbedContent: "what time is it"}}
+	// Subtle affect word passes pre-gate but LLM rates it low confidence.
+	turns := []Turn{{Role: "user", ScrubbedContent: "feeling off. what time is it anyway"}}
 	res := RunAgent(context.Background(), deps, AgentConfig{}, turns)
 	if res.Action != ActionDroppedLow {
 		t.Errorf("Action = %q, want %q", res.Action, ActionDroppedLow)
@@ -277,7 +279,8 @@ func TestRunAgent_ProposeErrorSurfacesAsErrored(t *testing.T) {
 		return 0, 0, fmt.Errorf("telegram api down")
 	}
 
-	turns := []Turn{{Role: "user", ScrubbedContent: "my pr was rejected"}}
+	// Affect word passes pre-gate, proceeds to Propose which errors.
+	turns := []Turn{{Role: "user", ScrubbedContent: "my pr was rejected. frustrated"}}
 	res := RunAgent(context.Background(), deps, AgentConfig{}, turns)
 	if res.Action != ActionErrored {
 		t.Errorf("Action = %q, want %q", res.Action, ActionErrored)
@@ -292,7 +295,8 @@ func TestRunAgent_ProposePanicRecoveredAsErrored(t *testing.T) {
 		panic("nil telebot handle")
 	}
 
-	turns := []Turn{{Role: "user", ScrubbedContent: "my pr was rejected"}}
+	// Affect word passes pre-gate, proceeds to Propose which panics.
+	turns := []Turn{{Role: "user", ScrubbedContent: "my pr was rejected. frustrated"}}
 	res := RunAgent(context.Background(), deps, AgentConfig{}, turns)
 	if res.Action != ActionErrored {
 		t.Errorf("Action = %q, want %q", res.Action, ActionErrored)
