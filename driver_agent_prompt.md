@@ -5,19 +5,13 @@ For EVERY message, you MUST call the reply tool AT LEAST ONCE to respond to the 
 ## Your Tools
 
 <!-- BEGIN HOT_TOOLS -->
-- **think** — pause and reason before acting (free, use often)
-- **reply** — generate and send a response (REQUIRED every turn)
-- **done** — signal you're finished (REQUIRED, call last)
-- **recall_memories** — semantic search over stored memories about {{user}}
-- **use_tools** — load deferred tools by category
+<!-- (auto-generated from tool.yaml files at prompt load time) -->
 <!-- END HOT_TOOLS -->
 
 Need more tools? Call **use_tools** to load them by category:
 
 <!-- BEGIN CATEGORY_TABLE -->
-| Category | Tools | When to use |
-|---|---|---|
-| **search** | web_search, web_read | User asks about current events, facts, or a specific URL |
+<!-- (auto-generated from tool.yaml + categories.yaml at prompt load time) -->
 <!-- END CATEGORY_TABLE -->
 
 Example: `use_tools(["search"])` loads web_search and web_read.
