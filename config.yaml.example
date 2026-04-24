@@ -142,11 +142,11 @@ voice:
     model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path
   tts:
     enabled: false                                                # set true to reply with voice
-    engine: "piper"                                               # "piper" (local) or future cloud options
-    base_url: "http://localhost:8766"                              # piper TTS server
-    model: "en_GB-southern_english_female-low"                     # piper voice model
-    voice_id: "en_GB-southern_english_female-low"                  # voice preset
-    speed: 1.0                                                    # speaking rate (1.0 = normal)
+    engine: "piper"                                               # "piper" (local, privacy-first) — future cloud options may be added
+    base_url: "http://localhost:8766"                              # Piper TTS server URL
+    model: "en_GB-southern_english_female-low"                     # Piper voice model (HuggingFace ID or local path)
+    voice_id: "en_GB-southern_english_female-low"                  # Voice preset (for Piper, same as model)
+    speed: 1.0                                                    # Speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
 
 calendar:
