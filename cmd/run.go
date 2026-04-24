@@ -231,8 +231,8 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "driver", Status: "ready", Detail: cfg.Driver.Model})
 	}
-	if cfg.Agent.Reasoning != nil && cfg.Agent.Reasoning.Enabled != nil {
-		agentClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Agent.Reasoning.Enabled})
+	if cfg.Driver.Reasoning != nil && cfg.Driver.Reasoning.Enabled != nil {
+		driverClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Driver.Reasoning.Enabled})
 	}
 
 	var visionClient *llm.Client

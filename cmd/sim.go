@@ -587,8 +587,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 	if disableReasoningFlag {
 		disabled := false
-		agentClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
-		log.Info("Reasoning disabled for agent model via --disable-reasoning")
+		driverClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
+		log.Info("Reasoning disabled for driver model via --disable-reasoning")
 	}
 
 	// --- Classifier client (optional) ---
