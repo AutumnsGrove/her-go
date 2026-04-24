@@ -52,6 +52,18 @@ type Client struct {
 	// Provider routing — OpenRouter-specific. Controls which providers
 	// serve this model (e.g., pin a memory-agent model to Groq for speed).
 	provider *ProviderRouting
+
+	// Reasoning control — OpenRouter-specific. For hybrid models that support
+	// both reasoning and non-reasoning modes (Qwen3.6, DeepSeek V3.2), this
+	// toggles the mode. nil = API default, pointer to false = disable reasoning.
+	reasoning *ReasoningControl
+}
+
+// ReasoningControl maps to OpenRouter's `reasoning` parameter object.
+// Currently we only expose `enabled`, but the API supports other fields
+// (max_tokens, effort, exclude) if we need them later.
+type ReasoningControl struct {
+	Enabled *bool `json:"enabled,omitempty"` // nil = default, false = disable, true = enable
 }
 
 // ProviderRouting controls OpenRouter's provider selection for a model.
@@ -209,6 +221,10 @@ type chatRequest struct {
 	// serves the model. Pin to fast providers (Groq) or exclude slow ones.
 	Provider *ProviderRouting `json:"provider,omitempty"`
 
+	// Reasoning controls reasoning behavior for hybrid models (OpenRouter-specific).
+	// Pure reasoning models ignore this, pure instruct models don't need it.
+	Reasoning *ReasoningControl `json:"reasoning,omitempty"`
+
 	Stream bool `json:"stream,omitempty"`
 }
 
@@ -299,6 +315,13 @@ func (c *Client) WithTimeout(d time.Duration) *Client {
 // like Groq, or exclude unreliable ones.
 func (c *Client) WithProvider(p *ProviderRouting) *Client {
 	c.provider = p
+	return c
+}
+
+// WithReasoning configures reasoning control for hybrid models.
+// Pass nil to use API default, &ReasoningControl{Enabled: &false} to disable.
+func (c *Client) WithReasoning(r *ReasoningControl) *Client {
+	c.reasoning = r
 	return c
 }
 
@@ -495,6 +518,10 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 	if c.provider != nil {
 		reqBody.Provider = c.provider
 	}
+	// Include reasoning control if configured (OpenRouter-specific).
+	if c.reasoning != nil {
+		reqBody.Reasoning = c.reasoning
+	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -595,6 +622,9 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	}
 	if c.provider != nil {
 		reqBody.Provider = c.provider
+	}
+	if c.reasoning != nil {
+		reqBody.Reasoning = c.reasoning
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -778,6 +808,9 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	}
 	if c.provider != nil {
 		reqBody.Provider = c.provider
+	}
+	if c.reasoning != nil {
+		reqBody.Reasoning = c.reasoning
 	}
 
 	jsonData, err := json.Marshal(reqBody)

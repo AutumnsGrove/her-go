@@ -140,6 +140,15 @@ type FallbackConfig struct {
 	MaxTokens   int     `yaml:"max_tokens"`
 }
 
+// ReasoningConfig controls reasoning behavior for models that support
+// both reasoning and non-reasoning modes (hybrid models like Qwen3.6, DeepSeek V3.2).
+// This maps to OpenRouter's `reasoning` parameter. Pure reasoning models
+// (DeepSeek R1, V4) ignore this — they always reason. Pure instruct models
+// (Qwen3 235B) don't need it — they never reason.
+type ReasoningConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"` // nil = API default, false = disable, true = enable
+}
+
 // LLMConfig holds shared OpenRouter / OpenAI-compatible API credentials.
 // Model settings live in the per-model sections (chat:, agent:, etc.)
 // so each model can be tuned independently without touching the API config.
@@ -153,25 +162,27 @@ type LLMConfig struct {
 // credentials and model tuning are not tangled together.
 // Shares the same base_url and api_key as the main LLM section.
 type ChatConfig struct {
-	Model       string          `yaml:"model"`
-	Temperature float64         `yaml:"temperature"`
-	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
-	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
-	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
-	Streaming   bool            `yaml:"streaming"` // stream reply tokens to Telegram for a live typing effect (default false)
+	Model       string           `yaml:"model"`
+	Temperature float64          `yaml:"temperature"`
+	MaxTokens   int              `yaml:"max_tokens"`
+	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
+	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
+	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
+	Streaming   bool             `yaml:"streaming"`           // stream reply tokens to Telegram for a live typing effect (default false)
 }
 
 // DriverConfig holds settings for the driver agent — the orchestrator that
 // receives user messages and decides which tools to call (think, recall, search,
 // reply, done). This is the primary model in the conversation loop.
 type DriverConfig struct {
-	Model       string          `yaml:"model"`
-	Temperature float64         `yaml:"temperature"`
-	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`   // HTTP timeout in seconds (0 = 60s default)
-	Trace       bool            `yaml:"trace"`     // show agent thinking traces in chat
-	Fallback    *FallbackConfig `yaml:"fallback"`  // optional fallback model for when primary is unavailable
+	Model       string           `yaml:"model"`
+	Temperature float64          `yaml:"temperature"`
+	MaxTokens   int              `yaml:"max_tokens"`
+	Timeout     int              `yaml:"timeout"`             // HTTP timeout in seconds (0 = 60s default)
+	Trace       bool             `yaml:"trace"`               // show agent thinking traces in chat
+	Fallback    *FallbackConfig  `yaml:"fallback"`            // optional fallback model for when primary is unavailable
+	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
 	// Loop tuning — how many iterations per window and how many continuation
 	// windows before giving up. Defaults: 15 iterations, 3 continuations (= 60 max).
@@ -214,12 +225,13 @@ type ClassifierConfig struct {
 // conversation turn and extracts facts to save. Runs in a goroutine so it
 // never blocks the user. A strong narrative-language model is recommended for nuanced fact extraction.
 type MemoryAgentConfig struct {
-	Model       string          `yaml:"model"`
-	Temperature float64         `yaml:"temperature"`
-	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
-	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
-	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+	Model       string           `yaml:"model"`
+	Temperature float64          `yaml:"temperature"`
+	MaxTokens   int              `yaml:"max_tokens"`
+	Timeout     int              `yaml:"timeout"`             // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
+	Provider    *ProviderConfig  `yaml:"provider,omitempty"`  // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
+	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
 	// Loop tuning — same as DriverConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15

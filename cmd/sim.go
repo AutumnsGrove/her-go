@@ -124,6 +124,12 @@ var fallbackModelFlag string
 // Example: --fallback-vision-model "google/gemini-2.5-flash-lite"
 var fallbackVisionModelFlag string
 
+// disableReasoningFlag disables reasoning mode for hybrid models that support
+// both reasoning and non-reasoning modes (e.g., Qwen3.6, DeepSeek V3.2).
+// Pure reasoning models (DeepSeek R1, V4) will ignore this flag — they always reason.
+// Example: --disable-reasoning
+var disableReasoningFlag bool
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
@@ -158,6 +164,7 @@ func init() {
 	simCmd.Flags().StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model for this run (e.g., google/gemini-2.5-flash-lite)")
 	simCmd.Flags().StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for chat/agent/memory/mood (e.g., google/gemini-2.5-flash-lite)")
 	simCmd.Flags().StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision only (must support multi-modal)")
+	simCmd.Flags().BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models (Qwen3.6, DeepSeek V3.2)")
 	// MarkFlagRequired makes Cobra error out if --suite is missing,
 	// so we don't have to check it ourselves in runSim.
 	simCmd.MarkFlagRequired("suite")
@@ -547,6 +554,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if cfg.Chat.Fallback != nil {
 		chatClient.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
 	}
+	if disableReasoningFlag {
+		disabled := false
+		chatClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
+	}
 	if chatProviderFlag != "" {
 		// Split "Groq,Together" → ["Groq", "Together"] for the provider order list.
 		// strings.Split on a single value produces a one-element slice, which is fine.
@@ -573,6 +584,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 	)
 	if cfg.Driver.Fallback != nil {
 		driverClient.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
+	}
+	if disableReasoningFlag {
+		disabled := false
+		agentClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
+		log.Info("Reasoning disabled for agent model via --disable-reasoning")
 	}
 
 	// --- Classifier client (optional) ---
@@ -628,6 +644,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			maTokens = 4096
 		}
 		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
+		if disableReasoningFlag {
+			disabled := false
+			memoryAgentClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
+		}
 	}
 
 	// --- Mood agent client (optional) ---
