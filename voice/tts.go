@@ -23,8 +23,68 @@ import (
 	"her/config"
 )
 
-// TTSClient talks to the local Piper TTS sidecar for text-to-speech.
+// TTSEngine is the common interface for all TTS engines.
+// Both PiperTTSClient and CloudflareTTSClient implement this.
+type TTSEngine interface {
+	Synthesize(text string) ([]byte, error)
+	ReplyMode() string
+	IsAvailable() bool
+}
+
+// TTSClient wraps a TTSEngine implementation (Piper or Cloudflare).
+// The bot code interacts with this wrapper, which dispatches to the
+// configured engine under the hood.
 type TTSClient struct {
+	engine TTSEngine
+}
+
+// NewTTSClient creates a new TTS client from config, dispatching to
+// the appropriate engine based on cfg.Engine. Returns nil if TTS is
+// disabled or misconfigured — callers should nil-check.
+func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
+	if !cfg.Enabled {
+		return nil
+	}
+
+	var engine TTSEngine
+
+	switch cfg.Engine {
+	case "piper":
+		engine = NewPiperTTSClient(cfg)
+	default:
+		log.Warn("Unknown TTS engine — TTS disabled", "engine", cfg.Engine)
+		return nil
+	}
+
+	if engine == nil {
+		// Engine constructor returned nil (misconfigured).
+		return nil
+	}
+
+	return &TTSClient{engine: engine}
+}
+
+// Synthesize delegates to the underlying engine.
+func (c *TTSClient) Synthesize(text string) ([]byte, error) {
+	return c.engine.Synthesize(text)
+}
+
+// ReplyMode delegates to the underlying engine.
+func (c *TTSClient) ReplyMode() string {
+	return c.engine.ReplyMode()
+}
+
+// IsAvailable delegates to the underlying engine.
+func (c *TTSClient) IsAvailable() bool {
+	return c.engine.IsAvailable()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Piper TTS Client (local engine)
+// ─────────────────────────────────────────────────────────────────────────
+
+// PiperTTSClient talks to the local Piper TTS sidecar for text-to-speech.
+type PiperTTSClient struct {
 	baseURL    string
 	model      string
 	voiceID    string
@@ -33,22 +93,25 @@ type TTSClient struct {
 	httpClient *http.Client
 }
 
-// NewTTSClient creates a new TTS client from config. Returns nil if
-// TTS is disabled or misconfigured — callers should nil-check.
-func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
-	if !cfg.Enabled {
-		return nil
-	}
-
+// NewPiperTTSClient creates a new Piper TTS client from config. Returns nil
+// if required fields are missing.
+func NewPiperTTSClient(cfg *config.TTSConfig) *PiperTTSClient {
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
 	if baseURL == "" {
-		log.Warn("TTS enabled but tts.base_url is empty — TTS disabled")
+		log.Warn("TTS enabled with piper but tts.base_url is empty — TTS disabled")
 		return nil
 	}
 
 	voiceID := cfg.VoiceID
 	if voiceID == "" {
-		voiceID = "en_GB-southern_english_female-low"
+		log.Warn("TTS enabled with piper but voice_id is empty — TTS disabled")
+		return nil
+	}
+
+	model := cfg.Model
+	if model == "" {
+		log.Warn("TTS enabled with piper but model is empty — TTS disabled")
+		return nil
 	}
 
 	speed := cfg.Speed
@@ -61,18 +124,18 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 		replyMode = "voice"
 	}
 
-	log.Info("TTS client initialized",
-		"engine", cfg.Engine,
+	log.Info("Piper TTS client initialized",
+		"engine", "piper",
 		"base_url", baseURL,
-		"model", cfg.Model,
+		"model", model,
 		"voice", voiceID,
 		"speed", speed,
 		"reply_mode", replyMode,
 	)
 
-	return &TTSClient{
+	return &PiperTTSClient{
 		baseURL:   baseURL,
-		model:     cfg.Model,
+		model:     model,
 		voiceID:   voiceID,
 		speed:     speed,
 		replyMode: replyMode,
@@ -94,8 +157,8 @@ type speechRequest struct {
 	ResponseFormat string  `json:"response_format"`
 }
 
-// Synthesize converts text to audio bytes. Returns OGG/Opus audio
-// suitable for sending as a Telegram voice memo.
+// Synthesize converts text to audio bytes using the Piper TTS sidecar.
+// Returns OGG/Opus audio suitable for sending as a Telegram voice memo.
 //
 // The flow:
 //  1. POST JSON to /v1/audio/speech requesting WAV format
@@ -104,7 +167,7 @@ type speechRequest struct {
 //
 // We request WAV from the server (no ffmpeg dependency on the Python side)
 // and convert on the Go side where we already require ffmpeg for STT anyway.
-func (c *TTSClient) Synthesize(text string) ([]byte, error) {
+func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 	// Build the request body.
 	reqBody := speechRequest{
 		Model:          c.model,
@@ -190,12 +253,12 @@ func (c *TTSClient) Synthesize(text string) ([]byte, error) {
 
 // ReplyMode returns whether the bot should always reply with voice
 // ("voice") or only when the user sends a voice memo ("match").
-func (c *TTSClient) ReplyMode() string {
+func (c *PiperTTSClient) ReplyMode() string {
 	return c.replyMode
 }
 
 // IsAvailable checks if the Piper TTS sidecar is reachable.
-func (c *TTSClient) IsAvailable() bool {
+func (c *PiperTTSClient) IsAvailable() bool {
 	resp, err := c.httpClient.Get(c.baseURL + "/healthz")
 	if err != nil {
 		return false
