@@ -185,6 +185,7 @@ type suite struct {
 	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
+	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
 	RunRollup          bool                `yaml:"run_rollup"`           // force the daily mood rollup after all messages complete
 }
@@ -307,6 +308,58 @@ type simDreamResult struct {
 }
 
 // --------------------------------------------------------------------------
+// Helper functions
+// --------------------------------------------------------------------------
+
+// runDreamCycle executes a full dream cycle (NightlyReflect + GatedRewrite).
+// Used by both dream_after (mid-suite) and run_dream (end of suite).
+// Returns a simDreamResult with the reflection and persona rewrite output.
+func runDreamCycle(memoryAgentClient *llm.Client, store *memory.Store, cfg *config.Config, turnContext string) simDreamResult {
+	var result simDreamResult
+	result.Ran = true
+
+	log.Infof("[dream] %s — running nightly reflection", turnContext)
+	if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
+		log.Error("[dream] reflection error", "err", err)
+		result.ReflectError = err.Error()
+	} else {
+		reflections, _ := store.ReflectionsSince(time.Now().Add(-30 * time.Second))
+		if len(reflections) > 0 {
+			result.Reflection = reflections[len(reflections)-1].Content
+			log.Infof("[dream] reflection: %s", result.Reflection)
+		} else {
+			result.Reflection = "NOTHING_NOTABLE"
+			log.Info("[dream] reflection: NOTHING_NOTABLE")
+		}
+	}
+
+	minDays := cfg.Persona.MinRewriteDays
+	if minDays == 0 {
+		minDays = 7
+	}
+	minRefl := cfg.Persona.MinReflections
+	if minRefl == 0 {
+		minRefl = 3
+	}
+
+	log.Infof("[dream] %s — running gated persona rewrite (bypass=true)", turnContext)
+	rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
+	if err != nil {
+		log.Error("[dream] rewrite error", "err", err)
+		result.RewriteError = err.Error()
+	} else if rewritten {
+		result.Rewritten = true
+		data, _ := os.ReadFile(cfg.Persona.PersonaFile)
+		result.PersonaText = string(data)
+		log.Infof("[dream] persona rewritten:\n%s", result.PersonaText)
+	} else {
+		log.Info("[dream] rewrite: UNCHANGED")
+	}
+
+	return result
+}
+
+// --------------------------------------------------------------------------
 // Main command logic
 // --------------------------------------------------------------------------
 
@@ -346,6 +399,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 	if s.CompactAfter > 0 {
 		log.Infof("  forced compaction after turn %d", s.CompactAfter)
+	}
+	if len(s.DreamAfter) > 0 {
+		log.Infof("  dream cycles after turns: %v", s.DreamAfter)
 	}
 
 	// ------------------------------------------------------------------
@@ -875,6 +931,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	turnResults := make([]simTurnResult, 0, len(messages))
+	dreamResults := make([]simDreamResult, 0, len(s.DreamAfter)) // collect dreams from dream_after
 
 	total := len(messages)
 	for i, msg := range messages {
@@ -1123,6 +1180,20 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// --- Forced dream cycle ---
+		// When dream_after is set in the suite YAML, run a full dream
+		// cycle (NightlyReflect + GatedRewrite) after specific turns.
+		// This lets us test persona evolution across multiple "days"
+		// in a single suite run.
+		for _, dreamTurn := range s.DreamAfter {
+			if (i+1) == dreamTurn && memoryAgentClient != nil {
+				turnCtx := fmt.Sprintf("turn %d/%d", i+1, total)
+				dreamRes := runDreamCycle(memoryAgentClient, store, cfg, turnCtx)
+				dreamResults = append(dreamResults, dreamRes)
+				break
+			}
+		}
+
 		// Pause between turns to avoid hitting rate limits on free-tier
 		// models. In real usage the user types slowly enough that this
 		// isn't needed, but sim fires back-to-back.
@@ -1212,46 +1283,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// This lets you test the dreaming pipeline without running hundreds of
 	// real conversations. The dream uses bypass=true so both gates are skipped —
 	// same behaviour as /dream in the Telegram bot.
-	var dreamResult simDreamResult
 	if s.RunDream && memoryAgentClient != nil {
-		dreamResult.Ran = true
-		log.Info("[dream] running nightly reflection")
-		if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
-			log.Error("[dream] reflection error", "err", err)
-			dreamResult.ReflectError = err.Error()
-		} else {
-			reflections, _ := store.ReflectionsSince(time.Now().Add(-30 * time.Second))
-			if len(reflections) > 0 {
-				dreamResult.Reflection = reflections[len(reflections)-1].Content
-				log.Infof("[dream] reflection: %s", dreamResult.Reflection)
-			} else {
-				dreamResult.Reflection = "NOTHING_NOTABLE"
-				log.Info("[dream] reflection: NOTHING_NOTABLE")
-			}
-		}
-
-		minDays := cfg.Persona.MinRewriteDays
-		if minDays == 0 {
-			minDays = 7
-		}
-		minRefl := cfg.Persona.MinReflections
-		if minRefl == 0 {
-			minRefl = 3
-		}
-
-		log.Info("[dream] running gated persona rewrite (bypass=true)")
-		rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
-		if err != nil {
-			log.Error("[dream] rewrite error", "err", err)
-			dreamResult.RewriteError = err.Error()
-		} else if rewritten {
-			dreamResult.Rewritten = true
-			data, _ := os.ReadFile(cfg.Persona.PersonaFile)
-			dreamResult.PersonaText = string(data)
-			log.Infof("[dream] persona rewritten:\n%s", dreamResult.PersonaText)
-		} else {
-			log.Info("[dream] rewrite: UNCHANGED")
-		}
+		dreamResult := runDreamCycle(memoryAgentClient, store, cfg, "end of suite")
+		dreamResults = append(dreamResults, dreamResult)
 	} else if s.RunDream && memoryAgentClient == nil {
 		log.Warn("[dream] skipped — memory_agent.model not configured in config.yaml")
 	}
@@ -1315,7 +1349,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// 9. Generate markdown report
 	// ------------------------------------------------------------------
 
-	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResult, rollupResult)
+	report, err := generateReport(simDB, runID, &s, cfg, turnResults, totalCost, totalDuration, dreamResults, rollupResult)
 	if err != nil {
 		log.Error("failed to generate report", "err", err)
 	} else {
@@ -1740,7 +1774,7 @@ func generateReport(
 	turns []simTurnResult,
 	totalCost float64,
 	totalDuration time.Duration,
-	dream simDreamResult,
+	dreams []simDreamResult,
 	rollup simRollupResult,
 ) (string, error) {
 	// strings.Builder is Go's equivalent of Python's io.StringIO or
@@ -1826,8 +1860,8 @@ func generateReport(
 	// Compaction summaries section
 	writeSummariesSection(&b, simDB, runID)
 
-	// Dream section (only present when run_dream: true)
-	writeDreamSection(&b, dream)
+	// Dream section (only present when run_dream: true or dream_after is set)
+	writeDreamSection(&b, dreams)
 
 	// Forced daily rollup section (only present when run_rollup: true).
 	writeRollupSection(&b, rollup)
@@ -1883,38 +1917,75 @@ func orDashList(items []string) string {
 }
 
 // writeDreamSection writes the nightly reflection and persona rewrite output
-// to the report. Only called when run_dream: true in the suite YAML.
-func writeDreamSection(b *strings.Builder, dream simDreamResult) {
-	if !dream.Ran {
+// to the report. Handles multiple dreams when dream_after is used.
+func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
+	if len(dreams) == 0 {
 		return
 	}
 
-	b.WriteString("## Dream Cycle\n\n")
+	// Single dream: use the original format
+	if len(dreams) == 1 {
+		dream := dreams[0]
+		b.WriteString("## Dream Cycle\n\n")
 
-	// Reflection
-	b.WriteString("### Nightly Reflection\n\n")
-	if dream.ReflectError != "" {
-		fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
-	} else if dream.Reflection == "NOTHING_NOTABLE" {
-		b.WriteString("_NOTHING_NOTABLE — reflection found no patterns worth recording._\n\n")
-	} else {
-		fmt.Fprintf(b, "%s\n\n", dream.Reflection)
+		// Reflection
+		b.WriteString("### Nightly Reflection\n\n")
+		if dream.ReflectError != "" {
+			fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
+		} else if dream.Reflection == "NOTHING_NOTABLE" {
+			b.WriteString("_NOTHING_NOTABLE — reflection found no patterns worth recording._\n\n")
+		} else {
+			fmt.Fprintf(b, "%s\n\n", dream.Reflection)
+		}
+
+		// Persona rewrite
+		b.WriteString("### Persona Rewrite\n\n")
+		if dream.RewriteError != "" {
+			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
+		} else if !dream.Rewritten {
+			b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
+		} else {
+			if dream.ChangeSummary != "" {
+				fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+			}
+			b.WriteString("**New persona:**\n\n")
+			b.WriteString("```\n")
+			b.WriteString(dream.PersonaText)
+			b.WriteString("\n```\n\n")
+		}
+		return
 	}
 
-	// Persona rewrite
-	b.WriteString("### Persona Rewrite\n\n")
-	if dream.RewriteError != "" {
-		fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
-	} else if !dream.Rewritten {
-		b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
-	} else {
-		if dream.ChangeSummary != "" {
-			fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+	// Multiple dreams: number them
+	b.WriteString("## Dream Cycles\n\n")
+	for i, dream := range dreams {
+		fmt.Fprintf(b, "### Dream %d\n\n", i+1)
+
+		// Reflection
+		b.WriteString("**Nightly Reflection:**\n\n")
+		if dream.ReflectError != "" {
+			fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
+		} else if dream.Reflection == "NOTHING_NOTABLE" {
+			b.WriteString("_NOTHING_NOTABLE — reflection found no patterns worth recording._\n\n")
+		} else {
+			fmt.Fprintf(b, "%s\n\n", dream.Reflection)
 		}
-		b.WriteString("**New persona:**\n\n")
-		b.WriteString("```\n")
-		b.WriteString(dream.PersonaText)
-		b.WriteString("\n```\n\n")
+
+		// Persona rewrite
+		b.WriteString("**Persona Rewrite:**\n\n")
+		if dream.RewriteError != "" {
+			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
+		} else if !dream.Rewritten {
+			b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
+		} else {
+			if dream.ChangeSummary != "" {
+				fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+			}
+			b.WriteString("**New persona:**\n\n")
+			b.WriteString("```\n")
+			b.WriteString(dream.PersonaText)
+			b.WriteString("\n```\n\n")
+		}
 	}
 }
 
