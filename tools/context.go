@@ -28,6 +28,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Telegram constants
+// ---------------------------------------------------------------------------
+
+// TelegramMaxMessageLen is Telegram's hard limit for message length in characters.
+// Messages exceeding this limit are rejected with MESSAGE_TOO_LONG.
+// Reference: https://core.telegram.org/bots/api#sendmessage
+const TelegramMaxMessageLen = 4096
+
+// ---------------------------------------------------------------------------
 // Callback types — moved from agent so both packages can reference them.
 //
 // These are function signatures that the bot (Telegram layer) provides to
@@ -81,6 +90,12 @@ type StreamCallback func(chunk string) error
 // The bot layer provides the implementation that translates these params
 // into an agent.AgentEvent and writes it to the agent event channel.
 type AgentEventCallback func(summary, directMessage string)
+
+// SendPaginatedCallback sends a message split into pages with ◀/▶ navigation
+// buttons when it exceeds Telegram's 4096-char limit. The reply tool calls
+// this when the combined response (chat text + place cards) is too long for
+// a single message. The bot layer handles page storage and button callbacks.
+type SendPaginatedCallback func(text string) error
 
 // ---------------------------------------------------------------------------
 // PlaceCard — a pre-formatted place result ready for deterministic rendering.
@@ -211,6 +226,13 @@ type Context struct {
 	// Nil means streaming is disabled for this turn — reply falls back to
 	// the existing non-streaming path automatically.
 	StreamCallback StreamCallback
+
+	// SendPaginatedCallback sends a message split into pages with inline
+	// navigation buttons. Used by the reply tool when the combined response
+	// (chat text + place cards) exceeds Telegram's 4096-char limit. Nil
+	// means pagination isn't supported for this turn — the reply tool will
+	// fall back to rejecting long messages.
+	SendPaginatedCallback SendPaginatedCallback
 
 	// StopTypingFn stops the Telegram typing indicator. Called by the
 	// reply tool after successfully delivering a reply, so typing stops
