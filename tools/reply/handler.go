@@ -275,9 +275,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Length guard for degenerate outputs. The chat model occasionally generates
 	// runaway 16k+ char responses (perseveration, repetition loops). Catch those
 	// BEFORE any side effects (DB save, Telegram send, TTS). Pagination handles
-	// normal long replies (4096-8000 chars), but replies over 10k suggest the
-	// model went off the rails — reject those and ask the agent to retry.
-	const maxReplyChars = 10000
+	// normal long replies (4096-8000 chars), but replies over this limit suggest
+	// the model went off the rails — reject those and ask the agent to retry.
+	maxReplyChars := ctx.Cfg.Chat.MaxReplyChars
+	if maxReplyChars <= 0 {
+		maxReplyChars = 10000 // default
+	}
 	if len(resp.Content) > maxReplyChars {
 		log.Warn("reply: response too long (likely degenerate), rejecting",
 			"chars", len(resp.Content),
@@ -449,16 +452,15 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// If pagination isn't available, we fall back to the old behavior
 	// (send it anyway and let Telegram reject it — the error surfaces
 	// to the agent so it can retry shorter).
-	const telegramMaxChars = 4096
 	var sendErr error
 
-	if len(replyText) > telegramMaxChars && ctx.SendPaginatedCallback != nil {
+	if len(replyText) > tools.TelegramMaxMessageLen && ctx.SendPaginatedCallback != nil {
 		// Message is too long and pagination is available — use it.
 		// Paginated sends always create a new message (can't edit a
 		// placeholder into a paginated view), so we delete the placeholder
 		// first if this is the first reply (ReplyCalled is false).
 		log.Info("reply: message exceeds limit, using pagination",
-			"chars", len(replyText), "limit", telegramMaxChars)
+			"chars", len(replyText), "limit", tools.TelegramMaxMessageLen)
 
 		// Delete placeholder before sending the paginated message, but only
 		// for the first reply. Follow-up replies don't have a placeholder

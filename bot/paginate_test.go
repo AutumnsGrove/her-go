@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -397,30 +398,159 @@ func TestPaginateLines_BasicSplit(t *testing.T) {
 }
 
 // TestPaginateLines_SingleLineTooLong verifies that a single line
-// that exceeds the limit gets its own page (edge case handling).
+// that exceeds the limit gets force-split across multiple pages.
 func TestPaginateLines_SingleLineTooLong(t *testing.T) {
 	hugeLine := strings.Repeat("x", 1000)
 	text := "Short line\n" + hugeLine + "\nAnother short line"
 
 	pages := paginateLines(text, 200)
 
-	if len(pages) < 3 {
-		t.Errorf("huge line should force multiple pages, got %d", len(pages))
+	// Should have: "Short line", then 5 pages of 200 chars from hugeLine,
+	// then "Another short line". Total >= 7 pages.
+	if len(pages) < 7 {
+		t.Errorf("huge line should force many pages, got %d", len(pages))
 	}
 
-	// The huge line should be on its own page.
-	foundHugeLine := false
-	for _, page := range pages {
-		if strings.Contains(page, hugeLine) {
-			foundHugeLine = true
-			// This page should ONLY contain the huge line (no other content).
-			if strings.Contains(page, "Short line") || strings.Contains(page, "Another short") {
-				t.Error("huge line should be isolated on its own page")
-			}
+	// First page should have "Short line" only.
+	if pages[0] != "Short line" {
+		t.Errorf("first page should be 'Short line', got %q", pages[0])
+	}
+
+	// Last page should have "Another short line".
+	lastPage := pages[len(pages)-1]
+	if lastPage != "Another short line" {
+		t.Errorf("last page should be 'Another short line', got %q", lastPage)
+	}
+
+	// Middle pages should all be exactly 200 chars (chunks of the huge line),
+	// except possibly the last chunk which might be shorter.
+	for i := 1; i < len(pages)-1; i++ {
+		if len(pages[i]) > 200 {
+			t.Errorf("page %d exceeds limit: %d chars", i, len(pages[i]))
+		}
+		// All middle pages should be chunks of 'x' repeated.
+		if !strings.HasPrefix(pages[i], "xxx") {
+			t.Errorf("page %d should contain chunks of the huge line", i)
 		}
 	}
+}
 
-	if !foundHugeLine {
-		t.Error("huge line not found in any page")
+// TestRenderPage_SinglePage verifies that single-page content
+// is rendered without a page footer.
+func TestRenderPage_SinglePage(t *testing.T) {
+	pages := []string{"This is the only page."}
+	rendered := renderPage(pages, 0)
+
+	if rendered != "This is the only page." {
+		t.Errorf("single page should not have footer, got: %q", rendered)
+	}
+}
+
+// TestRenderPage_MultiPage verifies that multi-page content
+// includes "Page X of Y" footer with HTML italic tags.
+func TestRenderPage_MultiPage(t *testing.T) {
+	pages := []string{"Page one", "Page two", "Page three"}
+
+	// Render each page and verify footer.
+	for i, expectedContent := range pages {
+		rendered := renderPage(pages, i)
+
+		if !strings.Contains(rendered, expectedContent) {
+			t.Errorf("page %d missing content: %q", i, rendered)
+		}
+
+		expectedFooter := fmt.Sprintf("<i>Page %d of %d</i>", i+1, len(pages))
+		if !strings.Contains(rendered, expectedFooter) {
+			t.Errorf("page %d missing footer, got: %q", i, rendered)
+		}
+	}
+}
+
+// TestRenderPage_OutOfBounds verifies that invalid page indices
+// return an error message.
+func TestRenderPage_OutOfBounds(t *testing.T) {
+	pages := []string{"Page one", "Page two"}
+
+	// Negative index.
+	rendered := renderPage(pages, -1)
+	if rendered != "Page not found." {
+		t.Errorf("negative index should return error message, got: %q", rendered)
+	}
+
+	// Index beyond last page.
+	rendered = renderPage(pages, 5)
+	if rendered != "Page not found." {
+		t.Errorf("out of bounds index should return error message, got: %q", rendered)
+	}
+}
+
+// TestPageMarkup_SinglePage verifies that single-page content
+// has no navigation buttons (returns nil).
+func TestPageMarkup_SinglePage(t *testing.T) {
+	markup := pageMarkup(0, 1)
+
+	if markup != nil {
+		t.Error("single page should have no navigation buttons")
+	}
+}
+
+// TestPageMarkup_FirstPage verifies that the first page of
+// multi-page content only has a "Next" button.
+func TestPageMarkup_FirstPage(t *testing.T) {
+	markup := pageMarkup(0, 3)
+
+	if markup == nil {
+		t.Fatal("first page of multi-page should have buttons")
+	}
+
+	// The markup should have inline buttons. We can't easily inspect
+	// the telebot internals, but we can verify it's non-nil.
+	// A more thorough test would require mocking telebot or inspecting
+	// the actual button data, but that's telebot-specific.
+	if len(markup.InlineKeyboard) == 0 {
+		t.Error("first page should have inline keyboard")
+	}
+
+	// First page should have one button (Next only).
+	if len(markup.InlineKeyboard[0]) != 1 {
+		t.Errorf("first page should have 1 button, got %d", len(markup.InlineKeyboard[0]))
+	}
+}
+
+// TestPageMarkup_MiddlePage verifies that a middle page has
+// both "Prev" and "Next" buttons.
+func TestPageMarkup_MiddlePage(t *testing.T) {
+	markup := pageMarkup(1, 3)
+
+	if markup == nil {
+		t.Fatal("middle page should have buttons")
+	}
+
+	if len(markup.InlineKeyboard) == 0 {
+		t.Error("middle page should have inline keyboard")
+	}
+
+	// Middle page should have two buttons (Prev and Next).
+	if len(markup.InlineKeyboard[0]) != 2 {
+		t.Errorf("middle page should have 2 buttons, got %d", len(markup.InlineKeyboard[0]))
+	}
+}
+
+// TestPageMarkup_LastPage verifies that the last page only
+// has a "Prev" button.
+func TestPageMarkup_LastPage(t *testing.T) {
+	markup := pageMarkup(2, 3)
+
+	if markup == nil {
+		t.Fatal("last page should have buttons")
+	}
+
+	if len(markup.InlineKeyboard) == 0 {
+		t.Error("last page should have inline keyboard")
+	}
+
+	// Last page should have one button (Prev only).
+	if len(markup.InlineKeyboard[0]) != 1 {
+		t.Errorf("last page should have 1 button, got %d", len(markup.InlineKeyboard[0]))
 	}
 }

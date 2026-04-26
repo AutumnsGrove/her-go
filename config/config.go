@@ -163,14 +163,15 @@ type LLMConfig struct {
 // credentials and model tuning are not tangled together.
 // Shares the same base_url and api_key as the main LLM section.
 type ChatConfig struct {
-	Model       string           `yaml:"model"`
-	Temperature float64          `yaml:"temperature"`
-	MaxTokens   int              `yaml:"max_tokens"`
-	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
-	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
-	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
-	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
-	Streaming   bool             `yaml:"streaming"`           // stream reply tokens to Telegram for a live typing effect (default false)
+	Model        string           `yaml:"model"`
+	Temperature  float64          `yaml:"temperature"`
+	MaxTokens    int              `yaml:"max_tokens"`
+	MaxReplyChars int             `yaml:"max_reply_chars"` // reject replies over this length as likely degenerate (0 = 10000 default)
+	Timeout      int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
+	Provider     *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback     *FallbackConfig  `yaml:"fallback,omitempty"`
+	Reasoning    *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
+	Streaming    bool             `yaml:"streaming"`           // stream reply tokens to Telegram for a live typing effect (default false)
 }
 
 // DriverConfig holds settings for the driver agent — the orchestrator that

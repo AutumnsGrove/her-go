@@ -28,6 +28,15 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Telegram constants
+// ---------------------------------------------------------------------------
+
+// TelegramMaxMessageLen is Telegram's hard limit for message length in characters.
+// Messages exceeding this limit are rejected with MESSAGE_TOO_LONG.
+// Reference: https://core.telegram.org/bots/api#sendmessage
+const TelegramMaxMessageLen = 4096
+
+// ---------------------------------------------------------------------------
 // Callback types — moved from agent so both packages can reference them.
 //
 // These are function signatures that the bot (Telegram layer) provides to
