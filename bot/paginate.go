@@ -21,13 +21,15 @@ import (
 	"strconv"
 	"strings"
 
+	"her/tools"
+
 	tele "gopkg.in/telebot.v4"
 )
 
-// maxTelegramLen is Telegram's maximum message length in characters.
-// We leave a small buffer for the page footer ("Page X of Y") and
-// any HTML overhead from the navigation text.
-const maxTelegramLen = 4000
+// pageFooterBuffer is the character budget reserved for the "Page X of Y"
+// footer and any HTML overhead from navigation text. Subtracted from
+// TelegramMaxMessageLen to get the usable content length per page.
+const pageFooterBuffer = 96
 
 // pageSession holds all the pages for a single paginated view.
 // Stored in Bot.pageSessions, keyed by chat ID.
@@ -166,6 +168,27 @@ func paginateLines(text string, maxLen int) []string {
 	var current strings.Builder
 
 	for _, line := range lines {
+		// If this single line exceeds maxLen, we need to split it.
+		if len(line) > maxLen {
+			// Flush any accumulated content first.
+			if current.Len() > 0 {
+				pages = append(pages, current.String())
+				current.Reset()
+			}
+
+			// Force-split this long line into chunks.
+			for len(line) > maxLen {
+				pages = append(pages, line[:maxLen])
+				line = line[maxLen:]
+			}
+
+			// Add the remainder to current (will be flushed later or at end).
+			if len(line) > 0 {
+				current.WriteString(line)
+			}
+			continue
+		}
+
 		// Would adding this line exceed the limit?
 		// +1 for the newline character we'd add.
 		if current.Len() > 0 && current.Len()+len(line)+1 > maxLen {
@@ -244,7 +267,9 @@ func pageMarkup(pageIdx, totalPages int) *tele.ReplyMarkup {
 // output can call this instead of c.Send(). Uses block-aware splitting
 // to avoid breaking place cards mid-entry.
 func (b *Bot) sendPaginated(c tele.Context, text string) error {
-	pages := paginateWithBlocks(text, maxTelegramLen)
+	// Calculate usable content length: Telegram's limit minus footer buffer.
+	maxContentLen := tools.TelegramMaxMessageLen - pageFooterBuffer
+	pages := paginateWithBlocks(text, maxContentLen)
 
 	// Fast path: fits in one message, no pagination needed.
 	if len(pages) == 1 {
