@@ -4,6 +4,8 @@ description: >-
   Search the web using Tavily. Returns relevant snippets and a synthesized
   summary. Use when the user asks about current events, facts you don't know,
   prices, schedules, or anything that needs up-to-date information.
+  For complex lookups, send a quick "let me look that up" reply first, then
+  search, then reply again with the answer.
 hot: false
 category: search
 parameters:

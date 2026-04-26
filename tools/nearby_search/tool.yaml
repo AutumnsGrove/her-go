@@ -2,12 +2,20 @@ name: nearby_search
 agent: main
 description: >-
   Search for nearby places — restaurants, coffee shops, pharmacies, parks, etc.
-  Uses Foursquare Places API for structured results with distance, categories,
-  and open/closed status. Falls back to web search if Foursquare isn't configured.
-  Pass a location string (e.g., "downtown Portland") or omit to use {{user}}'s
-  most recent known location (from location_history or saved home location).
-  Use when {{user}} asks where to find something nearby, or asks for
-  recommendations for local businesses or points of interest.
+  Uses Foursquare Places API for structured results with distance and categories.
+  Falls back to web search if Foursquare isn't configured.
+
+  Location resolves automatically: explicit location arg → most recent shared
+  location (e.g., a pin drop) → saved home location. You usually don't need
+  to pass a location unless {{user}} asks about a different area.
+
+  Results include formatted place cards (name, address, distance, Google Maps
+  link) that are automatically appended to your reply — don't try to format
+  them yourself. Just describe the results naturally in your reply instruction.
+
+  Can be used proactively when it would genuinely help — if {{user}} mentions
+  wanting to do something at a physical place and you know their area, suggest
+  a spot. But don't force it. Most conversations don't need a place search.
 hot: false
 category: context
 parameters:
