@@ -272,26 +272,21 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Length guard. Telegram rejects messages over 4096 characters with
-	// MESSAGE_TOO_LONG, and historically that error was logged then
-	// silently swallowed — the user got nothing. Worse, the chat model
-	// occasionally generates 16k+ char runaway replies. We catch that
-	// here, before any downstream side effects fire (DB save, Telegram
-	// send, TTS), and return a rejection string the agent can react to.
-	//
-	// 3500 leaves margin under Telegram's 4096 limit for deanonymization
-	// expansion (PII placeholders → real values may grow the string)
-	// and any markdown/emoji byte overhead.
-	const maxReplyChars = 3500
+	// Length guard for degenerate outputs. The chat model occasionally generates
+	// runaway 16k+ char responses (perseveration, repetition loops). Catch those
+	// BEFORE any side effects (DB save, Telegram send, TTS). Pagination handles
+	// normal long replies (4096-8000 chars), but replies over 10k suggest the
+	// model went off the rails — reject those and ask the agent to retry.
+	const maxReplyChars = 10000
 	if len(resp.Content) > maxReplyChars {
-		log.Warn("reply: response too long, rejecting",
+		log.Warn("reply: response too long (likely degenerate), rejecting",
 			"chars", len(resp.Content),
 			"max", maxReplyChars,
 			"preview", truncate(resp.Content, 120))
 		return fmt.Sprintf(
 			"rejected: response was %d characters (max %d). The reply was NOT delivered to the user. "+
-				"Call reply again with an instruction that explicitly demands a SHORT response — "+
-				"1-3 sentences, under 500 characters. Do not let the chat model riff or expand.",
+				"This suggests a runaway generation. Call reply again with an instruction that "+
+				"explicitly demands a SHORT response — 1-3 sentences, under 500 characters.",
 			len(resp.Content), maxReplyChars)
 	}
 
@@ -425,13 +420,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Append place cards if nearby_search populated them. These are
 	// pre-formatted with addresses, distances, and Maps links — the
 	// chat model wrote the prose, and this block adds the reliable
-	// structured data below it.
-	//
-	// TODO: When the combined reply exceeds Telegram's 4096 char limit,
-	// this should flow into paginated messages (page 1 / page 2 with
-	// inline buttons). For now, cards are appended as-is — the existing
-	// length guard upstream keeps chat model prose short enough that
-	// typical place card blocks (5 results) fit within the limit.
+	// structured data below it. If the combined length exceeds Telegram's
+	// 4096-char limit, the delivery logic below automatically uses pagination.
 	if cardBlock := tools.FormatPlaceCards(ctx.PlaceCards); cardBlock != "" {
 		replyText += cardBlock
 		// Clear cards after use so follow-up replies in the same turn
@@ -453,14 +443,43 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// that poisons the conversation context. Delivery is the fallible part;
 	// the DB save is cheap and reliable by comparison.
 	//
-	// First reply: edit the placeholder message (statusCallback).
-	// Follow-up replies: send as a new message (sendCallback) so both
-	// are visible — e.g., "let me look that up" → "here's what I found".
+	// Telegram's hard limit is 4096 characters. If the final text (after
+	// deanonymization and place card appending) exceeds that, we use
+	// SendPaginatedCallback to split it into pages with ◀/▶ buttons.
+	// If pagination isn't available, we fall back to the old behavior
+	// (send it anyway and let Telegram reject it — the error surfaces
+	// to the agent so it can retry shorter).
+	const telegramMaxChars = 4096
 	var sendErr error
-	if ctx.ReplyCalled && ctx.SendCallback != nil {
-		sendErr = ctx.SendCallback(replyText)
-	} else if ctx.StatusCallback != nil {
-		sendErr = ctx.StatusCallback(replyText)
+
+	if len(replyText) > telegramMaxChars && ctx.SendPaginatedCallback != nil {
+		// Message is too long and pagination is available — use it.
+		// Paginated sends always create a new message (can't edit a
+		// placeholder into a paginated view), so we delete the placeholder
+		// first if this is the first reply (ReplyCalled is false).
+		log.Info("reply: message exceeds limit, using pagination",
+			"chars", len(replyText), "limit", telegramMaxChars)
+
+		// Delete placeholder before sending the paginated message, but only
+		// for the first reply. Follow-up replies don't have a placeholder
+		// (it was already replaced by the first reply).
+		if !ctx.ReplyCalled && ctx.DeletePlaceholderCallback != nil {
+			if err := ctx.DeletePlaceholderCallback(); err != nil {
+				log.Warn("reply: failed to delete placeholder before pagination", "err", err)
+				// Non-fatal — proceed with pagination anyway. The orphan
+				// placeholder is annoying but not a blocker.
+			}
+		}
+
+		sendErr = ctx.SendPaginatedCallback(replyText)
+	} else {
+		// Normal delivery path — first reply edits placeholder,
+		// follow-up replies send new messages.
+		if ctx.ReplyCalled && ctx.SendCallback != nil {
+			sendErr = ctx.SendCallback(replyText)
+		} else if ctx.StatusCallback != nil {
+			sendErr = ctx.StatusCallback(replyText)
+		}
 	}
 
 	if sendErr != nil {
