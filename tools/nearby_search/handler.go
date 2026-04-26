@@ -136,8 +136,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 					DistanceText: integrate.FormatDistance(p.Distance),
 					Address:      integrate.PlaceAddress(p),
 					MapsURL:      integrate.PlaceMapsURL(p),
-					Lat:          p.Geocodes.Main.Latitude,
-					Lon:          p.Geocodes.Main.Longitude,
+					Lat:          p.Latitude,
+					Lon:          p.Longitude,
 				}
 			}
 			ctx.PlaceCards = cards

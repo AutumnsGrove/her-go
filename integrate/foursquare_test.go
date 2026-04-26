@@ -242,9 +242,7 @@ func TestPlaceAddress(t *testing.T) {
 }
 
 func TestPlaceMapsURL(t *testing.T) {
-	p := Place{}
-	p.Geocodes.Main.Latitude = 45.523
-	p.Geocodes.Main.Longitude = -122.676
+	p := Place{Latitude: 45.523, Longitude: -122.676}
 
 	got := PlaceMapsURL(p)
 	if !strings.HasPrefix(got, "https://maps.google.com/?q=") {
@@ -304,7 +302,7 @@ func TestMigrationConstants(t *testing.T) {
 	if strings.Contains(foursquareBaseURL, "/v3") {
 		t.Errorf("foursquareBaseURL = %q, should not contain /v3 (new API uses header versioning)", foursquareBaseURL)
 	}
-	if len(foursquareAPIVersion) != 8 {
-		t.Errorf("foursquareAPIVersion = %q, want YYYYMMDD format (8 digits)", foursquareAPIVersion)
+	if len(foursquareAPIVersion) != 10 {
+		t.Errorf("foursquareAPIVersion = %q, want YYYY-MM-DD format (10 chars)", foursquareAPIVersion)
 	}
 }

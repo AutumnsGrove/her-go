@@ -48,7 +48,7 @@ const foursquareBaseURL = "https://places-api.foursquare.com"
 // X-Places-Api-Version header. Foursquare uses this instead of
 // URL path versioning (/v3/ is gone). Pin to a known-good date
 // and bump deliberately when adopting new API features.
-const foursquareAPIVersion = "20250617"
+const foursquareAPIVersion = "2025-06-17"
 
 const (
 	// defaultRadiusM is the default search radius when the caller passes 0.
@@ -66,13 +66,16 @@ const (
 // ---------------------------------------------------------------------------
 
 // Place represents a single result from Foursquare place search.
+// Coordinates are top-level fields (latitude/longitude) on the new
+// Places API — the old nested geocodes.main structure is gone.
 type Place struct {
 	FSQPlaceID string          `json:"fsq_place_id"` // unique place identifier (was fsq_id on legacy API)
 	Name       string          `json:"name"`
 	Location   PlaceLocation   `json:"location"`
 	Categories []PlaceCategory `json:"categories"`
-	Distance   int             `json:"distance"` // meters from search center (only with ll param)
-	Geocodes   PlaceGeocodes   `json:"geocodes"`
+	Distance   int             `json:"distance"`  // meters from search center (only with ll param)
+	Latitude   float64         `json:"latitude"`  // place coordinates (top-level on new API)
+	Longitude  float64         `json:"longitude"`
 }
 
 // PlaceLocation holds address info for a place.
@@ -87,14 +90,6 @@ type PlaceLocation struct {
 // PlaceCategory is a Foursquare category (e.g., "Coffee Shop", "Bookstore").
 type PlaceCategory struct {
 	Name string `json:"name"`
-}
-
-// PlaceGeocodes holds coordinate data for a place.
-type PlaceGeocodes struct {
-	Main struct {
-		Latitude  float64 `json:"latitude"`
-		Longitude float64 `json:"longitude"`
-	} `json:"main"`
 }
 
 // placeSearchResponse wraps the results array from Foursquare.
@@ -134,7 +129,7 @@ func (c *FoursquareClient) SearchNearby(lat, lon float64, query string, radiusM,
 	}
 
 	// Request specific fields to keep the response lean.
-	endpoint += "&fields=fsq_place_id,name,location,categories,distance,geocodes"
+	endpoint += "&fields=fsq_place_id,name,location,categories,distance,latitude,longitude"
 
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
@@ -222,15 +217,13 @@ func PlaceAddress(p Place) string {
 	return p.Location.Address
 }
 
-// PlaceMapsURL builds a Google Maps link from a place's geocodes.
+// PlaceMapsURL builds a Google Maps link from a place's coordinates.
 // Returns empty string if no coordinates are available.
 func PlaceMapsURL(p Place) string {
-	lat := p.Geocodes.Main.Latitude
-	lon := p.Geocodes.Main.Longitude
-	if lat == 0 && lon == 0 {
+	if p.Latitude == 0 && p.Longitude == 0 {
 		return ""
 	}
-	return fmt.Sprintf("https://maps.google.com/?q=%f,%f", lat, lon)
+	return fmt.Sprintf("https://maps.google.com/?q=%f,%f", p.Latitude, p.Longitude)
 }
 
 // FormatDistance is the exported version of formatDistance — used by the
