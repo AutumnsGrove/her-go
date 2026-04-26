@@ -34,6 +34,7 @@ import (
 	_ "her/tools/get_time"
 	_ "her/tools/get_weather"
 	_ "her/tools/list_calendars"
+	_ "her/tools/nearby_search"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
 	_ "her/tools/search_books"

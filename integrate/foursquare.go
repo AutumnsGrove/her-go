@@ -1,9 +1,12 @@
-// integrate/foursquare.go — Foursquare Places API v3 client for nearby
-// place search. Returns structured results (name, address, distance,
-// categories, open/closed estimate) for queries like "coffee shops near me."
+// integrate/foursquare.go — Foursquare Places API client for nearby place
+// search. Returns structured results (name, address, distance, categories)
+// for queries like "coffee shops near me."
 //
-// Free tier: 10,000 calls/month. Auth: raw API key in Authorization header
-// (no "Bearer" prefix — Foursquare's quirk).
+// Free tier: 10,000 calls/month. Auth: Bearer token with a Service API Key
+// (generate one at https://foursquare.com/developers → Settings → Service API Keys).
+//
+// The API migrated from api.foursquare.com/v3 to places-api.foursquare.com
+// in early 2026. Date-based versioning is set via X-Places-Api-Version header.
 //
 // Docs: https://docs.foursquare.com/developer/reference/place-search
 package integrate
@@ -14,11 +17,12 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// FoursquareClient wraps the Foursquare Places API v3 for nearby search.
+// FoursquareClient wraps the Foursquare Places API for nearby search.
 type FoursquareClient struct {
 	apiKey string
 	http   *http.Client
@@ -36,7 +40,24 @@ func NewFoursquareClient(apiKey string) *FoursquareClient {
 	}
 }
 
-const foursquareBaseURL = "https://api.foursquare.com/v3"
+// foursquareBaseURL is the new Places API host. The old host
+// (api.foursquare.com/v3) returns 410 Gone as of April 2026.
+const foursquareBaseURL = "https://places-api.foursquare.com"
+
+// foursquareAPIVersion is the date-based version sent in the
+// X-Places-Api-Version header. Foursquare uses this instead of
+// URL path versioning (/v3/ is gone). Pin to a known-good date
+// and bump deliberately when adopting new API features.
+const foursquareAPIVersion = "20250617"
+
+const (
+	// defaultRadiusM is the default search radius when the caller passes 0.
+	defaultRadiusM = 5000 // 5km — reasonable walking/driving distance
+
+	// maxRadiusM is Foursquare's Places API maximum allowed search radius.
+	// Requests above this are clamped silently rather than erroring.
+	maxRadiusM = 100000 // 100km — API ceiling
+)
 
 // ---------------------------------------------------------------------------
 // Response types — only the fields we use from Foursquare's response.
@@ -46,12 +67,11 @@ const foursquareBaseURL = "https://api.foursquare.com/v3"
 
 // Place represents a single result from Foursquare place search.
 type Place struct {
-	FSQID      string          `json:"fsq_id"`
+	FSQPlaceID string          `json:"fsq_place_id"` // unique place identifier (was fsq_id on legacy API)
 	Name       string          `json:"name"`
 	Location   PlaceLocation   `json:"location"`
 	Categories []PlaceCategory `json:"categories"`
-	Distance   int             `json:"distance"`      // meters from search center (only with ll param)
-	ClosedBucket string        `json:"closed_bucket"` // "VeryLikelyOpen", "LikelyOpen", "LikelyClosed", "VeryLikelyClosed", "Unsure"
+	Distance   int             `json:"distance"` // meters from search center (only with ll param)
 	Geocodes   PlaceGeocodes   `json:"geocodes"`
 }
 
@@ -97,23 +117,24 @@ func (c *FoursquareClient) SearchNearby(lat, lon float64, query string, radiusM,
 		limit = 10
 	}
 	if radiusM <= 0 {
-		radiusM = 5000 // 5km default
+		radiusM = defaultRadiusM
 	}
-	if radiusM > 100000 {
-		radiusM = 100000 // Foursquare max
+	if radiusM > maxRadiusM {
+		radiusM = maxRadiusM
 	}
 
 	// Build the request URL with query parameters.
+	// Note: no /v3/ path segment — the new host uses date-based versioning
+	// via the X-Places-Api-Version header instead.
 	endpoint := fmt.Sprintf("%s/places/search?ll=%f,%f&radius=%d&limit=%d&sort=DISTANCE",
 		foursquareBaseURL, lat, lon, radiusM, limit)
 
 	if query != "" {
-		endpoint += "&query=" + query
+		endpoint += "&query=" + url.QueryEscape(query)
 	}
 
 	// Request specific fields to keep the response lean.
-	// These are all free-tier "Pro" fields.
-	endpoint += "&fields=fsq_id,name,location,categories,distance,closed_bucket,geocodes"
+	endpoint += "&fields=fsq_place_id,name,location,categories,distance,geocodes"
 
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
@@ -148,9 +169,11 @@ func (c *FoursquareClient) SearchNearby(lat, lon float64, query string, radiusM,
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-// FormatPlaces turns search results into readable markdown for the agent.
-// Includes distance in human-friendly units, categories, address, and
-// open/closed status.
+// FormatPlaces turns search results into a compact summary for the agent's
+// reasoning context (SearchContext). This is NOT the user-facing output —
+// the pretty place cards are built separately via tools.PlaceCard and
+// appended by the reply tool. This summary gives the agent enough info
+// to decide which places to recommend and what to say about them.
 func FormatPlaces(places []Place) string {
 	if len(places) == 0 {
 		return "No places found nearby."
@@ -158,37 +181,62 @@ func FormatPlaces(places []Place) string {
 
 	var b strings.Builder
 	for i, p := range places {
-		// Distance in human-friendly format.
 		dist := formatDistance(p.Distance)
+		cats := JoinCategories(p.Categories)
 
-		// Categories as a short label.
-		cats := ""
-		if len(p.Categories) > 0 {
-			names := make([]string, len(p.Categories))
-			for j, c := range p.Categories {
-				names[j] = c.Name
-			}
-			cats = " (" + strings.Join(names, ", ") + ")"
+		fmt.Fprintf(&b, "%d. %s", i+1, p.Name)
+		if cats != "" {
+			fmt.Fprintf(&b, " (%s)", cats)
 		}
+		fmt.Fprintf(&b, " — %s", dist)
 
-		// Open/closed indicator.
-		status := formatOpenStatus(p.ClosedBucket)
-
-		fmt.Fprintf(&b, "%d. **%s**%s%s — %s", i+1, p.Name, cats, status, dist)
-
-		// Address.
-		addr := p.Location.FormattedAddress
-		if addr == "" {
-			addr = p.Location.Address
-		}
+		addr := PlaceAddress(p)
 		if addr != "" {
-			fmt.Fprintf(&b, "\n   %s", addr)
+			fmt.Fprintf(&b, " | %s", addr)
 		}
-
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+// JoinCategories combines a place's categories into a comma-separated string.
+// Returns empty string for no categories.
+func JoinCategories(cats []PlaceCategory) string {
+	if len(cats) == 0 {
+		return ""
+	}
+	names := make([]string, len(cats))
+	for i, c := range cats {
+		names[i] = c.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// PlaceAddress returns the best available address for a place.
+// Prefers FormattedAddress, falls back to Address.
+func PlaceAddress(p Place) string {
+	if p.Location.FormattedAddress != "" {
+		return p.Location.FormattedAddress
+	}
+	return p.Location.Address
+}
+
+// PlaceMapsURL builds a Google Maps link from a place's geocodes.
+// Returns empty string if no coordinates are available.
+func PlaceMapsURL(p Place) string {
+	lat := p.Geocodes.Main.Latitude
+	lon := p.Geocodes.Main.Longitude
+	if lat == 0 && lon == 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://maps.google.com/?q=%f,%f", lat, lon)
+}
+
+// FormatDistance is the exported version of formatDistance — used by the
+// nearby_search handler when building PlaceCards.
+func FormatDistance(meters int) string {
+	return formatDistance(meters)
 }
 
 // formatDistance converts meters to a human-friendly string.
@@ -208,29 +256,15 @@ func formatDistance(meters int) string {
 	return fmt.Sprintf("%.1fkm away", km)
 }
 
-// formatOpenStatus turns Foursquare's closed_bucket into a short indicator.
-func formatOpenStatus(bucket string) string {
-	switch bucket {
-	case "VeryLikelyOpen":
-		return " [open]"
-	case "LikelyOpen":
-		return " [likely open]"
-	case "LikelyClosed":
-		return " [likely closed]"
-	case "VeryLikelyClosed":
-		return " [closed]"
-	default:
-		return "" // "Unsure" or empty — don't show anything
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// setAuth adds Foursquare authentication headers. Note: no "Bearer" prefix —
-// Foursquare expects the raw API key directly in the Authorization header.
+// setAuth adds Foursquare authentication and versioning headers.
+// The new Places API uses Bearer token auth with a Service API Key
+// and date-based versioning via X-Places-Api-Version.
 func (c *FoursquareClient) setAuth(req *http.Request) {
-	req.Header.Set("Authorization", c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("X-Places-Api-Version", foursquareAPIVersion)
 	req.Header.Set("Accept", "application/json")
 }

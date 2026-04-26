@@ -14,6 +14,8 @@
 package tools
 
 import (
+	"strings"
+
 	"her/calendar"
 	"her/config"
 	"her/embed"
@@ -79,6 +81,75 @@ type StreamCallback func(chunk string) error
 // The bot layer provides the implementation that translates these params
 // into an agent.AgentEvent and writes it to the agent event channel.
 type AgentEventCallback func(summary, directMessage string)
+
+// ---------------------------------------------------------------------------
+// PlaceCard — a pre-formatted place result ready for deterministic rendering.
+//
+// Built by nearby_search from Foursquare (or Tavily fallback) results.
+// The reply tool appends these as a block after the chat model's response,
+// so the user gets reliable formatting (address, distance, Maps link)
+// without relying on the LLM to reproduce structured data accurately.
+// ---------------------------------------------------------------------------
+
+// PlaceCard holds everything needed to render a single place result.
+// All fields are pre-computed by the nearby_search handler — no
+// downstream code needs to do math or URL construction.
+type PlaceCard struct {
+	Name         string  // "Blue Bottle Coffee"
+	Category     string  // "Coffee Shop" (joined if multiple)
+	DistanceText string  // "350m away" or "1.2km (~15 min walk)"
+	Address      string  // "123 Main St, Portland, OR"
+	MapsURL      string  // "https://maps.google.com/?q=45.523,-122.676"
+	Lat          float64 // raw coordinates (for future use)
+	Lon          float64
+}
+
+// FormatPlaceCards renders a slice of PlaceCards into a Telegram-ready
+// block that gets appended after the chat model's response. Uses a
+// simple text format with emoji markers — deterministic, no LLM needed.
+//
+// Returns empty string if there are no cards (so the reply tool can
+// skip appending without an extra check).
+func FormatPlaceCards(cards []PlaceCard) string {
+	if len(cards) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n───\n")
+	for _, c := range cards {
+		// Name + category.
+		b.WriteString("📍 ")
+		b.WriteString(c.Name)
+		if c.Category != "" {
+			b.WriteString(" (")
+			b.WriteString(c.Category)
+			b.WriteString(")")
+		}
+		// Distance.
+		if c.DistanceText != "" {
+			b.WriteString(" — ")
+			b.WriteString(c.DistanceText)
+		}
+		b.WriteString("\n")
+
+		// Address on its own line, indented.
+		if c.Address != "" {
+			b.WriteString("   ")
+			b.WriteString(c.Address)
+			b.WriteString("\n")
+		}
+
+		// Maps link on its own line, indented.
+		if c.MapsURL != "" {
+			b.WriteString("   → ")
+			b.WriteString(c.MapsURL)
+			b.WriteString("\n")
+		}
+	}
+
+	return b.String()
+}
 
 // ---------------------------------------------------------------------------
 // Context — the dependency bundle every tool handler receives.
@@ -184,6 +255,13 @@ type Context struct {
 	// SearchContext accumulates search results, book data, and URL
 	// content across tool calls. Included in the reply prompt.
 	SearchContext string
+
+	// PlaceCards holds pre-formatted place cards from nearby_search.
+	// The reply tool appends these as a structured block after the chat
+	// model's response — deterministic formatting that the LLM can't
+	// mangle. Each card includes name, category, distance, address,
+	// and a clickable Google Maps link, all pre-computed.
+	PlaceCards []PlaceCard
 
 	// --- Image / OCR ---
 

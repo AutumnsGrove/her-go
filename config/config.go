@@ -37,6 +37,7 @@ type Config struct {
 	Mood          MoodConfig          `yaml:"mood"`
 	Embed      EmbedConfig      `yaml:"embed"`
 	Search     SearchConfig     `yaml:"search"`
+	Foursquare FoursquareConfig `yaml:"foursquare"`
 	Scrub      ScrubConfig      `yaml:"scrub"`
 	Persona    PersonaConfig    `yaml:"persona"`
 	Voice      VoiceConfig      `yaml:"voice"`
@@ -331,6 +332,15 @@ type EmbedConfig struct {
 type SearchConfig struct {
 	TavilyAPIKey  string `yaml:"tavily_api_key"`
 	TavilyBaseURL string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
+}
+
+// FoursquareConfig holds credentials for the Foursquare Places API v3.
+// Used by the nearby_search tool for structured place search (distance,
+// categories, open/closed status). Free tier: 10,000 calls/month.
+// Empty api_key disables the integration — nearby_search falls back
+// to Tavily web search.
+type FoursquareConfig struct {
+	APIKey string `yaml:"api_key"`
 }
 
 // PersonaConfig controls the persona evolution system.
@@ -684,6 +694,7 @@ func (c *Config) ExportEnv() {
 	// as skills declare new env requirements in their skill.md.
 	exports := map[string]string{
 		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
+		"FOURSQUARE_API_KEY": c.Foursquare.APIKey,
 		"OPENROUTER_API_KEY": c.LLM.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}
