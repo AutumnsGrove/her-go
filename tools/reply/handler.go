@@ -422,6 +422,23 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// we swap those back to the real values before the user sees it.
 	replyText := scrub.Deanonymize(resp.Content, ctx.ScrubVault)
 
+	// Append place cards if nearby_search populated them. These are
+	// pre-formatted with addresses, distances, and Maps links — the
+	// chat model wrote the prose, and this block adds the reliable
+	// structured data below it.
+	//
+	// TODO: When the combined reply exceeds Telegram's 4096 char limit,
+	// this should flow into paginated messages (page 1 / page 2 with
+	// inline buttons). For now, cards are appended as-is — the existing
+	// length guard upstream keeps chat model prose short enough that
+	// typical place card blocks (5 results) fit within the limit.
+	if cardBlock := tools.FormatPlaceCards(ctx.PlaceCards); cardBlock != "" {
+		replyText += cardBlock
+		// Clear cards after use so follow-up replies in the same turn
+		// don't re-append them.
+		ctx.PlaceCards = nil
+	}
+
 	// Duplicate reply guard — if the agent calls reply twice with the
 	// same text, skip the second one. Some models loop think→reply→think→reply
 	// with identical content.

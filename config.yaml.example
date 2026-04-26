@@ -74,6 +74,9 @@ search:
   tavily_api_key: "${TAVILY_API_KEY}"
   tavily_base_url: "https://api.tavily.com"  # default, rarely needs changing
 
+foursquare:
+  api_key: "${FOURSQUARE_API_KEY}"  # Foursquare Places API (Service API Key). Free tier: 10k calls/month. Generate at https://foursquare.com/developers → Settings → Service API Keys
+
 mood_agent:
   # Kimi K2 via OpenRouter → Groq. Structured-output model —
   # returns JSON per the mood schema. Empty model disables the

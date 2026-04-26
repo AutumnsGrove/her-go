@@ -1,0 +1,32 @@
+name: nearby_search
+agent: main
+description: >-
+  Search for nearby places — restaurants, coffee shops, pharmacies, parks, etc.
+  Uses Foursquare Places API for structured results with distance, categories,
+  and open/closed status. Falls back to web search if Foursquare isn't configured.
+  Pass a location string (e.g., "downtown Portland") or omit to use {{user}}'s
+  most recent known location (from location_history or saved home location).
+  Use when {{user}} asks where to find something nearby, or asks for
+  recommendations for local businesses or points of interest.
+hot: false
+category: context
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: "What to search for (e.g., 'coffee shop', 'pharmacy', 'bookstore')"
+    location:
+      type: string
+      description: "Optional location to search near. Omit to use the most recent known location."
+    radius_km:
+      type: number
+      description: "Search radius in kilometers (default 5, max 100)"
+    limit:
+      type: integer
+      description: "Max results to return (default 5, max 50)"
+  required:
+    - query
+trace:
+  emoji: "📍"
+  format: "\"{{.query}}\"{{if .location}} near {{.location | escape}}{{end}} → {{.Result | truncate 80 | escape}}"
