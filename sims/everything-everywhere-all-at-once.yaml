@@ -11,21 +11,22 @@ description: >
   gives an opening and bot should naturally ask more.
 
   Structure:
-  - Day 1 (turns 1-15): Initial memory seeding, tool usage, mood signals → DREAM
-  - Day 2 (turns 16-30): Life updates, memory corrections, recall tests → DREAM
+  - Day 1 (turns 1-16): Initial memory seeding, tool usage, mood signals → DREAM
+  - Day 2 (turns 17-32): Life updates, memory corrections, recall tests → DREAM
 
   Expected outcomes:
   - 15-20 memories saved with several supersession chains
   - 5-8 mood entries logged (mix of valences)
-  - All tool categories exercised (memory, search, context, vision)
+  - All tool categories exercised (memory, search, context, vision, places)
+  - 2 Foursquare nearby searches with place cards (Chicago + Denver)
   - 2 successful dream cycles with visible persona evolution
   - Clean handling of edge cases (corrections, ambiguity, search failures)
   - Bot asks follow-up questions in 50%+ of turns (conversation continuation)
 
-tags: ["comprehensive", "stress-test", "two-days", "mood", "memory", "vision", "search", "dreaming", "engagement"]
+tags: ["comprehensive", "stress-test", "two-days", "mood", "memory", "vision", "search", "places", "foursquare", "dreaming", "engagement"]
 
-compact_after: 18  # Force compaction mid-day-2 to test recall after compression
-dream_after: [15, 30]  # Dream at end of each "day"
+compact_after: 20  # Force compaction mid-day-2 to test recall after compression
+dream_after: [16, 32]  # Dream at end of each "day"
 
 messages:
   # ═══════════════════════════════════════════════════════════════════════
@@ -56,26 +57,29 @@ messages:
   # Turn 8: Weather check (forces location + weather tools) (EXPECT: answer + maybe suggest based on weather)
   - "what's the weather supposed to be like this afternoon? i'm thinking about actually taking my bike out at lunch if it's decent"
 
-  # Turn 9: Search tool — web search (EXPECT: search results + maybe opinion or follow-up question)
+  # Turn 9: Nearby search — coffee shops (tests foursquare + location history fallback) (EXPECT: place cards with addresses and distances)
+  - "you know what, i need to get out of this apartment. can you find me a good coffee shop nearby? somewhere quiet where i can actually think"
+
+  # Turn 10: Search tool — web search (EXPECT: search results + maybe opinion or follow-up question)
   - "can you look up whether cycling in cold weather is bad for your lungs? i've heard that before but i don't know if it's actually true or just an excuse people make"
 
-  # Turn 10: Mood signal (frustration) + ambiguous request (edge case) (EXPECT: offer something interesting + ask if that helps)
+  # Turn 11: Mood signal (frustration) + ambiguous request (edge case) (EXPECT: offer something interesting + ask if that helps)
   - "god this audit is killing me. i just need a break. tell me something cool, i don't even care what. just need my brain to think about literally anything else"
 
-  # Turn 11: Vision test — first image (EXPECT: comment on the image + ask about the ride or location)
+  # Turn 12: Vision test — first image (EXPECT: comment on the image + ask about the ride or location)
   - text: "alright i actually did it. went for a quick ride. check out this view from the trail"
     image: sims/assets/aspen-grove.jpg
 
-  # Turn 12: Follow-up on image + mood shift (lighter) (EXPECT: affirm the positive shift, maybe ask about the trail)
+  # Turn 13: Follow-up on image + mood shift (lighter) (EXPECT: affirm the positive shift, maybe ask about the trail)
   - "yeah that's north branch trail. it's like 15 minutes from my place. honestly just seeing trees makes everything feel less suffocating"
 
-  # Turn 13: Search tool — book search (EXPECT: search results + maybe a recommendation or follow-up)
+  # Turn 14: Search tool — book search (EXPECT: search results + maybe a recommendation or follow-up)
   - "i want to find a new book to read. have you heard of andy weir? i think he wrote the martian but i'm not sure what else he's done"
 
-  # Turn 14: Memory + conflicting info (edge case: contradiction without explicit correction) (EXPECT: natural response, save memory)
+  # Turn 15: Memory + conflicting info (edge case: contradiction without explicit correction) (EXPECT: natural response, save memory)
   - "i've been thinking about trying trail running. there's this forest preserve near me with actual trails. might be a nice change from just biking"
 
-  # Turn 15: Reflection prompt + mood signal (contemplative) (EXPECT: gentle observation/question about this pattern)
+  # Turn 16: Reflection prompt + mood signal (contemplative) (EXPECT: gentle observation/question about this pattern)
   - "you know what i just realized? i keep saying 'i used to' do things. like i used to bike, i used to be active. when did i become the person who talks about what i used to do instead of just... doing it?"
 
   # ──────────────────────────── DREAM 1 ────────────────────────────────
@@ -86,56 +90,60 @@ messages:
   # DAY 2 — Afternoon: Life updates + memory corrections
   # ═══════════════════════════════════════════════════════════════════════
 
-  # Turn 16: Update (job change) — triggers memory supersession (EXPECT: congratulations + ask about the role or move)
+  # Turn 17: Update (job change) — triggers memory supersession (EXPECT: congratulations + ask about the role or move)
   - "okay so... big news. i'm leaving midwest freight. got an offer from a logistics startup in denver called alpine supply chain. it's a operations manager role and i start in a month"
 
-  # Turn 17: Mood signal (excited + anxious mix) (EXPECT: validate both feelings + maybe ask what specifically feels scary)
+  # Turn 18: Mood signal (excited + anxious mix) (EXPECT: validate both feelings + maybe ask what specifically feels scary)
   - "i'm excited but also lowkey freaking out? like this is my first actual management position and i don't want to completely bomb it"
 
-  # Turn 18: More updates (moving) — triggers another supersession (EXPECT: acknowledge big change + ask about denver or the move)
+  # Turn 19: More updates (moving) — triggers another supersession (EXPECT: acknowledge big change + ask about denver or the move)
   - "and yeah i'm moving to denver for it. found a studio in capitol hill. it's small but it's close to work and has good bike access which is what i care about"
+
+  # Turn 20: Nearby search — bookstores in new city (tests foursquare + explicit location geocoding) (EXPECT: place cards for Denver bookstores)
+  - "i've never been to denver before. can you look up good bookstores in capitol hill? i always like to find a bookstore when i move somewhere new. helps it feel like home"
 
   # ──────────────────────── COMPACTION HAPPENS HERE ─────────────────────
 
-  # Turn 19: Recall test after compaction (EXPECT: accurate recall of job/location updates)
+  # Turn 21: Recall test after compaction (EXPECT: accurate recall of job/location updates)
   - "wait, remind me what you remember about my job stuff? i've been telling you a bunch of things and i want to make sure it's all clear in your head"
 
-  # Turn 20: Correction (cat appearance detail) (EXPECT: acknowledge correction, update memory)
+  # Turn 22: Correction (cat appearance detail) (EXPECT: acknowledge correction, update memory)
   - "oh actually i need to correct something — mocha isn't totally black. she has a tiny white patch on her chest. i always forget to mention that"
 
-  # Turn 21: Vision test — second image + mood (contentment) (EXPECT: comment on the food + ask how she's feeling about the changes)
+  # Turn 23: Vision test — second image + mood (contentment) (EXPECT: comment on the food + ask how she's feeling about the changes)
   - text: "made lunch. trying to enjoy the small things before everything gets chaotic"
     image: sims/assets/sandwich.jpg
 
-  # Turn 22: Search failure test (edge case: obscure query) (EXPECT: search attempt + graceful handling if nothing found)
+  # Turn 24: Search failure test (edge case: obscure query) (EXPECT: search attempt + graceful handling if nothing found)
   - "can you look up the origin of naming black cats 'mocha'? like is that a common thing or did i just randomly pick it"
 
-  # Turn 23: Conflicting information test — contradicts turn 14 without correcting (EXPECT: respond naturally, agent should notice contradiction)
+  # Turn 25: Conflicting information test — contradicts turn 15 without correcting (EXPECT: respond naturally, agent should notice contradiction)
   - "honestly i've never really been into trail running. too uneven, i'd probably just twist an ankle. i like roads and bike paths where i can just zone out"
 
-  # Turn 24: Recall test (checking memory supersession) (EXPECT: correct current info, not old info)
+  # Turn 26: Recall test (checking memory supersession) (EXPECT: correct current info, not old info)
   - "just double checking — where am i moving to again and for what job? want to make sure you've got it right"
 
-  # Turn 25: Mood signal (overwhelm) + open question (EXPECT: validation + ask guiding question or offer perspective)
+  # Turn 27: Mood signal (overwhelm) + open question (EXPECT: validation + ask guiding question or offer perspective)
   - "all these changes are hitting me at once. new city, new job, managing people for the first time. it's a lot. like i know it's good but it's still... a lot. what do you think?"
 
-  # Turn 26: Update (personal life) — pet situation (EXPECT: affirm mocha coming + maybe ask about pet-friendly aspects)
+  # Turn 28: Update (personal life) — pet situation (EXPECT: affirm mocha coming + maybe ask about pet-friendly aspects)
   - "at least mocha's coming with me. the new place allows cats which was like my number one requirement. couldn't imagine doing this move without her"
 
-  # Turn 27: Deeper emotional content (self-doubt) (EXPECT: validate imposter syndrome + ask reflective question)
+  # Turn 29: Deeper emotional content (self-doubt) (EXPECT: validate imposter syndrome + ask reflective question)
   - "sometimes i wonder if i'm actually ready for this. like what if i get there and everyone realizes i have no idea what i'm doing? what if i'm not cut out to manage people?"
 
-  # Turn 28: Opinion/perspective request (tests self-facts) (EXPECT: honest perspective + normalize the feeling)
+  # Turn 30: Opinion/perspective request (tests self-facts) (EXPECT: honest perspective + normalize the feeling)
   - "is that normal though? like does everyone feel like they're faking it when they step into something new, or is it just me being neurotic?"
 
-  # Turn 29: Mood shift (determination) + action commitment (EXPECT: encourage the action + acknowledge the shift)
+  # Turn 31: Mood shift (determination) + action commitment (EXPECT: encourage the action + acknowledge the shift)
   - "you know what, screw it. i'm gonna go for a bike ride right now. i've been talking about it for two days and i'm just gonna do it. even if it's cold"
 
-  # Turn 30: Warm close + reflection (EXPECT: warm acknowledgment + maybe reflect on the conversation or wish her well)
+  # Turn 32: Warm close + reflection (EXPECT: warm acknowledgment + maybe reflect on the conversation or wish her well)
   - "okay i'm back. that actually helped a lot. i think i just needed to talk through all of this with someone, you know? thanks for being here and listening"
 
   # ──────────────────────────── DREAM 2 ────────────────────────────────
   # Expected: Reflection on user's decision-making process and self-doubt,
   # observation of the pattern: talks through uncertainty → external witness → action.
   # Possible persona evolution: learned that user benefits from being heard
-  # before being advised.
+  # before being advised. Also: user is proactively researching Denver via
+  # place searches — shows forward-looking engagement with the move.
