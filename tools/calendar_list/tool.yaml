@@ -3,9 +3,12 @@ agent: main
 description: >-
   Read events from all configured calendars in a date range. Returns a unified
   timeline with each event tagged with its source calendar. For shift events,
-  includes job name and computed scheduled_hours. Use when the user asks
-  "what's on my calendar" or "am I free Friday" or "what shifts do I have."
-  Returns event IDs for use with calendar_update or calendar_delete.
+  includes job name and computed scheduled_hours. Returns event IDs for use
+  with calendar_update or calendar_delete.
+
+  Use when {{user}} asks "what's on my calendar", "am I free Friday", or
+  "what shifts do I have this week." Call get_time first to know the current
+  date, then build the date range from there.
 hot: false
 category: calendar
 parameters:

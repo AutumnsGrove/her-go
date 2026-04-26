@@ -5,6 +5,10 @@ description: >-
   param per event to auto-fill location and position from config, store the
   shift in the DB, and sync to Apple Calendar. Returns event IDs for use with
   calendar_update or calendar_delete.
+
+  When {{user}} pastes a schedule or asks to create events, call get_time first
+  to know the current date/timezone, then create events with proper ISO 8601
+  timestamps including timezone offsets.
 hot: false
 category: calendar
 parameters:
