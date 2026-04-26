@@ -21,13 +21,15 @@ import (
 	"strconv"
 	"strings"
 
+	"her/tools"
+
 	tele "gopkg.in/telebot.v4"
 )
 
-// maxTelegramLen is Telegram's maximum message length in characters.
-// We leave a small buffer for the page footer ("Page X of Y") and
-// any HTML overhead from the navigation text.
-const maxTelegramLen = 4000
+// pageFooterBuffer is the character budget reserved for the "Page X of Y"
+// footer and any HTML overhead from navigation text. Subtracted from
+// TelegramMaxMessageLen to get the usable content length per page.
+const pageFooterBuffer = 96
 
 // pageSession holds all the pages for a single paginated view.
 // Stored in Bot.pageSessions, keyed by chat ID.
@@ -35,21 +37,158 @@ type pageSession struct {
 	Pages []string // pre-split pages of text
 }
 
+// paginateWithBlocks splits text into pages, respecting block boundaries
+// for place cards. Place cards (from nearby_search) start with "\n\n───\n"
+// and contain multiple entries starting with "📍". This function ensures
+// we never split a place card mid-entry.
+//
+// Returns a slice of page strings. If the text fits in one page, you get
+// a single-element slice.
+func paginateWithBlocks(text string, maxLen int) []string {
+	// Check if this text contains place cards.
+	const placeCardSeparator = "\n\n───\n"
+	sepIdx := strings.Index(text, placeCardSeparator)
+
+	if sepIdx == -1 {
+		// No place cards — use line-based pagination.
+		return paginateLines(text, maxLen)
+	}
+
+	// Split into chat response + place card block.
+	chatResponse := text[:sepIdx]
+	placeBlock := text[sepIdx:] // includes the separator
+
+	// Split place cards on the 📍 marker. Each card is everything from
+	// one 📍 to the next (or end of string). We keep the 📍 with its card.
+	const cardMarker = "\n📍"
+	var cards []string
+
+	// Find the separator line first.
+	separatorEnd := strings.Index(placeBlock, cardMarker)
+	if separatorEnd == -1 {
+		// Malformed — no cards found. Fall back to line pagination.
+		return paginateLines(text, maxLen)
+	}
+
+	separator := placeBlock[:separatorEnd] // "\n\n───\n"
+	remainingCards := placeBlock[separatorEnd:]
+
+	// Split on card boundaries.
+	parts := strings.Split(remainingCards, cardMarker)
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		// Re-add the marker (except for empty first element from split).
+		if i == 0 {
+			cards = append(cards, part)
+		} else {
+			cards = append(cards, cardMarker+part)
+		}
+	}
+
+	// Now build pages intelligently.
+	var pages []string
+
+	// Check if everything fits on one page.
+	totalLen := len(chatResponse) + len(separator) + len(strings.Join(cards, ""))
+	if totalLen <= maxLen {
+		// Fast path: everything fits together.
+		return []string{chatResponse + separator + strings.Join(cards, "")}
+	}
+
+	// Need to paginate. Start with chat response.
+	if len(chatResponse) > maxLen {
+		// Chat response itself needs multiple pages.
+		chatPages := paginateLines(chatResponse, maxLen)
+		pages = append(pages, chatPages...)
+	} else if chatResponse != "" {
+		pages = append(pages, chatResponse)
+	}
+
+	// Now add place cards. Try to pack multiple cards per page.
+	var currentPage strings.Builder
+	currentPage.WriteString(separator) // Start with the separator
+
+	for _, card := range cards {
+		// Would adding this card exceed the limit?
+		testLen := currentPage.Len() + len(card)
+		if testLen > maxLen {
+			// Current page is full — flush it and start a new one.
+			if currentPage.Len() > len(separator) {
+				// Only flush if we have content beyond the separator.
+				pages = append(pages, currentPage.String())
+				currentPage.Reset()
+				currentPage.WriteString(separator)
+			}
+			// If the card itself is too long, put it on its own page.
+			if len(separator)+len(card) > maxLen {
+				// This single card is too big. Add it anyway (Telegram
+				// will truncate, but that's better than dropping it).
+				pages = append(pages, separator+card)
+				continue
+			}
+		}
+		currentPage.WriteString(card)
+	}
+
+	// Don't forget the last page.
+	if currentPage.Len() > len(separator) {
+		pages = append(pages, currentPage.String())
+	}
+
+	return pages
+}
+
 // paginateLines splits text into pages that fit within maxLen.
 // It splits on newline boundaries so we never break a line (or HTML
 // tag) in the middle. If a single line exceeds maxLen on its own,
-// it gets its own page (Telegram will truncate it, but that's an
-// edge case — facts are capped at 200 chars).
+// it's force-split at the character boundary (edge case for unstructured text).
 //
 // Returns a slice of page strings. If the text fits in one page,
 // you get a single-element slice.
 func paginateLines(text string, maxLen int) []string {
+	// Handle edge case: text with no newlines that's too long.
+	if !strings.Contains(text, "\n") && len(text) > maxLen {
+		// Force-split on character boundaries.
+		var pages []string
+		for len(text) > maxLen {
+			pages = append(pages, text[:maxLen])
+			text = text[maxLen:]
+		}
+		if len(text) > 0 {
+			pages = append(pages, text)
+		}
+		return pages
+	}
+
 	lines := strings.Split(text, "\n")
 
 	var pages []string
 	var current strings.Builder
 
 	for _, line := range lines {
+		// If this single line exceeds maxLen, we need to split it.
+		if len(line) > maxLen {
+			// Flush any accumulated content first.
+			if current.Len() > 0 {
+				pages = append(pages, current.String())
+				current.Reset()
+			}
+
+			// Force-split this long line into chunks.
+			for len(line) > maxLen {
+				pages = append(pages, line[:maxLen])
+				line = line[maxLen:]
+			}
+
+			// Add the remainder to current (will be flushed later or at end).
+			if len(line) > 0 {
+				current.WriteString(line)
+			}
+			continue
+		}
+
 		// Would adding this line exceed the limit?
 		// +1 for the newline character we'd add.
 		if current.Len() > 0 && current.Len()+len(line)+1 > maxLen {
@@ -125,9 +264,12 @@ func pageMarkup(pageIdx, totalPages int) *tele.ReplyMarkup {
 // can serve subsequent pages.
 //
 // This is the main entry point — any handler that might produce long
-// output can call this instead of c.Send().
+// output can call this instead of c.Send(). Uses block-aware splitting
+// to avoid breaking place cards mid-entry.
 func (b *Bot) sendPaginated(c tele.Context, text string) error {
-	pages := paginateLines(text, maxTelegramLen)
+	// Calculate usable content length: Telegram's limit minus footer buffer.
+	maxContentLen := tools.TelegramMaxMessageLen - pageFooterBuffer
+	pages := paginateWithBlocks(text, maxContentLen)
 
 	// Fast path: fits in one message, no pagination needed.
 	if len(pages) == 1 {

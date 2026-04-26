@@ -248,6 +248,14 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 		streamCallback, stopStream = b.makeStreamCallback(c, func() *tele.Message { return placeholder })
 	}
 
+	// sendPaginatedCallback wraps the bot's pagination system for the
+	// reply tool. When a message exceeds Telegram's 4096-char limit,
+	// this splits it into pages with ◀/▶ navigation buttons. The pages
+	// are stored in Bot.pageSessions and served by handlePageCallback.
+	sendPaginatedCallback := func(text string) error {
+		return b.sendPaginated(c, text)
+	}
+
 	// --- Run the agent ---
 	params := b.baseRunParams()
 	params.Tracker = tracker
@@ -262,6 +270,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	params.SendConfirmCallback = sendConfirmCallback
 	params.TTSCallback = ttsCallback
 	params.StreamCallback = streamCallback
+	params.SendPaginatedCallback = sendPaginatedCallback
 	params.TraceCallback = traceCallback
 	params.MemoryTraceCallback = memoryTraceCallback
 	params.ImageBase64 = input.ImageBase64
