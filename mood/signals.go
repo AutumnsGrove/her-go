@@ -148,8 +148,8 @@ var affectWords = []string{
 	"resentful", "restless", "rough", "sad", "scared",
 	"shattered", "spooked", "stressed", "stuck", "sucks",
 	"suffering", "terrible", "terrified", "terrifying",
-	"tired", "trapped", "uneasy", "wiped", "worried",
-	"worthless", "wretched",
+	"tired", "trapped", "uneasy", "unhappy", "upset",
+	"wiped", "worried", "worthless", "wretched",
 
 	// Pleasant — high valence
 	"adored", "alive", "amazing", "awesome", "blessed",

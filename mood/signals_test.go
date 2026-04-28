@@ -69,19 +69,26 @@ func TestScoreSignals_IgnoresAssistantContent(t *testing.T) {
 	}
 }
 
-// TestScoreSignals_WordBoundary ensures "happy" doesn't match
-// "unhappy" (otherwise the sign of the signal would flip).
+// TestScoreSignals_WordBoundary ensures "happy" doesn't match inside
+// "unhappy" (otherwise the sign of the signal would flip). Note:
+// "unhappy" IS in our affect word list, so it gets its own match —
+// the test verifies that "happy" doesn't ALSO fire on top of it.
 func TestScoreSignals_WordBoundary(t *testing.T) {
-	// "unhappy" is not in our bare affect word list — but "happy"
-	// is. We want "unhappy" to NOT hit the "happy" matcher.
 	turns := []Turn{{Role: "user", ScrubbedContent: "I feel unhappy"}}
 	got := ScoreSignals(turns)
 
-	// First-person framing hits (0.50) but bare "happy" word should
-	// NOT (because it's embedded in "unhappy"). So total = 0.50.
-	want := 0.50
+	// First-person framing (0.50) + "unhappy" as its own affect word
+	// (0.25) = 0.75. The important thing: "happy" (positive) must
+	// NOT also match — containsWord("unhappy", "happy") should be false.
+	want := 0.75
 	if math.Abs(got-want) > 0.001 {
-		t.Errorf("ScoreSignals = %v, want %v (unhappy should not match happy)", got, want)
+		t.Errorf("ScoreSignals = %v, want %v", got, want)
+	}
+
+	// Verify the boundary logic directly: "happy" must not match
+	// inside "unhappy".
+	if containsWord("unhappy", "happy") {
+		t.Error("containsWord(\"unhappy\", \"happy\") = true, want false")
 	}
 }
 
