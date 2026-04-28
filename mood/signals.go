@@ -110,8 +110,11 @@ var firstPersonAffect = []string{
 	"its like ",
 	"everything is ",
 	"everything feels ",
+	"everything just ", // filler word between "everything" and "feels/is"
 	"things are ",
 	"things feel ",
+	"just feels ",  // "everything just feels gray", "it just feels wrong"
+	"just feel ",   // "i just feel like"
 
 	// Casual / colloquial framing
 	"feeling ",     // "feeling pretty good about"
@@ -132,8 +135,9 @@ var affectWords = []string{
 	"bitter", "blue", "broken", "crushed", "dead",
 	"defeated", "depressed", "destroyed", "disappointed",
 	"discouraged", "down", "drained", "dread", "embarrassed",
-	"empty", "exhausted", "frustrated", "furious", "grieving",
-	"guilty", "heavy", "helpless", "hopeless", "hurt",
+	"empty", "exhausted", "flat", "frustrated", "furious",
+	"gray", "grey", "grieving", "guilty", "heavy",
+	"helpless", "hopeless", "hurt",
 	"irritated", "jealous", "lonely", "lost", "miserable",
 	"numb", "off", "overwhelmed", "panicked", "pissed",
 	"rough", "sad", "scared", "shattered", "spooked",
@@ -141,15 +145,15 @@ var affectWords = []string{
 	"tired", "trapped", "wiped", "worried", "worthless",
 
 	// Pleasant — high valence
-	"alive", "amazing", "blessed", "blissful", "brave",
+	"alive", "amazing", "blessed", "blissful", "brave", "bright",
 	"buzzing", "cheerful", "cozy", "delighted", "ecstatic",
 	"elated", "energized", "excited", "fantastic", "free",
 	"fulfilled", "giddy", "glad", "glowing", "grateful",
 	"great", "happy", "hopeful", "hyped", "incredible",
 	"inspired", "joyful", "loved", "motivated", "overjoyed",
 	"peaceful", "proud", "pumped", "radiant", "refreshed",
-	"relieved", "stoked", "thankful", "thrilled", "upbeat",
-	"vibrant", "wonderful",
+	"relieved", "stoked", "thankful", "thrilled", "unreal",
+	"upbeat", "vibrant", "wonderful",
 
 	// Neutral / mixed
 	"calm", "chill", "confident", "content", "fine",
