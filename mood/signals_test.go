@@ -200,6 +200,34 @@ func TestScoreSignals_SimRegressions(t *testing.T) {
 	}
 }
 
+// TestScoreSignals_GenderIdentity verifies that gender/identity
+// experience words carry mood signal. These words almost always imply
+// strong emotion when used about oneself.
+func TestScoreSignals_GenderIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		min  float64
+	}{
+		{"dysphoria direct", "dysphoria is really bad today", 0.25},
+		{"misgendered", "got misgendered at the pharmacy again", 0.25},
+		{"deadnamed", "my mom deadnamed me in front of everyone", 0.25},
+		{"gender euphoria", "i'm feeling so euphoric after that haircut", 0.75},
+		{"affirmed", "she used my name and it felt so affirmed and seen", 0.25},
+		{"invalidated", "the whole appointment felt invalidated", 0.25},
+		{"erased", "it's like being erased over and over", 0.50},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got < tc.min {
+				t.Errorf("ScoreSignals(%q) = %.2f, want >= %.2f", tc.text, got, tc.min)
+			}
+		})
+	}
+}
+
 // TestScoreSignals_NeutralStillLow makes sure expanded phrases don't
 // cause false positives on genuinely non-emotional messages.
 func TestScoreSignals_NeutralStillLow(t *testing.T) {
