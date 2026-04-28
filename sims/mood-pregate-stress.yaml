@@ -1,0 +1,59 @@
+name: "Mood Pre-Gate Stress Test"
+description: >-
+  Stress-tests the mood agent's heuristic pre-gate with messages that have
+  clear emotional content but use maximally indirect language: metaphors,
+  body-state descriptions, rhetorical questions, slang, sarcasm, and
+  understated joy. Covers both valence extremes. Every emotional message
+  SHOULD pass the pre-gate — if any get dropped_no_signal, the vocabulary
+  has a gap. Control group at the end should still be correctly dropped.
+tags: ["mood", "pre-gate", "signals", "stress-test"]
+
+messages:
+  # --- Block 1: Indirect negative (zero explicit emotion words) ---
+
+  # Pure body-state description. No "I feel" framing, no affect words.
+  # The mood is 100% implied by the physical description.
+  - "woke up at 6, laid there til noon. couldn't figure out why i should get up"
+
+  # Weather-as-mood metaphor, filler words breaking phrase patterns
+  - "three straight days of rain and honestly everything just feels... gray. like the sky leaked into my head"
+
+  # Sarcasm masking frustration — surface reads as humor, subtext is defeat
+  - "love how i can work two jobs and still not afford to exist. really cool system we've got here"
+
+  # Pure behavioral description of dissociation, no emotion vocabulary
+  - "sat in the parking lot for forty minutes after work. engine off. just sat there. didn't even look at my phone"
+
+  # --- Block 2: Indirect positive (no "happy/excited/grateful") ---
+
+  # Physical sensation of joy, no affect labels
+  - "walked outside and the air smelled like cut grass and something just... unlocked? i took the long way home on purpose"
+
+  # Understated milestone, buried emotional significance
+  - "got the keys today. actual keys to an actual apartment. held them in my hand for like five minutes just staring"
+
+  # Enthusiasm expressed entirely through behavior description
+  - "i've been up since 4am working on this and i don't even want to stop. when was the last time that happened?"
+
+  # Connection/belonging expressed through someone else's action
+  - "she drove forty minutes just to drop off soup because i mentioned my throat hurt. didn't even come inside, just left it on the porch"
+
+  # --- Block 3: Mixed / ambiguous / shifting ---
+
+  # Bittersweet — the positive memory amplifies the current loss
+  - "found an old voicemail from grandma on my phone. her voice sounds exactly the same. i played it eleven times"
+
+  # Frustration that reads as a neutral observation on the surface
+  - "another appointment rescheduled. third time this month. starting to wonder if they're just hoping i stop calling"
+
+  # Emotional overwhelm presented as confusion, not sadness
+  - "i don't even know what i'm feeling right now? it's not bad and it's not good it's just... a lot. like my chest is full of static"
+
+  # --- Block 4: Control group (should be DROPPED) ---
+  # Pure factual/transactional — zero emotional signal.
+
+  - "do you know if costco is open on memorial day?"
+
+  - "what's the syntax for a multiline string in go again?"
+
+  - "remind me to buy cat food before thursday"

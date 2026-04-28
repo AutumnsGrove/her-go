@@ -273,6 +273,7 @@ type simTurnResult struct {
 	userMsg       string
 	botReply      string
 	followUpReply string // from EventInboxReady — empty if no background task reported back
+	moodVerdict   string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
 	elapsed       time.Duration
 }
 
@@ -1103,21 +1104,26 @@ func runSim(cmd *cobra.Command, args []string) error {
 		// agent is best-effort.
 		if moodRunner != nil {
 			moodRes := moodRunner.RunForConversation(context.Background(), conversationID)
+			var verdict string
 			switch moodRes.Action {
 			case mood.ActionAutoLogged:
-				fmt.Printf("       [mood] logged: valence=%d labels=%v conf=%.2f\n",
+				verdict = fmt.Sprintf("logged: valence=%d labels=%v conf=%.2f",
 					moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
 			case mood.ActionUpdated:
-				fmt.Printf("       [mood] updated #%d: valence=%d labels=%v conf=%.2f\n",
+				verdict = fmt.Sprintf("updated #%d: valence=%d labels=%v conf=%.2f",
 					moodRes.Entry.ID, moodRes.Entry.Valence, moodRes.Entry.Labels, moodRes.Confidence)
 			case mood.ActionDroppedLow, mood.ActionDroppedNoSignal, mood.ActionDroppedVocab:
-				fmt.Printf("       [mood] dropped: %s (%s)\n", moodRes.Action, moodRes.Reason)
+				verdict = fmt.Sprintf("dropped: %s (%s)", moodRes.Action, moodRes.Reason)
 			case mood.ActionDroppedDedup:
-				fmt.Printf("       [mood] dedup: %s\n", moodRes.Reason)
+				verdict = fmt.Sprintf("dedup: %s", moodRes.Reason)
 			case mood.ActionDroppedClassify:
-				fmt.Printf("       [mood] classifier rejected: %s\n", moodRes.Reason)
+				verdict = fmt.Sprintf("classifier rejected: %s", moodRes.Reason)
 			case mood.ActionErrored:
-				fmt.Printf("       [mood] error: %s\n", moodRes.Reason)
+				verdict = fmt.Sprintf("error: %s", moodRes.Reason)
+			}
+			if verdict != "" {
+				fmt.Printf("       [mood] %s\n", verdict)
+				turnResults[len(turnResults)-1].moodVerdict = verdict
 			}
 		}
 
@@ -1810,6 +1816,10 @@ func generateReport(
 
 		if turn.followUpReply != "" {
 			fmt.Fprintf(&b, "**%s** *(follow-up):* %s\n\n", cfg.Identity.Her, turn.followUpReply)
+		}
+
+		if turn.moodVerdict != "" {
+			fmt.Fprintf(&b, "> 🎭 **mood:** %s\n\n", turn.moodVerdict)
 		}
 
 		// Add agent trace as a collapsible details block.

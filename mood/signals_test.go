@@ -161,6 +161,38 @@ func TestScoreSignals_MetaphoricalMood(t *testing.T) {
 	}
 }
 
+// TestScoreSignals_SimRegressions covers specific messages from the
+// mood-pregate-stress sim that were false negatives before vocabulary
+// expansion. If either of these drops below the 0.15 threshold again,
+// something regressed.
+func TestScoreSignals_SimRegressions(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		min  float64
+	}{
+		{
+			"rain_gray_indirect",
+			"it's been raining nonstop for three days and everything just feels... gray",
+			0.15, // must pass the pre-gate threshold
+		},
+		{
+			"absolutely_unreal_positive",
+			"the new album dropped and it is absolutely unreal. i've had it on repeat for three hours straight",
+			0.15,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got < tc.min {
+				t.Errorf("ScoreSignals(%q) = %.2f, want >= %.2f (sim regression)", tc.text, got, tc.min)
+			}
+		})
+	}
+}
+
 // TestScoreSignals_NeutralStillLow makes sure expanded phrases don't
 // cause false positives on genuinely non-emotional messages.
 func TestScoreSignals_NeutralStillLow(t *testing.T) {
