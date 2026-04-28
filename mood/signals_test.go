@@ -85,6 +85,105 @@ func TestScoreSignals_WordBoundary(t *testing.T) {
 	}
 }
 
+// TestScoreSignals_ThirdPersonFraming covers "it feels like",
+// "everything is" — indirect emotional language that the old pre-gate
+// used to silently drop.
+func TestScoreSignals_ThirdPersonFraming(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		min  float64 // score must be at least this
+	}{
+		{"it feels like", "it feels like nothing matters anymore", 0.50},
+		{"everything is heavy", "everything is just heavy right now", 0.50},
+		{"things feel off", "things feel really off today", 0.50},
+		{"been feeling down", "been feeling kind of down lately", 0.50},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got < tc.min {
+				t.Errorf("ScoreSignals(%q) = %.2f, want >= %.2f", tc.text, got, tc.min)
+			}
+		})
+	}
+}
+
+// TestScoreSignals_PositiveAffect ensures the pre-gate catches joy
+// and excitement, not just sadness.
+func TestScoreSignals_PositiveAffect(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		min  float64
+	}{
+		{"stoked", "I'm so stoked about this", 0.75},
+		{"hyped", "feeling really hyped right now", 0.50},
+		{"amazing day", "today was actually amazing", 0.25},
+		{"blessed", "honestly feeling blessed", 0.50},
+		{"pumped emoji", "let's go 🔥", 0.10},
+		{"thrilled", "I am thrilled", 0.75},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got < tc.min {
+				t.Errorf("ScoreSignals(%q) = %.2f, want >= %.2f", tc.text, got, tc.min)
+			}
+		})
+	}
+}
+
+// TestScoreSignals_MetaphoricalMood covers the kind of messages from
+// real conversations that the old pre-gate missed — weather metaphors,
+// "heavy" feelings, feeling trapped/stuck.
+func TestScoreSignals_MetaphoricalMood(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		min  float64
+	}{
+		{"heavy everything", "I can't really explain it, everything is just heavier than usual", 0.50},
+		{"trapped", "I'm trapped there financially", 0.75},
+		{"stuck", "feeling stuck and can't get out", 0.50},
+		{"numb", "I've been pretty numb lately", 0.50},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got < tc.min {
+				t.Errorf("ScoreSignals(%q) = %.2f, want >= %.2f", tc.text, got, tc.min)
+			}
+		})
+	}
+}
+
+// TestScoreSignals_NeutralStillLow makes sure expanded phrases don't
+// cause false positives on genuinely non-emotional messages.
+func TestScoreSignals_NeutralStillLow(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		max  float64
+	}{
+		{"factual question", "how do I configure the database connection", 0.10},
+		{"code discussion", "it feels like the struct needs a pointer receiver", 0.50},
+		{"scheduling", "things are busy this week, can we meet thursday", 0.50},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			turns := []Turn{{Role: "user", ScrubbedContent: tc.text}}
+			got := ScoreSignals(turns)
+			if got > tc.max {
+				t.Errorf("ScoreSignals(%q) = %.2f, want <= %.2f", tc.text, got, tc.max)
+			}
+		})
+	}
+}
+
 func TestContainsWord(t *testing.T) {
 	tests := []struct {
 		text, word string

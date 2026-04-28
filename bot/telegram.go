@@ -392,10 +392,11 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 		log.Info("handling DDL audit event", "skill", evt.SkillName, "statement", evt.DDLStatement)
 
 	case agent.EventInboxReady:
-		log.Info("handling inbox-ready event", "summary", evt.Summary)
+		log.Info("inbox-ready event", "summary", evt.Summary)
 
-		// Direct message mode: skip the agent loop entirely and just send
-		// the text. Useful for simple confirmations like "done, cleaned up 4 memories."
+		// Direct message mode: send the text straight to chat and return.
+		// The memory agent uses this for explicit user-requested work
+		// ("done, cleaned up 4 memories").
 		if evt.DirectMessage != "" {
 			if err := b.SendToChat(b.ownerChat, evt.DirectMessage); err != nil {
 				log.Error("failed to send direct inbox message", "err", err)
@@ -403,14 +404,13 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 			return
 		}
 
-		// Full loop mode: run the agent with inbox context so it can read
-		// the inbox results and word a natural follow-up.
-		prompt = fmt.Sprintf("[system] A background task has completed. Summary: %s\n\n"+
-			"Check your inbox (it has been consumed already — the summary above is what happened). "+
-			"Briefly update the user on what was done. Keep it to 1-2 sentences — "+
-			"this is a follow-up, not a new conversation. You've already run once this turn.",
-			evt.Summary)
-		conversationID = "inbox-followup"
+		// Summary-only mode: memory housekeeping (splits, dedup, cleanup)
+		// that the user didn't ask for. Log it and move on — no user-facing
+		// message. Running a full agent loop here produces a jarring
+		// "I reorganized your memories" message mid-conversation.
+		log.Info("inbox-ready: background housekeeping complete (no user message)",
+			"summary", evt.Summary)
+		return
 
 	default:
 		log.Warn("unknown agent event type", "type", evt.Type)

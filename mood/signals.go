@@ -81,37 +81,80 @@ func ScoreSignals(turns []Turn) float64 {
 }
 
 // firstPersonAffect — phrases that signal the user is describing
-// their own state. Kept short; add phrases only when a real scenario
-// proves we're missing them.
+// their own emotional state. Includes both first-person ("I'm", "I feel")
+// and third-person emotional framing ("it feels like", "everything is")
+// which people commonly use to describe their own moods indirectly.
+//
+// False positives are cheap (one extra LLM call); false negatives mean
+// silently dropping a real mood. Err on the side of letting things through.
 var firstPersonAffect = []string{
+	// Direct first-person
 	"i'm ",
 	"i am ",
 	"i feel ",
-	"i'm feeling",
+	"i'm feeling ",
 	"i'm so ",
 	"i'm really ",
 	"im ", // common typing shortcut
+	"i've been ",
+	"ive been ",
+	"i've felt ",
+	"i was ",
+	"i just feel ",
+	"i can't even ",
+
+	// Third-person emotional framing — people describe their own
+	// state this way ("it feels like everything is heavy")
+	"it feels ",
+	"it's like ",
+	"its like ",
+	"everything is ",
+	"everything feels ",
+	"things are ",
+	"things feel ",
+
+	// Casual / colloquial framing
+	"feeling ",     // "feeling pretty good about"
+	"having a ",    // "having a great day", "having a rough time"
+	"been feeling ", // "been feeling off lately"
+	"kinda ",       // "kinda stressed", "kinda happy"
+	"lowkey ",      // "lowkey anxious", "lowkey excited"
 }
 
 // affectWords — bare emotion words likely to appear in a real mood
-// expression. Cross-referenced against Apple's label list but
-// broader (includes casual variants like "tired", "wiped").
+// expression. Balanced across the full valence spectrum: unpleasant,
+// neutral, and pleasant. Cross-referenced against Apple's label list
+// but broader (includes casual variants like "tired", "wiped",
+// "stoked", "hyped").
 var affectWords = []string{
+	// Unpleasant — low valence
 	"angry", "anxious", "ashamed", "awful", "bad",
-	"blue", "brave", "broken", "calm", "chill",
-	"confident", "content", "cozy", "crushed", "dead",
+	"bitter", "blue", "broken", "crushed", "dead",
 	"defeated", "depressed", "destroyed", "disappointed",
-	"discouraged", "down", "drained", "dread", "elated",
-	"embarrassed", "empty", "energized", "excited", "exhausted",
-	"fine", "frustrated", "furious", "glad", "good",
-	"grateful", "great", "grieving", "guilty", "happy",
-	"hopeful", "hopeless", "hurt", "irritated", "jealous",
-	"joyful", "lonely", "lost", "miserable", "numb",
-	"off", "overwhelmed", "panicked", "peaceful", "pissed",
-	"proud", "relaxed", "relieved", "rough", "sad",
-	"scared", "shattered", "solid", "spooked", "stressed",
-	"sucks", "terrible", "terrified", "thrilled", "tired",
-	"wiped", "worried", "worthless",
+	"discouraged", "down", "drained", "dread", "embarrassed",
+	"empty", "exhausted", "frustrated", "furious", "grieving",
+	"guilty", "heavy", "helpless", "hopeless", "hurt",
+	"irritated", "jealous", "lonely", "lost", "miserable",
+	"numb", "off", "overwhelmed", "panicked", "pissed",
+	"rough", "sad", "scared", "shattered", "spooked",
+	"stressed", "stuck", "sucks", "terrible", "terrified",
+	"tired", "trapped", "wiped", "worried", "worthless",
+
+	// Pleasant — high valence
+	"alive", "amazing", "blessed", "blissful", "brave",
+	"buzzing", "cheerful", "cozy", "delighted", "ecstatic",
+	"elated", "energized", "excited", "fantastic", "free",
+	"fulfilled", "giddy", "glad", "glowing", "grateful",
+	"great", "happy", "hopeful", "hyped", "incredible",
+	"inspired", "joyful", "loved", "motivated", "overjoyed",
+	"peaceful", "proud", "pumped", "radiant", "refreshed",
+	"relieved", "stoked", "thankful", "thrilled", "upbeat",
+	"vibrant", "wonderful",
+
+	// Neutral / mixed
+	"calm", "chill", "confident", "content", "fine",
+	"good", "meh", "okay", "relaxed", "solid",
+	"weird",
 }
 
 // intensityModifiers — adverbs/adjectives that make affect louder.
@@ -168,7 +211,9 @@ var affectEmoji = []string{
 	"😭", "😢", "😔", "😞", "😩",   // unpleasant cluster
 	"😤", "😠", "😡", "🤬",          // anger
 	"😰", "😨", "😱", "😖",          // anxiety / fear
-	"😊", "😄", "😃", "😁",          // happy
+	"😊", "😄", "😃", "😁", "😆",   // happy
 	"🥰", "❤️", "💕", "🙂", "😌",   // warmth / calm
+	"🥳", "🎉", "✨", "💪", "🔥",   // excitement / energy
+	"🤩", "😍", "💖", "🙌",          // enthusiasm / love
 	"😐", "😑",                      // neutral
 }
