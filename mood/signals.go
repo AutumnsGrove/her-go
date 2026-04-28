@@ -126,34 +126,44 @@ var firstPersonAffect = []string{
 
 // affectWords — bare emotion words likely to appear in a real mood
 // expression. Balanced across the full valence spectrum: unpleasant,
-// neutral, and pleasant. Cross-referenced against Apple's label list
-// but broader (includes casual variants like "tired", "wiped",
-// "stoked", "hyped").
+// neutral, and pleasant. Hand-curated from Apple's label list, casual
+// chat observation, and VADER sentiment lexicon (MIT, human-validated
+// valence scores). Includes casual variants like "tired", "wiped",
+// "stoked", "hyped" that VADER itself doesn't cover.
 var affectWords = []string{
 	// Unpleasant — low valence
-	"angry", "anxious", "ashamed", "awful", "bad",
+	"abandoned", "aching", "angry", "annoyed", "annoying",
+	"anxious", "ashamed", "awful", "bad", "betrayed",
 	"bitter", "blue", "broken", "crushed", "dead",
-	"defeated", "depressed", "destroyed", "disappointed",
-	"discouraged", "down", "drained", "dread", "embarrassed",
-	"empty", "exhausted", "flat", "frustrated", "furious",
-	"gray", "grey", "grieving", "guilty", "heavy",
-	"helpless", "hopeless", "hurt",
-	"irritated", "jealous", "lonely", "lost", "miserable",
-	"numb", "off", "overwhelmed", "panicked", "pissed",
-	"rough", "sad", "scared", "shattered", "spooked",
-	"stressed", "stuck", "sucks", "terrible", "terrified",
-	"tired", "trapped", "wiped", "worried", "worthless",
+	"defeated", "depressed", "destroyed", "devastated",
+	"disappointed", "discouraged", "disgusted", "doomed",
+	"down", "drained", "dread", "embarrassed", "empty",
+	"exhausted", "flat", "frustrated", "furious", "gray",
+	"grey", "grieving", "grumpy", "guilty", "heartbroken",
+	"heavy", "helpless", "hopeless", "hostile", "hurt",
+	"insecure", "irritated", "jealous", "livid", "lonely",
+	"lost", "miserable", "moody", "neglected", "numb",
+	"off", "outraged", "overwhelmed", "panicked", "paranoid",
+	"pathetic", "petrified", "pissed", "rejected",
+	"resentful", "restless", "rough", "sad", "scared",
+	"shattered", "spooked", "stressed", "stuck", "sucks",
+	"suffering", "terrible", "terrified", "terrifying",
+	"tired", "trapped", "uneasy", "wiped", "worried",
+	"worthless", "wretched",
 
 	// Pleasant — high valence
-	"alive", "amazing", "blessed", "blissful", "brave", "bright",
-	"buzzing", "cheerful", "cozy", "delighted", "ecstatic",
-	"elated", "energized", "excited", "fantastic", "free",
-	"fulfilled", "giddy", "glad", "glowing", "grateful",
-	"great", "happy", "hopeful", "hyped", "incredible",
-	"inspired", "joyful", "loved", "motivated", "overjoyed",
-	"peaceful", "proud", "pumped", "radiant", "refreshed",
-	"relieved", "stoked", "thankful", "thrilled", "unreal",
-	"upbeat", "vibrant", "wonderful",
+	"adored", "alive", "amazing", "awesome", "blessed",
+	"blissful", "brave", "bright", "brilliant", "buzzing",
+	"cheerful", "cherished", "cozy", "delighted", "ecstatic",
+	"elated", "energized", "euphoric", "excellent", "excited",
+	"exhilarated", "fantastic", "free", "fulfilled", "giddy",
+	"glad", "glorious", "glowing", "gorgeous", "grateful",
+	"great", "happy", "heavenly", "hopeful", "hyped",
+	"incredible", "inspired", "joyful", "jubilant", "loved",
+	"magnificent", "motivated", "outstanding", "overjoyed",
+	"peaceful", "perfect", "proud", "pumped", "radiant",
+	"refreshed", "relieved", "stoked", "superb", "thankful",
+	"thrilled", "unreal", "upbeat", "vibrant", "wonderful",
 
 	// Neutral / mixed
 	"calm", "chill", "confident", "content", "fine",
