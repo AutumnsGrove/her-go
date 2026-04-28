@@ -1076,40 +1076,16 @@ func runSim(cmd *cobra.Command, args []string) error {
 		// checking for inbox events or proceeding to the next turn.
 		tracker.Wait()
 
-		// If the memory agent called notify_agent, handle the follow-up
-		// synchronously — either a direct message or a brief agent loop.
+		// If the memory agent called notify_agent, handle the follow-up.
+		// Direct messages go straight to the user; summary-only events
+		// are silent housekeeping (splits, dedup) — log and move on.
 		var followUpReply string
 		if inboxEvent != nil {
 			if inboxEvent.DirectMessage != "" {
 				followUpReply = inboxEvent.DirectMessage
 				log.Infof("  %s (follow-up): %s", cfg.Identity.Her, followUpReply)
 			} else {
-				// Run a brief agent loop for a natural follow-up message.
-				followUpPrompt := fmt.Sprintf(
-					"[system] A background task has completed. Summary: %s\n\n"+
-						"Briefly update the user on what was done. Keep it to 1-2 sentences — "+
-						"this is a follow-up, not a new conversation.",
-					inboxEvent.Summary)
-				followUpResult, followUpErr := agent.Run(agent.RunParams{
-					DriverLLM:            driverClient,
-					ChatLLM:             chatClient,
-					Store:               store,
-					EmbedClient:         embedClient,
-					SimilarityThreshold: cfg.Embed.SimilarityThreshold,
-					Cfg:                 cfg,
-					ScrubbedUserMessage: followUpPrompt,
-					ConversationID:      "inbox-followup",
-					TriggerMsgID:        msgID,
-					StatusCallback:      statusCallback,
-					TraceCallback:       traceCallback,
-					ConfigPath:          cfgFile,
-				})
-				if followUpErr == nil {
-					followUpReply = followUpResult.ReplyText
-					log.Infof("  %s (follow-up): %s", cfg.Identity.Her, followUpReply)
-				} else {
-					log.Error("follow-up agent.Run failed", "err", followUpErr)
-				}
+				log.Infof("  inbox: background housekeeping complete — %s", inboxEvent.Summary)
 			}
 			inboxEvent = nil
 		}
