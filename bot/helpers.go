@@ -75,22 +75,36 @@ func (b *Bot) getConversationID(chatID int64) string {
 	return newID
 }
 
+// traceResult holds the return values from makeTraceCallbacks: the slot
+// callback factory (used by agents to write into their trace slot) and a
+// finalize function called after the turn completes to store the snapshot
+// and paginate overflow.
+type traceResult struct {
+	getCallback func(slot string) tools.TraceCallback
+	finalize    func() // call after turn completes
+}
+
 // makeTraceCallbacks wires up the trace inbox for one turn: one
 // Telegram message, N named slots (one per registered trace.Stream),
 // shared across every agent that fires during this turn.
 //
-// Returns a lookup function — call trace("main"), trace("memory"),
-// trace("mood"), or any other registered stream name — and receive a
+// The getCallback function — call trace("main"), trace("memory"),
+// trace("mood"), or any other registered stream name — returns a
 // tools.TraceCallback that writes into that slot. Slots not in the
 // trace.Streams() registry still work as a fallback (they render
 // after registered ones in insertion order), so a new agent in a
 // new package can call trace.Register + request a callback without
 // any edit to this function.
 //
+// The finalize function should be called when the turn completes. It
+// stores the final Board snapshot in b.lastTraceSnapshot (for /lasttrace)
+// and replaces the live trace message with a paginated version if it
+// exceeds ~3800 characters.
+//
 // Slots render in registry order, not completion order — main always
 // comes first, then memory and mood, regardless of which post-turn
 // agent finishes writing first.
-func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCallback {
+func (b *Bot) makeTraceCallbacks(c tele.Context) traceResult {
 	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
 	if err != nil {
 		log.Warn("trace: failed to send placeholder", "err", err)
@@ -122,7 +136,7 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCa
 
 	board := trace.NewBoard(edit)
 
-	return func(slot string) tools.TraceCallback {
+	getCallback := func(slot string) tools.TraceCallback {
 		return func(text string) error {
 			// Fire the board update in a goroutine so the agent
 			// loop isn't blocked on Telegram API latency.
@@ -130,6 +144,30 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) func(slot string) tools.TraceCa
 			return nil
 		}
 	}
+
+	finalize := func() {
+		snapshot := board.Snapshot()
+		if snapshot == "" {
+			return
+		}
+		// Store for /lasttrace — always, regardless of length.
+		b.lastTraceMu.Lock()
+		b.lastTraceSnapshot = snapshot
+		b.lastTraceMu.Unlock()
+
+		// If the final trace exceeds ~3800 chars, the live-edited single
+		// message is likely truncated by Telegram's 4096-char limit. Delete
+		// the live message and re-send as paginated. During the turn we
+		// keep the single message (splitting mid-stream is disruptive), but
+		// once the turn is done we can paginate cleanly.
+		const paginateThreshold = 3800
+		if len(snapshot) > paginateThreshold && traceMsg != nil {
+			_ = c.Bot().Delete(traceMsg)
+			_ = b.sendPaginated(c, snapshot)
+		}
+	}
+
+	return traceResult{getCallback: getCallback, finalize: finalize}
 }
 
 // handleTraces toggles agent thinking traces on/off.

@@ -23,26 +23,29 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
-	Debug         bool                `yaml:"debug"` // when true, logs full API request/response bodies
-	Identity      IdentityConfig      `yaml:"identity"`
-	Telegram      TelegramConfig      `yaml:"telegram"`
-	LLM           LLMConfig           `yaml:"llm"`
-	Chat          ChatConfig          `yaml:"chat"`
-	Driver        DriverConfig        `yaml:"driver"`
-	Vision        VisionConfig        `yaml:"vision"`
-	Classifier    ClassifierConfig    `yaml:"classifier"`
-	MemoryAgent   MemoryAgentConfig   `yaml:"memory_agent"`
-	MoodAgent     MoodAgentConfig     `yaml:"mood_agent"`
-	Memory        MemoryConfig        `yaml:"memory"`
-	Mood          MoodConfig          `yaml:"mood"`
-	Embed      EmbedConfig      `yaml:"embed"`
-	Search     SearchConfig     `yaml:"search"`
-	Foursquare FoursquareConfig `yaml:"foursquare"`
-	Scrub      ScrubConfig      `yaml:"scrub"`
-	Persona    PersonaConfig    `yaml:"persona"`
-	Voice      VoiceConfig      `yaml:"voice"`
-	Location   LocationConfig   `yaml:"location,omitempty"`
-	Calendar   CalendarConfig   `yaml:"calendar"`
+	Debug       bool              `yaml:"debug"` // when true, logs full API request/response bodies
+	Identity    IdentityConfig    `yaml:"identity"`
+	Telegram    TelegramConfig    `yaml:"telegram"`
+	LLM         LLMConfig         `yaml:"llm"`
+	Chat        ChatConfig        `yaml:"chat"`
+	Driver      DriverConfig      `yaml:"driver"`
+	Vision      VisionConfig      `yaml:"vision"`
+	Classifier  ClassifierConfig  `yaml:"classifier"`
+	MemoryAgent MemoryAgentConfig `yaml:"memory_agent"`
+	MoodAgent   MoodAgentConfig   `yaml:"mood_agent"`
+	Memory      MemoryConfig      `yaml:"memory"`
+	Mood        MoodConfig        `yaml:"mood"`
+	Embed       EmbedConfig       `yaml:"embed"`
+	Search      SearchConfig      `yaml:"search"`
+	Foursquare  FoursquareConfig  `yaml:"foursquare"`
+	Scrub       ScrubConfig       `yaml:"scrub"`
+	Persona     PersonaConfig     `yaml:"persona"`
+	Voice       VoiceConfig       `yaml:"voice"`
+	Location    LocationConfig    `yaml:"location,omitempty"`
+	Calendar    CalendarConfig    `yaml:"calendar"`
+	Tunnel      TunnelConfig      `yaml:"tunnel"`
+	Cloudflare  CloudflareConfig  `yaml:"cloudflare"`
+	Update      UpdateConfig      `yaml:"update"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -55,20 +58,49 @@ type Config struct {
 type LocationConfig struct {
 	Latitude  float64 `yaml:"latitude"`
 	Longitude float64 `yaml:"longitude"`
-	Name      string  `yaml:"name,omitempty"`       // display name from the last geocoding ("Portland, Oregon")
-	TempUnit  string  `yaml:"temp_unit,omitempty"`  // "fahrenheit" (default) or "celsius"
-	WindUnit  string  `yaml:"wind_unit,omitempty"`  // "mph" (default) or "kmh"
+	Name      string  `yaml:"name,omitempty"`      // display name from the last geocoding ("Portland, Oregon")
+	TempUnit  string  `yaml:"temp_unit,omitempty"` // "fahrenheit" (default) or "celsius"
+	WindUnit  string  `yaml:"wind_unit,omitempty"` // "mph" (default) or "kmh"
+}
+
+// TunnelConfig holds settings for Cloudflare Tunnel integration. The tunnel
+// creates a stable public URL (e.g., her.yourdomain.com) that routes to the
+// bot's local webhook server, even behind NAT. Used for always-on deployment
+// on the Mac Mini and ephemeral dev sessions on the MacBook.
+//
+// The tunnel name and credentials come from `cloudflared tunnel create`.
+// Domain is the hostname you've routed to this tunnel via DNS.
+type TunnelConfig struct {
+	Name            string `yaml:"name"`             // tunnel name from `cloudflared tunnel create` (e.g., "her-prod")
+	Domain          string `yaml:"domain"`           // public hostname (e.g., "her.yourdomain.com")
+	CredentialsFile string `yaml:"credentials_file"` // path to tunnel credentials JSON (e.g., ~/.cloudflared/<tunnel-id>.json)
+}
+
+// CloudflareConfig holds Cloudflare API credentials for dev mode KV management.
+// Only needed on the MacBook — `her dev` uses these to set/clear routing keys
+// in the Worker's KV namespace so the CF Worker routes traffic to the dev tunnel.
+// The Mac Mini's production instance doesn't need these.
+type CloudflareConfig struct {
+	AccountID     string `yaml:"account_id"`      // Cloudflare account ID (found in dashboard URL or API)
+	APIToken      string `yaml:"api_token"`       // API token with Workers KV write permission
+	KVNamespaceID string `yaml:"kv_namespace_id"` // KV namespace ID from wrangler.toml
+}
+
+// UpdateConfig holds settings for the /update self-update command.
+// Only relevant on the Mac Mini production instance — dev mode ignores it.
+type UpdateConfig struct {
+	RepoPath string `yaml:"repo_path"` // path to the git repo (default: working directory)
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
 // The bridge is optional — if missing at startup, calendar tools return clear
 // errors to the agent but don't block bot startup (fail-soft pattern).
 type CalendarConfig struct {
-	BridgePath      string      `yaml:"bridge_path"`       // path to her-calendar Swift binary
-	Calendars       []string    `yaml:"calendars"`         // which calendars to monitor (reads from all)
-	DefaultCalendar string      `yaml:"default_calendar"`  // default calendar for creating events
-	DefaultTimezone string      `yaml:"default_timezone"`  // e.g. "America/New_York", used by get_time tool
-	Jobs            []JobConfig `yaml:"jobs"`              // known jobs for shift tracking (optional)
+	BridgePath      string      `yaml:"bridge_path"`      // path to her-calendar Swift binary
+	Calendars       []string    `yaml:"calendars"`        // which calendars to monitor (reads from all)
+	DefaultCalendar string      `yaml:"default_calendar"` // default calendar for creating events
+	DefaultTimezone string      `yaml:"default_timezone"` // e.g. "America/New_York", used by get_time tool
+	Jobs            []JobConfig `yaml:"jobs"`             // known jobs for shift tracking (optional)
 }
 
 // JobConfig defines a known job for shift tracking. When the agent passes
@@ -123,11 +155,24 @@ func (c *Config) ExpandPrompt(content string) string {
 }
 
 // TelegramConfig holds Telegram bot settings.
+//
+// Mode controls the update transport:
+//   - "poll" (default): the bot long-polls Telegram every 10 seconds.
+//     Simple, works anywhere, no public URL needed.
+//   - "webhook": Telegram POSTs updates to us. Requires a public URL
+//     (CF Worker + Cloudflare Tunnel) and a listening HTTP server.
+//
+// In webhook mode, telebot opens an HTTP server on WebhookPort and
+// validates the X-Telegram-Bot-Api-Secret-Token header against
+// WebhookSecret. The CF Worker forwards updates here — the bot never
+// registers itself as the webhook endpoint (IgnoreSetWebhook is set).
 type TelegramConfig struct {
-	Token      string `yaml:"token"`
-	Mode       string `yaml:"mode"`        // "poll" or "webhook"
-	WebhookURL string `yaml:"webhook_url"` // only needed for webhook mode
-	OwnerChat  int64  `yaml:"owner_chat"`  // chat ID for the bot owner — used by scheduler for proactive messages
+	Token         string `yaml:"token"`
+	Mode          string `yaml:"mode"`           // "poll" or "webhook"
+	WebhookURL    string `yaml:"webhook_url"`    // public URL registered with Telegram (set by CF Worker, not the bot)
+	WebhookPort   int    `yaml:"webhook_port"`   // local port for webhook HTTP server (default 8443)
+	WebhookSecret string `yaml:"webhook_secret"` // shared secret — validated via X-Telegram-Bot-Api-Secret-Token header
+	OwnerChat     int64  `yaml:"owner_chat"`     // chat ID for the bot owner — used by scheduler for proactive messages
 }
 
 // FallbackConfig holds settings for a fallback model. When the primary
@@ -163,15 +208,15 @@ type LLMConfig struct {
 // credentials and model tuning are not tangled together.
 // Shares the same base_url and api_key as the main LLM section.
 type ChatConfig struct {
-	Model        string           `yaml:"model"`
-	Temperature  float64          `yaml:"temperature"`
-	MaxTokens    int              `yaml:"max_tokens"`
-	MaxReplyChars int             `yaml:"max_reply_chars"` // reject replies over this length as likely degenerate (0 = 10000 default)
-	Timeout      int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
-	Provider     *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
-	Fallback     *FallbackConfig  `yaml:"fallback,omitempty"`
-	Reasoning    *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
-	Streaming    bool             `yaml:"streaming"`           // stream reply tokens to Telegram for a live typing effect (default false)
+	Model         string           `yaml:"model"`
+	Temperature   float64          `yaml:"temperature"`
+	MaxTokens     int              `yaml:"max_tokens"`
+	MaxReplyChars int              `yaml:"max_reply_chars"`    // reject replies over this length as likely degenerate (0 = 10000 default)
+	Timeout       int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). A Groq-hosted tool-calling model should respond in <5s — 20s is a reasonable ceiling.
+	Provider      *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback      *FallbackConfig  `yaml:"fallback,omitempty"`
+	Reasoning     *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
+	Streaming     bool             `yaml:"streaming"`           // stream reply tokens to Telegram for a live typing effect (default false)
 }
 
 // DriverConfig holds settings for the driver agent — the orchestrator that
@@ -230,8 +275,8 @@ type MemoryAgentConfig struct {
 	Model       string           `yaml:"model"`
 	Temperature float64          `yaml:"temperature"`
 	MaxTokens   int              `yaml:"max_tokens"`
-	Timeout     int              `yaml:"timeout"`             // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
-	Provider    *ProviderConfig  `yaml:"provider,omitempty"`  // OpenRouter provider routing (optional)
+	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default). Memory agent processes long transcripts — 120s recommended.
+	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
 	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
@@ -249,7 +294,7 @@ type MoodAgentConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Timeout     int             `yaml:"timeout"`  // HTTP timeout in seconds (0 = 60s default)
+	Timeout     int             `yaml:"timeout"` // HTTP timeout in seconds (0 = 60s default)
 	Provider    *ProviderConfig `yaml:"provider,omitempty"`
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
@@ -301,15 +346,15 @@ type ProviderConfig struct {
 
 // MemoryConfig controls the SQLite-backed memory system.
 type MemoryConfig struct {
-	DBPath             string  `yaml:"db_path"`
-	RecentMessages     int     `yaml:"recent_messages"`
-	MaxFactsInContext  int     `yaml:"max_facts_in_context"`
-	ExtractionInterval int     `yaml:"extraction_interval"`
+	DBPath              string  `yaml:"db_path"`
+	RecentMessages      int     `yaml:"recent_messages"`
+	MaxFactsInContext   int     `yaml:"max_facts_in_context"`
+	ExtractionInterval  int     `yaml:"extraction_interval"`
 	MaxHistoryTokens    int     `yaml:"max_history_tokens"`    // history token budget for compaction — both triggers fire at 75% of this
 	DriverContextBudget int     `yaml:"driver_context_budget"` // driver model total prompt budget for action history compaction; 0 = use 6000 default
-	AutoLinkCount      int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
-	AutoLinkThreshold  float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
-	MaxMemoryLength    int     `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
+	AutoLinkCount       int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
+	AutoLinkThreshold   float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
+	MaxMemoryLength     int     `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
 }
 
 // ScrubConfig controls PII scrubbing behavior.

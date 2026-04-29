@@ -16,8 +16,16 @@ import (
 	"her/config"
 	"her/llm"
 	"her/memory"
+	"her/trace"
 	"her/tui"
 )
+
+// Register the persona trace stream. Order 150 puts it between main (100)
+// and memory (200) — persona evolution context sits naturally between the
+// driver's decision-making and the memory agent's fact extraction.
+func init() {
+	trace.Register(trace.Stream{Name: "persona", Order: 150, Label: "🪞 <b>persona</b>"})
+}
 
 // DreamerParams bundles everything the dreamer goroutine needs. Passing a
 // single struct instead of many positional arguments makes call sites readable

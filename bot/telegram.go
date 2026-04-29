@@ -33,22 +33,22 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb               *tele.Bot
-	llm              *llm.Client          // conversational model (chat)
-	driverLLM         *llm.Client          // tool-calling orchestrator
-	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
-	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
-	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
-	embedClient      *embed.Client        // local embedding model for similarity
-	tavilyClient  *search.TavilyClient // web search and URL extraction
-	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
-	ttsClient     *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store         *memory.Store
-	cfg           *config.Config
-	configPath    string // path to config.yaml — needed for /traces toggle
-	systemPrompt  string
-	startTime     time.Time
+	tb             *tele.Bot
+	llm            *llm.Client          // conversational model (chat)
+	driverLLM      *llm.Client          // tool-calling orchestrator
+	memoryAgentLLM *llm.Client          // post-turn memory agent — nil if not configured
+	moodAgentLLM   *llm.Client          // post-turn mood agent — nil if not configured
+	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
+	embedClient    *embed.Client        // local embedding model for similarity
+	tavilyClient   *search.TavilyClient // web search and URL extraction
+	voiceClient    *voice.Client        // local STT via parakeet-server — nil if voice disabled
+	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	store          *memory.Store
+	cfg            *config.Config
+	configPath     string // path to config.yaml — needed for /traces toggle
+	systemPrompt   string
+	startTime      time.Time
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
@@ -100,6 +100,14 @@ type Bot struct {
 	// language.
 	agentEvents chan agent.AgentEvent
 
+	// lastTraceSnapshot stores the full Board snapshot from the most
+	// recent completed turn. /lasttrace re-sends this via sendPaginated
+	// for on-demand observability when traces are disabled globally.
+	// Protected by lastTraceMu — written from a goroutine in
+	// traceFinalize, read from the /lasttrace handler.
+	lastTraceMu       sync.Mutex
+	lastTraceSnapshot string
+
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
 	ownerChat int64
@@ -121,9 +129,40 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 
 // New creates and configures a new Telegram bot.
 func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+	// Choose update transport based on config. In poll mode (the default),
+	// the bot calls Telegram every 10 seconds asking for new messages.
+	// In webhook mode, Telegram POSTs updates to us — used when a CF
+	// Worker sits in front and routes traffic to the right instance.
+	//
+	// This is like choosing between polling a queue vs. registering an
+	// HTTP handler — same data, different delivery model.
+	var poller tele.Poller
+	switch cfg.Telegram.Mode {
+	case "webhook":
+		port := cfg.Telegram.WebhookPort
+		if port == 0 {
+			port = 8443 // default — 8765 is taken by parakeet STT
+		}
+		poller = &tele.Webhook{
+			Listen:      fmt.Sprintf(":%d", port),
+			SecretToken: cfg.Telegram.WebhookSecret,
+			// IgnoreSetWebhook prevents telebot from calling Telegram's
+			// setWebhook API on startup. The CF Worker is the registered
+			// webhook endpoint, not this bot — if we called setWebhook
+			// with localhost:8765, Telegram would try to POST there
+			// directly (and fail, because we're behind NAT).
+			IgnoreSetWebhook: true,
+		}
+		log.Info("using webhook mode", "port", port)
+	default:
+		// "poll" or any unrecognized value — safe default.
+		poller = &tele.LongPoller{Timeout: 10 * time.Second}
+		log.Info("using long-polling mode")
+	}
+
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Poller: poller,
 	}
 
 	// Retry bot creation with exponential backoff. tele.NewBot calls the
@@ -160,7 +199,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	bot := &Bot{
 		tb:             tb,
 		llm:            llmClient,
-		driverLLM:       driverLLM,
+		driverLLM:      driverLLM,
 		memoryAgentLLM: memoryAgentLLM,
 		moodAgentLLM:   moodAgentLLM,
 		visionLLM:      visionLLM,
@@ -216,6 +255,8 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
 	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
 	tb.Handle("/dream", cmd("/dream", bot.handleDream))
+	tb.Handle("/update", cmd("/update", bot.handleUpdate))
+	tb.Handle("/lasttrace", cmd("/lasttrace", bot.handleLastTrace))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -245,17 +286,23 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	return bot, nil
 }
 
-// Start begins polling Telegram for messages. This blocks forever
-// (or until the bot is stopped), so it's typically the last thing
-// called in main.go.
+// Start begins receiving Telegram updates (via polling or webhook).
+// This blocks forever (or until the bot is stopped), so it's typically
+// the last thing called in main.go.
 //
-// Before polling, we call RemoveWebhook(true) to drop any pending
+// In poll mode, we call RemoveWebhook(true) first to drop any pending
 // updates from a previous session. Without this, restarting the bot
 // causes a delay (10-30s) while the old long-poll connection expires
 // at Telegram's end, and queued messages arrive in a burst.
+//
+// In webhook mode, we skip RemoveWebhook — calling it would unregister
+// the CF Worker's webhook URL, and Telegram would stop sending updates
+// entirely until the webhook is re-registered.
 func (b *Bot) Start() {
-	if err := b.tb.RemoveWebhook(true); err != nil {
-		log.Warn("failed to clear pending updates", "err", err)
+	if b.cfg.Telegram.Mode != "webhook" {
+		if err := b.tb.RemoveWebhook(true); err != nil {
+			log.Warn("failed to clear pending updates", "err", err)
+		}
 	}
 
 	// Start the agent event consumer before the Telegram poller.
@@ -267,6 +314,12 @@ func (b *Bot) Start() {
 	// Start the mood proposal expiry sweeper if the mood pipeline
 	// is configured. No-op otherwise.
 	b.startMoodSweeper()
+
+	// Check for a pending /update confirmation. If the previous binary
+	// wrote a her.update_pending flag before restarting, send the stored
+	// message now. This runs synchronously before Start() so the
+	// confirmation arrives before any user messages are processed.
+	b.CheckUpdatePending()
 
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
