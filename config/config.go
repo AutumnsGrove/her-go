@@ -44,6 +44,7 @@ type Config struct {
 	Location   LocationConfig   `yaml:"location,omitempty"`
 	Calendar   CalendarConfig   `yaml:"calendar"`
 	Tunnel     TunnelConfig     `yaml:"tunnel"`
+	Cloudflare CloudflareConfig `yaml:"cloudflare"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -72,6 +73,16 @@ type TunnelConfig struct {
 	Name            string `yaml:"name"`             // tunnel name from `cloudflared tunnel create` (e.g., "her-prod")
 	Domain          string `yaml:"domain"`           // public hostname (e.g., "her.yourdomain.com")
 	CredentialsFile string `yaml:"credentials_file"` // path to tunnel credentials JSON (e.g., ~/.cloudflared/<tunnel-id>.json)
+}
+
+// CloudflareConfig holds Cloudflare API credentials for dev mode KV management.
+// Only needed on the MacBook — `her dev` uses these to set/clear routing keys
+// in the Worker's KV namespace so the CF Worker routes traffic to the dev tunnel.
+// The Mac Mini's production instance doesn't need these.
+type CloudflareConfig struct {
+	AccountID     string `yaml:"account_id"`      // Cloudflare account ID (found in dashboard URL or API)
+	APIToken      string `yaml:"api_token"`        // API token with Workers KV write permission
+	KVNamespaceID string `yaml:"kv_namespace_id"`  // KV namespace ID from wrangler.toml
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
