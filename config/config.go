@@ -43,6 +43,7 @@ type Config struct {
 	Voice      VoiceConfig      `yaml:"voice"`
 	Location   LocationConfig   `yaml:"location,omitempty"`
 	Calendar   CalendarConfig   `yaml:"calendar"`
+	Tunnel     TunnelConfig     `yaml:"tunnel"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -58,6 +59,19 @@ type LocationConfig struct {
 	Name      string  `yaml:"name,omitempty"`       // display name from the last geocoding ("Portland, Oregon")
 	TempUnit  string  `yaml:"temp_unit,omitempty"`  // "fahrenheit" (default) or "celsius"
 	WindUnit  string  `yaml:"wind_unit,omitempty"`  // "mph" (default) or "kmh"
+}
+
+// TunnelConfig holds settings for Cloudflare Tunnel integration. The tunnel
+// creates a stable public URL (e.g., her.yourdomain.com) that routes to the
+// bot's local webhook server, even behind NAT. Used for always-on deployment
+// on the Mac Mini and ephemeral dev sessions on the MacBook.
+//
+// The tunnel name and credentials come from `cloudflared tunnel create`.
+// Domain is the hostname you've routed to this tunnel via DNS.
+type TunnelConfig struct {
+	Name            string `yaml:"name"`             // tunnel name from `cloudflared tunnel create` (e.g., "her-prod")
+	Domain          string `yaml:"domain"`           // public hostname (e.g., "her.yourdomain.com")
+	CredentialsFile string `yaml:"credentials_file"` // path to tunnel credentials JSON (e.g., ~/.cloudflared/<tunnel-id>.json)
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
