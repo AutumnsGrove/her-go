@@ -15,7 +15,7 @@ compatibility_date = "2026-01-01"
 #   npx wrangler kv namespace create HER_KV
 # then paste the id below.
 kv_namespaces = [
-  { binding = "HER_KV", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+  { binding = "HER_KV", id = "72f501f8dffc4eba984181d0130bcf9d" }
 ]
 
 [vars]
