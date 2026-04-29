@@ -15,6 +15,17 @@ import (
 	tele "gopkg.in/telebot.v4"
 )
 
+// handleLastTrace re-sends the most recent turn's full trace snapshot
+// via paginated messages. Useful when traces are globally disabled but
+// you want the detail for a specific turn, or when the live trace was
+// truncated by Telegram's 4096-char limit.
+func (b *Bot) handleLastTrace(c tele.Context) error {
+	if b.lastTraceSnapshot == "" {
+		return c.Send("No trace available yet — send a message first (with /traces enabled).")
+	}
+	return b.sendPaginated(c, b.lastTraceSnapshot)
+}
+
 // handleCompact manually triggers conversation compaction.
 func (b *Bot) handleCompact(c tele.Context) error {
 	convID := b.getConversationID(c.Message().Chat.ID)
