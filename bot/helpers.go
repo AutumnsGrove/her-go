@@ -151,7 +151,9 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) traceResult {
 			return
 		}
 		// Store for /lasttrace — always, regardless of length.
+		b.lastTraceMu.Lock()
 		b.lastTraceSnapshot = snapshot
+		b.lastTraceMu.Unlock()
 
 		// If the final trace exceeds ~3800 chars, the live-edited single
 		// message is likely truncated by Telegram's 4096-char limit. Delete

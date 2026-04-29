@@ -83,6 +83,7 @@ func runDev(cmd *cobra.Command, args []string) error {
 		accountID:   cfg.Cloudflare.AccountID,
 		apiToken:    cfg.Cloudflare.APIToken,
 		namespaceID: cfg.Cloudflare.KVNamespaceID,
+		http:        &http.Client{Timeout: 10 * time.Second},
 	}
 
 	// Step 2: Set KV routing keys.
@@ -218,6 +219,7 @@ type kvClient struct {
 	accountID   string
 	apiToken    string
 	namespaceID string
+	http        *http.Client
 }
 
 // kvBaseURL returns the API base for KV operations.
@@ -235,7 +237,7 @@ func (c *kvClient) put(key, value string) error {
 	req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	req.Header.Set("Content-Type", "text/plain")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("KV PUT %s: %w", key, err)
 	}
@@ -257,7 +259,7 @@ func (c *kvClient) delete(key string) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("KV DELETE %s: %w", key, err)
 	}

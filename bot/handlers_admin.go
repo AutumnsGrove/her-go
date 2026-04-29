@@ -20,10 +20,14 @@ import (
 // you want the detail for a specific turn, or when the live trace was
 // truncated by Telegram's 4096-char limit.
 func (b *Bot) handleLastTrace(c tele.Context) error {
-	if b.lastTraceSnapshot == "" {
+	b.lastTraceMu.Lock()
+	snapshot := b.lastTraceSnapshot
+	b.lastTraceMu.Unlock()
+
+	if snapshot == "" {
 		return c.Send("No trace available yet — send a message first (with /traces enabled).")
 	}
-	return b.sendPaginated(c, b.lastTraceSnapshot)
+	return b.sendPaginated(c, snapshot)
 }
 
 // handleCompact manually triggers conversation compaction.
@@ -148,7 +152,7 @@ func (b *Bot) handleRestart(c tele.Context) error {
 		// The -k flag kills the existing instance first.
 		go func() {
 			time.Sleep(500 * time.Millisecond) // let the message send
-			cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com."+strings.ToLower(b.cfg.Identity.Her)+".her-go")
+			cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.cfg.Identity.Her))
 			if err := cmd.Run(); err != nil {
 				log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 				os.Exit(0) // launchd will restart us via KeepAlive
@@ -238,8 +242,7 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond) // let the message send
-		label := "gui/" + fmt.Sprintf("%d", os.Getuid()) + "/com." + strings.ToLower(b.cfg.Identity.Her) + ".her-go"
-		cmd := exec.Command("launchctl", "kickstart", "-k", label)
+		cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.cfg.Identity.Her))
 		if err := cmd.Run(); err != nil {
 			log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 			os.Exit(0) // launchd will restart us via KeepAlive
@@ -308,9 +311,22 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, info.Mode())
 }
 
+// launchdServiceLabel returns the launchd service identifier for the bot.
+// e.g., "Mira" → "com.mira.her-go". This is the single source of truth
+// for the bot package — matches serviceLabel() in cmd/setup.go.
+func launchdServiceLabel(botName string) string {
+	return "com." + strings.ToLower(botName) + ".her-go"
+}
+
+// launchdTarget returns the full launchctl target path for the bot service.
+// e.g., "gui/501/com.mira.her-go" — used by kickstart and print commands.
+func launchdTarget(botName string) string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdServiceLabel(botName))
+}
+
 // isLaunchdManaged checks if the bot is running as a launchd service
 // by looking for the service in launchctl.
 func isLaunchdManaged(botName string) bool {
-	cmd := exec.Command("launchctl", "print", "gui/"+fmt.Sprintf("%d", os.Getuid())+"/com."+strings.ToLower(botName)+".her-go")
+	cmd := exec.Command("launchctl", "print", launchdTarget(botName))
 	return cmd.Run() == nil
 }
