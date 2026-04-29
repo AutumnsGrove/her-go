@@ -7,9 +7,11 @@ identity:
 
 telegram:
   token: "${TELEGRAM_BOT_TOKEN}"
-  mode: "poll"  # "poll" or "webhook"
-  webhook_url: ""  # only needed for webhook mode
-  owner_chat: 0    # your Telegram chat ID — needed for scheduled reminders. Send /status to the bot to find it.
+  mode: "poll"        # "poll" (long-polling, default) or "webhook" (CF Worker forwards updates to us)
+  webhook_url: ""     # public URL registered with Telegram — set by CF Worker deploy, not the bot
+  webhook_port: 8443  # local port for webhook HTTP server (only used in webhook mode)
+  webhook_secret: ""  # shared secret validated via X-Telegram-Bot-Api-Secret-Token header
+  owner_chat: 0       # your Telegram chat ID — needed for scheduled reminders. Send /status to the bot to find it.
 
 llm:
   base_url: "https://openrouter.ai/api/v1"

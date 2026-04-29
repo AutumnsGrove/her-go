@@ -121,9 +121,40 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 
 // New creates and configures a new Telegram bot.
 func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+	// Choose update transport based on config. In poll mode (the default),
+	// the bot calls Telegram every 10 seconds asking for new messages.
+	// In webhook mode, Telegram POSTs updates to us — used when a CF
+	// Worker sits in front and routes traffic to the right instance.
+	//
+	// This is like choosing between polling a queue vs. registering an
+	// HTTP handler — same data, different delivery model.
+	var poller tele.Poller
+	switch cfg.Telegram.Mode {
+	case "webhook":
+		port := cfg.Telegram.WebhookPort
+		if port == 0 {
+			port = 8443 // default — 8765 is taken by parakeet STT
+		}
+		poller = &tele.Webhook{
+			Listen:      fmt.Sprintf(":%d", port),
+			SecretToken: cfg.Telegram.WebhookSecret,
+			// IgnoreSetWebhook prevents telebot from calling Telegram's
+			// setWebhook API on startup. The CF Worker is the registered
+			// webhook endpoint, not this bot — if we called setWebhook
+			// with localhost:8765, Telegram would try to POST there
+			// directly (and fail, because we're behind NAT).
+			IgnoreSetWebhook: true,
+		}
+		log.Info("using webhook mode", "port", port)
+	default:
+		// "poll" or any unrecognized value — safe default.
+		poller = &tele.LongPoller{Timeout: 10 * time.Second}
+		log.Info("using long-polling mode")
+	}
+
 	settings := tele.Settings{
 		Token:  cfg.Telegram.Token,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Poller: poller,
 	}
 
 	// Retry bot creation with exponential backoff. tele.NewBot calls the
@@ -245,17 +276,23 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	return bot, nil
 }
 
-// Start begins polling Telegram for messages. This blocks forever
-// (or until the bot is stopped), so it's typically the last thing
-// called in main.go.
+// Start begins receiving Telegram updates (via polling or webhook).
+// This blocks forever (or until the bot is stopped), so it's typically
+// the last thing called in main.go.
 //
-// Before polling, we call RemoveWebhook(true) to drop any pending
+// In poll mode, we call RemoveWebhook(true) first to drop any pending
 // updates from a previous session. Without this, restarting the bot
 // causes a delay (10-30s) while the old long-poll connection expires
 // at Telegram's end, and queued messages arrive in a burst.
+//
+// In webhook mode, we skip RemoveWebhook — calling it would unregister
+// the CF Worker's webhook URL, and Telegram would stop sending updates
+// entirely until the webhook is re-registered.
 func (b *Bot) Start() {
-	if err := b.tb.RemoveWebhook(true); err != nil {
-		log.Warn("failed to clear pending updates", "err", err)
+	if b.cfg.Telegram.Mode != "webhook" {
+		if err := b.tb.RemoveWebhook(true); err != nil {
+			log.Warn("failed to clear pending updates", "err", err)
+		}
 	}
 
 	// Start the agent event consumer before the Telegram poller.
