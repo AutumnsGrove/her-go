@@ -247,6 +247,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
 	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
 	tb.Handle("/dream", cmd("/dream", bot.handleDream))
+	tb.Handle("/update", cmd("/update", bot.handleUpdate))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -304,6 +305,12 @@ func (b *Bot) Start() {
 	// Start the mood proposal expiry sweeper if the mood pipeline
 	// is configured. No-op otherwise.
 	b.startMoodSweeper()
+
+	// Check for a pending /update confirmation. If the previous binary
+	// wrote a her.update_pending flag before restarting, send the stored
+	// message now. This runs synchronously before Start() so the
+	// confirmation arrives before any user messages are processed.
+	b.CheckUpdatePending()
 
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()

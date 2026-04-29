@@ -45,6 +45,7 @@ type Config struct {
 	Calendar   CalendarConfig   `yaml:"calendar"`
 	Tunnel     TunnelConfig     `yaml:"tunnel"`
 	Cloudflare CloudflareConfig `yaml:"cloudflare"`
+	Update     UpdateConfig     `yaml:"update"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -83,6 +84,12 @@ type CloudflareConfig struct {
 	AccountID     string `yaml:"account_id"`      // Cloudflare account ID (found in dashboard URL or API)
 	APIToken      string `yaml:"api_token"`        // API token with Workers KV write permission
 	KVNamespaceID string `yaml:"kv_namespace_id"`  // KV namespace ID from wrangler.toml
+}
+
+// UpdateConfig holds settings for the /update self-update command.
+// Only relevant on the Mac Mini production instance — dev mode ignores it.
+type UpdateConfig struct {
+	RepoPath string `yaml:"repo_path"` // path to the git repo (default: working directory)
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
