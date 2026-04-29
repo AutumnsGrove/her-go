@@ -22,7 +22,7 @@ kv_namespaces = [
 # Permanent tunnel URL for the Mac Mini. Set this after creating the
 # Cloudflare Tunnel in Phase 3. For quick-start with trycloudflare.com,
 # use the assigned URL.
-PROD_URL = "https://her.yourdomain.com"
+PROD_URL = "https://her.autumnsgrove.com"
 
 # WEBHOOK_SECRET is stored as a Wrangler secret — not here.
 # Set it with: npx wrangler secret put WEBHOOK_SECRET

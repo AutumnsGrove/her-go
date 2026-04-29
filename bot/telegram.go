@@ -33,22 +33,22 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb               *tele.Bot
-	llm              *llm.Client          // conversational model (chat)
-	driverLLM         *llm.Client          // tool-calling orchestrator
-	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
-	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
-	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
-	embedClient      *embed.Client        // local embedding model for similarity
-	tavilyClient  *search.TavilyClient // web search and URL extraction
-	voiceClient   *voice.Client        // local STT via parakeet-server — nil if voice disabled
-	ttsClient     *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store         *memory.Store
-	cfg           *config.Config
-	configPath    string // path to config.yaml — needed for /traces toggle
-	systemPrompt  string
-	startTime     time.Time
+	tb             *tele.Bot
+	llm            *llm.Client          // conversational model (chat)
+	driverLLM      *llm.Client          // tool-calling orchestrator
+	memoryAgentLLM *llm.Client          // post-turn memory agent — nil if not configured
+	moodAgentLLM   *llm.Client          // post-turn mood agent — nil if not configured
+	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
+	embedClient    *embed.Client        // local embedding model for similarity
+	tavilyClient   *search.TavilyClient // web search and URL extraction
+	voiceClient    *voice.Client        // local STT via parakeet-server — nil if voice disabled
+	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	store          *memory.Store
+	cfg            *config.Config
+	configPath     string // path to config.yaml — needed for /traces toggle
+	systemPrompt   string
+	startTime      time.Time
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
@@ -103,6 +103,9 @@ type Bot struct {
 	// lastTraceSnapshot stores the full Board snapshot from the most
 	// recent completed turn. /lasttrace re-sends this via sendPaginated
 	// for on-demand observability when traces are disabled globally.
+	// Protected by lastTraceMu — written from a goroutine in
+	// traceFinalize, read from the /lasttrace handler.
+	lastTraceMu       sync.Mutex
 	lastTraceSnapshot string
 
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
@@ -196,7 +199,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	bot := &Bot{
 		tb:             tb,
 		llm:            llmClient,
-		driverLLM:       driverLLM,
+		driverLLM:      driverLLM,
 		memoryAgentLLM: memoryAgentLLM,
 		moodAgentLLM:   moodAgentLLM,
 		visionLLM:      visionLLM,

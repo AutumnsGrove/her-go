@@ -341,8 +341,8 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 // full UI machinery.
 func (b *Bot) baseRunParams() agent.RunParams {
 	return agent.RunParams{
-		DriverLLM:            b.driverLLM,
-		MemoryAgentLLM:       b.memoryAgentLLM,
+		DriverLLM:           b.driverLLM,
+		MemoryAgentLLM:      b.memoryAgentLLM,
 		ChatLLM:             b.llm,
 		VisionLLM:           b.visionLLM,
 		ClassifierLLM:       b.classifierLLM,

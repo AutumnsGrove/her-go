@@ -218,7 +218,7 @@ func runTunnelSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing cloudflared config: %w", err)
 	}
 	cfgFile.Close()
-	log.Infof("wrote: %s", configPath)
+	log.Info("wrote cloudflared config", "path", configPath)
 
 	// Step 2: Generate and install the launchd plist.
 	log.Info("[2/3] generating tunnel launchd plist")
@@ -255,7 +255,7 @@ func runTunnelSetup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing tunnel plist: %w", err)
 	}
 	plistFile.Close()
-	log.Infof("wrote: %s", dest)
+	log.Info("wrote tunnel plist", "path", dest)
 
 	// Step 3: Load the service.
 	log.Info("[3/3] loading tunnel service")
@@ -274,7 +274,7 @@ func runTunnelSetup(cmd *cobra.Command, args []string) error {
 		"domain", cfg.Tunnel.Domain,
 		"port", webhookPort,
 	)
-	log.Infof("test: curl -I https://%s", cfg.Tunnel.Domain)
+	log.Info("verify with", "cmd", "curl -I https://"+cfg.Tunnel.Domain)
 
 	return nil
 }
