@@ -102,6 +102,13 @@ type AgentConfig struct {
 	// like "stressed" but skips neutral turns). Set to 0 to disable.
 	// When left unset (0 or negative), defaults to 0.15.
 	SignalThreshold float64
+
+	// SessionGap is the minimum time gap between messages that counts
+	// as a conversation boundary. When a gap this large is found in the
+	// turn history, only messages after the gap are kept — stale
+	// emotional context from hours/days ago doesn't bleed into the
+	// current session's mood inference. Default 4 hours.
+	SessionGap time.Duration
 }
 
 // withDefaults returns a copy of c with every zero-value field filled
@@ -134,6 +141,9 @@ func (c AgentConfig) withDefaults() AgentConfig {
 	}
 	if c.SignalThreshold <= 0 {
 		c.SignalThreshold = 0.15
+	}
+	if c.SessionGap <= 0 {
+		c.SessionGap = 4 * time.Hour
 	}
 	return c
 }
@@ -240,6 +250,16 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 	// Trim to the last N turns per config.
 	if len(turns) > cfg.ContextTurns {
 		turns = turns[len(turns)-cfg.ContextTurns:]
+	}
+
+	// Session gap filter: scan backwards for a time gap larger than
+	// SessionGap. If found, discard everything before it — stale
+	// emotional context from a previous session shouldn't bleed into
+	// the current mood inference. Example: a heavy conversation last
+	// night + "hey mira" this morning → only "hey mira" survives.
+	turns = trimToCurrentSession(turns, cfg.SessionGap)
+	if len(turns) == 0 {
+		return Result{Action: ActionDroppedNoSignal, Reason: "no turns in current session (gap filter)"}
 	}
 
 	// Trace collector — accumulates HTML lines and flushes to the
@@ -653,6 +673,31 @@ func countLabelOverlap(a, b []string) int {
 		}
 	}
 	return count
+}
+
+// trimToCurrentSession scans turns (chronological order) backwards for
+// the last time gap exceeding the threshold. If found, returns only the
+// turns after the gap — the "current session." If no gap exceeds the
+// threshold, all turns are returned.
+//
+// This prevents stale emotional context from a previous session (e.g.,
+// a heavy conversation last night) from bleeding into a fresh greeting
+// this morning. The mood agent should only infer from the current
+// conversational session, not yesterday's emotional state.
+func trimToCurrentSession(turns []Turn, gap time.Duration) []Turn {
+	if len(turns) < 2 || gap <= 0 {
+		return turns
+	}
+	// Walk backwards — we want the LAST gap, which marks the start
+	// of the current session.
+	for i := len(turns) - 1; i > 0; i-- {
+		prev := turns[i-1].Timestamp
+		curr := turns[i].Timestamp
+		if !prev.IsZero() && !curr.IsZero() && curr.Sub(prev) >= gap {
+			return turns[i:]
+		}
+	}
+	return turns
 }
 
 // errResult wraps a pre-dispatch failure so callers still get a

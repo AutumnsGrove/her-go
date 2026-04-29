@@ -88,6 +88,7 @@ func (b *Bot) initMood() error {
 			DedupWindow:     dedupWin,
 			DedupSimilarity: dedupSim,
 			ProposalExpiry:  proposalExpiry,
+			SessionGap:      time.Duration(b.cfg.Mood.SessionGapMinutes) * time.Minute,
 		},
 	}
 

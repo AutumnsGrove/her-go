@@ -102,6 +102,7 @@ mood:
   proposal_expiry_minutes: 30    # how long a Telegram proposal stays tappable
   sweeper_interval_minutes: 5    # how often the expiry sweeper runs
   daily_rollup_cron: "0 21 * * *"  # 21:00 local — end-of-day rollup
+  session_gap_minutes: 240         # gap (minutes) between messages that marks a session boundary — stale turns excluded from mood inference
   # classifier is the unified cfg.classifier.model — same model across
   # memory writes and mood writes, no separate knob.
 

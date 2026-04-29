@@ -426,4 +426,75 @@ func TestRunAgent_ConfigDefaultsApplied(t *testing.T) {
 	if cfg.ProposalExpiry != 30*time.Minute {
 		t.Errorf("ProposalExpiry default = %v, want 30m", cfg.ProposalExpiry)
 	}
+	if cfg.SessionGap != 4*time.Hour {
+		t.Errorf("SessionGap default = %v, want 4h", cfg.SessionGap)
+	}
+}
+
+// TestTrimToCurrentSession verifies the session gap filter — stale
+// turns from a previous session are dropped, only the current session
+// survives.
+func TestTrimToCurrentSession(t *testing.T) {
+	now := time.Now()
+
+	t.Run("no gap keeps all turns", func(t *testing.T) {
+		turns := []Turn{
+			{Role: "user", ScrubbedContent: "hey", Timestamp: now.Add(-10 * time.Minute)},
+			{Role: "assistant", ScrubbedContent: "hi", Timestamp: now.Add(-9 * time.Minute)},
+			{Role: "user", ScrubbedContent: "how are you", Timestamp: now.Add(-1 * time.Minute)},
+		}
+		result := trimToCurrentSession(turns, 4*time.Hour)
+		if len(result) != 3 {
+			t.Errorf("got %d turns, want 3 (no gap to trim)", len(result))
+		}
+	})
+
+	t.Run("overnight gap trims to current session", func(t *testing.T) {
+		yesterday := now.Add(-14 * time.Hour)
+		turns := []Turn{
+			{Role: "user", ScrubbedContent: "i'm drowning in debt", Timestamp: yesterday},
+			{Role: "assistant", ScrubbedContent: "that sounds really hard", Timestamp: yesterday.Add(1 * time.Minute)},
+			{Role: "user", ScrubbedContent: "everything feels hopeless", Timestamp: yesterday.Add(3 * time.Minute)},
+			{Role: "assistant", ScrubbedContent: "i'm here for you", Timestamp: yesterday.Add(4 * time.Minute)},
+			// ^^^ 14-hour gap ^^^
+			{Role: "user", ScrubbedContent: "hey mira", Timestamp: now},
+		}
+		result := trimToCurrentSession(turns, 4*time.Hour)
+		if len(result) != 1 {
+			t.Errorf("got %d turns, want 1 (only 'hey mira' after gap)", len(result))
+		}
+		if len(result) > 0 && result[0].ScrubbedContent != "hey mira" {
+			t.Errorf("surviving turn = %q, want 'hey mira'", result[0].ScrubbedContent)
+		}
+	})
+
+	t.Run("multiple gaps uses the last one", func(t *testing.T) {
+		turns := []Turn{
+			{Role: "user", ScrubbedContent: "old stuff", Timestamp: now.Add(-20 * time.Hour)},
+			// 10-hour gap
+			{Role: "user", ScrubbedContent: "morning check-in", Timestamp: now.Add(-10 * time.Hour)},
+			// 5-hour gap → this is the LAST gap ≥ 4h, so trim happens here
+			{Role: "user", ScrubbedContent: "afternoon", Timestamp: now.Add(-5 * time.Hour)},
+			// 2-hour gap (below threshold)
+			{Role: "user", ScrubbedContent: "evening", Timestamp: now.Add(-3 * time.Hour)},
+			{Role: "user", ScrubbedContent: "current", Timestamp: now},
+		}
+		result := trimToCurrentSession(turns, 4*time.Hour)
+		// The last gap ≥ 4h is between "morning check-in" (-10h) and "afternoon" (-5h).
+		// Everything from "afternoon" onward survives.
+		if len(result) != 3 {
+			t.Errorf("got %d turns, want 3 (afternoon + evening + current)", len(result))
+		}
+	})
+
+	t.Run("zero gap disables filter", func(t *testing.T) {
+		turns := []Turn{
+			{Role: "user", ScrubbedContent: "old", Timestamp: now.Add(-24 * time.Hour)},
+			{Role: "user", ScrubbedContent: "new", Timestamp: now},
+		}
+		result := trimToCurrentSession(turns, 0)
+		if len(result) != 2 {
+			t.Errorf("got %d turns, want 2 (filter disabled)", len(result))
+		}
+	})
 }
