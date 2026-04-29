@@ -49,6 +49,7 @@ phases:                    # For multi-phase plans
 **High Priority (Ready/In Progress):**
 - [Test Infrastructure](TEST_PLAN.md) — in-progress
 - [Coding Agent](PLAN-coding-agent.md) — planning
+- [Always-On Infrastructure](PLAN-always-on-infra.md) — planning
 
 **Ready for Implementation:**
 - [Calendar Bridge](PLAN-calendar-bridge.md)
