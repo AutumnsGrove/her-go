@@ -191,3 +191,11 @@ calendar:
       address: "855 Peachtree St NE, Atlanta, GA 30308"
       default_role: "Grill Cook"
       aliases: []
+
+# Cloudflare Tunnel — used for always-on deployment. The tunnel creates a
+# stable public HTTPS URL that routes to the local webhook server, even behind
+# NAT. Only needed when mode is "webhook". Run `her tunnel setup` to configure.
+tunnel:
+  name: ""                # tunnel name from `cloudflared tunnel create` (e.g., "her-prod")
+  domain: ""              # public hostname routed to this tunnel (e.g., "her.yourdomain.com")
+  credentials_file: ""    # path to tunnel credentials JSON — auto-filled by `her tunnel setup`
