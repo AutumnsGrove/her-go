@@ -334,6 +334,12 @@ type MoodConfig struct {
 	// DailyRollupCron is the cron expression for the daily rollup
 	// task. Default "0 21 * * *" (9pm local).
 	DailyRollupCron string `yaml:"daily_rollup_cron"`
+
+	// SessionGapMinutes is the minimum gap (in minutes) between messages
+	// that marks a conversation boundary. Turns before the gap are
+	// excluded from mood inference so stale emotional context doesn't
+	// bleed across sessions. Default 240 (4 hours).
+	SessionGapMinutes int `yaml:"session_gap_minutes"`
 }
 
 // ProviderConfig controls OpenRouter provider routing from config.yaml.

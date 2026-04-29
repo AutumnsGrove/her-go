@@ -59,7 +59,14 @@ func buildPrompt(template string, v *Vocab, turns []Turn, recentMoods []string) 
 		if t.Role == "assistant" {
 			role = "her"
 		}
-		fmt.Fprintf(&b, "%s: %s\n\n", role, t.ScrubbedContent)
+		// Include timestamps so the LLM can reason about time gaps.
+		// A message from 12 hours ago carries less emotional weight
+		// than one from 2 minutes ago.
+		if !t.Timestamp.IsZero() {
+			fmt.Fprintf(&b, "[%s] %s: %s\n\n", t.Timestamp.Format("2006-01-02 15:04"), role, t.ScrubbedContent)
+		} else {
+			fmt.Fprintf(&b, "%s: %s\n\n", role, t.ScrubbedContent)
+		}
 	}
 
 	// Format recent moods as a bulleted list, or "None yet" if empty.
