@@ -254,7 +254,46 @@ update:
 
 `com.mira.her-go.plist` already exists in the project root — the service label is already established.
 
-### Phase 6 — D1 Shared State (Dependency)
+### Phase 6 — Trace Parity with TUI
+
+**Goal:** When running headless on the Mac Mini, Telegram traces should give the same observability the TUI gives during local dev. The trace infrastructure (`Board`, slots, live-editing) already exists and is solid — this phase is about filling the content gaps and handling overflow gracefully.
+
+**What the TUI shows that traces currently don't:**
+
+| TUI section | What's missing from traces |
+|---|---|
+| Turn header | Per-turn cost, latency, tool count — shown as a summary line in TUI, not written to the `main` trace slot |
+| Context box | "N memories retrieved semantically" — a `ContextEvent` exists in the TUI event system but isn't surfaced to the trace Board |
+| Reply box | Full token breakdown (prompt + completion + total), cost, latency — TUI renders this as a metrics line; traces get the reply text but not the numbers |
+| Persona box | `reflection_triggered`, `rewrite_triggered` events — these go to TUI's persona section but there's no persona trace slot |
+| Driver box | Tool calls are already in traces but think/reply/done rendering could be richer (TUI shows truncated thought text inline) |
+
+Memory and mood slots already exist and are wired up — those are fine.
+
+**New trace slot: `persona`**
+
+Register a `persona` stream in `trace/registry.go` (Order 150, between main and memory). Wire it up in `bot/run_agent.go` alongside the existing `traceCallback`, `memoryTraceCallback`, `moodTraceCallback`. Persona events (reflection, rewrite, trait shift) write into this slot.
+
+**Enriching the `main` slot**
+
+The turn summary line (cost · latency · N tools) should be appended to the main slot when the turn completes — same data the TUI puts in the turn header. Context retrieval count should appear at the top of main when facts are injected.
+
+**Pagination for overflow**
+
+The trace Board live-edits a single Telegram message per turn. Telegram's hard limit is 4096 characters. Heavy turns (long think steps, multiple web searches, memory writes) can exceed this silently.
+
+`bot/paginate.go` already has `b.sendPaginated(c, text)` — one call, handles page splitting, page footer, and ◀/▶ inline buttons automatically. It's used by `/facts` today.
+
+Approach:
+- Keep the live-edited single message during the turn (in-progress traces stream updates — splitting mid-stream is disruptive)
+- When the turn completes: if the final Board snapshot exceeds ~3800 chars, replace the live message with a paginated send via `b.sendPaginated`
+- Add a `/lasttrace` command that re-sends the last turn's full trace through `sendPaginated` on demand — useful when traces are disabled globally but you want the detail for one specific turn
+
+**`/lasttrace` command**
+
+Store the last completed turn's full Board snapshot in the `Bot` struct (a single `string` field, replaced each turn). `/lasttrace` calls `b.sendPaginated(c, b.lastTraceSnapshot)`. If traces are globally disabled, this is the only way to get the detail — opt-in per-turn observability.
+
+### Phase 7 — D1 Shared State (Dependency)
 
 This phase enables the MacBook dev instance to share memory/persona with the Mac Mini prod instance. Without it, `her-dev.db` starts empty and doesn't know about real memories — which is fine for testing but means the dev bot "doesn't know you."
 
@@ -287,6 +326,8 @@ When `her dev` starts on MacBook:
 2. Mac Mini bot continues running, receives nothing until dev session ends
 3. MacBook has TUI, full observability
 4. Ctrl+C: KV cleared, Mac Mini immediately resumes receiving all traffic
+
+Note: `her dev` does not exist yet — `cmd/dev.go` is new code. The existing `her run` continues to work as-is for local dev before Phase 4 is implemented.
 
 ---
 
