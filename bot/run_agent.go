@@ -139,12 +139,19 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	var traceCallback tools.TraceCallback
 	var memoryTraceCallback tools.TraceCallback
 	var moodTraceCallback tools.TraceCallback
+	var personaTraceCallback tools.TraceCallback
+	var traceFinalize func()
 	if b.cfg.Driver.Trace {
-		getTrace := b.makeTraceCallbacks(c)
-		traceCallback = getTrace("main")
-		memoryTraceCallback = getTrace("memory")
-		moodTraceCallback = getTrace("mood")
+		tr := b.makeTraceCallbacks(c)
+		traceCallback = tr.getCallback("main")
+		memoryTraceCallback = tr.getCallback("memory")
+		moodTraceCallback = tr.getCallback("mood")
+		personaTraceCallback = tr.getCallback("persona")
+		traceFinalize = tr.finalize
 	}
+	// Suppress unused-variable warning — personaTraceCallback is wired
+	// up for future use by the dreamer/reflect path.
+	_ = personaTraceCallback
 
 	// --- Reply placeholder ---
 	// The thinking emoji (💭) signals to the user that we're processing.
@@ -302,6 +309,21 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	// launching the goroutine to prevent a race where all known phases
 	// finish and TurnEndEvent fires before the mood goroutine starts.
 	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker)
+
+	// Finalize the trace — store the snapshot for /lasttrace and
+	// paginate overflow if the trace exceeds Telegram's char limit.
+	// This runs after the main agent completes but before mood/memory
+	// background agents finish, so their slots may still be updating.
+	// That's OK — /lasttrace can be called later to get the full picture.
+	if traceFinalize != nil {
+		// Small delay lets the background agents write their initial
+		// content before we snapshot. Not critical — the snapshot
+		// captures whatever's in the board at this moment.
+		go func() {
+			time.Sleep(2 * time.Second)
+			traceFinalize()
+		}()
+	}
 
 	// No manual TurnEndEvent here — the Tracker emits it when all
 	// phases (main, memory, mood) complete, with accumulated metrics.

@@ -100,6 +100,11 @@ type Bot struct {
 	// language.
 	agentEvents chan agent.AgentEvent
 
+	// lastTraceSnapshot stores the full Board snapshot from the most
+	// recent completed turn. /lasttrace re-sends this via sendPaginated
+	// for on-demand observability when traces are disabled globally.
+	lastTraceSnapshot string
+
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
 	ownerChat int64
@@ -248,6 +253,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
 	tb.Handle("/dream", cmd("/dream", bot.handleDream))
 	tb.Handle("/update", cmd("/update", bot.handleUpdate))
+	tb.Handle("/lasttrace", cmd("/lasttrace", bot.handleLastTrace))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
