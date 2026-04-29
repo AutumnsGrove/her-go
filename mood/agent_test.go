@@ -182,17 +182,23 @@ func TestRunAgent_SkipFlagDropsSilently(t *testing.T) {
 }
 
 func TestRunAgent_LowConfidenceDropped(t *testing.T) {
-	// LLM says 0.30 confidence, turn has no affect signal, so both
-	// sources agree: drop it.
+	// LLM says 0.30 confidence, heuristic only scores 0.25 (bare affect
+	// word, no firstPersonAffect match), so hybrid max is 0.30 — below
+	// the low threshold (0.40). Should be dropped.
+	//
+	// The input uses a third-person affect word ("disappointed") so it
+	// passes the pre-gate but doesn't trigger firstPersonAffect phrases
+	// like "i feel" or "feeling" which would add +0.50 and push the
+	// heuristic above the threshold.
 	reply := `{"skip":false,"valence":4,"labels":["Calm"],"associations":[],"note":"neutral","confidence":0.30,"signals":[]}`
 	server := newScriptedServer(t, reply)
 	deps := testDeps(t, server, newAgentTestStore(t))
 
-	// Subtle affect word passes pre-gate but LLM rates it low confidence.
-	turns := []Turn{{Role: "user", ScrubbedContent: "feeling off. what time is it anyway"}}
+	turns := []Turn{{Role: "user", ScrubbedContent: "she seemed disappointed. what time is it anyway"}}
 	res := RunAgent(context.Background(), deps, AgentConfig{}, turns)
 	if res.Action != ActionDroppedLow {
-		t.Errorf("Action = %q, want %q", res.Action, ActionDroppedLow)
+		t.Errorf("Action = %q, want %q (confidence=%.2f, heuristic should be 0.25)",
+			res.Action, ActionDroppedLow, res.Confidence)
 	}
 }
 
