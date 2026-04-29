@@ -71,6 +71,16 @@ Webhooks make Telegram the *caller*, not the receiver. There is exactly one regi
 
 The Worker forwards and immediately returns `200 OK` to Telegram using `ctx.waitUntil()`. This decouples Telegram's timeout from backend latency. If the backend is slow, Telegram doesn't care — it already got its `200`.
 
+### Why Cloudflare Tunnels Are Needed (and Why Your Phone Isn't Involved)
+
+Your phone is just a Telegram client — it sends messages to Telegram's servers over normal Telegram, and receives replies the same way. The phone never touches the Mac Mini or the CF Worker directly. No changes needed there.
+
+The tunnel is needed for a different reason: the CF Worker needs to forward Telegram updates to the Mac Mini, and the Mac Mini is behind your home NAT. It has a private IP (`192.168.1.x`) that nothing on the open internet can reach by default. The tunnel solves this by having the Mac Mini establish an outbound connection to Cloudflare's edge, which creates a stable inbound path — essentially port forwarding, but handled by Cloudflare with a permanent HTTPS URL regardless of your home IP changing.
+
+Only the two machines that act as webhook receivers need a tunnel:
+- **Mac Mini** — permanent tunnel, always running as a launchd service
+- **MacBook** — temporary tunnel, only active during `her dev` sessions
+
 ### KV Routing Logic
 
 Two KV keys control routing:
