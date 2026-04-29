@@ -207,3 +207,8 @@ cloudflare:
   account_id: ""          # Cloudflare account ID (dashboard URL: /accounts/<this>/...)
   api_token: ""           # API token with Workers KV write permission
   kv_namespace_id: ""     # KV namespace ID (from wrangler.toml after `npx wrangler kv namespace create`)
+
+# Self-update via /update Telegram command. Only used on the Mac Mini
+# production instance — pulls latest code, builds, and restarts via launchd.
+update:
+  repo_path: ""           # path to the git repo (default: working directory). Set this on the Mac Mini.
