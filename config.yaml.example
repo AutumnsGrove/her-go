@@ -199,3 +199,11 @@ tunnel:
   name: ""                # tunnel name from `cloudflared tunnel create` (e.g., "her-prod")
   domain: ""              # public hostname routed to this tunnel (e.g., "her.yourdomain.com")
   credentials_file: ""    # path to tunnel credentials JSON — auto-filled by `her tunnel setup`
+
+# Cloudflare API credentials for dev mode (`her dev`). Only needed on the
+# MacBook — used to set/clear KV routing keys so the CF Worker sends traffic
+# to the dev tunnel. The Mac Mini production instance doesn't need these.
+cloudflare:
+  account_id: ""          # Cloudflare account ID (dashboard URL: /accounts/<this>/...)
+  api_token: ""           # API token with Workers KV write permission
+  kv_namespace_id: ""     # KV namespace ID (from wrangler.toml after `npx wrangler kv namespace create`)

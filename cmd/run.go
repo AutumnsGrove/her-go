@@ -53,6 +53,14 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 }
 
+// configTransform is an optional hook that modifies the config after loading.
+// Set by `her dev` to override mode, db_path, etc. before the bot starts.
+var configTransform func(*config.Config)
+
+// devCleanup is called during shutdown if set. `her dev` uses this to clear
+// KV routing keys so the CF Worker routes traffic back to prod.
+var devCleanup func()
+
 // runBot contains all the initialization and startup logic.
 // With the TUI enabled, it:
 //  1. Does fatal pre-checks (config, tokens, DB) — these fail before the TUI
@@ -66,6 +74,11 @@ func runBot(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
 		log.Fatal("Failed to load config", "err", err)
+	}
+
+	// Apply dev mode overrides if `her dev` set a transform.
+	if configTransform != nil {
+		configTransform(cfg)
 	}
 
 	// Export config secrets as process-level env vars so skills can find
@@ -502,6 +515,13 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 	}
 
 	// --- Cleanup ---
+
+	// Dev mode cleanup (clear KV routing keys) runs first — we want
+	// traffic to route back to prod ASAP, before the bot actually stops.
+	if devCleanup != nil {
+		devCleanup()
+	}
+
 	dreamerCancel() // tell the dreamer goroutine to stop at its next wake-up
 	schedCancel()   // same for the scheduler runner
 
