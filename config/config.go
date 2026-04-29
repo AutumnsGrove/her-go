@@ -123,11 +123,24 @@ func (c *Config) ExpandPrompt(content string) string {
 }
 
 // TelegramConfig holds Telegram bot settings.
+//
+// Mode controls the update transport:
+//   - "poll" (default): the bot long-polls Telegram every 10 seconds.
+//     Simple, works anywhere, no public URL needed.
+//   - "webhook": Telegram POSTs updates to us. Requires a public URL
+//     (CF Worker + Cloudflare Tunnel) and a listening HTTP server.
+//
+// In webhook mode, telebot opens an HTTP server on WebhookPort and
+// validates the X-Telegram-Bot-Api-Secret-Token header against
+// WebhookSecret. The CF Worker forwards updates here — the bot never
+// registers itself as the webhook endpoint (IgnoreSetWebhook is set).
 type TelegramConfig struct {
-	Token      string `yaml:"token"`
-	Mode       string `yaml:"mode"`        // "poll" or "webhook"
-	WebhookURL string `yaml:"webhook_url"` // only needed for webhook mode
-	OwnerChat  int64  `yaml:"owner_chat"`  // chat ID for the bot owner — used by scheduler for proactive messages
+	Token          string `yaml:"token"`
+	Mode           string `yaml:"mode"`            // "poll" or "webhook"
+	WebhookURL     string `yaml:"webhook_url"`     // public URL registered with Telegram (set by CF Worker, not the bot)
+	WebhookPort    int    `yaml:"webhook_port"`    // local port for webhook HTTP server (default 8765)
+	WebhookSecret  string `yaml:"webhook_secret"`  // shared secret — validated via X-Telegram-Bot-Api-Secret-Token header
+	OwnerChat      int64  `yaml:"owner_chat"`      // chat ID for the bot owner — used by scheduler for proactive messages
 }
 
 // FallbackConfig holds settings for a fallback model. When the primary

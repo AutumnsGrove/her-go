@@ -1,6 +1,6 @@
 ---
 title: "Always-On Infrastructure: CF Worker Routing + Mac Mini Deployment"
-status: planning
+status: in-progress
 created: 2026-04-29
 updated: 2026-04-29
 category: infrastructure
@@ -59,7 +59,7 @@ Telegram
          │                    │
          ▼                    ▼
   her webhook server   her webhook server
-  port 8765 (prod)     port 8765 (dev)
+  port 8443 (prod)     port 8443 (dev)
          │
          ▼
   her.db (SQLite)      her-dev.db (SQLite)
@@ -106,7 +106,7 @@ If `dev_mode_active` is set but `dev_instance_url` is missing or the forward fai
 - `bot/telegram.go`: conditionally use `tele.Webhook{Listen: ":8765", ...}` when `mode == "webhook"`, skip `RemoveWebhook`
 - `bot/telegram.go`: don't call `RemoveWebhook(true)` in webhook mode (it would unregister the webhook the CF Worker registered)
 - The telebot library handles the HTTP server and update parsing automatically in webhook mode — it just needs a `Listen` address and an optional secret token
-- `config.yaml.example`: add `webhook_port: 8765` and `webhook_secret` fields
+- `config.yaml.example`: add `webhook_port: 8443` and `webhook_secret` fields
 
 The webhook secret is a random string you set once. Telegram sends it in the `X-Telegram-Bot-Api-Secret-Token` header with every update. The CF Worker validates it before forwarding — drops any request that doesn't match. This is the primary security layer against random internet traffic.
 
@@ -182,14 +182,14 @@ tunnel: her-prod
 credentials-file: /Users/autumn/.cloudflared/<tunnel-id>.json
 ingress:
   - hostname: her.yourdomain.com
-    service: http://localhost:8765
+    service: http://localhost:8443
   - service: http_status:404
 ```
 
 Run as a launchd service (same pattern as the bot itself — `cmd/setup.go` could generate the plist).
 
 **MacBook (ephemeral dev tunnel):**
-No setup needed. Use `cloudflared tunnel --url http://localhost:8765` — Cloudflare assigns a random `*.trycloudflare.com` URL. The dev mode command captures this URL and puts it in KV.
+No setup needed. Use `cloudflared tunnel --url http://localhost:8443` — Cloudflare assigns a random `*.trycloudflare.com` URL. The dev mode command captures this URL and puts it in KV.
 
 **Open question:** Does your domain's nameservers point to Cloudflare? This is required for `cloudflared tunnel route dns` to work. If not, a `*.trycloudflare.com` URL can also be used as the permanent Mac Mini URL — it's less clean but doesn't require a domain.
 
@@ -198,7 +198,7 @@ No setup needed. Use `cloudflared tunnel --url http://localhost:8765` — Cloudf
 **What gets built:** A `cmd/dev.go` command that manages the MacBook dev session lifecycle.
 
 `her dev` does:
-1. Starts `cloudflared tunnel --url http://localhost:8765` as a subprocess, captures the assigned URL from stdout
+1. Starts `cloudflared tunnel --url http://localhost:8443` as a subprocess, captures the assigned URL from stdout
 2. POSTs to CF Workers API: sets `dev_mode_active=true`, `dev_instance_url=<url>`, `dev_session_heartbeat=<now>`
 3. Starts the bot in dev mode using `config.dev.yaml` (separate DB path `./her-dev.db`, same API keys)
 4. Sends a background goroutine that refreshes `dev_session_heartbeat` in KV every 2 minutes (keeps session alive)
@@ -209,7 +209,7 @@ No setup needed. Use `cloudflared tunnel --url http://localhost:8765` — Cloudf
 telegram:
   token: "${TELEGRAM_BOT_TOKEN}"  # same token, the router handles separation
   mode: "webhook"
-  webhook_port: 8765
+  webhook_port: 8443
 memory:
   db_path: "./her-dev.db"
 # everything else inherited from config.yaml
