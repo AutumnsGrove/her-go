@@ -9,7 +9,7 @@ import (
 	"her/memory"
 )
 
-func newProposalTestStore(t *testing.T) *memory.Store {
+func newProposalTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "proposal.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -20,7 +20,7 @@ func newProposalTestStore(t *testing.T) *memory.Store {
 	return store
 }
 
-func seedPendingProposal(t *testing.T, store *memory.Store, chatID, msgID int64) int64 {
+func seedPendingProposal(t *testing.T, store memory.Store, chatID, msgID int64) int64 {
 	t.Helper()
 	entry := memory.MoodEntry{
 		Kind:    memory.MoodKindMomentary,

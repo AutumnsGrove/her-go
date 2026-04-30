@@ -25,7 +25,7 @@ import (
 
 // newTestStore creates a fresh SQLite store in a temp dir. The cleanup is
 // registered automatically via t.Cleanup — no defer needed at the call site.
-func newTestStore(t *testing.T) *memory.Store {
+func newTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -39,7 +39,7 @@ func newTestStore(t *testing.T) *memory.Store {
 // newCtx builds a minimal Context: a real store, no embed, no classifier.
 // With EmbedClient=nil the dedup path is skipped entirely.
 // With ClassifierLLM=nil the classifier gate is skipped (fail-open).
-func newCtx(store *memory.Store) *tools.Context {
+func newCtx(store memory.Store) *tools.Context {
 	return &tools.Context{
 		Store: store,
 		Cfg: &config.Config{
@@ -51,7 +51,7 @@ func newCtx(store *memory.Store) *tools.Context {
 
 // savedUserMemories reads back all active "user" memories from the store.
 // Using RecentMemories lets us verify the DB write without raw SQL.
-func savedUserMemories(t *testing.T, store *memory.Store) []memory.Memory {
+func savedUserMemories(t *testing.T, store memory.Store) []memory.Memory {
 	t.Helper()
 	mems, err := store.RecentMemories("user", 100)
 	if err != nil {
@@ -61,7 +61,7 @@ func savedUserMemories(t *testing.T, store *memory.Store) []memory.Memory {
 }
 
 // savedSelfMemories reads back all active "self" memories.
-func savedSelfMemories(t *testing.T, store *memory.Store) []memory.Memory {
+func savedSelfMemories(t *testing.T, store memory.Store) []memory.Memory {
 	t.Helper()
 	mems, err := store.RecentMemories("self", 100)
 	if err != nil {

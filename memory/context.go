@@ -119,7 +119,7 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 // maxSemanticDist is the cosine distance cutoff — memories farther than this
 // from the query are filtered out even if they're the "nearest" neighbors.
 // Set to 0 to disable filtering (include all KNN results).
-func BuildMemoryContext(store *Store, maxMemories int, relevantMemories []Memory, userName string, maxSemanticDist float64) (string, []InjectedMemory, error) {
+func BuildMemoryContext(store Store, maxMemories int, relevantMemories []Memory, userName string, maxSemanticDist float64) (string, []InjectedMemory, error) {
 	var parts []string
 	var allInjected []InjectedMemory
 
@@ -164,7 +164,7 @@ func BuildMemoryContext(store *Store, maxMemories int, relevantMemories []Memory
 // about how each was selected.
 //
 // If relevantMemories is nil (no embeddings), returns nothing.
-func blendMemories(store *Store, subject string, maxMemories int, relevantMemories []Memory, maxDist float64) ([]Memory, []InjectedMemory, error) {
+func blendMemories(store Store, subject string, maxMemories int, relevantMemories []Memory, maxDist float64) ([]Memory, []InjectedMemory, error) {
 	seen := make(map[int64]bool)
 	var result []Memory
 	var injected []InjectedMemory

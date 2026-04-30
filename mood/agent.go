@@ -169,7 +169,7 @@ type Deps struct {
 	Classifier *llm.Client
 
 	// Store is the mood + proposal store. Required.
-	Store *memory.Store
+	Store memory.Store
 
 	// Vocab validates labels/associations returned by the LLM.
 	// Required — drop any label not in the vocab before hitting the DB.

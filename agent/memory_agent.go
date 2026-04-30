@@ -56,7 +56,7 @@ type MemoryAgentInput struct {
 type MemoryAgentParams struct {
 	LLM           *llm.Client    // nil = memory agent disabled
 	ClassifierLLM *llm.Client    // nil = classifier disabled (writes pass through)
-	Store         *memory.Store
+	Store         memory.Store
 	EmbedClient   *embed.Client
 	Cfg           *config.Config
 	TraceCallback tools.TraceCallback    // nil = tracing disabled for memory agent
@@ -316,7 +316,7 @@ func loadMemoryAgentPrompt(cfg *config.Config) string {
 // transcript that the memory model can parse. The format is intentionally
 // simple — three labelled sections that map directly to what the model
 // needs to make save/skip decisions.
-func buildMemoryTranscript(input MemoryAgentInput, store *memory.Store) string {
+func buildMemoryTranscript(input MemoryAgentInput, store memory.Store) string {
 	var b strings.Builder
 
 	b.WriteString("## What the user said\n")

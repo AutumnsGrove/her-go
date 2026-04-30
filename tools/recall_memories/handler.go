@@ -40,7 +40,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if ctx.EmbedClient == nil {
 		return "memory search is not available (embedding client not configured)"
 	}
-	if ctx.Store.EmbedDimension == 0 {
+	if ctx.Store.GetEmbedDimension() == 0 {
 		return "memory search is not available (vector index not configured)"
 	}
 

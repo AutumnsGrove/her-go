@@ -24,7 +24,7 @@ import (
 
 // newTestStore creates a fresh SQLite store in a temp dir. Cleanup is
 // automatic via t.Cleanup — no defer needed at the call site.
-func newTestStore(t *testing.T) *memory.Store {
+func newTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -38,7 +38,7 @@ func newTestStore(t *testing.T) *memory.Store {
 // newCtx builds a minimal Context with a real store and the given location
 // config. No Foursquare or Tavily clients — both are nil so we test the
 // handler's resolution logic and error paths without network calls.
-func newCtx(t *testing.T, store *memory.Store, loc config.LocationConfig) *tools.Context {
+func newCtx(t *testing.T, store memory.Store, loc config.LocationConfig) *tools.Context {
 	t.Helper()
 	return &tools.Context{
 		Store: store,

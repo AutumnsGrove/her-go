@@ -8,7 +8,7 @@ import (
 // SaveSummary stores a compacted summary of older messages.
 // startID and endID mark the range of message IDs that were summarized.
 // stream is "chat" or "agent" — each model maintains its own running summary.
-func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64, stream string) (int64, error) {
+func (s *SQLiteStore) SaveSummary(conversationID, summary string, startID, endID int64, stream string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO summaries (conversation_id, summary, messages_start_id, messages_end_id, stream)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -26,7 +26,7 @@ func (s *Store) SaveSummary(conversationID, summary string, startID, endID int64
 
 // LatestSummary returns the most recent summary for a conversation and stream.
 // stream is "chat" or "agent". Returns empty string if no summary exists yet.
-func (s *Store) LatestSummary(conversationID, stream string) (string, int64, error) {
+func (s *SQLiteStore) LatestSummary(conversationID, stream string) (string, int64, error) {
 	var summary string
 	var endID int64
 	err := s.db.QueryRow(

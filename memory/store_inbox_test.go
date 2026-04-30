@@ -8,7 +8,7 @@ import (
 // newInboxTestStore opens a fresh temp SQLite with all tables created.
 // embedDim=0 means the vec_memories / vec_moods virtual tables are skipped —
 // these tests only touch the inbox table.
-func newInboxTestStore(t *testing.T) *Store {
+func newInboxTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "inbox_test.db")
 	store, err := NewStore(dbPath, 0)

@@ -46,7 +46,7 @@ type extractedMemory struct {
 // conversationID identifies which conversation to extract from.
 // sinceID is the last message ID that was already extracted — we only
 // look at messages after this point to avoid re-extracting.
-func ExtractMemories(store *Store, llmClient *llm.Client, conversationID string, sinceID int64, botName, userName string) error {
+func ExtractMemories(store Store, llmClient *llm.Client, conversationID string, sinceID int64, botName, userName string) error {
 	// Get the messages we haven't extracted from yet.
 	messages, err := store.MessagesAfter(conversationID, sinceID)
 	if err != nil {

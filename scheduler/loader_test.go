@@ -30,7 +30,7 @@ func writeYAML(t *testing.T, rootDir, relPath, body string) string {
 }
 
 // newLoaderTestStore is a store helper with the scheduler_tasks table.
-func newLoaderTestStore(t *testing.T) *memory.Store {
+func newLoaderTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "loader.db")
 	store, err := memory.NewStore(dbPath, 0)

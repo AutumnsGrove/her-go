@@ -13,7 +13,7 @@ import (
 // newTestStore opens a fresh temp SQLite database with all tables created.
 // Pass embedDim > 0 to get the vec_memories virtual table (needed for the
 // EmbedDimension guard-rail tests).
-func newTestStore(t *testing.T, embedDim int) *memory.Store {
+func newTestStore(t *testing.T, embedDim int) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, embedDim)
@@ -61,8 +61,8 @@ func TestHandle_EmbedClientNil(t *testing.T) {
 //     early-return behaviour through the same code block.
 func TestHandle_EmbedDimensionZero(t *testing.T) {
 	store := newTestStore(t, 0)
-	if store.EmbedDimension != 0 {
-		t.Fatalf("test setup: EmbedDimension = %d, want 0", store.EmbedDimension)
+	if store.GetEmbedDimension() != 0 {
+		t.Fatalf("test setup: EmbedDimension = %d, want 0", store.GetEmbedDimension())
 	}
 
 	// The nil-client guard fires first. Confirmed: calling Handle with
@@ -91,14 +91,14 @@ func TestHandle_EmbedDimensionZero(t *testing.T) {
 func TestHandle_StoreEmbedDimensionObservable(t *testing.T) {
 	// A store opened with dim=0 has EmbedDimension = 0.
 	storeZero := newTestStore(t, 0)
-	if storeZero.EmbedDimension != 0 {
-		t.Errorf("dim=0 store: EmbedDimension = %d, want 0", storeZero.EmbedDimension)
+	if storeZero.GetEmbedDimension() != 0 {
+		t.Errorf("dim=0 store: EmbedDimension = %d, want 0", storeZero.GetEmbedDimension())
 	}
 
 	// A store opened with dim=4 has EmbedDimension = 4.
 	storeWithDim := newTestStore(t, 4)
-	if storeWithDim.EmbedDimension != 4 {
-		t.Errorf("dim=4 store: EmbedDimension = %d, want 4", storeWithDim.EmbedDimension)
+	if storeWithDim.GetEmbedDimension() != 4 {
+		t.Errorf("dim=4 store: EmbedDimension = %d, want 4", storeWithDim.GetEmbedDimension())
 	}
 }
 

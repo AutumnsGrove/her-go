@@ -23,7 +23,7 @@ type AgentAction struct {
 // The limit controls how many message IDs worth of actions to load (not
 // individual tool calls). A message that triggered 5 tool calls returns
 // all 5 as separate AgentAction structs.
-func (s *Store) RecentAgentActions(conversationID string, messageLimit int) ([]AgentAction, error) {
+func (s *SQLiteStore) RecentAgentActions(conversationID string, messageLimit int) ([]AgentAction, error) {
 	if messageLimit <= 0 {
 		messageLimit = 20
 	}
@@ -91,7 +91,7 @@ func (s *Store) RecentAgentActions(conversationID string, messageLimit int) ([]A
 // SaveAgentTurn logs a single step in the agent's reasoning chain.
 // turnIndex is the sequential position within the agent run (0, 1, 2...).
 // role is "assistant" (agent's decision) or "tool" (tool result).
-func (s *Store) SaveAgentTurn(messageID int64, turnIndex int, role, toolName, toolArgs, content string) error {
+func (s *SQLiteStore) SaveAgentTurn(messageID int64, turnIndex int, role, toolName, toolArgs, content string) error {
 	var msgID interface{} = messageID
 	if messageID == 0 {
 		msgID = nil
@@ -110,7 +110,7 @@ func (s *Store) SaveAgentTurn(messageID int64, turnIndex int, role, toolName, to
 // SaveSearch logs a search operation (web, book, or URL read) for
 // full observability. Tracks what was searched, what came back, and
 // which user message triggered it.
-func (s *Store) SaveSearch(messageID int64, searchType, query, results string, resultCount int) error {
+func (s *SQLiteStore) SaveSearch(messageID int64, searchType, query, results string, resultCount int) error {
 	var msgID interface{} = messageID
 	if messageID == 0 {
 		msgID = nil
@@ -130,7 +130,7 @@ func (s *Store) SaveSearch(messageID int64, searchType, query, results string, r
 // Every call to the classifier gate is logged here so we can track false
 // positive rates, tune prompts, and debug rejection patterns without
 // scraping her.log.
-func (s *Store) SaveClassifierLog(conversationID, writeType, verdict, content, reason, rewrite string) error {
+func (s *SQLiteStore) SaveClassifierLog(conversationID, writeType, verdict, content, reason, rewrite string) error {
 	var rewriteVal interface{}
 	if rewrite != "" {
 		rewriteVal = rewrite
@@ -148,7 +148,7 @@ func (s *Store) SaveClassifierLog(conversationID, writeType, verdict, content, r
 
 // LogCommand records a slash command the user ran. This goes into the
 // command_log table for usage analytics — how often /clear is used, etc.
-func (s *Store) LogCommand(command string, chatID int64, conversationID, args string) {
+func (s *SQLiteStore) LogCommand(command string, chatID int64, conversationID, args string) {
 	_, err := s.db.Exec(
 		`INSERT INTO command_log (command, chat_id, conversation_id, args)
 		 VALUES (?, ?, ?, ?)`,

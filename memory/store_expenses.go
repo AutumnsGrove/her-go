@@ -41,7 +41,7 @@ type Expense struct {
 // Same pattern as SaveMoodEntry — validate inputs, insert, return ID.
 // The category validation happens in the agent tool handler, not here,
 // since the store layer is intentionally dumb about business logic.
-func (s *Store) SaveExpense(amount float64, currency, vendor, category, date, note string, sourceMessageID int64) (int64, error) {
+func (s *SQLiteStore) SaveExpense(amount float64, currency, vendor, category, date, note string, sourceMessageID int64) (int64, error) {
 	if currency == "" {
 		currency = "USD"
 	}
@@ -72,7 +72,7 @@ func (s *Store) SaveExpense(amount float64, currency, vendor, category, date, no
 // SaveExpenseItem inserts a line item linked to a parent expense.
 // Called in a loop after SaveExpense when the agent extracts individual
 // items from receipt OCR text.
-func (s *Store) SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error {
+func (s *SQLiteStore) SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error {
 	if quantity < 1 {
 		quantity = 1
 	}
@@ -89,7 +89,7 @@ func (s *Store) SaveExpenseItem(expenseID int64, description string, quantity in
 
 // DeleteExpense removes an expense and all its line items.
 // Uses a transaction so both deletes succeed or neither does.
-func (s *Store) DeleteExpense(id int64) error {
+func (s *SQLiteStore) DeleteExpense(id int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("starting transaction: %w", err)
@@ -114,7 +114,7 @@ func (s *Store) DeleteExpense(id int64) error {
 
 // UpdateExpense modifies fields on an existing expense. Only non-zero/non-empty
 // values are updated — pass zero/empty to leave a field unchanged.
-func (s *Store) UpdateExpense(id int64, amount float64, currency, vendor, category, date, note string) error {
+func (s *SQLiteStore) UpdateExpense(id int64, amount float64, currency, vendor, category, date, note string) error {
 	// Build SET clause dynamically — only include fields that have values.
 	var sets []string
 	var args []interface{}
@@ -164,7 +164,7 @@ func (s *Store) UpdateExpense(id int64, amount float64, currency, vendor, catego
 
 // RecentExpenses returns the last N expenses with their line items, newest first.
 // Used by the query_expenses tool to answer financial questions.
-func (s *Store) RecentExpenses(limit int) ([]Expense, map[int64][]ExpenseItem, error) {
+func (s *SQLiteStore) RecentExpenses(limit int) ([]Expense, map[int64][]ExpenseItem, error) {
 	rows, err := s.db.Query(
 		`SELECT id, amount, COALESCE(currency, 'USD'), COALESCE(vendor, ''),
 		        category, date, COALESCE(note, ''), COALESCE(source_message_id, 0),
@@ -219,7 +219,7 @@ func (s *Store) RecentExpenses(limit int) ([]Expense, map[int64][]ExpenseItem, e
 
 // ExpenseSummary returns aggregate stats for expenses in a date range.
 // Used by the query_expenses tool for "how much this week/month" questions.
-func (s *Store) ExpenseSummary(startDate, endDate string) (total float64, byCategory map[string]float64, count int, err error) {
+func (s *SQLiteStore) ExpenseSummary(startDate, endDate string) (total float64, byCategory map[string]float64, count int, err error) {
 	byCategory = make(map[string]float64)
 
 	rows, err := s.db.Query(

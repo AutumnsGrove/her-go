@@ -17,7 +17,7 @@ import (
 // bot; it queries across all chats by scanning the
 // pending_mood_proposals table directly.
 type ProposalSweeper struct {
-	Store *memory.Store
+	Store memory.Store
 
 	// Edit rewrites a Telegram message in place. Matches the
 	// FakeTransport.Edit signature in the sim so scenarios can
