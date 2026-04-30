@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 	"time"
 
 	"her/config"
@@ -56,6 +59,13 @@ func runDev(cmd *cobra.Command, args []string) error {
 	// Validate Cloudflare API credentials.
 	if cfg.Cloudflare.AccountID == "" || cfg.Cloudflare.APIToken == "" || cfg.Cloudflare.KVNamespaceID == "" {
 		return fmt.Errorf("cloudflare section in config.yaml is incomplete — need account_id, api_token, and kv_namespace_id for dev mode KV routing")
+	}
+
+	// Generate worker/wrangler.toml from config.yaml so IDs stay out
+	// of version control. Non-fatal — wrangler.toml is only needed for
+	// `npx wrangler deploy`, not for the bot itself.
+	if err := generateWranglerConfig(cfg); err != nil {
+		log.Warn("could not generate wrangler.toml", "err", err)
 	}
 
 	// Check cloudflared is installed.
@@ -316,4 +326,61 @@ func (c *kvClient) delete(key string) error {
 // The CF Worker parses this with parseInt() to check heartbeat freshness.
 func nowMillis() string {
 	return strconv.FormatInt(time.Now().UnixMilli(), 10)
+}
+
+// ---------------------------------------------------------------------------
+// Wrangler config generator
+// ---------------------------------------------------------------------------
+
+// wranglerData holds the values injected into wrangler.toml.tmpl.
+// All fields come from config.yaml — one source of truth.
+type wranglerData struct {
+	KVNamespaceID string
+	D1DatabaseID  string
+	ProdURL       string
+}
+
+// generateWranglerConfig reads worker/wrangler.toml.tmpl, fills in values
+// from config.yaml, and writes worker/wrangler.toml. This keeps IDs out of
+// version control — anyone can clone the repo, fill in config.yaml, and
+// the wrangler config is derived automatically.
+func generateWranglerConfig(cfg *config.Config) error {
+	tmplPath := filepath.Join("worker", "wrangler.toml.tmpl")
+	outPath := filepath.Join("worker", "wrangler.toml")
+
+	tmplBytes, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return fmt.Errorf("reading wrangler template: %w", err)
+	}
+
+	tmpl, err := template.New("wrangler").Parse(string(tmplBytes))
+	if err != nil {
+		return fmt.Errorf("parsing wrangler template: %w", err)
+	}
+
+	// Derive PROD_URL from tunnel domain. If no tunnel is configured,
+	// leave it empty — the user hasn't set up production routing yet.
+	prodURL := ""
+	if cfg.Tunnel.Domain != "" {
+		prodURL = "https://" + cfg.Tunnel.Domain
+	}
+
+	data := wranglerData{
+		KVNamespaceID: cfg.Cloudflare.KVNamespaceID,
+		D1DatabaseID:  cfg.Cloudflare.D1DatabaseID,
+		ProdURL:       prodURL,
+	}
+
+	f, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("creating wrangler.toml: %w", err)
+	}
+	defer f.Close()
+
+	if err := tmpl.Execute(f, data); err != nil {
+		return fmt.Errorf("writing wrangler.toml: %w", err)
+	}
+
+	log.Info("generated worker/wrangler.toml from config.yaml")
+	return nil
 }
