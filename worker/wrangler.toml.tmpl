@@ -1,5 +1,9 @@
 # her-router — CF Worker config for Telegram webhook routing.
 #
+# This file is a template. The actual wrangler.toml is auto-generated
+# from config.yaml by `her dev` or `her setup`. Do not edit wrangler.toml
+# directly — edit config.yaml instead.
+#
 # Deploy:  cd worker && npx wrangler deploy
 # Secrets: npx wrangler secret put WEBHOOK_SECRET
 #
@@ -13,9 +17,9 @@ compatibility_date = "2026-01-01"
 # KV namespace for routing state (dev_mode_active, dev_instance_url,
 # dev_session_heartbeat). Create with:
 #   npx wrangler kv namespace create HER_KV
-# then paste the id below.
+# then set kv_namespace_id in config.yaml.
 kv_namespaces = [
-  { binding = "HER_KV", id = "72f501f8dffc4eba984181d0130bcf9d" }
+  { binding = "HER_KV", id = "{{.KVNamespaceID}}" }
 ]
 
 # D1 database for shared state sync (memories, messages, persona, moods).
@@ -23,14 +27,14 @@ kv_namespaces = [
 # REST API — this binding is here so `wrangler d1 execute` works from
 # the worker/ directory without remembering the database ID.
 d1_databases = [
-  { binding = "HER_DB", database_name = "her-db", database_id = "31705605-9460-4d03-b87b-5bbff4cccd1d" }
+  { binding = "HER_DB", database_name = "her-db", database_id = "{{.D1DatabaseID}}" }
 ]
 
 [vars]
-# Permanent tunnel URL for the Mac Mini. Set this after creating the
-# Cloudflare Tunnel in Phase 3. For quick-start with trycloudflare.com,
-# use the assigned URL.
-PROD_URL = "https://her.autumnsgrove.com"
+# Permanent tunnel URL for the prod instance. Derived from tunnel.domain
+# in config.yaml. For quick-start with trycloudflare.com, set the domain
+# to the assigned URL.
+PROD_URL = "{{.ProdURL}}"
 
 # WEBHOOK_SECRET is stored as a Wrangler secret — not here.
 # Set it with: npx wrangler secret put WEBHOOK_SECRET
