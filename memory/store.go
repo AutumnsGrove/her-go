@@ -119,14 +119,6 @@ type Store interface {
 	SaveSummary(conversationID, summary string, startID, endID int64, stream string) (int64, error)
 	LatestSummary(conversationID, stream string) (string, int64, error)
 
-	// Expenses
-	SaveExpense(amount float64, currency, vendor, category, date, note string, sourceMessageID int64) (int64, error)
-	SaveExpenseItem(expenseID int64, description string, quantity int, unitPrice, totalPrice float64) error
-	DeleteExpense(id int64) error
-	UpdateExpense(id int64, amount float64, currency, vendor, category, date, note string) error
-	RecentExpenses(limit int) ([]Expense, map[int64][]ExpenseItem, error)
-	ExpenseSummary(startDate, endDate string) (total float64, byCategory map[string]float64, count int, err error)
-
 	// Scheduler
 	UpsertSchedulerTask(t *SchedulerTask) error
 	DueSchedulerTasks(now time.Time) ([]SchedulerTask, error)

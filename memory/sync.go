@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,12 +26,8 @@ import (
 //   - Full: tables with composite keys (memory_links) or singletons
 //     (persona_state). We pull everything and INSERT OR REPLACE.
 
-const (
-	// pullPageSize is how many rows to fetch from D1 per query.
-	// D1 has response size limits; 500 rows keeps us well within the
-	// 5 MB response cap for our schema widths.
-	pullPageSize = 500
-)
+// Default pull page size — used when config omits the sync section.
+const defaultPullPageSize = 500
 
 // incrementalTables have an auto-increment id column. Pull uses
 // WHERE id > last_synced_id to fetch only new rows.
@@ -135,7 +132,7 @@ func (s *SyncedStore) pullIncremental(ctx context.Context, table string) error {
 	cursor := lastID
 
 	// Paginated pull — keep fetching pages until we get fewer rows
-	// than pullPageSize, which means we've hit the end.
+	// than s.PullPageSize, which means we've hit the end.
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -145,7 +142,7 @@ func (s *SyncedStore) pullIncremental(ctx context.Context, table string) error {
 			"SELECT %s FROM %s WHERE id > ? ORDER BY id LIMIT ?",
 			spec.d1Cols, table,
 		)
-		result, err := s.d1Client.Query(query, cursor, pullPageSize)
+		result, err := s.d1Client.Query(query, cursor, s.PullPageSize)
 		if err != nil {
 			return fmt.Errorf("querying D1 for %s (cursor=%d): %w", table, cursor, err)
 		}
@@ -165,7 +162,7 @@ func (s *SyncedStore) pullIncremental(ctx context.Context, table string) error {
 		}
 		totalPulled += len(result.Results)
 
-		if len(result.Results) < pullPageSize {
+		if len(result.Results) < s.PullPageSize {
 			break // last page
 		}
 	}
@@ -293,9 +290,14 @@ func (s *SyncedStore) getLastSyncedID(table string) (int64, error) {
 	err := s.SQLiteStore.db.QueryRow(
 		"SELECT last_synced_id FROM _sync_meta WHERE table_name = ?", table,
 	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil // first sync for this table — start from 0
+	}
 	if err != nil {
-		// sql.ErrNoRows means first sync — start from 0.
-		// Any other error is also fine to treat as 0 (fail-open).
+		// Unexpected error (corrupt table, etc.). Fail-open to 0 so we
+		// re-pull everything (idempotent upserts make this safe), but log
+		// it so silent full re-pulls are observable.
+		log.Warn("reading _sync_meta, falling back to full pull", "table", table, "err", err)
 		return 0, nil
 	}
 	return id, nil
@@ -428,7 +430,7 @@ func splitCols(cols string) []string {
 // has all the real data to populate D1 for the first time.
 //
 // Idempotent: uses INSERT OR REPLACE, so running it twice is safe.
-// Concurrent per-table uploads for speed, with batches of maxBatchSize
+// Concurrent per-table uploads for speed, with batches of BatchSize
 // rows per D1 API call.
 //
 // After pushing, updates local _sync_meta so this machine knows it's
@@ -523,7 +525,7 @@ func (s *SyncedStore) pushTable(ctx context.Context, table string) error {
 
 		batch = append(batch, d1.Statement{SQL: insertSQL, Params: values})
 
-		if len(batch) >= maxBatchSize {
+		if len(batch) >= s.BatchSize {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

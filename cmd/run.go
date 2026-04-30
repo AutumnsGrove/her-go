@@ -45,6 +45,10 @@ import (
 // log is the package-level logger for the cmd package.
 var log = logger.WithPrefix("cmd")
 
+// kvClientTimeout is the HTTP timeout for Cloudflare KV API calls.
+// Used by both dev mode (KV routing keys) and prod (sync poller).
+const kvClientTimeout = 10 * time.Second
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Start the bot process (foreground)",
@@ -135,9 +139,24 @@ func runBot(cmd *cobra.Command, args []string) error {
 				log.Fatal("Failed to initialize D1 sync", "err", err)
 			}
 
+			// Apply sync tuning from config (zero values keep defaults).
+			if cfg.Cloudflare.Sync.BatchSize > 0 {
+				synced.BatchSize = cfg.Cloudflare.Sync.BatchSize
+			}
+			if cfg.Cloudflare.Sync.CarrierPollSeconds > 0 {
+				synced.CarrierPoll = time.Duration(cfg.Cloudflare.Sync.CarrierPollSeconds) * time.Second
+			}
+			if cfg.Cloudflare.Sync.PullPageSize > 0 {
+				synced.PullPageSize = cfg.Cloudflare.Sync.PullPageSize
+			}
+
 			// Pull from D1 before the bot starts — ensures we have all
 			// data the other machine wrote since we last ran.
-			pullCtx, pullCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			startupTimeout := time.Duration(cfg.Cloudflare.Sync.StartupPullTimeout) * time.Second
+			if startupTimeout == 0 {
+				startupTimeout = 60 * time.Second
+			}
+			pullCtx, pullCancel := context.WithTimeout(context.Background(), startupTimeout)
 			if err := synced.Pull(pullCtx); err != nil {
 				log.Error("d1 pull on startup failed — continuing with local data", "err", err)
 			}
@@ -537,9 +556,13 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			accountID:   cfg.Cloudflare.AccountID,
 			apiToken:    cfg.Cloudflare.APIToken,
 			namespaceID: cfg.Cloudflare.KVNamespaceID,
-			http:        &http.Client{Timeout: 10 * time.Second},
+			http:        &http.Client{Timeout: kvClientTimeout},
 		}
-		go startSyncPoller(kvPollerCtx, kv, synced)
+		pollerInterval := time.Duration(cfg.Cloudflare.Sync.PollerInterval) * time.Second
+		if pollerInterval == 0 {
+			pollerInterval = 30 * time.Second
+		}
+		go startSyncPoller(kvPollerCtx, kv, synced, pollerInterval)
 		log.Info("d1 sync poller started — watching for dev session end")
 	}
 
@@ -842,8 +865,8 @@ func startEmbedSidecar(cfg *config.Config, bus *tui.Bus, embedClient *embed.Clie
 // prod wouldn't know to pull until its next restart. Think of it like
 // a very simple message queue over KV: one producer, one consumer,
 // one message at a time.
-func startSyncPoller(ctx context.Context, kv *kvClient, synced *memory.SyncedStore) {
-	ticker := time.NewTicker(30 * time.Second)
+func startSyncPoller(ctx context.Context, kv *kvClient, synced *memory.SyncedStore, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

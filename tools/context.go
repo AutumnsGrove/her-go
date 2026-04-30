@@ -325,9 +325,6 @@ type Context struct {
 	// ReplyText stores the final response text (after deanonymization).
 	ReplyText string
 
-	// ExpenseContext holds receipt scan results for system prompt injection.
-	ExpenseContext string
-
 	// --- Config ---
 
 	// Cfg holds the full config (prompt file paths, memory limits, etc.).

@@ -28,7 +28,6 @@ func buildAgentImage(ctx *LayerContext) LayerResult {
 		b.WriteString("```\n")
 		b.WriteString(ctx.OCRText)
 		b.WriteString("\n```\n\n")
-		b.WriteString("If this looks like a receipt (amounts, totals, store names), use `use_tools([\"expenses\"])` → `scan_receipt` to log the expense. ")
 		b.WriteString("If the OCR text is garbled or not useful, call `view_image` to see the photo with the VLM instead.\n")
 	} else {
 		b.WriteString("The user sent a photo. No OCR text was extracted (image may not contain text). ")

@@ -71,9 +71,11 @@ func runSyncPush(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
-	// 10-minute timeout — initial push of thousands of messages can take
-	// a while depending on D1 response times and row counts.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	pushTimeout := time.Duration(cfg.Cloudflare.Sync.PushTimeout) * time.Second
+	if pushTimeout == 0 {
+		pushTimeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 
 	return synced.PushAll(ctx)
@@ -92,7 +94,11 @@ func runSyncPull(cmd *cobra.Command, args []string) error {
 	}
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	pullTimeout := time.Duration(cfg.Cloudflare.Sync.PullTimeout) * time.Second
+	if pullTimeout == 0 {
+		pullTimeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pullTimeout)
 	defer cancel()
 
 	if err := synced.Pull(ctx); err != nil {
@@ -129,6 +135,14 @@ func makeSyncedStore(cfg *config.Config) (*memory.SyncedStore, func(), error) {
 	if err != nil {
 		store.Close()
 		return nil, nil, fmt.Errorf("creating synced store: %w", err)
+	}
+
+	// Apply sync tuning from config (zero values keep defaults).
+	if cfg.Cloudflare.Sync.BatchSize > 0 {
+		synced.BatchSize = cfg.Cloudflare.Sync.BatchSize
+	}
+	if cfg.Cloudflare.Sync.PullPageSize > 0 {
+		synced.PullPageSize = cfg.Cloudflare.Sync.PullPageSize
 	}
 
 	return synced, func() { synced.Close() }, nil
