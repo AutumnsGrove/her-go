@@ -69,7 +69,7 @@ type LayerResult struct {
 // and buildAgentContext. Not every layer uses every field — weather layers
 // ignore EmbedClient, time layers ignore Store, etc.
 type LayerContext struct {
-	Store       *memory.Store
+	Store       memory.Store
 	Cfg         *config.Config
 	EmbedClient *embed.Client
 

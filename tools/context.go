@@ -198,7 +198,7 @@ type Context struct {
 
 	// Store is the SQLite-backed store for memories, messages, schedules,
 	// expenses, and everything else that persists.
-	Store *memory.Store
+	Store memory.Store
 
 	// EmbedClient generates embedding vectors for semantic search.
 	EmbedClient *embed.Client

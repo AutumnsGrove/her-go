@@ -13,7 +13,7 @@ import (
 // newRemoveMemoryTestStore opens a fresh temp SQLite with all tables
 // created. embedDim=0 skips the vec_memories virtual table — these
 // tests only need the memories table.
-func newRemoveMemoryTestStore(t *testing.T) *memory.Store {
+func newRemoveMemoryTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "remove_memory_test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -26,7 +26,7 @@ func newRemoveMemoryTestStore(t *testing.T) *memory.Store {
 
 // saveTestMemory inserts a minimal memory and returns its ID.
 // It fatally fails the test on error so call sites stay clean.
-func saveTestMemory(t *testing.T, store *memory.Store, content string) int64 {
+func saveTestMemory(t *testing.T, store memory.Store, content string) int64 {
 	t.Helper()
 	id, err := store.SaveMemory(content, "test", "user", 0, 5, nil, nil, "", "")
 	if err != nil {
@@ -38,7 +38,7 @@ func saveTestMemory(t *testing.T, store *memory.Store, content string) int64 {
 // isActiveMemory returns true if the memory with the given ID is still in
 // the active memories list. We check AllActiveMemories rather than GetMemory
 // so the test validates the same view the agent uses for retrieval.
-func isActiveMemory(t *testing.T, store *memory.Store, id int64) bool {
+func isActiveMemory(t *testing.T, store memory.Store, id int64) bool {
 	t.Helper()
 	memories, err := store.AllActiveMemories()
 	if err != nil {

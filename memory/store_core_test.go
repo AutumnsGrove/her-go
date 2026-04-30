@@ -8,7 +8,7 @@ import (
 
 // newCoreTestStore creates a fresh temp store for testing. Used by
 // summaries, PII vault, metrics, agent turns, and confirmations tests.
-func newCoreTestStore(t *testing.T) *Store {
+func newCoreTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "core_test.db")
 	store, err := NewStore(dbPath, 0)

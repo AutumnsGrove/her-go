@@ -83,7 +83,7 @@ func deserializeEmbedding(data []byte) []float32 {
 // embedding is the tag-based vector (used for KNN search via vec_memories).
 // embeddingText is the raw-text vector (used for dedup and redundancy filtering).
 // Both are optional — pass nil if not yet computed.
-func (s *Store) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
+func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -166,7 +166,7 @@ func (s *Store) SaveMemory(content, category, subject string, sourceMessageID in
 // embeddingText is the raw-text vector for dedup checks; pass nil to leave
 // it unchanged (the SQL still writes NULL, so pass existing.EmbeddingText
 // when you don't want to clear it).
-func (s *Store) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {
+func (s *SQLiteStore) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {
 	vecBytes, err := serializeEmbedding(embedding)
 	if err != nil {
 		return fmt.Errorf("serializing embedding for memory %d: %w", memoryID, err)
@@ -210,7 +210,7 @@ func (s *Store) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embed
 
 // RecentMemories retrieves the top-K active memories for a given subject,
 // ordered by recency (descending).
-func (s *Store) RecentMemories(subject string, limit int) ([]Memory, error) {
+func (s *SQLiteStore) RecentMemories(subject string, limit int) ([]Memory, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, memory, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM memories
@@ -247,7 +247,7 @@ func (s *Store) RecentMemories(subject string, limit int) ([]Memory, error) {
 // created). Used by update_memory to show the classifier both the old and
 // new text so it can evaluate what actually changed — without this, the
 // classifier only sees the final text and can't catch inferred additions.
-func (s *Store) GetMemoryContent(memoryID int64) (string, error) {
+func (s *SQLiteStore) GetMemoryContent(memoryID int64) (string, error) {
 	var text string
 	err := s.db.QueryRow(`SELECT memory FROM memories WHERE id = ?`, memoryID).Scan(&text)
 	if err != nil {
@@ -257,7 +257,7 @@ func (s *Store) GetMemoryContent(memoryID int64) (string, error) {
 }
 
 // UpdateMemory modifies an existing memory's text, category, or importance.
-func (s *Store) UpdateMemory(memoryID int64, content, category string, importance int, tags string) error {
+func (s *SQLiteStore) UpdateMemory(memoryID int64, content, category string, importance int, tags string) error {
 	_, err := s.db.Exec(
 		`UPDATE memories SET memory = ?, category = ?, importance = ?, tags = ? WHERE id = ?`,
 		content, category, importance, tags, memoryID,
@@ -270,7 +270,7 @@ func (s *Store) UpdateMemory(memoryID int64, content, category string, importanc
 
 // UpdateMemoryTags sets the topic tags for a memory without changing anything else.
 // Used by `her retag` to backfill tags for existing memories.
-func (s *Store) UpdateMemoryTags(memoryID int64, tags string) error {
+func (s *SQLiteStore) UpdateMemoryTags(memoryID int64, tags string) error {
 	_, err := s.db.Exec(`UPDATE memories SET tags = ? WHERE id = ?`, tags, memoryID)
 	return err
 }
@@ -278,7 +278,7 @@ func (s *Store) UpdateMemoryTags(memoryID int64, tags string) error {
 // DeactivateMemory soft-deletes a memory by setting active = 0 and removing
 // it from the vec_memories index. The memory stays in the DB for audit trail
 // but won't appear in retrieval or vector search.
-func (s *Store) DeactivateMemory(memoryID int64) error {
+func (s *SQLiteStore) DeactivateMemory(memoryID int64) error {
 	_, err := s.db.Exec(
 		`UPDATE memories SET active = 0 WHERE id = ?`,
 		memoryID,
@@ -302,7 +302,7 @@ func (s *Store) DeactivateMemory(memoryID int64) error {
 // in different order — same trick social graph databases use for friendships.
 //
 // INSERT OR IGNORE means calling this with an already-linked pair is a no-op.
-func (s *Store) LinkMemories(id1, id2 int64, similarity float64) error {
+func (s *SQLiteStore) LinkMemories(id1, id2 int64, similarity float64) error {
 	// Normalize: always store (smaller ID, larger ID).
 	// This is like sorting a tuple in Python: min/max guarantees one
 	// canonical order regardless of which direction the link was found.
@@ -324,7 +324,7 @@ func (s *Store) LinkMemories(id1, id2 int64, similarity float64) error {
 // Because links are normalized (source < target), we need to check both
 // directions — that's why this uses a UNION query. Each sub-query can use
 // its own index, which is faster than a single query with OR.
-func (s *Store) LinkedMemories(memoryID int64, limit int) ([]Memory, error) {
+func (s *SQLiteStore) LinkedMemories(memoryID int64, limit int) ([]Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.timestamp, m.memory, m.category, COALESCE(m.subject, 'user'),
 		       m.importance, COALESCE(m.tags, ''), ml.similarity
@@ -373,7 +373,7 @@ func (s *Store) LinkedMemories(memoryID int64, limit int) ([]Memory, error) {
 // Uses the same KNN search as SemanticSearch but with the new memory's own
 // embedding as the query. The memory itself will appear as distance=0, so
 // we skip it explicitly.
-func (s *Store) AutoLinkMemory(memoryID int64, embedding []float32) error {
+func (s *SQLiteStore) AutoLinkMemory(memoryID int64, embedding []float32) error {
 	if s.AutoLinkCount == 0 {
 		return nil // linking disabled
 	}
@@ -435,7 +435,7 @@ func (s *Store) AutoLinkMemory(memoryID int64, embedding []float32) error {
 // DeactivateMemory but records the supersession chain — which memory replaced
 // it and why. The chain lets the agent naturally reference knowledge
 // evolution: "you used to work at X, now at Y."
-func (s *Store) SupersedeMemory(oldID, newID int64, reason string) error {
+func (s *SQLiteStore) SupersedeMemory(oldID, newID int64, reason string) error {
 	_, err := s.db.Exec(
 		`UPDATE memories SET active = 0, superseded_by = ?, supersede_reason = ? WHERE id = ?`,
 		newID, reason, oldID,
@@ -453,7 +453,7 @@ func (s *Store) SupersedeMemory(oldID, newID int64, reason string) error {
 // GetMemory returns a single memory by ID, including inactive (superseded) ones.
 // Returns nil and no error if the memory doesn't exist. Used by update_memory
 // to read the old memory's metadata before creating a supersession chain.
-func (s *Store) GetMemory(memoryID int64) (*Memory, error) {
+func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	var m Memory
 	var ts string
 	var active bool
@@ -491,7 +491,7 @@ func (s *Store) GetMemory(memoryID int64) (*Memory, error) {
 // Walks backward (who did memoryID replace?) and forward (what replaced memoryID?).
 // Includes inactive memories — the whole point is seeing deactivated predecessors.
 // Capped at 20 hops in each direction to prevent runaway traversal.
-func (s *Store) MemoryHistory(memoryID int64) ([]Memory, error) {
+func (s *SQLiteStore) MemoryHistory(memoryID int64) ([]Memory, error) {
 	const maxHops = 20
 
 	// Collect the starting memory.
@@ -564,7 +564,7 @@ func (s *Store) MemoryHistory(memoryID int64) ([]Memory, error) {
 
 // CountMemoryLinks returns the total number of links in the memory graph.
 // Used by the relink command to report progress.
-func (s *Store) CountMemoryLinks() (int, error) {
+func (s *SQLiteStore) CountMemoryLinks() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM memory_links`).Scan(&count)
 	return count, err
@@ -573,7 +573,7 @@ func (s *Store) CountMemoryLinks() (int, error) {
 // AllActiveMemories returns every active memory (both user and self).
 // Used by the agent to see the full memory state when deciding
 // what to update or consolidate. Includes cached embeddings.
-func (s *Store) AllActiveMemories() ([]Memory, error) {
+func (s *SQLiteStore) AllActiveMemories() ([]Memory, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, memory, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding, embedding_text
 		 FROM memories WHERE active = 1
@@ -613,7 +613,7 @@ func (s *Store) AllActiveMemories() ([]Memory, error) {
 // Under the hood, sqlite-vec uses the MATCH operator on the vec0 virtual
 // table. The query plan: KNN on vec_memories → get rowids → JOIN memories for
 // metadata → filter out inactive memories.
-func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Memory, error) {
+func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, error) {
 	if s.EmbedDimension == 0 {
 		return nil, fmt.Errorf("semantic search not available: embed dimension is 0")
 	}
@@ -694,7 +694,7 @@ func (s *Store) SemanticSearch(queryVec []float32, topK int) ([]Memory, error) {
 // embedding yet (embedding BLOB is NULL or empty). The caller should embed
 // each memory and call UpdateMemoryEmbedding to populate both the BLOB and
 // vec_memories index.
-func (s *Store) MemoriesWithoutEmbeddings() ([]Memory, error) {
+func (s *SQLiteStore) MemoriesWithoutEmbeddings() ([]Memory, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, memory, category, COALESCE(subject, 'user'), importance, COALESCE(tags, '')
 		 FROM memories
@@ -722,7 +722,7 @@ func (s *Store) MemoriesWithoutEmbeddings() ([]Memory, error) {
 
 // VecMemoriesCount returns the number of rows in the vec_memories virtual table.
 // Useful for checking if a backfill is needed (compare against total active memories).
-func (s *Store) VecMemoriesCount() (int, error) {
+func (s *SQLiteStore) VecMemoriesCount() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM vec_memories`).Scan(&count)
 	if err != nil {
@@ -733,7 +733,7 @@ func (s *Store) VecMemoriesCount() (int, error) {
 
 // FindMemoriesByKeyword searches active memories for a keyword match.
 // Used by /forget to help the user find memories to deactivate.
-func (s *Store) FindMemoriesByKeyword(keyword string) ([]Memory, error) {
+func (s *SQLiteStore) FindMemoriesByKeyword(keyword string) ([]Memory, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, memory, category, COALESCE(subject, 'user'), importance, COALESCE(tags, ''), embedding
 		 FROM memories

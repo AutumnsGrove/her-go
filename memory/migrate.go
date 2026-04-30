@@ -10,7 +10,7 @@ import "fmt"
 // INSERT OR IGNORE skips any rows that already exist in the destination.
 //
 // Returns the number of memories and links copied, and any error.
-func (s *Store) MigrateFromLegacyFacts() (memoriesCopied int, linksCopied int, err error) {
+func (s *SQLiteStore) MigrateFromLegacyFacts() (memoriesCopied int, linksCopied int, err error) {
 	// Check that the legacy facts table actually exists before trying to copy.
 	var name string
 	row := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='facts'`)

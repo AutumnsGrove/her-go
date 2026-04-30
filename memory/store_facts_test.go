@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func newFactTestStore(t *testing.T) *Store {
+func newFactTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "fact_test.db")
 	store, err := NewStore(dbPath, 0)
@@ -16,7 +16,7 @@ func newFactTestStore(t *testing.T) *Store {
 	return store
 }
 
-func newFactTestStoreWithVec(t *testing.T, dim int) *Store {
+func newFactTestStoreWithVec(t *testing.T, dim int) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "fact_vec_test.db")
 	store, err := NewStore(dbPath, dim)

@@ -20,7 +20,7 @@ type InboxMessage struct {
 
 // initInboxTable creates the inbox table and index. Called from initTables.
 // Idempotent — safe to run on every startup.
-func (s *Store) initInboxTable() error {
+func (s *SQLiteStore) initInboxTable() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS inbox (
 		id          INTEGER PRIMARY KEY AUTOINCREMENT,
 		created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -46,7 +46,7 @@ func (s *Store) initInboxTable() error {
 // SendInbox writes a message to the inbox for another agent to pick up.
 // Returns the new message ID. The payload should be a JSON string — the
 // inbox doesn't parse it, that's the recipient's job.
-func (s *Store) SendInbox(sender, recipient, msgType, payload string) (int64, error) {
+func (s *SQLiteStore) SendInbox(sender, recipient, msgType, payload string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO inbox (sender, recipient, msg_type, payload) VALUES (?, ?, ?, ?)`,
 		sender, recipient, msgType, payload,
@@ -64,7 +64,7 @@ func (s *Store) SendInbox(sender, recipient, msgType, payload string) (int64, er
 // The atomicity comes from SQLite's single-writer lock: the UPDATE runs
 // in the same transaction as the SELECT, so no other goroutine can
 // consume the same messages between reading and marking.
-func (s *Store) ConsumeInbox(recipient string) ([]InboxMessage, error) {
+func (s *SQLiteStore) ConsumeInbox(recipient string) ([]InboxMessage, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("beginning inbox transaction: %w", err)
@@ -131,7 +131,7 @@ func (s *Store) ConsumeInbox(recipient string) ([]InboxMessage, error) {
 
 // PendingInboxCount returns how many unread messages are waiting for a
 // recipient. Useful for quick checks without consuming the messages.
-func (s *Store) PendingInboxCount(recipient string) (int, error) {
+func (s *SQLiteStore) PendingInboxCount(recipient string) (int, error) {
 	var count int
 	err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM inbox WHERE recipient = ? AND status = 'pending'`,

@@ -214,7 +214,7 @@ var sidecarOut io.Writer = os.Stderr
 
 // runBotBackground handles all init and bot lifecycle in a goroutine while
 // the TUI runs on the main goroutine.
-func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
+func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
 	// --- Create LLM clients ---
 
 	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
@@ -548,7 +548,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 // runBotPlain runs the bot without a TUI (piped output, CI, etc.).
 // Same logic as the original runBot but with events going to file logger only.
-func runBotPlain(cfg *config.Config, store *memory.Store, bus *tui.Bus) error {
+func runBotPlain(cfg *config.Config, store memory.Store, bus *tui.Bus) error {
 	// In plain mode, also write events to stderr so they're visible
 	tui.StartFileLogger(bus, os.Stderr)
 
