@@ -76,14 +76,15 @@ type TunnelConfig struct {
 	CredentialsFile string `yaml:"credentials_file"` // path to tunnel credentials JSON (e.g., ~/.cloudflared/<tunnel-id>.json)
 }
 
-// CloudflareConfig holds Cloudflare API credentials for dev mode KV management.
-// Only needed on the MacBook — `her dev` uses these to set/clear routing keys
-// in the Worker's KV namespace so the CF Worker routes traffic to the dev tunnel.
-// The Mac Mini's production instance doesn't need these.
+// CloudflareConfig holds Cloudflare API credentials for Workers KV and D1.
+// Used by `her dev` for KV routing keys, and by the sync layer to push/pull
+// shared state via D1. When D1DatabaseID is empty, D1 sync is disabled and
+// the bot runs with plain SQLiteStore — no overhead.
 type CloudflareConfig struct {
 	AccountID     string `yaml:"account_id"`      // Cloudflare account ID (found in dashboard URL or API)
-	APIToken      string `yaml:"api_token"`       // API token with Workers KV write permission
+	APIToken      string `yaml:"api_token"`       // API token with Workers KV + D1 write permission
 	KVNamespaceID string `yaml:"kv_namespace_id"` // KV namespace ID from wrangler.toml
+	D1DatabaseID  string `yaml:"d1_database_id"`  // D1 database ID — empty = sync disabled
 }
 
 // UpdateConfig holds settings for the /update self-update command.

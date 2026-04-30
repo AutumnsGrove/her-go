@@ -201,13 +201,15 @@ tunnel:
   domain: ""              # public hostname routed to this tunnel (e.g., "her.yourdomain.com")
   credentials_file: ""    # path to tunnel credentials JSON — auto-filled by `her tunnel setup`
 
-# Cloudflare API credentials for dev mode (`her dev`). Only needed on the
-# MacBook — used to set/clear KV routing keys so the CF Worker sends traffic
-# to the dev tunnel. The Mac Mini production instance doesn't need these.
+# Cloudflare API credentials for KV routing and D1 shared state sync.
+# account_id and api_token are needed on both machines.
+# kv_namespace_id is for dev mode routing (`her dev`).
+# d1_database_id enables cross-machine sync — leave empty to disable.
 cloudflare:
   account_id: ""          # Cloudflare account ID (dashboard URL: /accounts/<this>/...)
-  api_token: ""           # API token with Workers KV write permission
+  api_token: ""           # API token with Workers KV + D1 write permission
   kv_namespace_id: ""     # KV namespace ID (from wrangler.toml after `npx wrangler kv namespace create`)
+  d1_database_id: ""      # D1 database ID — empty = sync disabled, SyncedStore not used
 
 # Self-update via /update Telegram command. Only used on the Mac Mini
 # production instance — pulls latest code, builds, and restarts via launchd.
