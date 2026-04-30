@@ -98,47 +98,44 @@ vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command
 
 ## Phases
 
-### Phase 1 — Store Interface Extraction
-**Goal:** Define a `Store` interface, rename current struct to `SQLiteStore`. Zero behavior change.
+### Phase 1 — Store Interface Extraction ✅
+**Status:** Complete — commit `9ac74ca`
 
-**Files changed:**
-- `memory/store.go` — rename `Store` → `SQLiteStore`, add `type Store interface { ... }` with all ~88 public methods (excluding `DB()` and `MigrateFromLegacyFacts()`)
-- `memory/store_*.go` — rename receiver types (`func (s *Store)` → `func (s *SQLiteStore)`)
-- `tools/context.go` — change `Store *memory.Store` → `Store memory.Store` (interface). This cascades to all 20+ tool handlers for free.
-- `bot/telegram.go` — change `store *memory.Store` → `store memory.Store`
-- ~36 files total reference `*memory.Store` — migrate all callers
+Defined `Store` interface (87 methods including `GetEmbedDimension()`), renamed `Store` struct to `SQLiteStore`. 58 files updated — all callers now use `memory.Store` (interface). Added `GetEmbedDimension()` getter since interfaces can't expose fields. `go build ./...` and `go test ./...` pass.
 
-**Verification:** `go build ./...` passes. `go test ./...` passes. Zero behavior change.
+### Phase 2 — D1 Database & Schema ✅
+**Status:** Complete — commits `0897dc0`, `44b1cd3`
 
-### Phase 2 — D1 Database & Schema
-**Goal:** Create the D1 database and write the schema for synced tables.
+- D1 database `her-db` created (ID: `31705605-9460-4d03-b87b-5bbff4cccd1d`)
+- `d1/schema.sql` written with 9 synced tables + `_sync_meta` (embedding columns excluded)
+- Schema applied via `wrangler d1 execute --remote`
+- `D1DatabaseID` added to `CloudflareConfig` in `config/config.go`
+- D1 binding added to `worker/wrangler.toml` for convenience
+- `config.yaml.example` updated
 
-- `wrangler d1 create her-db` — creates the D1 database
-- Write `d1/schema.sql` — DDL for the 10 synced tables (same SQLite syntax, minus embedding columns)
-- Add `_sync_meta` table: `CREATE TABLE _sync_meta (table_name TEXT PRIMARY KEY, last_synced_id INTEGER DEFAULT 0)`
-- Apply schema: `wrangler d1 execute her-db --file d1/schema.sql`
-- Add `D1DatabaseID` to `CloudflareConfig` in `config/config.go`
-- Update `config.yaml.example`
+### Phase 3 — D1 Go Client ✅
+**Status:** Complete — commit `90e7220`
 
-### Phase 3 — D1 Go Client
-**Goal:** Thin HTTP client for D1's REST API.
+- `d1/client.go` — `Client` struct with `Query()` and `Batch()` methods
+- Uses Cloudflare REST API `/query` endpoint (rows as objects)
+- 30s timeout, bearer auth via `cfg.Cloudflare.APIToken`
+- 6 tests using `httptest.Server` (no real Cloudflare calls)
 
-New package: `d1/`
-- `d1/client.go` — `Client` struct with `Query(sql string, params ...any) ([]Row, error)` and `Batch(stmts []Statement) error`
-- Uses `POST https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query`
-- Bearer token auth (reuses `cfg.Cloudflare.APIToken`)
-- 10s timeout per request
-- JSON request/response marshaling
+### Phase 4 — SyncedStore Decorator ✅
+**Status:** Complete — commit `73edb9b`
 
-### Phase 4 — SyncedStore Decorator
-**Goal:** Wrap SQLiteStore with D1 push-on-write.
+**Design change from original plan:** Replaced in-memory channel with **transactional outbox pattern** for crash safety. Writes land in `_d1_outbox` SQLite table (durable across crashes), carrier goroutine reads actual row data at send-time and pushes to D1 in batches.
 
-New file: `memory/synced_store.go`
-- `SyncedStore` struct embedding `*SQLiteStore` + `*d1.Client` + `pushCh chan PushJob`
-- Override ~25 write methods for synced tables (SaveMessage, SaveMemory, SaveMoodEntry, SaveReflection, SavePersonaVersion, SaveSummary, SaveTraits, SetLastReflectionAt, SetLastRewriteAt, UpdateMemory, UpdateMemoryTags, DeactivateMemory, SupersedeMemory, LinkMemories, UpdateMoodEntry, DeleteMoodEntry, UpdateMessageScrubbed, UpdateMessageMedia, UpdateMessageVoicePath, UpdateMessageTokenCount, etc.)
-- Background push goroutine: reads from `pushCh`, batches, sends to D1
-- `NewSyncedStore(sqlite *SQLiteStore, d1Client *d1.Client) *SyncedStore`
-- `Close()` drains push queue before closing
+New file: `memory/synced_store.go` (725 lines)
+- `SyncedStore` struct embedding `*SQLiteStore` + `*d1.Client` + notify/done channels
+- 20 method overrides — each calls SQLiteStore then `writeOutbox(table, id, op)`
+- `_d1_outbox` table created on init (id, table_name, row_id, row_id_2, op, created_at)
+- Carrier goroutine: polls outbox, reads rows via `syncedTableSpecs` registry, batches to D1, deletes on success
+- `syncedTableSpecs` — column layouts for all 9 synced tables (single source of truth)
+- Composite key support via `row_id_2` column for `memory_links`
+- `NewSyncedStore(sqlite, d1Client) (*SyncedStore, error)` — returns error because `initOutbox()` can fail
+- `Close()` signals carrier to drain, waits, then closes SQLiteStore
+- Startup reconciliation (comparing local MAX(id) vs D1) covers the tiny crash window between data write and outbox insert
 
 ### Phase 5 — Sync Engine (Pull)
 **Goal:** Pull from D1, upsert into local SQLite, rebuild embeddings.
