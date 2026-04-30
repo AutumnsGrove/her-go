@@ -55,6 +55,13 @@ func NewClient(accountID, databaseID, apiToken string) *Client {
 	}
 }
 
+// WithBaseURL overrides the Cloudflare API base URL. Used by tests to
+// point at a local httptest.Server instead of the real Cloudflare API.
+// Production code never calls this.
+func (c *Client) WithBaseURL(url string) {
+	c.baseURL = url
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------

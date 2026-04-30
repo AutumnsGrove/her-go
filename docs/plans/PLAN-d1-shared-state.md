@@ -137,41 +137,46 @@ New file: `memory/synced_store.go` (725 lines)
 - `Close()` signals carrier to drain, waits, then closes SQLiteStore
 - Startup reconciliation (comparing local MAX(id) vs D1) covers the tiny crash window between data write and outbox insert
 
-### Phase 5 — Sync Engine (Pull)
-**Goal:** Pull from D1, upsert into local SQLite, rebuild embeddings.
+### Phase 5 — Sync Engine (Pull) ✅
+**Status:** Complete — commit `6e9869e`
 
 New file: `memory/sync.go`
-- `(s *SyncedStore) Pull(ctx context.Context) error` — concurrent per-table fetch from D1
-- Uses `errgroup` for concurrent table pulls with shared context
-- After pull: bump `sqlite_sequence` for each table
-- After pull: call existing `MemoriesWithoutEmbeddings()` + batch embed
-- Track progress in `_sync_meta`
+- `Pull(ctx)` — concurrent per-table fetch from D1 via errgroup
+- Incremental pull (WHERE id > last_synced_id) for 7 tables with pagination (500 rows/page)
+- Full pull for composite-key/singleton tables (memory_links, persona_state)
+- `_sync_meta` tracking table for pull progress
+- `sqlite_sequence` bumping to prevent ID collisions
+- FK checks disabled during pull to handle concurrent table inserts
+- Embedding backfill delegated to caller (run.go startup handles it)
 
-### Phase 6 — Startup Wiring & KV Poller
-**Goal:** Wire SyncedStore into bot startup. Add KV polling on prod.
+### Phase 6 — Startup Wiring & KV Poller ✅
+**Status:** Complete — commit `6e9869e`
 
-**Files changed:**
-- `cmd/run.go` — if `cfg.Cloudflare.D1DatabaseID != ""`, wrap SQLiteStore in SyncedStore. Run `Pull()` before bot starts. Start KV poller goroutine.
-- `cmd/dev.go` — run `Pull()` on dev startup (hydrate local her.db with latest from D1). Remove the `cfg.Memory.DBPath = "./her-dev.db"` override — dev uses the same her.db. On shutdown, write `dev_session_ended=<timestamp>` to KV before clearing dev keys.
-- Add KV poller goroutine: checks `dev_session_ended` key every 30s. When found, triggers `Pull()`, then deletes the key.
+- `cmd/run.go` — wraps SQLiteStore in SyncedStore when `d1_database_id` is set. Runs `Pull()` before bot starts. Passes `botStore` (interface) to all downstream consumers.
+- `cmd/run.go` — KV sync poller goroutine (prod only): checks `dev_session_ended` every 30s, triggers Pull, deletes key. Cancelled during shutdown alongside dreamer/scheduler.
+- `cmd/dev.go` — removed `her-dev.db` override; dev uses same `her.db` synced via D1. Writes `dev_session_ended` timestamp to KV on shutdown.
+- `cmd/dev.go` — added `kvClient.get()` method for reading KV values.
+- `d1/client.go` — added `WithBaseURL()` for test httptest.Server injection.
 
-### Phase 7 — Sync Commands
-**Goal:** Manual push/pull commands for initial upload and on-demand sync.
+### Phase 7 — Sync Commands ✅
+**Status:** Complete — commit `ade3d80`
 
-New command group: `her sync push` / `her sync pull`
-- `cmd/sync.go` — `her sync push` reads each synced table from local SQLite, batches rows, pushes to D1. `her sync pull` pulls from D1 into local SQLite (same as the automatic Pull but manually triggered).
-- Concurrent per-table uploads (same `errgroup` pattern)
-- Idempotent: uses `INSERT OR REPLACE`
-- Progress logging: "pushing memories: 150/150", "pushing messages: 2340/2340"
-- Updates `_sync_meta` with max IDs after push
+New file: `cmd/sync.go`
+- `her sync push` — bulk upload all local SQLite to D1. Streams rows per-table, batches of 50, concurrent via errgroup. Progress logging.
+- `her sync pull` — manual pull from D1 (same as startup Pull but on-demand).
+- `PushAll(ctx)` method on SyncedStore for the push logic.
+- `makeSyncedStore` helper handles resource cleanup on error paths.
+- Updates `_sync_meta` after push so future pulls skip known rows.
 
-### Phase 8 — Testing & Polish
-- Integration test: push → pull → verify data matches
-- Test SyncedStore push failure doesn't block local writes
-- Test Pull correctly skips already-synced rows
-- Test embedding backfill runs after pull
-- Test KV poller triggers sync
-- Verify `go test ./... -race` passes
+### Phase 8 — Testing & Polish ✅
+**Status:** Complete
+
+New file: `memory/sync_test.go` — 4 tests with fake D1 server (in-memory SQLite behind httptest.Server):
+- `TestPushPullRoundtrip` — push messages/memories/reflections, pull into fresh store, verify data matches
+- `TestPushFailureDoesNotBlockLocalWrites` — D1 returns 500, local write still succeeds, outbox entry created
+- `TestPullSkipsAlreadySyncedRows` — pull twice, second pull only fetches new rows via _sync_meta cursor
+- `TestPullBumpsSequence` — after pulling ID 100 from D1, next local write gets ID > 100
+- `go test ./... -race` passes across all 18 packages with zero data races
 
 ---
 

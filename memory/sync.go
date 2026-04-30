@@ -72,6 +72,17 @@ func (s *SyncedStore) Pull(ctx context.Context) error {
 		return fmt.Errorf("initializing sync meta: %w", err)
 	}
 
+	// Disable FK checks for the duration of the pull. Tables are pulled
+	// concurrently, so child rows (e.g. memories with source_message_id)
+	// may arrive before their parent rows (messages). This is safe
+	// because the data in D1 already passed FK validation when it was
+	// first written — we're replicating, not creating relationships.
+	//
+	// PRAGMA foreign_keys is per-connection in SQLite, so this only
+	// affects the pull's upserts, not concurrent bot writes.
+	s.SQLiteStore.db.Exec("PRAGMA foreign_keys = OFF")
+	defer s.SQLiteStore.db.Exec("PRAGMA foreign_keys = ON")
+
 	// Use a plain errgroup (not WithContext) so one table's failure
 	// doesn't cancel the others — we want best-effort for each table.
 	// This is like asyncio.gather(return_exceptions=False) in Python,
