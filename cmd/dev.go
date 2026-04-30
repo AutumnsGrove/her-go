@@ -121,11 +121,13 @@ func runDev(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Step 4: Set config transform so runBot uses webhook mode + dev DB.
+	// Step 4: Set config transform so runBot uses webhook mode.
+	// No separate dev DB — both machines use their own local her.db,
+	// kept in sync via D1. The Pull on startup hydrates this machine's
+	// her.db with any data the other machine created.
 	configTransform = func(c *config.Config) {
 		c.Telegram.Mode = "webhook"
-		c.Memory.DBPath = "./her-dev.db"
-		log.Info("dev overrides applied", "mode", "webhook", "db", "./her-dev.db")
+		log.Info("dev overrides applied", "mode", "webhook")
 	}
 
 	// Step 5: Set cleanup hook — clears KV keys on shutdown so traffic
@@ -133,6 +135,12 @@ func runDev(cmd *cobra.Command, args []string) error {
 	devCleanup = func() {
 		log.Info("clearing KV routing keys...")
 		heartbeatCancel()
+
+		// Signal the prod instance that dev ended — it polls for this
+		// key and triggers a D1 Pull to sync any data we created.
+		if err := kv.put("dev_session_ended", nowMillis()); err != nil {
+			log.Warn("failed to write dev_session_ended", "err", err)
+		}
 
 		// Best-effort cleanup — if these fail, the 5-minute heartbeat
 		// timeout in the CF Worker handles it automatically.
@@ -225,6 +233,38 @@ type kvClient struct {
 // kvBaseURL returns the API base for KV operations.
 func (c *kvClient) kvBaseURL() string {
 	return fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/storage/kv/namespaces/%s", c.accountID, c.namespaceID)
+}
+
+// get reads a value from KV. Returns "" if the key doesn't exist.
+// Used by the sync poller to check for the dev_session_ended signal.
+func (c *kvClient) get(key string) (string, error) {
+	url := c.kvBaseURL() + "/values/" + key
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("KV GET %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+
+	// 404 means the key doesn't exist — not an error, just empty.
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("KV GET %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("KV GET %s: reading body: %w", key, err)
+	}
+	return string(body), nil
 }
 
 // put writes a key-value pair to KV.
