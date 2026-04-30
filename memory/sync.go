@@ -407,3 +407,155 @@ func splitCols(cols string) []string {
 	}
 	return parts
 }
+
+// ---------------------------------------------------------------------------
+// PushAll — bulk upload local SQLite → D1 (initial seeding)
+// ---------------------------------------------------------------------------
+
+// PushAll uploads all rows from every synced table in local SQLite to D1.
+// This is the initial seeding operation: run it once on the machine that
+// has all the real data to populate D1 for the first time.
+//
+// Idempotent: uses INSERT OR REPLACE, so running it twice is safe.
+// Concurrent per-table uploads for speed, with batches of maxBatchSize
+// rows per D1 API call.
+//
+// After pushing, updates local _sync_meta so this machine knows it's
+// fully synced (future Pulls won't re-download what we just pushed).
+func (s *SyncedStore) PushAll(ctx context.Context) error {
+	if err := s.initSyncMeta(); err != nil {
+		return fmt.Errorf("initializing sync meta: %w", err)
+	}
+
+	allTables := make([]string, 0, len(incrementalTables)+len(fullPullTables))
+	allTables = append(allTables, incrementalTables...)
+	allTables = append(allTables, fullPullTables...)
+
+	// Push tables concurrently — each table is independent, and D1
+	// handles concurrent HTTP requests fine. errgroup collects the
+	// first error but still waits for all goroutines to finish.
+	var g errgroup.Group
+	for _, table := range allTables {
+		table := table
+		g.Go(func() error {
+			return s.pushTable(ctx, table)
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("pushing to D1: %w", err)
+	}
+
+	log.Info("d1 push complete")
+	return nil
+}
+
+// pushTable reads all rows from a local SQLite table and pushes them
+// to D1 in batches. Logs progress as it goes. After pushing, updates
+// _sync_meta for incremental tables.
+func (s *SyncedStore) pushTable(ctx context.Context, table string) error {
+	spec, ok := syncedTableSpecs[table]
+	if !ok {
+		return fmt.Errorf("no table spec for %q", table)
+	}
+
+	// Count rows for progress logging.
+	var total int
+	if err := s.SQLiteStore.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&total); err != nil {
+		return fmt.Errorf("counting %s rows: %w", table, err)
+	}
+	if total == 0 {
+		log.Info("d1 push", "table", table, "rows", "0/0")
+		return nil
+	}
+
+	// Determine ORDER BY — most tables use id, memory_links uses composite PK.
+	orderBy := "id"
+	if table == "memory_links" {
+		orderBy = "source_id, target_id"
+	}
+
+	// Stream rows from local SQLite. We don't load everything into memory —
+	// just scan one row at a time and accumulate batches.
+	rows, err := s.SQLiteStore.db.QueryContext(ctx,
+		fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", spec.selectCols, table, orderBy),
+	)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	colCount := strings.Count(spec.d1Cols, ",") + 1
+	insertSQL := fmt.Sprintf("INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
+		table, spec.d1Cols, spec.placeholders)
+
+	var batch []d1.Statement
+	var pushed int
+	var maxID int64
+
+	for rows.Next() {
+		// Scan row values. Same pointer-indirection pattern as readRow/scanRow,
+		// but for sql.Rows instead of sql.Row.
+		values := make([]any, colCount)
+		ptrs := make([]any, colCount)
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return fmt.Errorf("scanning %s row: %w", table, err)
+		}
+
+		// Track max ID for _sync_meta (first column is id for incremental tables).
+		if id, ok := toInt64(values[0]); ok && id > maxID {
+			maxID = id
+		}
+
+		batch = append(batch, d1.Statement{SQL: insertSQL, Params: values})
+
+		if len(batch) >= maxBatchSize {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if _, err := s.d1Client.Batch(batch); err != nil {
+				return fmt.Errorf("pushing %s batch: %w", table, err)
+			}
+			pushed += len(batch)
+			log.Info("d1 push", "table", table, "progress", fmt.Sprintf("%d/%d", pushed, total))
+			batch = batch[:0]
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating %s rows: %w", table, err)
+	}
+
+	// Push remaining rows in the last partial batch.
+	if len(batch) > 0 {
+		if _, err := s.d1Client.Batch(batch); err != nil {
+			return fmt.Errorf("pushing %s final batch: %w", table, err)
+		}
+		pushed += len(batch)
+	}
+
+	log.Info("d1 push done", "table", table, "rows", fmt.Sprintf("%d/%d", pushed, total))
+
+	// Update _sync_meta for incremental tables so future Pulls on this
+	// machine skip rows we already have locally.
+	if isIncremental(table) && maxID > 0 {
+		if err := s.setLastSyncedID(table, maxID); err != nil {
+			return fmt.Errorf("updating sync meta for %s: %w", table, err)
+		}
+	}
+
+	return nil
+}
+
+// isIncremental returns true if the table uses ID-based incremental sync.
+func isIncremental(table string) bool {
+	for _, t := range incrementalTables {
+		if t == table {
+			return true
+		}
+	}
+	return false
+}
