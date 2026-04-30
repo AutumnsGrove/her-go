@@ -102,7 +102,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 
 	// Check if running under launchd.
 	managedBy := "manual (go run)"
-	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged(b.cfg.Identity.Her) {
+	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged(b.effectiveServiceLabel()) {
 		managedBy = "launchd"
 	}
 
@@ -145,14 +145,14 @@ func (b *Bot) handleStatus(c tele.Context) error {
 func (b *Bot) handleRestart(c tele.Context) error {
 	log.Info("/restart: restart requested via Telegram")
 
-	if isLaunchdManaged(b.cfg.Identity.Her) {
+	if isLaunchdManaged(b.effectiveServiceLabel()) {
 		_ = c.Send("Restarting via launchd... be right back.")
 
 		// launchctl kickstart -k forces a restart of the service.
 		// The -k flag kills the existing instance first.
 		go func() {
 			time.Sleep(500 * time.Millisecond) // let the message send
-			cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.cfg.Identity.Her))
+			cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.effectiveServiceLabel()))
 			if err := cmd.Run(); err != nil {
 				log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 				os.Exit(0) // launchd will restart us via KeepAlive
@@ -178,7 +178,7 @@ func (b *Bot) handleRestart(c tele.Context) error {
 func (b *Bot) handleUpdate(c tele.Context) error {
 	log.Info("/update: self-update requested via Telegram")
 
-	if !isLaunchdManaged(b.cfg.Identity.Her) {
+	if !isLaunchdManaged(b.effectiveServiceLabel()) {
 		return c.Send("⚠️ /update only works when running as a launchd service. Use <code>her setup</code> first.", &tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 
@@ -242,7 +242,7 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 
 	go func() {
 		time.Sleep(500 * time.Millisecond) // let the message send
-		cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.cfg.Identity.Her))
+		cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.effectiveServiceLabel()))
 		if err := cmd.Run(); err != nil {
 			log.Error("launchctl kickstart failed, falling back to exit", "err", err)
 			os.Exit(0) // launchd will restart us via KeepAlive
@@ -311,22 +311,30 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, info.Mode())
 }
 
-// launchdServiceLabel returns the launchd service identifier for the bot.
-// e.g., "Mira" → "com.mira.her-go". This is the single source of truth
-// for the bot package — matches serviceLabel() in cmd/setup.go.
+// launchdServiceLabel returns the launchd service identifier derived from
+// the bot name. e.g., "Mira" → "com.mira.her-go".
 func launchdServiceLabel(botName string) string {
 	return "com." + strings.ToLower(botName) + ".her-go"
 }
 
-// launchdTarget returns the full launchctl target path for the bot service.
-// e.g., "gui/501/com.mira.her-go" — used by kickstart and print commands.
-func launchdTarget(botName string) string {
-	return fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdServiceLabel(botName))
+// effectiveServiceLabel returns the configured launchd service label,
+// falling back to the name-derived label when update.service_label is empty.
+func (b *Bot) effectiveServiceLabel() string {
+	if b.cfg.Update.ServiceLabel != "" {
+		return b.cfg.Update.ServiceLabel
+	}
+	return launchdServiceLabel(b.cfg.Identity.Her)
 }
 
-// isLaunchdManaged checks if the bot is running as a launchd service
-// by looking for the service in launchctl.
-func isLaunchdManaged(botName string) bool {
-	cmd := exec.Command("launchctl", "print", launchdTarget(botName))
+// launchdTarget returns the full launchctl target path for the given service
+// label. e.g., "gui/501/com.mira.her-go" — used by kickstart and print commands.
+func launchdTarget(label string) string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+}
+
+// isLaunchdManaged checks if a service is running under launchd by
+// querying launchctl with the given service label.
+func isLaunchdManaged(label string) bool {
+	cmd := exec.Command("launchctl", "print", launchdTarget(label))
 	return cmd.Run() == nil
 }

@@ -222,4 +222,5 @@ cloudflare:
 # Self-update via /update Telegram command. Only used on the Mac Mini
 # production instance — pulls latest code, builds, and restarts via launchd.
 update:
-  repo_path: ""           # path to the git repo (default: working directory). Set this on the Mac Mini.
+  repo_path: ""                    # path to the git repo (default: working directory). Set this on the Mac Mini.
+  service_label: "com.mira.her-go" # launchd service label — must match the Label key in your .plist

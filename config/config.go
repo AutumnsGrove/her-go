@@ -104,7 +104,8 @@ type SyncConfig struct {
 // UpdateConfig holds settings for the /update self-update command.
 // Only relevant on the Mac Mini production instance — dev mode ignores it.
 type UpdateConfig struct {
-	RepoPath string `yaml:"repo_path"` // path to the git repo (default: working directory)
+	RepoPath     string `yaml:"repo_path"`     // path to the git repo (default: working directory)
+	ServiceLabel string `yaml:"service_label"` // launchd service label (default: "com.<botname>.her-go")
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.
