@@ -315,7 +315,7 @@ type simDreamResult struct {
 // runDreamCycle executes a full dream cycle (NightlyReflect + GatedRewrite).
 // Used by both dream_after (mid-suite) and run_dream (end of suite).
 // Returns a simDreamResult with the reflection and persona rewrite output.
-func runDreamCycle(memoryAgentClient *llm.Client, store *memory.Store, cfg *config.Config, turnContext string) simDreamResult {
+func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *config.Config, turnContext string) simDreamResult {
 	var result simDreamResult
 	result.Ran = true
 

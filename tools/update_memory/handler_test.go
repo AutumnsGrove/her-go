@@ -24,7 +24,7 @@ import (
 // newTestStore opens a fresh temp SQLite with all tables created.
 // embedDim=0 skips the vec_memories virtual table — these tests only need
 // the memories table and supersession columns.
-func newTestStore(t *testing.T) *memory.Store {
+func newTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -37,7 +37,7 @@ func newTestStore(t *testing.T) *memory.Store {
 
 // saveMemory inserts a memory with the given content, category and subject.
 // Fatally fails the test on error so call sites stay clean.
-func saveMemory(t *testing.T, store *memory.Store, content, category, subject string) int64 {
+func saveMemory(t *testing.T, store memory.Store, content, category, subject string) int64 {
 	t.Helper()
 	id, err := store.SaveMemory(content, category, subject, 0, 5, nil, nil, "", "")
 	if err != nil {
@@ -48,7 +48,7 @@ func saveMemory(t *testing.T, store *memory.Store, content, category, subject st
 
 // getMemory fetches a memory by ID including inactive ones.
 // Fatally fails the test if the DB call itself errors; returns nil if not found.
-func getMemory(t *testing.T, store *memory.Store, id int64) *memory.Memory {
+func getMemory(t *testing.T, store memory.Store, id int64) *memory.Memory {
 	t.Helper()
 	m, err := store.GetMemory(id)
 	if err != nil {
@@ -60,7 +60,7 @@ func getMemory(t *testing.T, store *memory.Store, id int64) *memory.Memory {
 // isActive returns true if the memory is in AllActiveMemories.
 // Checking via the same view the agent uses for retrieval is more meaningful
 // than just reading the row directly.
-func isActive(t *testing.T, store *memory.Store, id int64) bool {
+func isActive(t *testing.T, store memory.Store, id int64) bool {
 	t.Helper()
 	all, err := store.AllActiveMemories()
 	if err != nil {

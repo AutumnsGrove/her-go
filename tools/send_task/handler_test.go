@@ -12,7 +12,7 @@ import (
 
 // newSendTaskTestStore opens a fresh temp SQLite with all tables created.
 // embedDim=0 skips the vector tables — these tests only touch the inbox.
-func newSendTaskTestStore(t *testing.T) *memory.Store {
+func newSendTaskTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "send_task_test.db")
 	store, err := memory.NewStore(dbPath, 0)

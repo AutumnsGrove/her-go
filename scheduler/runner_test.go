@@ -45,7 +45,7 @@ func (h *scriptedHandler) Execute(_ context.Context, payload json.RawMessage, _ 
 // newRunnerTestScheduler returns a Scheduler wired to a fresh temp DB
 // with no tasks registered yet. Caller registers handlers and seeds
 // tasks via store.UpsertSchedulerTask directly.
-func newRunnerTestScheduler(t *testing.T) (*Scheduler, *memory.Store) {
+func newRunnerTestScheduler(t *testing.T) (*Scheduler, memory.Store) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "runner.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -68,7 +68,7 @@ func newRunnerTestScheduler(t *testing.T) (*Scheduler, *memory.Store) {
 
 // seedTask inserts a ready-to-fire task into the store and returns the
 // stored row (with its ID populated).
-func seedTask(t *testing.T, store *memory.Store, task *memory.SchedulerTask) *memory.SchedulerTask {
+func seedTask(t *testing.T, store memory.Store, task *memory.SchedulerTask) *memory.SchedulerTask {
 	t.Helper()
 	if err := store.UpsertSchedulerTask(task); err != nil {
 		t.Fatalf("UpsertSchedulerTask: %v", err)

@@ -14,5 +14,4 @@ var VerboseTools = map[string]bool{
 	"find_skill":      true,
 	"recall_memories": true,
 	"search_history":  true,
-	"query_expenses":  true,
 }

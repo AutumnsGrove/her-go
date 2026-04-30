@@ -11,7 +11,7 @@ import (
 
 // newLayerTestStore opens a tiny store — embedDim=0 (mood layer
 // doesn't touch vec_moods).
-func newLayerTestStore(t *testing.T) *memory.Store {
+func newLayerTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "layer.db")
 	store, err := memory.NewStore(dbPath, 0)

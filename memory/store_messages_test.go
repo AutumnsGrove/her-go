@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func newMessageTestStore(t *testing.T) *Store {
+func newMessageTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "msg_test.db")
 	store, err := NewStore(dbPath, 0)

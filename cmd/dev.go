@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 	"time"
 
 	"her/config"
@@ -58,6 +61,13 @@ func runDev(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cloudflare section in config.yaml is incomplete — need account_id, api_token, and kv_namespace_id for dev mode KV routing")
 	}
 
+	// Generate worker/wrangler.toml from config.yaml so IDs stay out
+	// of version control. Non-fatal — wrangler.toml is only needed for
+	// `npx wrangler deploy`, not for the bot itself.
+	if err := generateWranglerConfig(cfg); err != nil {
+		log.Warn("could not generate wrangler.toml", "err", err)
+	}
+
 	// Check cloudflared is installed.
 	cloudflaredBin, err := exec.LookPath("cloudflared")
 	if err != nil {
@@ -83,7 +93,7 @@ func runDev(cmd *cobra.Command, args []string) error {
 		accountID:   cfg.Cloudflare.AccountID,
 		apiToken:    cfg.Cloudflare.APIToken,
 		namespaceID: cfg.Cloudflare.KVNamespaceID,
-		http:        &http.Client{Timeout: 10 * time.Second},
+		http:        &http.Client{Timeout: kvClientTimeout},
 	}
 
 	// Step 2: Set KV routing keys.
@@ -121,11 +131,13 @@ func runDev(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Step 4: Set config transform so runBot uses webhook mode + dev DB.
+	// Step 4: Set config transform so runBot uses webhook mode.
+	// No separate dev DB — both machines use their own local her.db,
+	// kept in sync via D1. The Pull on startup hydrates this machine's
+	// her.db with any data the other machine created.
 	configTransform = func(c *config.Config) {
 		c.Telegram.Mode = "webhook"
-		c.Memory.DBPath = "./her-dev.db"
-		log.Info("dev overrides applied", "mode", "webhook", "db", "./her-dev.db")
+		log.Info("dev overrides applied", "mode", "webhook")
 	}
 
 	// Step 5: Set cleanup hook — clears KV keys on shutdown so traffic
@@ -133,6 +145,12 @@ func runDev(cmd *cobra.Command, args []string) error {
 	devCleanup = func() {
 		log.Info("clearing KV routing keys...")
 		heartbeatCancel()
+
+		// Signal the prod instance that dev ended — it polls for this
+		// key and triggers a D1 Pull to sync any data we created.
+		if err := kv.put("dev_session_ended", nowMillis()); err != nil {
+			log.Warn("failed to write dev_session_ended", "err", err)
+		}
 
 		// Best-effort cleanup — if these fail, the 5-minute heartbeat
 		// timeout in the CF Worker handles it automatically.
@@ -227,6 +245,38 @@ func (c *kvClient) kvBaseURL() string {
 	return fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/storage/kv/namespaces/%s", c.accountID, c.namespaceID)
 }
 
+// get reads a value from KV. Returns "" if the key doesn't exist.
+// Used by the sync poller to check for the dev_session_ended signal.
+func (c *kvClient) get(key string) (string, error) {
+	url := c.kvBaseURL() + "/values/" + key
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("kv get %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+
+	// 404 means the key doesn't exist — not an error, just empty.
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("kv get %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("kv get %s: reading body: %w", key, err)
+	}
+	return string(body), nil
+}
+
 // put writes a key-value pair to KV.
 func (c *kvClient) put(key, value string) error {
 	url := c.kvBaseURL() + "/values/" + key
@@ -239,13 +289,13 @@ func (c *kvClient) put(key, value string) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("KV PUT %s: %w", key, err)
+		return fmt.Errorf("kv put %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("KV PUT %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+		return fmt.Errorf("kv put %s: HTTP %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -261,13 +311,13 @@ func (c *kvClient) delete(key string) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("KV DELETE %s: %w", key, err)
+		return fmt.Errorf("kv delete %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("KV DELETE %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+		return fmt.Errorf("kv delete %s: HTTP %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -276,4 +326,61 @@ func (c *kvClient) delete(key string) error {
 // The CF Worker parses this with parseInt() to check heartbeat freshness.
 func nowMillis() string {
 	return strconv.FormatInt(time.Now().UnixMilli(), 10)
+}
+
+// ---------------------------------------------------------------------------
+// Wrangler config generator
+// ---------------------------------------------------------------------------
+
+// wranglerData holds the values injected into wrangler.toml.tmpl.
+// All fields come from config.yaml — one source of truth.
+type wranglerData struct {
+	KVNamespaceID string
+	D1DatabaseID  string
+	ProdURL       string
+}
+
+// generateWranglerConfig reads worker/wrangler.toml.tmpl, fills in values
+// from config.yaml, and writes worker/wrangler.toml. This keeps IDs out of
+// version control — anyone can clone the repo, fill in config.yaml, and
+// the wrangler config is derived automatically.
+func generateWranglerConfig(cfg *config.Config) error {
+	tmplPath := filepath.Join("worker", "wrangler.toml.tmpl")
+	outPath := filepath.Join("worker", "wrangler.toml")
+
+	tmplBytes, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return fmt.Errorf("reading wrangler template: %w", err)
+	}
+
+	tmpl, err := template.New("wrangler").Parse(string(tmplBytes))
+	if err != nil {
+		return fmt.Errorf("parsing wrangler template: %w", err)
+	}
+
+	// Derive PROD_URL from tunnel domain. If no tunnel is configured,
+	// leave it empty — the user hasn't set up production routing yet.
+	prodURL := ""
+	if cfg.Tunnel.Domain != "" {
+		prodURL = "https://" + cfg.Tunnel.Domain
+	}
+
+	data := wranglerData{
+		KVNamespaceID: cfg.Cloudflare.KVNamespaceID,
+		D1DatabaseID:  cfg.Cloudflare.D1DatabaseID,
+		ProdURL:       prodURL,
+	}
+
+	f, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("creating wrangler.toml: %w", err)
+	}
+	defer f.Close()
+
+	if err := tmpl.Execute(f, data); err != nil {
+		return fmt.Errorf("writing wrangler.toml: %w", err)
+	}
+
+	log.Info("generated worker/wrangler.toml from config.yaml")
+	return nil
 }

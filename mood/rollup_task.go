@@ -41,9 +41,9 @@ func (h dailyRollupHandler) Execute(
 	_ json.RawMessage,
 	deps *scheduler.Deps,
 ) error {
-	store, ok := deps.Store.(*memory.Store)
+	store, ok := deps.Store.(*memory.SQLiteStore)
 	if !ok {
-		return fmt.Errorf("mood_daily_rollup: deps.Store is %T, want *memory.Store", deps.Store)
+		return fmt.Errorf("mood_daily_rollup: deps.Store is %T, want *memory.SQLiteStore", deps.Store)
 	}
 
 	now := time.Now()

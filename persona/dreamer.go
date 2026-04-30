@@ -32,7 +32,7 @@ func init() {
 // and easier to extend — same pattern used by agent.RunParams.
 type DreamerParams struct {
 	LLM      *llm.Client   // model for NightlyReflect and GatedRewrite (typically the memory agent's model)
-	Store    *memory.Store // SQLite store for reading/writing persona state
+	Store    memory.Store // SQLite store for reading/writing persona state
 	Cfg      *config.Config
 	EventBus *tui.Bus // may be nil (e.g., sim mode) — all emits are nil-safe
 

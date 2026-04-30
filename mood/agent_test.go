@@ -66,7 +66,7 @@ func (s *scriptedServer) handle(w http.ResponseWriter, _ *http.Request) {
 }
 
 // newAgentTestStore opens a store with embedDim=0 — non-KNN paths.
-func newAgentTestStore(t *testing.T) *memory.Store {
+func newAgentTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "mood_agent.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -79,7 +79,7 @@ func newAgentTestStore(t *testing.T) *memory.Store {
 
 // testDeps builds a Deps pointed at the given scripted server.
 // Callers can mutate fields after (e.g. set Propose to a spy).
-func testDeps(t *testing.T, s *scriptedServer, store *memory.Store) Deps {
+func testDeps(t *testing.T, s *scriptedServer, store memory.Store) Deps {
 	t.Helper()
 	return Deps{
 		LLM:   llm.NewClient(s.URL(), "test-key", "mood-model", 0.1, 256),

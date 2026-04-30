@@ -51,7 +51,7 @@ type Deps struct {
 	// project's central SQLite wrapper.
 	//
 	// Typed as `any` here to avoid a scheduler → memory import cycle.
-	// Handlers cast to `*memory.Store` at the call site. Not beautiful,
+	// Handlers cast to `*memory.SQLiteStore` at the call site. Not beautiful,
 	// but contained: every handler's first line is usually the cast.
 	Store any
 

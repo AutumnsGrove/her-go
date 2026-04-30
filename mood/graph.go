@@ -56,7 +56,7 @@ func (r GraphRange) Duration() time.Duration {
 //
 // Returns a friendly zero-entries PNG when there's no data — the
 // caller shouldn't have to special-case that.
-func RenderValencePNG(store *memory.Store, vocab *Vocab, r GraphRange, now time.Time) ([]byte, error) {
+func RenderValencePNG(store memory.Store, vocab *Vocab, r GraphRange, now time.Time) ([]byte, error) {
 	if store == nil {
 		return nil, fmt.Errorf("RenderValencePNG: nil store")
 	}

@@ -23,7 +23,7 @@ import (
 // newTestStore opens a fresh temp SQLite with all tables created.
 // embedDim=0 skips the vec_memories virtual table — these tests only touch the
 // memories and memory_links tables.
-func newTestStore(t *testing.T) *memory.Store {
+func newTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -36,7 +36,7 @@ func newTestStore(t *testing.T) *memory.Store {
 
 // saveMemory inserts a memory with the given content, category and subject.
 // Fatally fails on error so call sites stay clean.
-func saveMemory(t *testing.T, store *memory.Store, content, category, subject string) int64 {
+func saveMemory(t *testing.T, store memory.Store, content, category, subject string) int64 {
 	t.Helper()
 	id, err := store.SaveMemory(content, category, subject, 0, 5, nil, nil, "", "")
 	if err != nil {
@@ -46,7 +46,7 @@ func saveMemory(t *testing.T, store *memory.Store, content, category, subject st
 }
 
 // getMemory fetches a memory by ID including inactive rows.
-func getMemory(t *testing.T, store *memory.Store, id int64) *memory.Memory {
+func getMemory(t *testing.T, store memory.Store, id int64) *memory.Memory {
 	t.Helper()
 	m, err := store.GetMemory(id)
 	if err != nil {
@@ -56,7 +56,7 @@ func getMemory(t *testing.T, store *memory.Store, id int64) *memory.Memory {
 }
 
 // isActive returns true if the memory appears in AllActiveMemories.
-func isActive(t *testing.T, store *memory.Store, id int64) bool {
+func isActive(t *testing.T, store memory.Store, id int64) bool {
 	t.Helper()
 	all, err := store.AllActiveMemories()
 	if err != nil {
@@ -71,7 +71,7 @@ func isActive(t *testing.T, store *memory.Store, id int64) bool {
 }
 
 // activeMemoryCount returns how many active memories the store contains.
-func activeMemoryCount(t *testing.T, store *memory.Store) int {
+func activeMemoryCount(t *testing.T, store memory.Store) int {
 	t.Helper()
 	all, err := store.AllActiveMemories()
 	if err != nil {

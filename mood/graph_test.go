@@ -14,7 +14,7 @@ import (
 // a PNG" assertion without embedding a full decoder in the test.
 var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
 
-func newGraphTestStore(t *testing.T) *memory.Store {
+func newGraphTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "graph.db")
 	store, err := memory.NewStore(dbPath, 0)

@@ -50,7 +50,7 @@ type SchedulerTask struct {
 // When updating, we only change the scheduling config (cron, next_fire,
 // payload, retry) — we leave last_run_at, last_error, and attempt_count
 // alone so historical state isn't lost when task.yaml is edited.
-func (s *Store) UpsertSchedulerTask(t *SchedulerTask) error {
+func (s *SQLiteStore) UpsertSchedulerTask(t *SchedulerTask) error {
 	cron := nullableString(t.CronExpr)
 
 	_, err := s.db.Exec(
@@ -81,7 +81,7 @@ func (s *Store) UpsertSchedulerTask(t *SchedulerTask) error {
 
 // DueSchedulerTasks returns every task whose next_fire is at or before
 // `now`. The runner calls this on every tick.
-func (s *Store) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) {
+func (s *SQLiteStore) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, kind, cron_expr, next_fire, payload_json,
 		        retry_max_attempts, retry_backoff, retry_initial_wait,
@@ -101,7 +101,7 @@ func (s *Store) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) {
 
 // SchedulerTaskByKind looks up the row for a given kind. Returns
 // (nil, nil) when no row exists.
-func (s *Store) SchedulerTaskByKind(kind string) (*SchedulerTask, error) {
+func (s *SQLiteStore) SchedulerTaskByKind(kind string) (*SchedulerTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, kind, cron_expr, next_fire, payload_json,
 		        retry_max_attempts, retry_backoff, retry_initial_wait,
@@ -128,7 +128,7 @@ func (s *Store) SchedulerTaskByKind(kind string) (*SchedulerTask, error) {
 
 // MarkSchedulerSuccess records a successful run: bumps next_fire, sets
 // last_run_at, clears last_error, resets attempt_count.
-func (s *Store) MarkSchedulerSuccess(id int64, nextFire time.Time) error {
+func (s *SQLiteStore) MarkSchedulerSuccess(id int64, nextFire time.Time) error {
 	_, err := s.db.Exec(
 		`UPDATE scheduler_tasks
 		   SET last_run_at   = ?,
@@ -149,7 +149,7 @@ func (s *Store) MarkSchedulerSuccess(id int64, nextFire time.Time) error {
 // MarkSchedulerFailure records a failed run. The caller computes the new
 // next_fire according to the retry policy and passes it here, so this
 // method is pure SQL with no policy logic.
-func (s *Store) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error {
+func (s *SQLiteStore) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error {
 	_, err := s.db.Exec(
 		`UPDATE scheduler_tasks
 		   SET last_run_at   = ?,
@@ -172,7 +172,7 @@ func (s *Store) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string
 // DeleteSchedulerTask removes a task row. Used for one-shot tasks after
 // they've fired successfully (nothing registered yet, but the scheduler
 // supports it).
-func (s *Store) DeleteSchedulerTask(id int64) error {
+func (s *SQLiteStore) DeleteSchedulerTask(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM scheduler_tasks WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("deleting scheduler task %d: %w", id, err)

@@ -63,7 +63,7 @@ func runShape(cmd *cobra.Command, args []string) error {
 	// Open the database for live data (facts, messages, mood, etc.).
 	// If it doesn't exist, we run with nil store — layers handle this
 	// gracefully and return empty/estimated results.
-	var store *memory.Store
+	var store memory.Store
 	store, err = memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
 		fmt.Printf("  (no database found at %s — using estimates)\n\n", cfg.Memory.DBPath)
