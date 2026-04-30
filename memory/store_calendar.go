@@ -33,7 +33,7 @@ type CalendarEvent struct {
 //
 // This is the first step in the calendar_create handler: write locally,
 // then sync to EventKit, then update the row with the returned event_id.
-func (s *Store) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error) {
+func (s *SQLiteStore) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error) {
 	// In SQL, we use NULL to represent "no value yet" for optional fields.
 	// In Go, we convert empty strings to nil (interface{}) so SQLite stores NULL.
 	// This is a common pattern — like Python's None vs. "" distinction.
@@ -82,7 +82,7 @@ func (s *Store) InsertCalendarEvent(title, start, end, location, notes, calendar
 //
 // Go doesn't have Python's **kwargs, so we use a map[string]any to represent
 // optional field updates. The handler builds this map from the JSON args.
-func (s *Store) UpdateCalendarEvent(id int64, updates map[string]any) error {
+func (s *SQLiteStore) UpdateCalendarEvent(id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil // no-op
 	}
@@ -144,7 +144,7 @@ func (s *Store) UpdateCalendarEvent(id int64, updates map[string]any) error {
 // UpdateCalendarEventID sets the event_id for a calendar event after it's
 // been synced to EventKit. This is called by calendar_create after the
 // bridge returns the EventKit identifier.
-func (s *Store) UpdateCalendarEventID(id int64, eventID string) error {
+func (s *SQLiteStore) UpdateCalendarEventID(id int64, eventID string) error {
 	_, err := s.db.Exec(
 		`UPDATE calendar_events SET event_id = ?, updated_at = ? WHERE id = ?`,
 		eventID, time.Now().Format("2006-01-02 15:04:05"), id,
@@ -159,7 +159,7 @@ func (s *Store) UpdateCalendarEventID(id int64, eventID string) error {
 // This follows the memory system pattern (DeactivateMemory) — the event stays
 // in the database for audit trail but won't appear in queries. This is called
 // by calendar_delete before calling the bridge.
-func (s *Store) DeleteCalendarEvent(id int64) error {
+func (s *SQLiteStore) DeleteCalendarEvent(id int64) error {
 	_, err := s.db.Exec(
 		`UPDATE calendar_events SET active = 0, updated_at = ? WHERE id = ?`,
 		time.Now().Format("2006-01-02 15:04:05"), id,
@@ -180,7 +180,7 @@ func (s *Store) DeleteCalendarEvent(id int64) error {
 //
 // The query uses string comparison on TEXT columns, which works correctly for
 // ISO 8601 dates because they sort lexicographically (2026-04-21 < 2026-04-22).
-func (s *Store) ListCalendarEvents(start, end, job string, shiftsOnly bool) ([]CalendarEvent, error) {
+func (s *SQLiteStore) ListCalendarEvents(start, end, job string, shiftsOnly bool) ([]CalendarEvent, error) {
 	// Build the query dynamically based on optional filters. In Go we build
 	// the WHERE clause and args slice together — similar to how you'd use
 	// a query builder in Python (like SQLAlchemy's filter chain).
@@ -244,7 +244,7 @@ func (s *Store) ListCalendarEvents(start, end, job string, shiftsOnly bool) ([]C
 // GetCalendarEventByEventID looks up a calendar event by its EventKit identifier.
 // Returns nil and no error if the event doesn't exist. Used by update/delete
 // handlers to find the database ID from the event_id the agent provides.
-func (s *Store) GetCalendarEventByEventID(eventID string) (*CalendarEvent, error) {
+func (s *SQLiteStore) GetCalendarEventByEventID(eventID string) (*CalendarEvent, error) {
 	var e CalendarEvent
 	var startStr, endStr, createdAtStr string
 	var locationVal, notesVal, jobVal, updatedAtVal sql.NullString
@@ -299,6 +299,6 @@ func (s *Store) GetCalendarEventByEventID(eventID string) (*CalendarEvent, error
 // This is essentially ListCalendarEvents with shiftsOnly hardcoded to true,
 // extracted as a separate method for clarity. The shift_hours handler calls
 // this directly instead of passing flags through the general-purpose method.
-func (s *Store) ListShiftEvents(start, end, job string) ([]CalendarEvent, error) {
+func (s *SQLiteStore) ListShiftEvents(start, end, job string) ([]CalendarEvent, error) {
 	return s.ListCalendarEvents(start, end, job, true)
 }

@@ -7,7 +7,7 @@ import (
 
 // newCalendarTestStore creates a fresh in-memory Store for calendar tests.
 // Same pattern as newMoodTestStore — temp directory auto-cleaned on test end.
-func newCalendarTestStore(t *testing.T) *Store {
+func newCalendarTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "calendar_test.db")
 	store, err := NewStore(dbPath, 0)

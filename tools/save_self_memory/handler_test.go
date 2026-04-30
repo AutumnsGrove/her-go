@@ -23,7 +23,7 @@ import (
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func newTestStore(t *testing.T) *memory.Store {
+func newTestStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := memory.NewStore(dbPath, 0)
@@ -36,7 +36,7 @@ func newTestStore(t *testing.T) *memory.Store {
 
 // newCtx returns a Context with a real store but nil EmbedClient and nil
 // ClassifierLLM — both dedup and classifier gates are skipped.
-func newCtx(store *memory.Store) *tools.Context {
+func newCtx(store memory.Store) *tools.Context {
 	return &tools.Context{
 		Store: store,
 		Cfg: &config.Config{

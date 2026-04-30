@@ -11,7 +11,7 @@ import (
 // newSchedulerTestStore opens a fresh temp SQLite with all tables
 // created. embedDim=0 so vec_memories / vec_moods virtual tables are
 // skipped — these tests only touch scheduler_tasks.
-func newSchedulerTestStore(t *testing.T) *Store {
+func newSchedulerTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "scheduler_test.db")
 	store, err := NewStore(dbPath, 0)

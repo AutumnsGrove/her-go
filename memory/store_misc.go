@@ -12,7 +12,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // SavePIIVaultEntry persists a Tier 2 token↔original mapping for audit trail.
-func (s *Store) SavePIIVaultEntry(messageID int64, token, originalValue, entityType string) error {
+func (s *SQLiteStore) SavePIIVaultEntry(messageID int64, token, originalValue, entityType string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO pii_vault (message_id, token, original_value, entity_type)
 		 VALUES (?, ?, ?, ?)`,
@@ -57,7 +57,7 @@ type PendingConfirmation struct {
 // This follows the same pattern as SaveMoodEntry — simple INSERT, return
 // the auto-generated ID. The telegramMsgID comes from the bot's Send()
 // call, which returns the message object with its ID.
-func (s *Store) CreatePendingConfirmation(telegramMsgID int64, actionType string, actionPayload json.RawMessage, description string) (int64, error) {
+func (s *SQLiteStore) CreatePendingConfirmation(telegramMsgID int64, actionType string, actionPayload json.RawMessage, description string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO pending_confirmations (telegram_msg_id, action_type, action_payload, description)
 		 VALUES (?, ?, ?, ?)`,
@@ -81,7 +81,7 @@ func (s *Store) CreatePendingConfirmation(telegramMsgID int64, actionType string
 // The 1-hour TTL prevents stale confirmations from executing days later
 // if the user scrolls back and clicks an old button. This is a soft
 // safety net — the worst case is the user has to re-ask.
-func (s *Store) GetPendingConfirmation(telegramMsgID int64) (*PendingConfirmation, error) {
+func (s *SQLiteStore) GetPendingConfirmation(telegramMsgID int64) (*PendingConfirmation, error) {
 	row := s.db.QueryRow(
 		`SELECT id, telegram_msg_id, action_type, action_payload, description, created_at
 		 FROM pending_confirmations
@@ -107,7 +107,7 @@ func (s *Store) GetPendingConfirmation(telegramMsgID int64) (*PendingConfirmatio
 // ResolvePendingConfirmation marks a confirmation as resolved with the
 // given action ("confirmed", "cancelled", or "error"). This prevents
 // double-clicks — once resolved, GetPendingConfirmation won't return it.
-func (s *Store) ResolvePendingConfirmation(id int64, action string) error {
+func (s *SQLiteStore) ResolvePendingConfirmation(id int64, action string) error {
 	_, err := s.db.Exec(
 		`UPDATE pending_confirmations
 		 SET resolved_at = CURRENT_TIMESTAMP, resolved_action = ?
@@ -138,7 +138,7 @@ type LocationEntry struct {
 // InsertLocation records a location event. source should be one of:
 // "pin" (Telegram location share), "venue" (Telegram venue share),
 // "text" (geocoded from text input), "search" (nearby_search query).
-func (s *Store) InsertLocation(lat, lon float64, label, source, conversationID string) error {
+func (s *SQLiteStore) InsertLocation(lat, lon float64, label, source, conversationID string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO location_history (latitude, longitude, label, source, conversation_id)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -152,7 +152,7 @@ func (s *Store) InsertLocation(lat, lon float64, label, source, conversationID s
 
 // LatestLocation returns the most recent location entry, or nil if none exist.
 // Used by nearby_search as a fallback when no explicit location is provided.
-func (s *Store) LatestLocation() *LocationEntry {
+func (s *SQLiteStore) LatestLocation() *LocationEntry {
 	row := s.db.QueryRow(
 		`SELECT id, timestamp, latitude, longitude, label, source, conversation_id
 		 FROM location_history ORDER BY timestamp DESC LIMIT 1`,

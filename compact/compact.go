@@ -100,7 +100,7 @@ type CompactResult struct {
 //  5. Return the new summary + remaining recent messages
 func MaybeCompact(
 	chatLLM *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	conversationID string,
 	recentMessages []memory.Message,
 	maxHistoryTokens int,
@@ -333,7 +333,7 @@ func formatActionTranscript(existingSummary string, actions []memory.AgentAction
 // agent DID so it can build on past decisions, update previous facts, etc.
 func MaybeCompactAgent(
 	chatLLM *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	conversationID string,
 	actions []memory.AgentAction,
 	agentContextBudget int,

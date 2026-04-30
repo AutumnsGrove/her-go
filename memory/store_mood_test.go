@@ -10,7 +10,7 @@ import (
 
 // newMoodTestStore opens a store with embedDim=0 (no vec_moods) —
 // covers every non-KNN path.
-func newMoodTestStore(t *testing.T) *Store {
+func newMoodTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "mood_test.db")
 	store, err := NewStore(dbPath, 0)
@@ -23,7 +23,7 @@ func newMoodTestStore(t *testing.T) *Store {
 
 // newMoodTestStoreWithVec opens a store with a real embedding
 // dimension so vec_moods works. KNN dedup tests use this.
-func newMoodTestStoreWithVec(t *testing.T, dim int) *Store {
+func newMoodTestStoreWithVec(t *testing.T, dim int) *SQLiteStore {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "mood_vec_test.db")
 	store, err := NewStore(dbPath, dim)

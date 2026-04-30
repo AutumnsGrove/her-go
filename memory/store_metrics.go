@@ -22,7 +22,7 @@ type Metric struct {
 // If messageID is 0, it's stored as NULL (e.g., for agent calls).
 // isFallback is true when the primary model failed and the fallback
 // model handled the request (the "Haiku tax" — see issue #68).
-func (s *Store) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error {
+func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error {
 	var msgID interface{} = messageID
 	if messageID == 0 {
 		msgID = nil
@@ -67,7 +67,7 @@ type Stats struct {
 // GetStats computes aggregate usage statistics across all data.
 // Uses several small queries rather than one giant join — clearer
 // and fast enough for our scale.
-func (s *Store) GetStats() (*Stats, error) {
+func (s *SQLiteStore) GetStats() (*Stats, error) {
 	st := &Stats{}
 
 	// Message counts by role.
@@ -138,7 +138,7 @@ type UsageReport struct {
 // Queries the metrics table with different time windows and a per-model
 // GROUP BY. Each query is small and fast — SQLite handles this easily
 // at our scale.
-func (s *Store) GetUsageReport() (*UsageReport, error) {
+func (s *SQLiteStore) GetUsageReport() (*UsageReport, error) {
 	r := &UsageReport{}
 
 	// Time-windowed totals: today, last 7 days, last 30 days, all-time.

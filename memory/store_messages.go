@@ -19,7 +19,7 @@ type Message struct {
 
 // SaveMessage inserts a message into the database and returns its ID.
 // This is called for both user messages and assistant responses.
-func (s *Store) SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error) {
+func (s *SQLiteStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO messages (role, content_raw, content_scrubbed, conversation_id)
 		 VALUES (?, ?, ?, ?)`,
@@ -42,7 +42,7 @@ func (s *Store) SaveMessage(role, contentRaw, contentScrubbed, conversationID st
 // GlobalRecentMessages retrieves the last N messages across ALL conversations,
 // ordered oldest-first. Used by /reflect which needs recent context regardless
 // of which conversation ID they belong to.
-func (s *Store) GlobalRecentMessages(limit int) ([]Message, error) {
+func (s *SQLiteStore) GlobalRecentMessages(limit int) ([]Message, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
 		 FROM (
@@ -77,7 +77,7 @@ func (s *Store) GlobalRecentMessages(limit int) ([]Message, error) {
 
 // RecentMessages retrieves the last N messages for a conversation,
 // ordered oldest-first so they can be fed directly into the LLM prompt.
-func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, error) {
+func (s *SQLiteStore) RecentMessages(conversationID string, limit int) ([]Message, error) {
 	// The subquery grabs the last N rows (newest first), then the outer
 	// query flips them to chronological order for the prompt.
 	rows, err := s.db.Query(
@@ -126,7 +126,7 @@ func (s *Store) RecentMessages(conversationID string, limit int) ([]Message, err
 
 // MessagesAfter retrieves all messages in a conversation after a given ID.
 // Used by fact extraction to get the batch of messages to analyze.
-func (s *Store) MessagesAfter(conversationID string, sinceID int64) ([]Message, error) {
+func (s *SQLiteStore) MessagesAfter(conversationID string, sinceID int64) ([]Message, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
 		 FROM messages
@@ -157,7 +157,7 @@ func (s *Store) MessagesAfter(conversationID string, sinceID int64) ([]Message, 
 }
 
 // MessagesInRange returns messages between startID and endID inclusive.
-func (s *Store) MessagesInRange(conversationID string, startID, endID int64) ([]Message, error) {
+func (s *SQLiteStore) MessagesInRange(conversationID string, startID, endID int64) ([]Message, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
 		 FROM messages
@@ -190,7 +190,7 @@ func (s *Store) MessagesInRange(conversationID string, startID, endID int64) ([]
 // UpdateMessageScrubbed updates the scrubbed content for a message.
 // We save the raw message first (for data safety), then update with the
 // scrubbed version after PII processing completes.
-func (s *Store) UpdateMessageScrubbed(messageID int64, scrubbed string) error {
+func (s *SQLiteStore) UpdateMessageScrubbed(messageID int64, scrubbed string) error {
 	_, err := s.db.Exec(
 		`UPDATE messages SET content_scrubbed = ? WHERE id = ?`,
 		scrubbed, messageID,
@@ -206,7 +206,7 @@ func (s *Store) UpdateMessageScrubbed(messageID int64, scrubbed string) error {
 // we use COALESCE to only update non-empty values, so you can call this
 // once for the file_id (from the bot) and again for the description
 // (from the agent's view_image tool) without clobbering the other.
-func (s *Store) UpdateMessageMedia(messageID int64, fileID, description string) error {
+func (s *SQLiteStore) UpdateMessageMedia(messageID int64, fileID, description string) error {
 	_, err := s.db.Exec(
 		`UPDATE messages SET
 			media_file_id = COALESCE(NULLIF(?, ''), media_file_id),
@@ -222,7 +222,7 @@ func (s *Store) UpdateMessageMedia(messageID int64, fileID, description string) 
 
 // UpdateMessageVoicePath stores the local file path to the original
 // audio file for a voice memo message. Used for debugging and replay.
-func (s *Store) UpdateMessageVoicePath(messageID int64, path string) error {
+func (s *SQLiteStore) UpdateMessageVoicePath(messageID int64, path string) error {
 	_, err := s.db.Exec(
 		`UPDATE messages SET voice_memo_path = ? WHERE id = ?`,
 		path, messageID,
@@ -236,7 +236,7 @@ func (s *Store) UpdateMessageVoicePath(messageID int64, path string) error {
 // UpdateMessageTokenCount sets the token count for a message after the
 // LLM responds. For user messages this is the prompt token count, for
 // assistant messages it's the completion token count.
-func (s *Store) UpdateMessageTokenCount(messageID int64, tokenCount int) error {
+func (s *SQLiteStore) UpdateMessageTokenCount(messageID int64, tokenCount int) error {
 	_, err := s.db.Exec(
 		`UPDATE messages SET token_count = ? WHERE id = ?`,
 		tokenCount, messageID,
@@ -249,7 +249,7 @@ func (s *Store) UpdateMessageTokenCount(messageID int64, tokenCount int) error {
 
 // MessageCountSince counts how many user messages exist in a conversation
 // after a given message ID. Used to decide when to trigger fact extraction.
-func (s *Store) MessageCountSince(conversationID string, sinceID int64) (int, error) {
+func (s *SQLiteStore) MessageCountSince(conversationID string, sinceID int64) (int, error) {
 	var count int
 	err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM messages
@@ -265,7 +265,7 @@ func (s *Store) MessageCountSince(conversationID string, sinceID int64) (int, er
 // ConversationCountSince counts distinct conversation IDs in messages
 // created after the given timestamp. Used to determine when to trigger
 // a persona rewrite (every ~20 conversations).
-func (s *Store) ConversationCountSince(since time.Time) (int, error) {
+func (s *SQLiteStore) ConversationCountSince(since time.Time) (int, error) {
 	var count int
 	err := s.db.QueryRow(
 		`SELECT COUNT(DISTINCT conversation_id) FROM messages WHERE timestamp > ?`,
@@ -282,7 +282,7 @@ func (s *Store) ConversationCountSince(since time.Time) (int, error) {
 // Returns empty string if no conversations exist.
 // This lets the bot resume the same conversation after a restart
 // instead of generating a new ID and losing context.
-func (s *Store) LatestConversationID(prefix string) string {
+func (s *SQLiteStore) LatestConversationID(prefix string) string {
 	var convID string
 	err := s.db.QueryRow(
 		`SELECT conversation_id FROM messages
@@ -299,7 +299,7 @@ func (s *Store) LatestConversationID(prefix string) string {
 // LastExtractionMessageID returns the highest source_message_id in the
 // facts table for tracking where the last extraction left off. Returns 0
 // if no facts exist yet.
-func (s *Store) LastExtractionMessageID() (int64, error) {
+func (s *SQLiteStore) LastExtractionMessageID() (int64, error) {
 	var id sql.NullInt64
 	err := s.db.QueryRow(
 		`SELECT MAX(source_message_id) FROM facts`,

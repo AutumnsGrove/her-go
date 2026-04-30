@@ -14,8 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"net/http"
+
 	"her/bot"
 	"her/config"
+	"her/d1"
 	"her/embed"
 	"her/llm"
 	"her/logger"
@@ -41,6 +44,10 @@ import (
 
 // log is the package-level logger for the cmd package.
 var log = logger.WithPrefix("cmd")
+
+// kvClientTimeout is the HTTP timeout for Cloudflare KV API calls.
+// Used by both dev mode (KV routing keys) and prod (sync poller).
+const kvClientTimeout = 10 * time.Second
 
 var runCmd = &cobra.Command{
 	Use:   "run",
@@ -113,9 +120,53 @@ func runBot(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		log.Fatal("Failed to initialize database", "err", err)
 	}
-	defer store.Close()
 	store.AutoLinkCount = cfg.Memory.AutoLinkCount
 	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
+
+	// If D1 sync is configured, wrap SQLiteStore in SyncedStore for
+	// bidirectional sync with Cloudflare D1. Writes push to D1 in the
+	// background; Pull() on startup hydrates local her.db with any
+	// rows the other machine created since last sync.
+	//
+	// When D1 is disabled (empty d1_database_id), botStore is the plain
+	// SQLiteStore — zero overhead, no D1 dependency.
+	var botStore memory.Store = store
+	if cfg.Cloudflare.D1DatabaseID != "" {
+		d1Client := d1.NewClient(cfg.Cloudflare.AccountID, cfg.Cloudflare.D1DatabaseID, cfg.Cloudflare.APIToken)
+		if d1Client != nil {
+			synced, err := memory.NewSyncedStore(store, d1Client)
+			if err != nil {
+				log.Fatal("Failed to initialize D1 sync", "err", err)
+			}
+
+			// Apply sync tuning from config (zero values keep defaults).
+			if cfg.Cloudflare.Sync.BatchSize > 0 {
+				synced.BatchSize = cfg.Cloudflare.Sync.BatchSize
+			}
+			if cfg.Cloudflare.Sync.CarrierPollSeconds > 0 {
+				synced.CarrierPoll = time.Duration(cfg.Cloudflare.Sync.CarrierPollSeconds) * time.Second
+			}
+			if cfg.Cloudflare.Sync.PullPageSize > 0 {
+				synced.PullPageSize = cfg.Cloudflare.Sync.PullPageSize
+			}
+
+			// Pull from D1 before the bot starts — ensures we have all
+			// data the other machine wrote since we last ran.
+			startupTimeout := time.Duration(cfg.Cloudflare.Sync.StartupPullTimeout) * time.Second
+			if startupTimeout == 0 {
+				startupTimeout = 60 * time.Second
+			}
+			pullCtx, pullCancel := context.WithTimeout(context.Background(), startupTimeout)
+			if err := synced.Pull(pullCtx); err != nil {
+				log.Error("d1 pull on startup failed — continuing with local data", "err", err)
+			}
+			pullCancel()
+
+			botStore = synced
+			log.Info("d1 sync enabled")
+		}
+	}
+	defer botStore.Close()
 
 	// --- Start the event bus and logger bridge ---
 	// From this point on, all log.Info/Warn/Error calls flow through the bus.
@@ -181,7 +232,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 
 	if !useTUI {
 		// Plain mode — run init and bot directly on this goroutine
-		return runBotPlain(cfg, store, bus)
+		return runBotPlain(cfg, botStore, bus)
 	}
 
 	// --- Start Bubble Tea TUI ---
@@ -196,7 +247,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	// Run all remaining initialization + the bot in a background goroutine.
 	// This goroutine's lifecycle: init → run bot → wait for quit → cleanup.
 	go func() {
-		runBotBackground(cfg, store, bus, program, quitCh)
+		runBotBackground(cfg, botStore, bus, program, quitCh)
 	}()
 
 	// Block the main goroutine on the TUI.
@@ -214,7 +265,7 @@ var sidecarOut io.Writer = os.Stderr
 
 // runBotBackground handles all init and bot lifecycle in a goroutine while
 // the TUI runs on the main goroutine.
-func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
+func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
 	// --- Create LLM clients ---
 
 	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
@@ -492,6 +543,29 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 		log.Warn("dreamer disabled — memory_agent.model not configured")
 	}
 
+	// --- KV Sync Poller (prod only) ---
+	// When a dev session ends, the dev machine writes `dev_session_ended`
+	// to KV. This poller detects that signal and triggers a Pull to sync
+	// any data the dev session created. Only runs in prod mode (not
+	// webhook/dev) and only when D1 sync is active.
+	var kvPollerCancel context.CancelFunc
+	if synced, ok := store.(*memory.SyncedStore); ok && cfg.Cloudflare.KVNamespaceID != "" && cfg.Telegram.Mode != "webhook" {
+		var kvPollerCtx context.Context
+		kvPollerCtx, kvPollerCancel = context.WithCancel(context.Background())
+		kv := &kvClient{
+			accountID:   cfg.Cloudflare.AccountID,
+			apiToken:    cfg.Cloudflare.APIToken,
+			namespaceID: cfg.Cloudflare.KVNamespaceID,
+			http:        &http.Client{Timeout: kvClientTimeout},
+		}
+		pollerInterval := time.Duration(cfg.Cloudflare.Sync.PollerInterval) * time.Second
+		if pollerInterval == 0 {
+			pollerInterval = 30 * time.Second
+		}
+		go startSyncPoller(kvPollerCtx, kv, synced, pollerInterval)
+		log.Info("d1 sync poller started — watching for dev session end")
+	}
+
 	// --- Signal handling + bot start ---
 	// Listen for SIGINT/SIGTERM. When received, shut everything down
 	// and close the bus (which makes the TUI exit).
@@ -524,6 +598,9 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 	dreamerCancel() // tell the dreamer goroutine to stop at its next wake-up
 	schedCancel()   // same for the scheduler runner
+	if kvPollerCancel != nil {
+		kvPollerCancel()
+	}
 
 	if sttProcess != nil && sttProcess.Process != nil {
 		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
@@ -548,7 +625,7 @@ func runBotBackground(cfg *config.Config, store *memory.Store, bus *tui.Bus, pro
 
 // runBotPlain runs the bot without a TUI (piped output, CI, etc.).
 // Same logic as the original runBot but with events going to file logger only.
-func runBotPlain(cfg *config.Config, store *memory.Store, bus *tui.Bus) error {
+func runBotPlain(cfg *config.Config, store memory.Store, bus *tui.Bus) error {
 	// In plain mode, also write events to stderr so they're visible
 	tui.StartFileLogger(bus, os.Stderr)
 
@@ -777,4 +854,46 @@ func startEmbedSidecar(cfg *config.Config, bus *tui.Bus, embedClient *embed.Clie
 	}()
 
 	return embedProcess
+}
+
+// startSyncPoller checks KV every 30 seconds for a `dev_session_ended`
+// signal. When the dev machine (MacBook) stops a dev session, it writes
+// this key to KV. The prod machine (Mac Mini) detects it here, pulls
+// fresh data from D1, and deletes the key.
+//
+// This is the glue between dev shutdown and prod sync — without it,
+// prod wouldn't know to pull until its next restart. Think of it like
+// a very simple message queue over KV: one producer, one consumer,
+// one message at a time.
+func startSyncPoller(ctx context.Context, kv *kvClient, synced *memory.SyncedStore, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			val, err := kv.get("dev_session_ended")
+			if err != nil {
+				log.Warn("sync poller: KV read failed", "err", err)
+				continue
+			}
+			if val == "" {
+				continue // no signal — dev session still active or not started
+			}
+
+			log.Info("dev session ended — pulling from D1", "ended_at", val)
+			pullCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			if err := synced.Pull(pullCtx); err != nil {
+				log.Error("sync poller: pull failed", "err", err)
+			}
+			cancel()
+
+			// Clear the signal so we don't pull again next cycle.
+			if err := kv.delete("dev_session_ended"); err != nil {
+				log.Warn("sync poller: failed to clear dev_session_ended key", "err", err)
+			}
+		}
+	}
 }

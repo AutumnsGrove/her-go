@@ -50,7 +50,7 @@ var rewritePromptTmpl string
 // The reflection is stored in the dedicated reflections table via SaveReflection.
 func Reflect(
 	llmClient *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	userMessage string,
 	botResponse string,
 	newFacts []string,
@@ -99,7 +99,7 @@ func Reflect(
 // Returns true if a rewrite happened.
 func MaybeRewrite(
 	llmClient *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	personaFile string,
 	_ int, // unused, kept for API compatibility
 	botName string,
@@ -210,7 +210,7 @@ var traitExtractionPrompt string
 // (default 0.1). humor_style is categorical — no damping needed.
 func ExtractTraits(
 	llmClient *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	personaText string,
 	personaVersionID int64,
 	maxShift float64,
@@ -350,7 +350,7 @@ var gatedRewritePromptTmpl string
 // is updated.
 func NightlyReflect(
 	llmClient *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	cfg *config.Config,
 	botName, userName string,
 ) error {
@@ -455,7 +455,7 @@ func NightlyReflect(
 // (false, nil) when gates blocked or LLM returned UNCHANGED.
 func GatedRewrite(
 	llmClient *llm.Client,
-	store *memory.Store,
+	store memory.Store,
 	personaFile string,
 	botName string,
 	bypass bool,

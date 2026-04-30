@@ -10,6 +10,9 @@ persona.md
 # Config with secrets (use config.yaml.example as template)
 config.yaml
 
+# Generated wrangler config (derived from config.yaml by `her dev`)
+worker/wrangler.toml
+
 # Environment files
 .env
 .env.*

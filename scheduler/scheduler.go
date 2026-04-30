@@ -47,7 +47,7 @@ const TickInterval = 30 * time.Second
 // for a single SQLite store. Construct one via New() at app startup
 // and call Run(ctx) in its own goroutine.
 type Scheduler struct {
-	store   *memory.Store
+	store   memory.Store
 	deps    *Deps
 	rootDir string
 	log     *logger.Logger
@@ -68,7 +68,7 @@ type Scheduler struct {
 // rootDir is the project root — Handler.ConfigPath() paths are resolved
 // relative to it. Pass the result of os.Getwd() from main, or an
 // explicit project path from config.
-func New(store *memory.Store, deps *Deps, rootDir string) (*Scheduler, error) {
+func New(store memory.Store, deps *Deps, rootDir string) (*Scheduler, error) {
 	if store == nil {
 		return nil, fmt.Errorf("scheduler.New: nil store")
 	}

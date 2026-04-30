@@ -69,7 +69,7 @@ type LayerResult struct {
 // and buildAgentContext. Not every layer uses every field — weather layers
 // ignore EmbedClient, time layers ignore Store, etc.
 type LayerContext struct {
-	Store       *memory.Store
+	Store       memory.Store
 	Cfg         *config.Config
 	EmbedClient *embed.Client
 
@@ -83,8 +83,6 @@ type LayerContext struct {
 	RecentMessages      []memory.Message      // sliding window for agent context
 	HasImage            bool                  // user sent a photo
 	OCRText             string                // pre-flight OCR extraction
-	ExpenseContext      string                // from receipt scanning (if any)
-
 	// Instruction and search context from the agent (for chat stream messages).
 	Instruction   string
 	SearchContext string

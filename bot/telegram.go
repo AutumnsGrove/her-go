@@ -44,7 +44,7 @@ type Bot struct {
 	tavilyClient   *search.TavilyClient // web search and URL extraction
 	voiceClient    *voice.Client        // local STT via parakeet-server — nil if voice disabled
 	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store          *memory.Store
+	store          memory.Store
 	cfg            *config.Config
 	configPath     string // path to config.yaml — needed for /traces toggle
 	systemPrompt   string
@@ -128,7 +128,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store *memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	// Choose update transport based on config. In poll mode (the default),
 	// the bot calls Telegram every 10 seconds asking for new messages.
 	// In webhook mode, Telegram POSTs updates to us — used when a CF

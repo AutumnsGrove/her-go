@@ -128,7 +128,7 @@ type RunParams struct {
 	ChatLLM                   *llm.Client
 	VisionLLM                 *llm.Client // vision language model — nil if not configured
 	ClassifierLLM             *llm.Client // classifier for memory writes — nil if not configured
-	Store                     *memory.Store
+	Store                     memory.Store
 	EmbedClient               *embed.Client
 	SimilarityThreshold       float64
 	TavilyClient              *search.TavilyClient
@@ -307,7 +307,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// this, "vet says it might be his kidneys" embeds as health/medical —
 	// with "my dog max has been sick" prepended, it correctly pulls pet facts too.
 	var relevantMemories []memory.Memory
-	if params.EmbedClient != nil && params.Store.EmbedDimension > 0 {
+	if params.EmbedClient != nil && params.Store.GetEmbedDimension() > 0 {
 		queryText := params.ScrubbedUserMessage
 		if len(recentMsgs) > 0 {
 			var priorUserMsgs []string

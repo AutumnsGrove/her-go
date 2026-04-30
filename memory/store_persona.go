@@ -16,7 +16,7 @@ type PersonaVersion struct {
 }
 
 // PersonaHistory returns the most recent N persona versions, newest first.
-func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
+func (s *SQLiteStore) PersonaHistory(limit int) ([]PersonaVersion, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, content, COALESCE(trigger, '') FROM persona_versions
 		 ORDER BY id DESC LIMIT ?`,
@@ -40,7 +40,7 @@ func (s *Store) PersonaHistory(limit int) ([]PersonaVersion, error) {
 	return versions, nil
 }
 
-func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
+func (s *SQLiteStore) SavePersonaVersion(content, trigger string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO persona_versions (content, trigger) VALUES (?, ?)`,
 		content, trigger,
@@ -57,7 +57,7 @@ func (s *Store) SavePersonaVersion(content, trigger string) (int64, error) {
 
 // SaveReflection stores a new reflection entry in the dedicated reflections
 // table. Called by persona.Reflect() after a memory-dense conversation.
-func (s *Store) SaveReflection(content string, factCount int, userMessage, miraResponse string) (int64, error) {
+func (s *SQLiteStore) SaveReflection(content string, factCount int, userMessage, miraResponse string) (int64, error) {
 	result, err := s.db.Exec(
 		`INSERT INTO reflections (content, fact_count, user_message, mira_response) VALUES (?, ?, ?, ?)`,
 		content, factCount, userMessage, miraResponse,
@@ -72,7 +72,7 @@ func (s *Store) SaveReflection(content string, factCount int, userMessage, miraR
 // since the most recent reflection. Used to trigger reflections based
 // on accumulated new knowledge rather than per-turn counts.
 // Now queries the reflections table directly instead of filtering facts.
-func (s *Store) FactCountSinceLastReflection() (int, error) {
+func (s *SQLiteStore) FactCountSinceLastReflection() (int, error) {
 	var lastReflectionTime string
 	err := s.db.QueryRow(
 		`SELECT timestamp FROM reflections ORDER BY id DESC LIMIT 1`,
@@ -94,14 +94,14 @@ func (s *Store) FactCountSinceLastReflection() (int, error) {
 
 // TotalReflectionCount returns the total number of reflections stored.
 // Used alongside PersonaRewriteCount to decide if a rewrite is due.
-func (s *Store) TotalReflectionCount() (int, error) {
+func (s *SQLiteStore) TotalReflectionCount() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM reflections`).Scan(&count)
 	return count, err
 }
 
 // PersonaRewriteCount returns how many persona rewrites have occurred.
-func (s *Store) PersonaRewriteCount() (int, error) {
+func (s *SQLiteStore) PersonaRewriteCount() (int, error) {
 	var count int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM persona_versions`).Scan(&count)
 	return count, err
@@ -109,7 +109,7 @@ func (s *Store) PersonaRewriteCount() (int, error) {
 
 // LastPersonaTimestamp returns the timestamp of the most recent persona
 // version. Returns zero time if no versions exist yet.
-func (s *Store) LastPersonaTimestamp() (time.Time, error) {
+func (s *SQLiteStore) LastPersonaTimestamp() (time.Time, error) {
 	var ts string
 	err := s.db.QueryRow(
 		`SELECT timestamp FROM persona_versions ORDER BY id DESC LIMIT 1`,
@@ -123,7 +123,7 @@ func (s *Store) LastPersonaTimestamp() (time.Time, error) {
 
 // ReflectionsSince returns all reflections created after the given timestamp.
 // The return type is []Reflection — the dedicated struct, not Fact.
-func (s *Store) ReflectionsSince(since time.Time) ([]Reflection, error) {
+func (s *SQLiteStore) ReflectionsSince(since time.Time) ([]Reflection, error) {
 	rows, err := s.db.Query(
 		`SELECT id, timestamp, content FROM reflections
 		 WHERE timestamp > ?
@@ -164,7 +164,7 @@ type Trait struct {
 
 // SaveTraits bulk-inserts trait scores for a persona version.
 // Called after a persona rewrite to snapshot the current trait state.
-func (s *Store) SaveTraits(traits []Trait, personaVersionID int64) error {
+func (s *SQLiteStore) SaveTraits(traits []Trait, personaVersionID int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("starting trait transaction: %w", err)
@@ -190,7 +190,7 @@ func (s *Store) SaveTraits(traits []Trait, personaVersionID int64) error {
 
 // GetCurrentTraits returns the trait scores from the most recent
 // persona version. Returns nil (not an error) if no traits exist yet.
-func (s *Store) GetCurrentTraits() ([]Trait, error) {
+func (s *SQLiteStore) GetCurrentTraits() ([]Trait, error) {
 	rows, err := s.db.Query(
 		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
 		 FROM traits t
@@ -229,7 +229,7 @@ type PersonaState struct {
 // GetPersonaState returns the current dreaming state. Returns a zero-value
 // PersonaState (both times zero) if the persona_state row doesn't exist yet
 // — i.e., on a fresh install before the first dream runs.
-func (s *Store) GetPersonaState() (PersonaState, error) {
+func (s *SQLiteStore) GetPersonaState() (PersonaState, error) {
 	var lastReflStr, lastRewriteStr string
 	err := s.db.QueryRow(
 		`SELECT COALESCE(last_reflection_at, ''), COALESCE(last_rewrite_at, '') FROM persona_state WHERE id = 1`,
@@ -253,7 +253,7 @@ func (s *Store) GetPersonaState() (PersonaState, error) {
 // Uses INSERT OR REPLACE to upsert the single row while preserving the
 // last_rewrite_at column — SQLite's INSERT OR REPLACE deletes then inserts,
 // so we must COALESCE to carry the existing value forward.
-func (s *Store) SetLastReflectionAt(t time.Time) error {
+func (s *SQLiteStore) SetLastReflectionAt(t time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
 		 VALUES (1, ?, (SELECT last_rewrite_at FROM persona_state WHERE id = 1))`,
@@ -264,7 +264,7 @@ func (s *Store) SetLastReflectionAt(t time.Time) error {
 
 // SetLastRewriteAt records when the most recent persona rewrite ran.
 // Same COALESCE trick as SetLastReflectionAt to preserve last_reflection_at.
-func (s *Store) SetLastRewriteAt(t time.Time) error {
+func (s *SQLiteStore) SetLastRewriteAt(t time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
 		 VALUES (1, (SELECT last_reflection_at FROM persona_state WHERE id = 1), ?)`,
@@ -277,7 +277,7 @@ func (s *Store) SetLastRewriteAt(t time.Time) error {
 // since the last persona rewrite. The dreaming gate requires at least N
 // unconsumed reflections before a rewrite is allowed.
 // If no rewrite has ever happened, counts ALL reflections.
-func (s *Store) UnconsumedReflectionCount() (int, error) {
+func (s *SQLiteStore) UnconsumedReflectionCount() (int, error) {
 	var count int
 	err := s.db.QueryRow(
 		`SELECT COUNT(*) FROM reflections
@@ -292,7 +292,7 @@ func (s *Store) UnconsumedReflectionCount() (int, error) {
 // GetTraitHistory returns historical values for a single trait across
 // persona versions, newest first. Useful for showing how a trait has
 // drifted over time.
-func (s *Store) GetTraitHistory(traitName string, limit int) ([]Trait, error) {
+func (s *SQLiteStore) GetTraitHistory(traitName string, limit int) ([]Trait, error) {
 	rows, err := s.db.Query(
 		`SELECT t.id, t.trait_name, t.value, t.persona_version_id, t.timestamp
 		 FROM traits t

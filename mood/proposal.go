@@ -22,7 +22,7 @@ import (
 // here because the proposal status flip is a best-effort audit
 // trail, not a correctness guarantee.
 func ConfirmProposal(
-	store *memory.Store,
+	store memory.Store,
 	chatID, messageID int64,
 	edit func(chatID int64, messageID int, text string) error,
 ) (*memory.MoodEntry, error) {
@@ -73,7 +73,7 @@ func ConfirmProposal(
 // written to mood_entries — the whole point is the user declined
 // the inference.
 func RejectProposal(
-	store *memory.Store,
+	store memory.Store,
 	chatID, messageID int64,
 	edit func(chatID int64, messageID int, text string) error,
 ) error {

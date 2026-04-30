@@ -71,7 +71,7 @@ Plus a `_sync_meta` tracking table in both D1 and local SQLite.
 
 ### Tables That Stay Local-Only
 
-vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command_log, pii_vault, pending_confirmations, pending_mood_proposals, scheduled_tasks, calendar_events, expenses, expense_items, inbox, location_history, facts (legacy)
+vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command_log, pii_vault, pending_confirmations, pending_mood_proposals, scheduled_tasks, calendar_events, inbox, location_history, facts (legacy)
 
 ---
 
@@ -98,83 +98,85 @@ vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command
 
 ## Phases
 
-### Phase 1 — Store Interface Extraction
-**Goal:** Define a `Store` interface, rename current struct to `SQLiteStore`. Zero behavior change.
+### Phase 1 — Store Interface Extraction ✅
+**Status:** Complete — commit `9ac74ca`
 
-**Files changed:**
-- `memory/store.go` — rename `Store` → `SQLiteStore`, add `type Store interface { ... }` with all ~88 public methods (excluding `DB()` and `MigrateFromLegacyFacts()`)
-- `memory/store_*.go` — rename receiver types (`func (s *Store)` → `func (s *SQLiteStore)`)
-- `tools/context.go` — change `Store *memory.Store` → `Store memory.Store` (interface). This cascades to all 20+ tool handlers for free.
-- `bot/telegram.go` — change `store *memory.Store` → `store memory.Store`
-- ~36 files total reference `*memory.Store` — migrate all callers
+Defined `Store` interface (87 methods including `GetEmbedDimension()`), renamed `Store` struct to `SQLiteStore`. 58 files updated — all callers now use `memory.Store` (interface). Added `GetEmbedDimension()` getter since interfaces can't expose fields. `go build ./...` and `go test ./...` pass.
 
-**Verification:** `go build ./...` passes. `go test ./...` passes. Zero behavior change.
+### Phase 2 — D1 Database & Schema ✅
+**Status:** Complete — commits `0897dc0`, `44b1cd3`
 
-### Phase 2 — D1 Database & Schema
-**Goal:** Create the D1 database and write the schema for synced tables.
+- D1 database `her-db` created (ID in config.yaml `cloudflare.d1_database_id`)
+- `d1/schema.sql` written with 9 synced tables + `_sync_meta` (embedding columns excluded)
+- Schema applied via `wrangler d1 execute --remote`
+- `D1DatabaseID` added to `CloudflareConfig` in `config/config.go`
+- D1 binding added to `worker/wrangler.toml` for convenience
+- `config.yaml.example` updated
 
-- `wrangler d1 create her-db` — creates the D1 database
-- Write `d1/schema.sql` — DDL for the 10 synced tables (same SQLite syntax, minus embedding columns)
-- Add `_sync_meta` table: `CREATE TABLE _sync_meta (table_name TEXT PRIMARY KEY, last_synced_id INTEGER DEFAULT 0)`
-- Apply schema: `wrangler d1 execute her-db --file d1/schema.sql`
-- Add `D1DatabaseID` to `CloudflareConfig` in `config/config.go`
-- Update `config.yaml.example`
+### Phase 3 — D1 Go Client ✅
+**Status:** Complete — commit `90e7220`
 
-### Phase 3 — D1 Go Client
-**Goal:** Thin HTTP client for D1's REST API.
+- `d1/client.go` — `Client` struct with `Query()` and `Batch()` methods
+- Uses Cloudflare REST API `/query` endpoint (rows as objects)
+- 30s timeout, bearer auth via `cfg.Cloudflare.APIToken`
+- 6 tests using `httptest.Server` (no real Cloudflare calls)
 
-New package: `d1/`
-- `d1/client.go` — `Client` struct with `Query(sql string, params ...any) ([]Row, error)` and `Batch(stmts []Statement) error`
-- Uses `POST https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}/query`
-- Bearer token auth (reuses `cfg.Cloudflare.APIToken`)
-- 10s timeout per request
-- JSON request/response marshaling
+### Phase 4 — SyncedStore Decorator ✅
+**Status:** Complete — commit `73edb9b`
 
-### Phase 4 — SyncedStore Decorator
-**Goal:** Wrap SQLiteStore with D1 push-on-write.
+**Design change from original plan:** Replaced in-memory channel with **transactional outbox pattern** for crash safety. Writes land in `_d1_outbox` SQLite table (durable across crashes), carrier goroutine reads actual row data at send-time and pushes to D1 in batches.
 
-New file: `memory/synced_store.go`
-- `SyncedStore` struct embedding `*SQLiteStore` + `*d1.Client` + `pushCh chan PushJob`
-- Override ~25 write methods for synced tables (SaveMessage, SaveMemory, SaveMoodEntry, SaveReflection, SavePersonaVersion, SaveSummary, SaveTraits, SetLastReflectionAt, SetLastRewriteAt, UpdateMemory, UpdateMemoryTags, DeactivateMemory, SupersedeMemory, LinkMemories, UpdateMoodEntry, DeleteMoodEntry, UpdateMessageScrubbed, UpdateMessageMedia, UpdateMessageVoicePath, UpdateMessageTokenCount, etc.)
-- Background push goroutine: reads from `pushCh`, batches, sends to D1
-- `NewSyncedStore(sqlite *SQLiteStore, d1Client *d1.Client) *SyncedStore`
-- `Close()` drains push queue before closing
+New file: `memory/synced_store.go` (725 lines)
+- `SyncedStore` struct embedding `*SQLiteStore` + `*d1.Client` + notify/done channels
+- 20 method overrides — each calls SQLiteStore then `writeOutbox(table, id, op)`
+- `_d1_outbox` table created on init (id, table_name, row_id, row_id_2, op, created_at)
+- Carrier goroutine: polls outbox, reads rows via `syncedTableSpecs` registry, batches to D1, deletes on success
+- `syncedTableSpecs` — column layouts for all 9 synced tables (single source of truth)
+- Composite key support via `row_id_2` column for `memory_links`
+- `NewSyncedStore(sqlite, d1Client) (*SyncedStore, error)` — returns error because `initOutbox()` can fail
+- `Close()` signals carrier to drain, waits, then closes SQLiteStore
+- Startup reconciliation (comparing local MAX(id) vs D1) covers the tiny crash window between data write and outbox insert
 
-### Phase 5 — Sync Engine (Pull)
-**Goal:** Pull from D1, upsert into local SQLite, rebuild embeddings.
+### Phase 5 — Sync Engine (Pull) ✅
+**Status:** Complete — commit `6e9869e`
 
 New file: `memory/sync.go`
-- `(s *SyncedStore) Pull(ctx context.Context) error` — concurrent per-table fetch from D1
-- Uses `errgroup` for concurrent table pulls with shared context
-- After pull: bump `sqlite_sequence` for each table
-- After pull: call existing `MemoriesWithoutEmbeddings()` + batch embed
-- Track progress in `_sync_meta`
+- `Pull(ctx)` — concurrent per-table fetch from D1 via errgroup
+- Incremental pull (WHERE id > last_synced_id) for 7 tables with pagination (500 rows/page)
+- Full pull for composite-key/singleton tables (memory_links, persona_state)
+- `_sync_meta` tracking table for pull progress
+- `sqlite_sequence` bumping to prevent ID collisions
+- FK checks disabled during pull to handle concurrent table inserts
+- Embedding backfill delegated to caller (run.go startup handles it)
 
-### Phase 6 — Startup Wiring & KV Poller
-**Goal:** Wire SyncedStore into bot startup. Add KV polling on prod.
+### Phase 6 — Startup Wiring & KV Poller ✅
+**Status:** Complete — commit `6e9869e`
 
-**Files changed:**
-- `cmd/run.go` — if `cfg.Cloudflare.D1DatabaseID != ""`, wrap SQLiteStore in SyncedStore. Run `Pull()` before bot starts. Start KV poller goroutine.
-- `cmd/dev.go` — run `Pull()` on dev startup (hydrate local her.db with latest from D1). Remove the `cfg.Memory.DBPath = "./her-dev.db"` override — dev uses the same her.db. On shutdown, write `dev_session_ended=<timestamp>` to KV before clearing dev keys.
-- Add KV poller goroutine: checks `dev_session_ended` key every 30s. When found, triggers `Pull()`, then deletes the key.
+- `cmd/run.go` — wraps SQLiteStore in SyncedStore when `d1_database_id` is set. Runs `Pull()` before bot starts. Passes `botStore` (interface) to all downstream consumers.
+- `cmd/run.go` — KV sync poller goroutine (prod only): checks `dev_session_ended` every 30s, triggers Pull, deletes key. Cancelled during shutdown alongside dreamer/scheduler.
+- `cmd/dev.go` — removed `her-dev.db` override; dev uses same `her.db` synced via D1. Writes `dev_session_ended` timestamp to KV on shutdown.
+- `cmd/dev.go` — added `kvClient.get()` method for reading KV values.
+- `d1/client.go` — added `WithBaseURL()` for test httptest.Server injection.
 
-### Phase 7 — Sync Commands
-**Goal:** Manual push/pull commands for initial upload and on-demand sync.
+### Phase 7 — Sync Commands ✅
+**Status:** Complete — commit `ade3d80`
 
-New command group: `her sync push` / `her sync pull`
-- `cmd/sync.go` — `her sync push` reads each synced table from local SQLite, batches rows, pushes to D1. `her sync pull` pulls from D1 into local SQLite (same as the automatic Pull but manually triggered).
-- Concurrent per-table uploads (same `errgroup` pattern)
-- Idempotent: uses `INSERT OR REPLACE`
-- Progress logging: "pushing memories: 150/150", "pushing messages: 2340/2340"
-- Updates `_sync_meta` with max IDs after push
+New file: `cmd/sync.go`
+- `her sync push` — bulk upload all local SQLite to D1. Streams rows per-table, batches of 50, concurrent via errgroup. Progress logging.
+- `her sync pull` — manual pull from D1 (same as startup Pull but on-demand).
+- `PushAll(ctx)` method on SyncedStore for the push logic.
+- `makeSyncedStore` helper handles resource cleanup on error paths.
+- Updates `_sync_meta` after push so future pulls skip known rows.
 
-### Phase 8 — Testing & Polish
-- Integration test: push → pull → verify data matches
-- Test SyncedStore push failure doesn't block local writes
-- Test Pull correctly skips already-synced rows
-- Test embedding backfill runs after pull
-- Test KV poller triggers sync
-- Verify `go test ./... -race` passes
+### Phase 8 — Testing & Polish ✅
+**Status:** Complete
+
+New file: `memory/sync_test.go` — 4 tests with fake D1 server (in-memory SQLite behind httptest.Server):
+- `TestPushPullRoundtrip` — push messages/memories/reflections, pull into fresh store, verify data matches
+- `TestPushFailureDoesNotBlockLocalWrites` — D1 returns 500, local write still succeeds, outbox entry created
+- `TestPullSkipsAlreadySyncedRows` — pull twice, second pull only fetches new rows via _sync_meta cursor
+- `TestPullBumpsSequence` — after pulling ID 100 from D1, next local write gets ID > 100
+- `go test ./... -race` passes across all 18 packages with zero data races
 
 ---
 

@@ -13,7 +13,7 @@ import (
 
 // newSweeperStore opens an embedDim=0 store — the sweeper doesn't
 // touch vec_moods.
-func newSweeperStore(t *testing.T) *memory.Store {
+func newSweeperStore(t *testing.T) memory.Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "sweeper.db")
 	store, err := memory.NewStore(dbPath, 0)

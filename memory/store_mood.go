@@ -76,7 +76,7 @@ type MoodEntry struct {
 // strings. Validation (against the mood vocab) happens in the agent
 // layer before calling here — the store layer is intentionally dumb
 // about vocabulary.
-func (s *Store) SaveMoodEntry(entry *MoodEntry) (int64, error) {
+func (s *SQLiteStore) SaveMoodEntry(entry *MoodEntry) (int64, error) {
 	if entry == nil {
 		return 0, fmt.Errorf("SaveMoodEntry: nil entry")
 	}
@@ -174,7 +174,7 @@ func (s *Store) SaveMoodEntry(entry *MoodEntry) (int64, error) {
 // original entries from refined ones. The vec_moods virtual table
 // embedding is also replaced so future KNN dedup sees the latest
 // vector geometry.
-func (s *Store) UpdateMoodEntry(id int64, entry *MoodEntry) error {
+func (s *SQLiteStore) UpdateMoodEntry(id int64, entry *MoodEntry) error {
 	if entry == nil {
 		return fmt.Errorf("UpdateMoodEntry: nil entry")
 	}
@@ -230,7 +230,7 @@ func (s *Store) UpdateMoodEntry(id int64, entry *MoodEntry) error {
 
 // LatestMoodEntry returns the most recent mood entry of the given
 // kind, or nil when none exist. Empty kind means any.
-func (s *Store) LatestMoodEntry(kind MoodKind) (*MoodEntry, error) {
+func (s *SQLiteStore) LatestMoodEntry(kind MoodKind) (*MoodEntry, error) {
 	q := `SELECT id, ts, kind, valence, labels, associations, note, source,
 	             confidence, conversation_id, embedding, created_at
 	      FROM mood_entries`
@@ -259,7 +259,7 @@ func (s *Store) LatestMoodEntry(kind MoodKind) (*MoodEntry, error) {
 
 // RecentMoodEntries returns the most recent N entries of the given
 // kind, newest first. Used by the prompt layer and the daily rollup.
-func (s *Store) RecentMoodEntries(kind MoodKind, limit int) ([]MoodEntry, error) {
+func (s *SQLiteStore) RecentMoodEntries(kind MoodKind, limit int) ([]MoodEntry, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -285,7 +285,7 @@ func (s *Store) RecentMoodEntries(kind MoodKind, limit int) ([]MoodEntry, error)
 // MoodEntriesInRange returns every entry of the given kind whose
 // timestamp falls within [from, to]. Kind may be empty. Ordered
 // oldest-first, which is what charts want.
-func (s *Store) MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEntry, error) {
+func (s *SQLiteStore) MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEntry, error) {
 	q := `SELECT id, ts, kind, valence, labels, associations, note, source,
 	             confidence, conversation_id, embedding, created_at
 	      FROM mood_entries
@@ -318,7 +318,7 @@ func (s *Store) MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEnt
 // Returns a slice sorted by distance (closest first). `limit` caps the
 // number of results. Returns nil if the store was initialized without
 // a vec_moods virtual table (EmbedDimension=0).
-func (s *Store) SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]MoodEntry, error) {
+func (s *SQLiteStore) SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]MoodEntry, error) {
 	if s.EmbedDimension == 0 || len(embedding) == 0 {
 		return nil, nil
 	}
@@ -393,7 +393,7 @@ func (s *Store) SimilarMoodEntriesWithin(now time.Time, embedding []float32, win
 
 // DeleteMoodEntry removes a row and its vec_moods mirror. Used by the
 // /mood wizard's "cancel before final step" path and by tests.
-func (s *Store) DeleteMoodEntry(id int64) error {
+func (s *SQLiteStore) DeleteMoodEntry(id int64) error {
 	if _, err := s.db.Exec(`DELETE FROM mood_entries WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("DeleteMoodEntry: %w", err)
 	}
@@ -434,7 +434,7 @@ type PendingMoodProposal struct {
 
 // SavePendingMoodProposal inserts a proposal row tied to the Telegram
 // message that carries the inline keyboard.
-func (s *Store) SavePendingMoodProposal(p *PendingMoodProposal) (int64, error) {
+func (s *SQLiteStore) SavePendingMoodProposal(p *PendingMoodProposal) (int64, error) {
 	if p == nil {
 		return 0, fmt.Errorf("SavePendingMoodProposal: nil")
 	}
@@ -471,7 +471,7 @@ func (s *Store) SavePendingMoodProposal(p *PendingMoodProposal) (int64, error) {
 // PendingMoodProposalByMessageID looks up a proposal by its Telegram
 // message ID. Returns (nil, nil) when no matching row exists. The
 // callback handler uses this on tap.
-func (s *Store) PendingMoodProposalByMessageID(chatID, msgID int64) (*PendingMoodProposal, error) {
+func (s *SQLiteStore) PendingMoodProposalByMessageID(chatID, msgID int64) (*PendingMoodProposal, error) {
 	row := s.db.QueryRow(
 		`SELECT id, ts, telegram_chat_id, telegram_message_id,
 		        proposal_json, status, expires_at
@@ -502,7 +502,7 @@ func (s *Store) PendingMoodProposalByMessageID(chatID, msgID int64) (*PendingMoo
 // but still have status=pending. The sweeper loop calls this on its
 // tick and flips each to status=expired after editing the Telegram
 // message.
-func (s *Store) DuePendingMoodProposals(now time.Time) ([]PendingMoodProposal, error) {
+func (s *SQLiteStore) DuePendingMoodProposals(now time.Time) ([]PendingMoodProposal, error) {
 	rows, err := s.db.Query(
 		`SELECT id, ts, telegram_chat_id, telegram_message_id,
 		        proposal_json, status, expires_at
@@ -537,7 +537,7 @@ func (s *Store) DuePendingMoodProposals(now time.Time) ([]PendingMoodProposal, e
 // UpdatePendingMoodProposalStatus changes a proposal's status. The
 // callback handler flips to confirmed/rejected; the sweeper flips to
 // expired.
-func (s *Store) UpdatePendingMoodProposalStatus(id int64, status MoodProposalStatus) error {
+func (s *SQLiteStore) UpdatePendingMoodProposalStatus(id int64, status MoodProposalStatus) error {
 	res, err := s.db.Exec(
 		`UPDATE pending_mood_proposals SET status = ? WHERE id = ?`,
 		string(status), id,
