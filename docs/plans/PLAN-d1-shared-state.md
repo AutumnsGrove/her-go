@@ -106,7 +106,7 @@ Defined `Store` interface (87 methods including `GetEmbedDimension()`), renamed 
 ### Phase 2 — D1 Database & Schema ✅
 **Status:** Complete — commits `0897dc0`, `44b1cd3`
 
-- D1 database `her-db` created (ID: `31705605-9460-4d03-b87b-5bbff4cccd1d`)
+- D1 database `her-db` created (ID in config.yaml `cloudflare.d1_database_id`)
 - `d1/schema.sql` written with 9 synced tables + `_sync_meta` (embedding columns excluded)
 - Schema applied via `wrangler d1 execute --remote`
 - `D1DatabaseID` added to `CloudflareConfig` in `config/config.go`
