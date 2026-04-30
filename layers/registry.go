@@ -83,8 +83,6 @@ type LayerContext struct {
 	RecentMessages      []memory.Message      // sliding window for agent context
 	HasImage            bool                  // user sent a photo
 	OCRText             string                // pre-flight OCR extraction
-	ExpenseContext      string                // from receipt scanning (if any)
-
 	// Instruction and search context from the agent (for chat stream messages).
 	Instruction   string
 	SearchContext string

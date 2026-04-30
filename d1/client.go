@@ -189,8 +189,11 @@ func (c *Client) execute(stmts ...Statement) ([]QueryResult, error) {
 	}
 	defer resp.Body.Close()
 
-	// Read the full body — D1 responses are small enough to buffer.
-	respBody, err := io.ReadAll(resp.Body)
+	// Read the full body, capped at 10 MB as defense-in-depth.
+	// D1 responses are small (Cloudflare caps at 5 MB), but we don't
+	// want a misbehaving proxy to OOM us.
+	const maxResponseSize = 10 << 20 // 10 MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, fmt.Errorf("reading d1 response: %w", err)
 	}

@@ -33,16 +33,11 @@ import (
 //     down or the process crashes mid-push.
 //   - Embeddings are NOT pushed to D1 (D1 has no vector tables).
 
+// Default sync tuning values — used when config omits the sync section.
+// These can be overridden via config.yaml cloudflare.sync.*.
 const (
-	// maxBatchSize is the maximum number of outbox entries to process in
-	// one carrier cycle. D1 supports up to 100 per batch; we use 50 as a
-	// comfortable limit.
-	maxBatchSize = 50
-
-	// carrierPollInterval is how often the carrier checks the outbox when
-	// there's no notification signal. Acts as a safety net so entries are
-	// never stuck longer than this, even if the notify channel is missed.
-	carrierPollInterval = 2 * time.Second
+	defaultBatchSize       = 50
+	defaultCarrierPollSecs = 2
 )
 
 // SyncedStore wraps an SQLiteStore and pushes writes to D1 in the background.
@@ -58,6 +53,13 @@ type SyncedStore struct {
 	d1Client *d1.Client   // Cloudflare D1 HTTP client
 	notify   chan struct{} // signals the carrier that new outbox entries exist
 	done     chan struct{} // closed when the carrier goroutine exits
+
+	// Tuning knobs — set via config.yaml cloudflare.sync section.
+	// Defaults are applied in NewSyncedStore; callers can override after
+	// construction (same pattern as SQLiteStore.AutoLinkCount).
+	BatchSize    int           // max outbox entries per carrier cycle (default 50)
+	CarrierPoll  time.Duration // carrier polling interval (default 2s)
+	PullPageSize int           // rows per D1 pull query (default 500)
 }
 
 // NewSyncedStore creates a SyncedStore that mirrors writes to D1.
@@ -71,8 +73,11 @@ func NewSyncedStore(sqlite *SQLiteStore, d1Client *d1.Client) (*SyncedStore, err
 		// Buffer size 1: we only need one "hey, there's work" signal at a
 		// time. Multiple writes between carrier cycles just need one nudge.
 		// Same idea as Python's threading.Event — set/clear, not a queue.
-		notify: make(chan struct{}, 1),
-		done:   make(chan struct{}),
+		notify:       make(chan struct{}, 1),
+		done:         make(chan struct{}),
+		BatchSize:    defaultBatchSize,
+		CarrierPoll:  time.Duration(defaultCarrierPollSecs) * time.Second,
+		PullPageSize: defaultPullPageSize,
 	}
 
 	if err := s.initOutbox(); err != nil {
@@ -225,7 +230,7 @@ var syncedTableSpecs = map[string]tableSpec{
 func (s *SyncedStore) carrier() {
 	defer close(s.done)
 
-	ticker := time.NewTicker(carrierPollInterval)
+	ticker := time.NewTicker(s.CarrierPoll)
 	defer ticker.Stop()
 
 	for {
@@ -260,7 +265,7 @@ func (s *SyncedStore) processOutbox() {
 	// 1. Read a batch of outbox entries.
 	rows, err := s.SQLiteStore.db.Query(
 		`SELECT id, table_name, row_id, row_id_2, op FROM _d1_outbox ORDER BY id LIMIT ?`,
-		maxBatchSize,
+		s.BatchSize,
 	)
 	if err != nil {
 		log.Error("reading d1 outbox", "err", err)

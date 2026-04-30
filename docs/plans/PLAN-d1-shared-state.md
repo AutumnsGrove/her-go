@@ -71,7 +71,7 @@ Plus a `_sync_meta` tracking table in both D1 and local SQLite.
 
 ### Tables That Stay Local-Only
 
-vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command_log, pii_vault, pending_confirmations, pending_mood_proposals, scheduled_tasks, calendar_events, expenses, expense_items, inbox, location_history, facts (legacy)
+vec_memories, vec_moods, metrics, agent_turns, searches, classifier_log, command_log, pii_vault, pending_confirmations, pending_mood_proposals, scheduled_tasks, calendar_events, inbox, location_history, facts (legacy)
 
 ---
 

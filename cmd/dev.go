@@ -83,7 +83,7 @@ func runDev(cmd *cobra.Command, args []string) error {
 		accountID:   cfg.Cloudflare.AccountID,
 		apiToken:    cfg.Cloudflare.APIToken,
 		namespaceID: cfg.Cloudflare.KVNamespaceID,
-		http:        &http.Client{Timeout: 10 * time.Second},
+		http:        &http.Client{Timeout: kvClientTimeout},
 	}
 
 	// Step 2: Set KV routing keys.
@@ -247,7 +247,7 @@ func (c *kvClient) get(key string) (string, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("KV GET %s: %w", key, err)
+		return "", fmt.Errorf("kv get %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 
@@ -257,12 +257,12 @@ func (c *kvClient) get(key string) (string, error) {
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("KV GET %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+		return "", fmt.Errorf("kv get %s: HTTP %d: %s", key, resp.StatusCode, string(body))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("KV GET %s: reading body: %w", key, err)
+		return "", fmt.Errorf("kv get %s: reading body: %w", key, err)
 	}
 	return string(body), nil
 }
@@ -279,13 +279,13 @@ func (c *kvClient) put(key, value string) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("KV PUT %s: %w", key, err)
+		return fmt.Errorf("kv put %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("KV PUT %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+		return fmt.Errorf("kv put %s: HTTP %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -301,13 +301,13 @@ func (c *kvClient) delete(key string) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("KV DELETE %s: %w", key, err)
+		return fmt.Errorf("kv delete %s: %w", key, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("KV DELETE %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+		return fmt.Errorf("kv delete %s: HTTP %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
 }

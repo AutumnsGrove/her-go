@@ -114,46 +114,6 @@ func (b *Bot) handleConfirmCallback(c tele.Context) error {
 // callback handler is self-contained.
 func (b *Bot) executeConfirmedAction(pending *memory.PendingConfirmation) (string, error) {
 	switch pending.ActionType {
-	case "delete_expense":
-		// Supports both single ID and multiple IDs:
-		//   {"id": 42}       → delete one expense
-		//   {"ids": [1,2,3]} → delete several expenses in one confirmation
-		var payload struct {
-			ID  int64   `json:"id"`
-			IDs []int64 `json:"ids"`
-		}
-		if err := json.Unmarshal(pending.ActionPayload, &payload); err != nil {
-			return "", fmt.Errorf("bad payload: %v", err)
-		}
-
-		// Normalize: if single ID was provided, treat it as a one-element list.
-		ids := payload.IDs
-		if payload.ID > 0 && len(ids) == 0 {
-			ids = []int64{payload.ID}
-		}
-		if len(ids) == 0 {
-			return "", fmt.Errorf("no expense IDs provided")
-		}
-
-		var deleted int
-		for _, id := range ids {
-			if id <= 0 {
-				continue
-			}
-			if err := b.store.DeleteExpense(id); err != nil {
-				log.Error("deleting expense in batch", "id", id, "err", err)
-				continue // best-effort — delete what we can
-			}
-			deleted++
-		}
-		if deleted == 0 {
-			return "", fmt.Errorf("no expenses were deleted")
-		}
-		if deleted == 1 {
-			return fmt.Sprintf("Expense #%d deleted", ids[0]), nil
-		}
-		return fmt.Sprintf("%d expenses deleted", deleted), nil
-
 	case "remove_memory":
 		var payload struct {
 			FactID int64 `json:"fact_id"`

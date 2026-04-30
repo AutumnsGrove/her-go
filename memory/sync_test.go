@@ -69,11 +69,16 @@ func newFakeD1(t *testing.T) (*d1.Client, *fakeD1Server) {
 }
 
 // exec inserts test data directly into the fake D1 database, bypassing
-// the HTTP layer. Useful for setting up pull test scenarios.
-func (f *fakeD1Server) exec(sql string, args ...any) {
+// the HTTP layer. Useful for setting up pull test scenarios. Accepts
+// testing.T so setup failures surface immediately instead of producing
+// silent wrong results.
+func (f *fakeD1Server) exec(t *testing.T, sqlStr string, args ...any) {
+	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.db.Exec(sql, args...)
+	if _, err := f.db.Exec(sqlStr, args...); err != nil {
+		t.Fatalf("fake D1 exec failed: %v\nSQL: %s", err, sqlStr)
+	}
 }
 
 // handle is the HTTP handler that speaks the D1 REST API protocol.
@@ -334,8 +339,8 @@ func TestPullSkipsAlreadySyncedRows(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed fake D1 with 2 messages.
-	fake.exec("INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (1, '2026-01-01 00:00:00', 'user', 'msg1', 'msg1', 'conv1')")
-	fake.exec("INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (2, '2026-01-01 00:01:00', 'assistant', 'msg2', 'msg2', 'conv1')")
+	fake.exec(t, "INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (1, '2026-01-01 00:00:00', 'user', 'msg1', 'msg1', 'conv1')")
+	fake.exec(t, "INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (2, '2026-01-01 00:01:00', 'assistant', 'msg2', 'msg2', 'conv1')")
 
 	// Pull into a fresh store.
 	store := newSyncTestStore(t)
@@ -363,7 +368,7 @@ func TestPullSkipsAlreadySyncedRows(t *testing.T) {
 	}
 
 	// Add 1 more message to fake D1.
-	fake.exec("INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (3, '2026-01-01 00:02:00', 'user', 'msg3', 'msg3', 'conv1')")
+	fake.exec(t, "INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (3, '2026-01-01 00:02:00', 'user', 'msg3', 'msg3', 'conv1')")
 
 	// Pull again — should only fetch msg3.
 	if err := synced.Pull(ctx); err != nil {
@@ -402,7 +407,7 @@ func TestPullBumpsSequence(t *testing.T) {
 
 	// Seed fake D1 with a message at ID 100 — simulating data from
 	// the other machine that has progressed much further.
-	fake.exec("INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (100, '2026-01-01 00:00:00', 'user', 'remote msg', 'remote msg', 'conv1')")
+	fake.exec(t, "INSERT INTO messages (id, timestamp, role, content_raw, content_scrubbed, conversation_id) VALUES (100, '2026-01-01 00:00:00', 'user', 'remote msg', 'remote msg', 'conv1')")
 
 	// Local store starts at ID 1 (no messages yet, sequence at 0).
 	store := newSyncTestStore(t)

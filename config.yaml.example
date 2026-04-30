@@ -210,6 +210,14 @@ cloudflare:
   api_token: ""           # API token with Workers KV + D1 write permission
   kv_namespace_id: ""     # KV namespace ID (from wrangler.toml after `npx wrangler kv namespace create`)
   d1_database_id: ""      # D1 database ID — empty = sync disabled, SyncedStore not used
+  sync:                    # D1 sync tuning (all optional — sane defaults if omitted)
+    batch_size: 50           # max rows per D1 batch push
+    carrier_poll_seconds: 2  # outbox check interval
+    pull_page_size: 500      # rows per D1 pull query
+    poller_interval: 30      # KV poller check interval (prod only, seconds)
+    startup_pull_timeout: 60 # startup pull timeout (seconds)
+    push_timeout: 600        # her sync push timeout (seconds)
+    pull_timeout: 300        # her sync pull timeout (seconds)
 
 # Self-update via /update Telegram command. Only used on the Mac Mini
 # production instance — pulls latest code, builds, and restarts via launchd.
