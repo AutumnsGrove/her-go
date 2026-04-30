@@ -18,6 +18,14 @@ kv_namespaces = [
   { binding = "HER_KV", id = "72f501f8dffc4eba984181d0130bcf9d" }
 ]
 
+# D1 database for shared state sync (memories, messages, persona, moods).
+# Source of truth across Mac Mini + MacBook. The Go bot talks to D1 via
+# REST API — this binding is here so `wrangler d1 execute` works from
+# the worker/ directory without remembering the database ID.
+d1_databases = [
+  { binding = "HER_DB", database_name = "her-db", database_id = "31705605-9460-4d03-b87b-5bbff4cccd1d" }
+]
+
 [vars]
 # Permanent tunnel URL for the Mac Mini. Set this after creating the
 # Cloudflare Tunnel in Phase 3. For quick-start with trycloudflare.com,
