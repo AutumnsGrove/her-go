@@ -277,6 +277,15 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	log.Infof("setting up %s on %s as %s", cfg.Identity.Her, hostname, currentUser.Username)
 	log.Infof("working directory: %s", workDir)
 
+	// Generate worker/wrangler.toml from config.yaml so Cloudflare IDs
+	// stay out of version control. Non-fatal — only needed if using
+	// the CF Worker for webhook routing.
+	if cfg.Cloudflare.KVNamespaceID != "" {
+		if err := generateWranglerConfig(cfg); err != nil {
+			log.Warn("could not generate wrangler.toml", "err", err)
+		}
+	}
+
 	// Kick off dependency installs in the background immediately.
 	// These run concurrently while we build the binary and set up launchd.
 	depResults := installDeps()
