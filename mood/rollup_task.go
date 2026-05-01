@@ -41,9 +41,18 @@ func (h dailyRollupHandler) Execute(
 	_ json.RawMessage,
 	deps *scheduler.Deps,
 ) error {
-	store, ok := deps.Store.(*memory.SQLiteStore)
-	if !ok {
-		return fmt.Errorf("mood_daily_rollup: deps.Store is %T, want *memory.SQLiteStore", deps.Store)
+	// The store may be a plain *SQLiteStore or a *SyncedStore (which
+	// embeds *SQLiteStore). When D1 sync is enabled, the scheduler
+	// receives the SyncedStore wrapper — we unwrap it to get the
+	// underlying SQLiteStore we need.
+	var store *memory.SQLiteStore
+	switch s := deps.Store.(type) {
+	case *memory.SQLiteStore:
+		store = s
+	case *memory.SyncedStore:
+		store = s.SQLiteStore
+	default:
+		return fmt.Errorf("mood_daily_rollup: deps.Store is %T, want *memory.SQLiteStore or *memory.SyncedStore", deps.Store)
 	}
 
 	now := time.Now()
