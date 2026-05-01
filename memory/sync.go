@@ -440,6 +440,17 @@ func (s *SyncedStore) PushAll(ctx context.Context) error {
 		return fmt.Errorf("initializing sync meta: %w", err)
 	}
 
+	// Flush any pending outbox entries first. These represent updates to
+	// existing rows (e.g. importance score changes on memory #52) that the
+	// carrier hasn't pushed yet. Without this, the incremental push below
+	// would skip those rows because their IDs are already in D1.
+	flushed, err := s.FlushOutbox()
+	if err != nil {
+		log.Warn("flushing outbox before push", "err", err)
+	} else if flushed > 0 {
+		log.Info("d1 outbox flushed before push", "entries", flushed)
+	}
+
 	allTables := make([]string, 0, len(incrementalTables)+len(fullPullTables))
 	allTables = append(allTables, incrementalTables...)
 	allTables = append(allTables, fullPullTables...)
@@ -463,36 +474,54 @@ func (s *SyncedStore) PushAll(ctx context.Context) error {
 	return nil
 }
 
-// pushTable reads all rows from a local SQLite table and pushes them
-// to D1 in batches. Logs progress as it goes. After pushing, updates
-// _sync_meta for incremental tables.
+// pushTable reads rows from a local SQLite table and pushes them to D1
+// in batches. For incremental tables (those with an auto-increment id),
+// it first queries D1 for MAX(id) and only pushes rows beyond that —
+// so re-running `sync push` is cheap when D1 is already up to date.
+// Full-pull tables (composite keys, singletons) are always re-sent.
+//
+// After pushing, updates _sync_meta for incremental tables.
 func (s *SyncedStore) pushTable(ctx context.Context, table string) error {
 	spec, ok := syncedTableSpecs[table]
 	if !ok {
 		return fmt.Errorf("no table spec for %q", table)
 	}
 
-	// Count rows for progress logging.
+	// Determine ORDER BY and WHERE clause. For incremental tables, ask D1
+	// what it already has and skip those rows. This makes re-runs fast —
+	// like Python's "if not exists" guard, but at the row level.
+	orderBy := "id"
+	whereClause := ""
+	var queryArgs []any
+
+	if table == "memory_links" {
+		orderBy = "source_id, target_id"
+	} else if isIncremental(table) {
+		remoteMax, err := s.getRemoteMaxID(ctx, table)
+		if err != nil {
+			log.Warn("could not query D1 max id, pushing all rows", "table", table, "err", err)
+		} else if remoteMax > 0 {
+			whereClause = " WHERE id > ?"
+			queryArgs = append(queryArgs, remoteMax)
+		}
+	}
+
+	// Count rows that need pushing (not total rows).
 	var total int
-	if err := s.SQLiteStore.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&total); err != nil {
+	countQuery := "SELECT COUNT(*) FROM " + table + whereClause
+	if err := s.SQLiteStore.db.QueryRow(countQuery, queryArgs...).Scan(&total); err != nil {
 		return fmt.Errorf("counting %s rows: %w", table, err)
 	}
 	if total == 0 {
-		log.Info("d1 push", "table", table, "rows", "0/0")
+		log.Info("d1 push", "table", table, "status", "already up to date")
 		return nil
-	}
-
-	// Determine ORDER BY — most tables use id, memory_links uses composite PK.
-	orderBy := "id"
-	if table == "memory_links" {
-		orderBy = "source_id, target_id"
 	}
 
 	// Stream rows from local SQLite. We don't load everything into memory —
 	// just scan one row at a time and accumulate batches.
-	rows, err := s.SQLiteStore.db.QueryContext(ctx,
-		fmt.Sprintf("SELECT %s FROM %s ORDER BY %s", spec.selectCols, table, orderBy),
-	)
+	selectQuery := fmt.Sprintf("SELECT %s FROM %s%s ORDER BY %s",
+		spec.selectCols, table, whereClause, orderBy)
+	rows, err := s.SQLiteStore.db.QueryContext(ctx, selectQuery, queryArgs...)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", table, err)
 	}
@@ -571,4 +600,25 @@ func isIncremental(table string) bool {
 		}
 	}
 	return false
+}
+
+// getRemoteMaxID queries D1 for the highest id in a table. Returns 0
+// if the table is empty or doesn't exist yet. Used by pushTable to
+// skip rows D1 already has — a single cheap query that can save
+// hundreds of INSERT OR REPLACE round-trips.
+func (s *SyncedStore) getRemoteMaxID(ctx context.Context, table string) (int64, error) {
+	result, err := s.d1Client.Query(
+		fmt.Sprintf("SELECT COALESCE(MAX(id), 0) AS max_id FROM %s", table),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if len(result.Results) == 0 {
+		return 0, nil
+	}
+	id, ok := toInt64(result.Results[0]["max_id"])
+	if !ok {
+		return 0, nil
+	}
+	return id, nil
 }

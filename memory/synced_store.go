@@ -336,6 +336,27 @@ func (s *SyncedStore) processOutbox() {
 	s.deleteOutboxEntries(processedIDs)
 }
 
+// FlushOutbox drains the entire outbox, processing batches until no entries
+// remain. Unlike the carrier goroutine (which processes one batch per tick),
+// this runs synchronously and exhausts the queue. Used by PushAll to ensure
+// any pending updates (e.g. importance score changes on existing rows) reach
+// D1 before the incremental new-row push runs.
+//
+// Returns the total number of statements pushed, or the first error encountered.
+func (s *SyncedStore) FlushOutbox() (int, error) {
+	var totalFlushed int
+	for {
+		var count int
+		err := s.SQLiteStore.db.QueryRow("SELECT COUNT(*) FROM _d1_outbox").Scan(&count)
+		if err != nil || count == 0 {
+			break
+		}
+		s.processOutbox()
+		totalFlushed += count
+	}
+	return totalFlushed, nil
+}
+
 // buildDeleteStatement creates a DELETE statement for D1. For most tables,
 // deletes use the id column. For memory_links, the composite key is used.
 func (s *SyncedStore) buildDeleteStatement(e outboxEntry) *d1.Statement {
