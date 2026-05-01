@@ -1,0 +1,23 @@
+name: "Mercury 2 Test"
+description: >
+  Quick 5-message test to see how Mercury 2 performs now that tool_choice
+  enforcement is optional. Mercury 2 was blazing fast but unreliable - let's
+  see if it calls tools without being forced.
+
+tags: ["mercury", "quick", "speed-test"]
+
+messages:
+  # Turn 1: Basic intro - should call think → reply → done
+  - "hey im autumn, 25, living in portland. just started learning go"
+
+  # Turn 2: Casual chat - tests if it maintains protocol on turn 2
+  - "yeah im building a chatbot to learn. python dev normally but go is kinda fun once you get used to the whole explicit error handling thing"
+
+  # Turn 3: Question that needs recall - does it call recall_memories?
+  - "what do you remember about me so far?"
+
+  # Turn 4: Emotional content - tests empathy + protocol
+  - "honestly been stressed lately. work is just a lot right now and i feel like im drowning"
+
+  # Turn 5: Simple close - clean done call
+  - "ok gotta run, talk later!"
