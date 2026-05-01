@@ -33,6 +33,7 @@ import (
 	// in each package calls tools.Register(name, handler).
 	_ "her/tools/done"
 	_ "her/tools/notify_agent"
+	_ "her/tools/recall_memories"
 	_ "her/tools/remove_memory"
 	_ "her/tools/save_memory"
 	_ "her/tools/save_self_memory"
@@ -68,12 +69,15 @@ type MemoryAgentParams struct {
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
 const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this conversation turn and decide what memories are worth saving permanently.
 
-Use save_memory for memories about {{user}}.
+Use recall_memories FIRST to check for related memories before saving new ones.
+Use save_memory for memories about {{user}} — only if no related memory exists to update.
+Use update_memory to consolidate new info into an existing related memory.
 Use save_self_memory for observations about {{her}}'s own patterns, communication style, or relationship dynamics.
-Use update_memory when something you already know has changed or been refined.
 Use remove_memory for memories that are now incorrect or made redundant by new information. Accepts memory_id (single) or memory_ids (batch).
 Use split_memory to break a compound memory into individual facts.
 Use notify_agent (instead of done) when you completed inbox tasks and the user should be told.
+
+Workflow: before saving, call recall_memories with a query about the topic. If a related memory exists, use update_memory to consolidate. Only use save_memory for truly novel information.
 
 Rules for writing good memories:
 - Write memories as timeless truths — NO temporal references like "today", "last week", or "right now"
@@ -82,6 +86,7 @@ Rules for writing good memories:
 - User preferences ABOUT fiction are real memories. In-game events are NOT.
 - Transient moods (tired today, stressed this week) are NOT memories — skip them.
 - Do NOT re-save anything already in the existing memories list.
+- Consolidation over accumulation: one rich memory beats five fragments about the same topic.
 
 If you see an Inbox section in your transcript, handle those tasks and call notify_agent when done.
 Otherwise call done when finished.`
@@ -140,7 +145,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	// Tool definitions for the memory agent — the 4 memory tools plus done.
 	// These are loaded from the same YAML registry as all other tools.
 	memToolDefs := tools.LookupToolDefs(
-		[]string{"save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "notify_agent", "done"},
+		[]string{"recall_memories", "save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "notify_agent", "done"},
 		params.Cfg,
 	)
 

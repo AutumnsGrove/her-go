@@ -1,5 +1,5 @@
 name: recall_memories
-agent: main
+agent: main, memory
 description: >-
   Search through stored memories using semantic similarity. Use when the
   user asks 'do you remember...', references something from a past
