@@ -244,7 +244,7 @@ type DriverConfig struct {
 	MaxTokens   int              `yaml:"max_tokens"`
 	Timeout     int              `yaml:"timeout"`             // HTTP timeout in seconds (0 = 60s default)
 	Trace       bool             `yaml:"trace"`               // show agent thinking traces in chat
-	Fallback    *FallbackConfig  `yaml:"fallback"`            // optional fallback model for when primary is unavailable
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`   // optional fallback model for when primary is unavailable
 	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
 	// Loop tuning — how many iterations per window and how many continuation
@@ -269,7 +269,7 @@ type VisionConfig struct {
 	Model       string          `yaml:"model"`
 	Temperature float64         `yaml:"temperature"`
 	MaxTokens   int             `yaml:"max_tokens"`
-	Fallback    *FallbackConfig `yaml:"fallback"` // optional fallback model for when primary is unavailable
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"` // optional fallback model for when primary is unavailable
 }
 
 // ClassifierConfig holds settings for the classifier LLM gate.
