@@ -536,11 +536,20 @@ outer:
 		for i := 0; i < iterationsPerWindow; i++ {
 			// Nudge on the first iteration only: tool_choice="required"
 			// forces the model into the tool-calling flow. Without this,
-			// the driver agent occasionally skips tools entirely and outputs plain
-			// text on iter 0. After the first call, "auto" lets the model
-			// drive naturally (it exits via the done tool).
+			// unreliable driver models occasionally skip tools entirely and
+			// output plain text on iter 0. After the first call, "auto" lets
+			// the model drive naturally (it exits via the done tool).
+			//
+			// This is optional via config.driver.require_tool_choice. Some models
+			// (or some OpenRouter providers) don't support tool_choice, returning
+			// 404 errors. Modern instruct models should handle "auto" mode fine
+			// based on the system prompt alone.
 			var toolChoice interface{}
-			if i == 0 && window == 0 {
+			requireToolChoice := true // default to true for backwards compat
+			if params.Cfg.Driver.RequireToolChoice != nil {
+				requireToolChoice = *params.Cfg.Driver.RequireToolChoice
+			}
+			if i == 0 && window == 0 && requireToolChoice {
 				toolChoice = "required"
 			}
 			resp, err := params.DriverLLM.ChatCompletionWithTools(messages, toolDefs, toolChoice)

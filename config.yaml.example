@@ -36,6 +36,7 @@ driver:
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
   trace: false                                   # show driver agent thinking traces in chat (/traces to toggle)
+  # require_tool_choice: true                    # force tool_choice="required" on first agent call (default true). Set false for models/providers that don't support tool_choice.
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fallback:
     model: "google/gemini-3.1-flash-lite-preview"

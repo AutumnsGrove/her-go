@@ -247,6 +247,12 @@ type DriverConfig struct {
 	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`   // optional fallback model for when primary is unavailable
 	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
+	// RequireToolChoice forces tool_choice="required" on the first agent call.
+	// Default true (maintains current behavior). Set false for models that don't
+	// support tool_choice (some OpenRouter providers) — the agent prompt is strong
+	// enough that reliable instruct models will call tools without enforcement.
+	RequireToolChoice *bool `yaml:"require_tool_choice,omitempty"` // nil = true (default), false = disable
+
 	// Loop tuning — how many iterations per window and how many continuation
 	// windows before giving up. Defaults: 15 iterations, 3 continuations (= 60 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
