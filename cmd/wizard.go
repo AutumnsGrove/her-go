@@ -58,6 +58,20 @@ func runWizard(cfgPath string) error {
 		webhookPortStr = strconv.Itoa(cfg.Telegram.WebhookPort)
 	}
 
+	// Ensure fallback structs exist so huh can bind to their Model fields.
+	// In Go, a nil pointer can't be dereferenced — unlike Python where
+	// you'd just do `cfg.driver.fallback = cfg.driver.fallback or Fallback()`.
+	// Here we must explicitly allocate the struct.
+	if cfg.Driver.Fallback == nil {
+		cfg.Driver.Fallback = &config.FallbackConfig{}
+	}
+	if cfg.Chat.Fallback == nil {
+		cfg.Chat.Fallback = &config.FallbackConfig{}
+	}
+	if cfg.MemoryAgent.Fallback == nil {
+		cfg.MemoryAgent.Fallback = &config.FallbackConfig{}
+	}
+
 	form := huh.NewForm(
 
 		// ── Group 1: Identity ──────────────────────────────────────────────
@@ -169,10 +183,39 @@ func runWizard(cfgPath string) error {
 				Value(&cfg.Vision.Model),
 
 			huh.NewInput().
+				Title("Mood agent model").
+				Description("Infers mood from conversation — runs in background after each reply.").
+				Value(&cfg.MoodAgent.Model),
+
+			huh.NewInput().
 				Title("Classifier model").
 				Description("Memory + reply safety gate — needs a fast, cheap model.").
 				Value(&cfg.Classifier.Model),
 		).Title("Models"),
+
+		// ── Group 4b: Fallback Models ─────────────────────────────────────
+		// Fallback models kick in when the primary model fails (rate limit,
+		// timeout, server error). Pre-populated from config — usually a
+		// cheaper/faster model as a safety net. Leave blank to disable.
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Driver fallback model").
+				Description("Used when the primary driver model is unavailable.").
+				Placeholder("optional — leave blank to disable").
+				Value(&cfg.Driver.Fallback.Model),
+
+			huh.NewInput().
+				Title("Chat fallback model").
+				Description("Used when the primary chat model is unavailable.").
+				Placeholder("optional — leave blank to disable").
+				Value(&cfg.Chat.Fallback.Model),
+
+			huh.NewInput().
+				Title("Memory agent fallback model").
+				Description("Used when the primary memory model is unavailable.").
+				Placeholder("optional — leave blank to disable").
+				Value(&cfg.MemoryAgent.Fallback.Model),
+		).Title("Fallback Models"),
 
 		// ── Group 5: Cloudflare ────────────────────────────────────────────
 		// All optional — only needed for webhook mode and cross-machine sync.
@@ -270,6 +313,20 @@ func runWizard(cfgPath string) error {
 	}
 	if webhookPortStr != "" {
 		cfg.Telegram.WebhookPort, _ = strconv.Atoi(webhookPortStr)
+	}
+
+	// Nil out fallback structs with empty models so they don't write
+	// an empty `fallback: {model: ""}` block to config.yaml. In Go,
+	// a nil pointer omits the field entirely from YAML output (via the
+	// `omitempty` tag on the parent struct field).
+	if cfg.Driver.Fallback != nil && cfg.Driver.Fallback.Model == "" {
+		cfg.Driver.Fallback = nil
+	}
+	if cfg.Chat.Fallback != nil && cfg.Chat.Fallback.Model == "" {
+		cfg.Chat.Fallback = nil
+	}
+	if cfg.MemoryAgent.Fallback != nil && cfg.MemoryAgent.Fallback.Model == "" {
+		cfg.MemoryAgent.Fallback = nil
 	}
 
 	// Auto-derive service label from bot name if left blank.
