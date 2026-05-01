@@ -222,8 +222,15 @@ func runBot(cmd *cobra.Command, args []string) error {
 		"classifier_model", cfg.Classifier.Model,
 	)
 
-	// Emit startup event now that the bus is live
+	// Emit startup events now that the bus is live
 	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "db", Status: "ready", Detail: cfg.Memory.DBPath})
+
+	// D1 sync status — let the TUI show whether Cloudflare is connected.
+	if _, ok := botStore.(*memory.SyncedStore); ok {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "d1_sync", Status: "ready", Detail: "cloudflare D1"})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "d1_sync", Status: "skipped"})
+	}
 
 	// --- Decide: TUI or plain fallback ---
 	// If stdout is not a terminal (piped, redirected, CI), skip the TUI

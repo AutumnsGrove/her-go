@@ -747,7 +747,7 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 
 buildResponse:
 	var toolCalls []ToolCall
-	if p, ok := partials[0]; ok {
+	if p, ok := partials[0]; ok && p.name != "" {
 		args := p.arguments.String()
 		if args != "" && !json.Valid([]byte(args)) {
 			return nil, fmt.Errorf("truncated tool call arguments: %.100s", args)

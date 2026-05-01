@@ -21,7 +21,7 @@ var log = logger.WithPrefix("mood")
 // main (100) and memory (200) when both are present.
 func init() {
 	trace.Register(trace.Stream{Name: "mood", Order: 300, Label: "🎭 <b>mood</b>"})
-	turn.Register(turn.Phase{Name: "mood", Order: 300, Label: "mood"})
+	turn.Register(turn.Phase{Name: "mood", Order: 300, Emoji: "🎭", Label: "mood"})
 }
 
 // Action describes what the agent did with a given turn. One action

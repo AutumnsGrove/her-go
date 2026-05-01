@@ -63,8 +63,8 @@ func init() {
 	// Turn phase registration — same pattern as trace streams.
 	// "driver" and "memory" register here because this package owns
 	// both the driver agent loop and the memory agent launch.
-	turn.Register(turn.Phase{Name: "driver", Order: 100, Label: "driver"})
-	turn.Register(turn.Phase{Name: "memory", Order: 200, Label: "memory"})
+	turn.Register(turn.Phase{Name: "driver", Order: 100, Emoji: "🛠️", Label: "driver"})
+	turn.Register(turn.Phase{Name: "memory", Order: 200, Emoji: "🧩", Label: "memory"})
 }
 
 // Callback types and toolContext have been moved to the tools package
@@ -638,6 +638,14 @@ outer:
 			// Execute each tool call, feed results back to the model,
 			// and build trace lines for observability.
 			for _, tc := range resp.ToolCalls {
+				// Guard: skip tool calls with empty names. Some models
+				// (notably via OpenRouter) occasionally emit a tool call
+				// delta with no function name — the streaming parser
+				// filters these, but the non-streaming path may not.
+				if tc.Function.Name == "" {
+					log.Warn("skipping tool call with empty name", "id", tc.ID)
+					continue
+				}
 				totalToolCalls++
 				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
 				turnIndex++

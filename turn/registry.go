@@ -25,6 +25,11 @@ type Phase struct {
 	// register at, say, 250.
 	Order int
 
+	// Emoji is the single-character icon for this phase, used by
+	// both the TUI content group header and the Telegram trace
+	// board. Defined here so there's one source of truth.
+	Emoji string
+
 	// Label is the display name rendered in the TUI content group
 	// header (e.g. "memory", "mood"). Empty means no label.
 	Label string

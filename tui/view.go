@@ -135,17 +135,18 @@ func (m Model) renderTurnContent(sec *Section) []string {
 
 	type group struct {
 		label string
+		emoji string
 		lines []string
 		style lipgloss.Style
 	}
 
 	groups := []group{
-		{"context", sec.ContextLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
-		{"driver", sec.ToolLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorCyan).Width(boxWidth).Padding(0, 1)},
-		{"reply", sec.ReplyLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorSuccess).Width(boxWidth).Padding(0, 1)},
-		{"persona", sec.PersonaLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
-		{"memory", sec.MemoryLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
-		{"mood", sec.MoodLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
+		{"context", "📋", sec.ContextLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
+		{"driver", "🛠️", sec.ToolLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorCyan).Width(boxWidth).Padding(0, 1)},
+		{"reply", "💬", sec.ReplyLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorSuccess).Width(boxWidth).Padding(0, 1)},
+		{"persona", "🪞", sec.PersonaLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
+		{"memory", "🧩", sec.MemoryLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
+		{"mood", "🎭", sec.MoodLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
 	}
 
 	for _, g := range groups {
@@ -153,8 +154,9 @@ func (m Model) renderTurnContent(sec *Section) []string {
 			continue
 		}
 
-		// Build content for the box
-		content := strings.Join(g.lines, "\n")
+		// Build content with a header line showing the agent's emoji + label
+		header := lipgloss.NewStyle().Bold(true).Render(g.emoji + " " + g.label)
+		content := header + "\n" + strings.Join(g.lines, "\n")
 
 		// Render the bordered box
 		box := g.style.Render(content)
