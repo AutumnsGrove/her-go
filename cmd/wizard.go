@@ -53,7 +53,10 @@ func runWizard(cfgPath string) error {
 	if cfg.Telegram.OwnerChat != 0 {
 		ownerChatStr = strconv.FormatInt(cfg.Telegram.OwnerChat, 10)
 	}
-	webhookPortStr := strconv.Itoa(cfg.Telegram.WebhookPort)
+	webhookPortStr := ""
+	if cfg.Telegram.WebhookPort != 0 {
+		webhookPortStr = strconv.Itoa(cfg.Telegram.WebhookPort)
+	}
 
 	form := huh.NewForm(
 
@@ -62,13 +65,11 @@ func runWizard(cfgPath string) error {
 			huh.NewInput().
 				Title("Bot name").
 				Description("The bot's name — injected into prompts as {{her}}.").
-				Placeholder("Mira").
 				Value(&cfg.Identity.Her),
 
 			huh.NewInput().
 				Title("Your name").
 				Description("Your name — injected into prompts as {{user}}.").
-				Placeholder("Autumn").
 				Value(&cfg.Identity.User),
 
 			huh.NewInput().
@@ -105,7 +106,6 @@ func runWizard(cfgPath string) error {
 			huh.NewInput().
 				Title("Webhook port").
 				Description("Local HTTP port for the webhook server (ignored in poll mode).").
-				Placeholder("8443").
 				Value(&webhookPortStr).
 				Validate(validateOptionalPort),
 
@@ -242,7 +242,6 @@ func runWizard(cfgPath string) error {
 			huh.NewInput().
 				Title("Embed server URL").
 				Description("Ollama or OpenAI-compatible embedding server URL.").
-				Placeholder("http://localhost:11434/v1").
 				Value(&cfg.Embed.BaseURL),
 		).Title("Features"),
 	)
@@ -320,12 +319,19 @@ func wizardLoadConfig(cfgPath string) (*config.Config, error) {
 	cfg = &config.Config{}
 	examplePath := filepath.Join(filepath.Dir(cfgPath), "config.yaml.example")
 	if data, readErr := os.ReadFile(examplePath); readErr == nil {
-		_ = yaml.Unmarshal(data, cfg)
-		// The example file has "${VAR}" placeholder literals that expand to
-		// empty strings — be explicit about clearing secrets so they don't
-		// appear as garbage in the wizard.
+		// config.yaml.example is read without env expansion, so ${VAR}
+		// literals land as raw strings in cfg. We unmarshal for the
+		// structural defaults (model names, ports, tuning knobs), then
+		// explicitly clear every field that uses a ${VAR} placeholder so
+		// sensitiveHint doesn't show "✓ Already set" on a fresh install.
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			log.Warn("config.yaml.example is malformed — starting wizard with empty defaults", "err", err)
+			cfg = &config.Config{}
+		}
 		cfg.Telegram.Token = ""
 		cfg.LLM.APIKey = ""
+		cfg.Search.TavilyAPIKey = ""
+		cfg.Foursquare.APIKey = ""
 	}
 	return cfg, nil
 }
@@ -333,6 +339,10 @@ func wizardLoadConfig(cfgPath string) (*config.Config, error) {
 // saveConfig marshals cfg to YAML and writes it to path.
 // 0600 permissions restrict read/write to the owner — important since
 // config.yaml contains API keys and bot tokens.
+//
+// Note: yaml.Marshal is a full round-trip — inline comments and custom
+// formatting in an existing config.yaml are not preserved on re-run.
+// Values are always correct; only hand-written annotations are lost.
 func saveConfig(cfg *config.Config, path string) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
