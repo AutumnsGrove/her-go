@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -257,6 +258,16 @@ func installDeps() <-chan depResult {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
+	// Run the interactive wizard first — walks through config.yaml fields
+	// and writes the file before we build or install anything. If the user
+	// quits mid-wizard nothing is written and setup stops cleanly.
+	if err := runWizard(cfgFile); err != nil {
+		if errors.Is(err, errWizardAborted) {
+			return nil
+		}
+		return fmt.Errorf("setup wizard: %w", err)
+	}
+
 	// Load config to get the bot's name for the service label.
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
