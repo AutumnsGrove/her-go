@@ -40,18 +40,29 @@ log = logging.getLogger("tts-server")
 
 app = FastAPI(title="Piper TTS Server")
 
-# Global voice reference — loaded once at startup.
+# Global voice reference -- loaded once at startup.
 _voice = None
 _voice_name = None
 
-# Duration of silence inserted between paragraphs (double newlines).
+# Pause durations (ms) -- set from CLI args at startup, which come from
+# config.yaml via the Go sidecar launcher. These defaults match
+# config.yaml.example and are only used when running the server standalone.
 PARAGRAPH_PAUSE_MS = 500
-# Duration of silence inserted at single newlines.
 LINE_PAUSE_MS = 250
-# Duration of silence after sentence-ending punctuation (. ! ?).
-SENTENCE_PAUSE_MS = 300
-# Duration of silence after clause-level punctuation (, ; :).
-CLAUSE_PAUSE_MS = 150
+SENTENCE_PAUSE_MS = 75
+COMMA_PAUSE_MS = 50
+SEMI_PAUSE_MS = 30
+
+
+class PauseConfig(BaseModel):
+    """Per-request pause overrides. When present in the speech request,
+    these take priority over the CLI defaults -- enabling hot-reload
+    from config.yaml without restarting the sidecar."""
+    paragraph_ms: int | None = None
+    line_ms: int | None = None
+    sentence_ms: int | None = None
+    comma_ms: int | None = None
+    semi_ms: int | None = None
 
 
 class SpeechRequest(BaseModel):
@@ -60,6 +71,7 @@ class SpeechRequest(BaseModel):
     voice: str = "en_GB-southern_english_female-low"
     speed: float = 1.0
     response_format: str = "wav"
+    pauses: PauseConfig | None = None
 
 
 def make_silence(duration_ms: int, sample_rate: int) -> bytes:
@@ -73,44 +85,44 @@ def clean_for_tts(text: str) -> str:
 
     Handles characters and words that Piper struggles with.
     """
-    # Em-dashes (—) and en-dashes (–) → comma + pause. The model isn't
+    # Em-dashes and en-dashes -> comma + pause. The model isn't
     # supposed to use these, but they slip through sometimes.
     text = re.sub(r"\s*[—–]\s*", ", ", text)
 
-    # "Huh" sounds robotic in Piper — replace with a more natural filler.
+    # "Huh" sounds robotic in Piper -- replace with a more natural filler.
     text = re.sub(r"\bhuh\b", "hmm", text, flags=re.IGNORECASE)
 
-    # Ellipsis → period (Piper handles sentence-end pauses better than ...)
+    # Ellipsis -> period (Piper handles sentence-end pauses better than ...)
     text = re.sub(r"\.{2,}", ".", text)
-
     return text
 
 
-def split_punctuation(text: str) -> list[dict]:
-    """Split a single line into clause/sentence fragments with pause hints.
+def _resolve_pauses(overrides):
+    """Merge per-request pause overrides with CLI defaults.
 
-    Splits at sentence-ending punctuation (. ! ?) and clause-level
-    punctuation (, ; :) so that explicit silence can be inserted between
-    them — Piper's low-quality models don't reliably pause at these marks.
-
-    Closing quotes/parens that follow punctuation stay attached to the
-    fragment (e.g. 'she said "hello!"' keeps the quote with "hello!").
+    Returns a dict with all five pause keys, preferring request values
+    when present (not None), falling back to the module-level defaults
+    set at startup from CLI args.
     """
-    # Regex: capture a chunk of text up to and including a punctuation mark,
-    # plus any trailing quotes/parens/whitespace that belong with it.
-    # Group 1 = the text fragment including its punctuation.
-    # Group 2 = the punctuation character itself (for choosing pause length).
-    pattern = re.compile(
-        r'(.*?'           # non-greedy leading text
-        r'([.!?;:,])'    # the punctuation mark we split on
-        r'[\"\'\)\]”’]*'  # optional closing quotes/parens
-        r')\s*'           # eat trailing whitespace
-    )
+    return {
+        "paragraph": overrides.paragraph_ms if overrides and overrides.paragraph_ms is not None else PARAGRAPH_PAUSE_MS,
+        "line": overrides.line_ms if overrides and overrides.line_ms is not None else LINE_PAUSE_MS,
+        "sentence": overrides.sentence_ms if overrides and overrides.sentence_ms is not None else SENTENCE_PAUSE_MS,
+        "comma": overrides.comma_ms if overrides and overrides.comma_ms is not None else COMMA_PAUSE_MS,
+        "semi": overrides.semi_ms if overrides and overrides.semi_ms is not None else SEMI_PAUSE_MS,
+    }
 
+
+# Regex: match text up to a punctuation mark. Group 1 = the fragment
+# including punctuation, group 2 = the punctuation character itself.
+_PUNCT_SPLIT = re.compile(r"(.*?([.!?;:,]))\s*")
+
+
+def split_punctuation(text, pauses):
+    """Split a single line into clause/sentence fragments with pause hints."""
     fragments = []
     pos = 0
-    for m in pattern.finditer(text):
-        # Skip if this match starts before our cursor (overlapping).
+    for m in _PUNCT_SPLIT.finditer(text):
         if m.start() < pos:
             continue
         fragment = m.group(1).strip()
@@ -120,38 +132,33 @@ def split_punctuation(text: str) -> list[dict]:
 
         punct = m.group(2)
         if punct in ".!?":
-            pause = SENTENCE_PAUSE_MS
+            pause = pauses["sentence"]
+        elif punct in ";:":
+            pause = pauses["semi"]
         else:
-            pause = CLAUSE_PAUSE_MS
+            pause = pauses["comma"]
 
         fragments.append({"text": fragment, "pause_after_ms": pause})
         pos = m.end()
 
-    # Leftover text after the last punctuation mark (e.g. trailing clause
-    # with no period). Append it with no pause — the line-level pause
-    # from preprocess_text will handle the gap.
     remainder = text[pos:].strip()
     if remainder:
         fragments.append({"text": remainder, "pause_after_ms": 0})
 
-    # If the text had no punctuation at all, return it as one chunk.
     if not fragments:
         fragments.append({"text": text.strip(), "pause_after_ms": 0})
 
     return fragments
 
 
-def preprocess_text(text: str) -> list[dict]:
+def preprocess_text(text, pauses):
     """Split text into chunks with pause hints at every natural boundary.
 
     Hierarchy (outer to inner):
-      1. Paragraph breaks (\\n\\n) → PARAGRAPH_PAUSE_MS
-      2. Line breaks (\\n) → LINE_PAUSE_MS
-      3. Sentence-ending punctuation (. ! ?) → SENTENCE_PAUSE_MS
-      4. Clause-level punctuation (, ; :) → CLAUSE_PAUSE_MS
-
-    Returns a list of dicts:
-      {"text": "...", "pause_after_ms": <ms>}
+      1. Paragraph breaks -> pauses["paragraph"]
+      2. Line breaks -> pauses["line"]
+      3. Sentence-ending punctuation (. ! ?) -> pauses["sentence"]
+      4. Clause-level punctuation (, ; :) -> pauses["comma"] / pauses["semi"]
     """
     text = text.strip()
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -168,19 +175,15 @@ def preprocess_text(text: str) -> list[dict]:
             is_last_line_in_para = j == len(lines) - 1
             is_last_para = i == len(paragraphs) - 1
 
-            # Determine the pause that follows this entire line.
             if is_last_para and is_last_line_in_para:
                 line_pause = 0
             elif is_last_line_in_para:
-                line_pause = PARAGRAPH_PAUSE_MS
+                line_pause = pauses["paragraph"]
             else:
-                line_pause = LINE_PAUSE_MS
+                line_pause = pauses["line"]
 
-            # Split the line at punctuation for intra-line pauses.
-            sub_chunks = split_punctuation(line)
+            sub_chunks = split_punctuation(line, pauses)
 
-            # The last sub-chunk inherits the line-level pause (which is
-            # always >= the punctuation pause), so structural pauses win.
             if sub_chunks:
                 sub_chunks[-1]["pause_after_ms"] = max(
                     sub_chunks[-1]["pause_after_ms"], line_pause
@@ -196,9 +199,10 @@ async def speech(req: SpeechRequest):
     if _voice is None:
         return Response(content="Model not loaded", status_code=503)
 
+    pauses = _resolve_pauses(req.pauses)
     log.info(f"TTS request: voice={_voice_name}, text_len={len(req.input)}, speed={req.speed}")
 
-    chunks = preprocess_text(req.input)
+    chunks = preprocess_text(req.input, pauses)
     if not chunks:
         return Response(content="No text to synthesize", status_code=400)
 
@@ -234,7 +238,7 @@ async def speech(req: SpeechRequest):
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit
+        wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(pcm_data)
     wav_bytes = buf.getvalue()
@@ -258,9 +262,21 @@ def main():
     parser.add_argument(
         "--model",
         default=None,
-        help="Path to .onnx voice model (default: scripts/piper-voices/en_GB-southern_english_female-low.onnx)",
+        help="Path to .onnx voice model",
     )
+    parser.add_argument("--pause-paragraph", type=int, default=500)
+    parser.add_argument("--pause-line", type=int, default=250)
+    parser.add_argument("--pause-sentence", type=int, default=75)
+    parser.add_argument("--pause-comma", type=int, default=50)
+    parser.add_argument("--pause-semi", type=int, default=30)
     args = parser.parse_args()
+
+    global PARAGRAPH_PAUSE_MS, LINE_PAUSE_MS, SENTENCE_PAUSE_MS, COMMA_PAUSE_MS, SEMI_PAUSE_MS
+    PARAGRAPH_PAUSE_MS = args.pause_paragraph
+    LINE_PAUSE_MS = args.pause_line
+    SENTENCE_PAUSE_MS = args.pause_sentence
+    COMMA_PAUSE_MS = args.pause_comma
+    SEMI_PAUSE_MS = args.pause_semi
 
     # Resolve model path. Default to the southern_english_female voice.
     script_dir = Path(__file__).parent

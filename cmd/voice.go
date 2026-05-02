@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 
 	"her/config"
 
@@ -68,10 +69,31 @@ func runVoiceShowroom(cmd *cobra.Command, args []string) error {
 
 	// Run the Gradio app. uv handles dependencies automatically
 	// from the inline script metadata (the /// script block).
-	showroom := exec.Command(uvPath, "run", script,
+	showroomArgs := []string{"run", script,
 		"--tts-url", ttsURL,
 		"--stt-url", sttURL,
-	)
+	}
+
+	// Forward pause config so the showroom can pass it to the TTS sidecar
+	// if it needs to auto-start one.
+	p := cfg.Voice.TTS.Pauses
+	if p.Paragraph > 0 {
+		showroomArgs = append(showroomArgs, "--pause-paragraph", strconv.Itoa(p.Paragraph))
+	}
+	if p.Line > 0 {
+		showroomArgs = append(showroomArgs, "--pause-line", strconv.Itoa(p.Line))
+	}
+	if p.Sentence > 0 {
+		showroomArgs = append(showroomArgs, "--pause-sentence", strconv.Itoa(p.Sentence))
+	}
+	if p.Comma > 0 {
+		showroomArgs = append(showroomArgs, "--pause-comma", strconv.Itoa(p.Comma))
+	}
+	if p.Semi > 0 {
+		showroomArgs = append(showroomArgs, "--pause-semi", strconv.Itoa(p.Semi))
+	}
+
+	showroom := exec.Command(uvPath, showroomArgs...)
 	showroom.Stdout = os.Stdout
 	showroom.Stderr = os.Stderr
 	showroom.Stdin = os.Stdin

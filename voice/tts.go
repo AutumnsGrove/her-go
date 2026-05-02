@@ -90,6 +90,7 @@ type PiperTTSClient struct {
 	voiceID    string
 	speed      float64
 	replyMode  string
+	pauses     *config.TTSPauseConfig
 	httpClient *http.Client
 }
 
@@ -139,6 +140,7 @@ func NewPiperTTSClient(cfg *config.TTSConfig) *PiperTTSClient {
 		voiceID:   voiceID,
 		speed:     speed,
 		replyMode: replyMode,
+		pauses:    &cfg.Pauses,
 		httpClient: &http.Client{
 			// TTS for a typical chat message (1-3 sentences) should be
 			// well under 30 seconds. Longer timeout as a safety net.
@@ -147,14 +149,27 @@ func NewPiperTTSClient(cfg *config.TTSConfig) *PiperTTSClient {
 	}
 }
 
-// speechRequest is the JSON body for the OpenAI-compatible /v1/audio/speech
-// endpoint. Same shape as the OpenAI TTS API.
+// speechRequest is the JSON body for the /v1/audio/speech endpoint.
+// Extends the OpenAI TTS shape with a pauses field for hot-reloadable
+// punctuation pause durations.
 type speechRequest struct {
-	Model          string  `json:"model"`
-	Input          string  `json:"input"`
-	Voice          string  `json:"voice"`
-	Speed          float64 `json:"speed,omitempty"`
-	ResponseFormat string  `json:"response_format"`
+	Model          string          `json:"model"`
+	Input          string          `json:"input"`
+	Voice          string          `json:"voice"`
+	Speed          float64         `json:"speed,omitempty"`
+	ResponseFormat string          `json:"response_format"`
+	Pauses         *speechPauses   `json:"pauses,omitempty"`
+}
+
+// speechPauses carries per-request pause overrides to the TTS sidecar.
+// Values come from config.yaml and are sent on every request so the
+// sidecar picks up config changes without a restart.
+type speechPauses struct {
+	ParagraphMS int `json:"paragraph_ms,omitempty"`
+	LineMS      int `json:"line_ms,omitempty"`
+	SentenceMS  int `json:"sentence_ms,omitempty"`
+	CommaMS     int `json:"comma_ms,omitempty"`
+	SemiMS      int `json:"semi_ms,omitempty"`
 }
 
 // Synthesize converts text to audio bytes using the Piper TTS sidecar.
@@ -175,6 +190,15 @@ func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 		Voice:          c.voiceID,
 		Speed:          c.speed,
 		ResponseFormat: "wav",
+	}
+	if c.pauses != nil {
+		reqBody.Pauses = &speechPauses{
+			ParagraphMS: c.pauses.Paragraph,
+			LineMS:      c.pauses.Line,
+			SentenceMS:  c.pauses.Sentence,
+			CommaMS:     c.pauses.Comma,
+			SemiMS:      c.pauses.Semi,
+		}
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
