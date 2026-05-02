@@ -69,7 +69,7 @@ Check that the diff does not violate function boundaries:
 - **LLM calls** — consumers use `llm.Client` methods (`ChatCompletion`, `ChatCompletionWithTools`, `ChatCompletionStreaming`), never build HTTP requests to OpenRouter/OpenAI directly. FAIL if any package outside `llm/` constructs API requests.
 - **Embeddings** — consumers use `embed.Client.Embed()`, `embed.CosineSimilarity()`, `embed.FindBestMatch()`. FAIL if vector math or embedding API calls are implemented outside `embed/`.
 - **PII scrubbing** — consumers use `scrub.Scrub()` and `scrub.Deanonymize()`. FAIL if regex-based PII detection is implemented outside `scrub/`.
-- **Config** — consumers read `cfg.Models.*`, `cfg.Memory.*`, etc. FAIL if any package parses YAML, reads env vars, or opens config files directly.
+- **App config** — consumers read `cfg.Models.*`, `cfg.Memory.*`, etc. FAIL if any package parses app config YAML, reads env vars, or opens `config.yaml` directly. Note: domain-specific manifests (`tool.yaml`, `classifiers.yaml`, `vocab.yaml`, `help.yaml`) are parsed by their owning package — this is correct, not a violation.
 - **Tool definitions** — tool schema lives in `tools/<name>/tool.yaml`, dispatch via `tools.Dispatch()`. FAIL if tool schemas are hardcoded in Go source.
 - **Search** — consumers use `search.TavilyClient`. FAIL if Tavily API calls exist outside `search/`.
 - **Vision** — consumers use `vision.Describe()`. FAIL if multi-modal message construction happens outside `vision/`.

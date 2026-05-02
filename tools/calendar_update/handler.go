@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"her/calendar"
+	"her/logger"
 	"her/tools"
-
-	"github.com/charmbracelet/log"
 )
+
+var log = logger.WithPrefix("calendar_update")
 
 func init() {
 	tools.Register("calendar_update", Handle)
@@ -132,10 +133,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			},
 		}
 
-		logger := log.Default()
 		bridge := ctx.CalendarBridge
 		if bridge == nil {
-			bridge = calendar.NewCLIBridge(ctx.Cfg, logger)
+			bridge = calendar.NewCLIBridge(ctx.Cfg)
 		}
 
 		callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"her/calendar"
+	"her/logger"
 	"her/tools"
-
-	"github.com/charmbracelet/log"
 )
+
+var log = logger.WithPrefix("list_calendars")
 
 func init() {
 	tools.Register("list_calendars", Handle)
@@ -27,10 +28,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Get bridge (injected in sim mode, CLIBridge in production)
-	logger := log.Default()
 	bridge := ctx.CalendarBridge
 	if bridge == nil {
-		bridge = calendar.NewCLIBridge(ctx.Cfg, logger)
+		bridge = calendar.NewCLIBridge(ctx.Cfg)
 	}
 
 	// Call with timeout

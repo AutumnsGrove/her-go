@@ -176,9 +176,10 @@ func TestPIIVault_RoundTrip(t *testing.T) {
 		t.Fatalf("SavePIIVaultEntry: %v", err)
 	}
 
-	// Verify by direct query (no getter method exists, so we query raw)
+	// Verify by direct query (no getter method exists, so we query raw).
+	// Uses the DB() escape hatch rather than accessing the private db field.
 	var token, original, entityType string
-	err = store.db.QueryRow(
+	err = store.DB().QueryRow(
 		`SELECT token, original_value, entity_type FROM pii_vault WHERE message_id = ?`, msgID,
 	).Scan(&token, &original, &entityType)
 	if err != nil {
@@ -227,7 +228,7 @@ func TestSaveMetric_WithMessageID(t *testing.T) {
 
 	// Verify metric is linked to the message
 	var linkedMsgID int64
-	store.db.QueryRow(`SELECT message_id FROM metrics WHERE model = 'model-x'`).Scan(&linkedMsgID)
+	store.DB().QueryRow(`SELECT message_id FROM metrics WHERE model = 'model-x'`).Scan(&linkedMsgID)
 	if linkedMsgID != msgID {
 		t.Errorf("message_id = %d, want %d", linkedMsgID, msgID)
 	}
@@ -403,10 +404,10 @@ func TestSaveSearch(t *testing.T) {
 		t.Fatalf("SaveSearch: %v", err)
 	}
 
-	// Verify via raw query
+	// Verify via raw query using the DB() escape hatch
 	var query, searchType string
 	var resultCount int
-	store.db.QueryRow(`SELECT search_type, query, result_count FROM searches LIMIT 1`).
+	store.DB().QueryRow(`SELECT search_type, query, result_count FROM searches LIMIT 1`).
 		Scan(&searchType, &query, &resultCount)
 	if searchType != "web" {
 		t.Errorf("search_type = %q, want %q", searchType, "web")
@@ -428,7 +429,7 @@ func TestSaveClassifierLog(t *testing.T) {
 	}
 
 	var verdict, content string
-	store.db.QueryRow(`SELECT verdict, content FROM classifier_log LIMIT 1`).Scan(&verdict, &content)
+	store.DB().QueryRow(`SELECT verdict, content FROM classifier_log LIMIT 1`).Scan(&verdict, &content)
 	if verdict != "LOW_VALUE" {
 		t.Errorf("verdict = %q, want %q", verdict, "LOW_VALUE")
 	}

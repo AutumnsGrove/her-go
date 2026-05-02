@@ -65,7 +65,7 @@ This is the behavioral sibling of C0. Where C0 governs *values*, C0b governs *be
 - No HTTP requests to OpenRouter/OpenAI outside `llm/` — all LLM calls go through `llm.Client`
 - No embedding API calls or vector math outside `embed/` — use `embed.Client.Embed()`, `embed.CosineSimilarity()`
 - No PII regex matching outside `scrub/` — use `scrub.Scrub()` and `scrub.Deanonymize()`
-- No YAML parsing or env var reading outside `config/` — use `cfg.*` fields
+- No *app config* YAML parsing or env var reading outside `config/` — use `cfg.*` fields. Domain-specific manifests (`tool.yaml`, `classifiers.yaml`, `vocab.yaml`) are parsed by their owning package — this is correct, not a violation
 - No Tavily API calls outside `search/`, no multi-modal message construction outside `vision/`, no Piper/Parakeet HTTP outside `voice/`, no Open-Meteo calls outside `weather/`
 - Tool schemas live in `tools/<name>/tool.yaml`, dispatch via `tools.Dispatch()` — no hardcoded tool definitions in Go source
 
