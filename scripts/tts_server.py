@@ -48,6 +48,10 @@ _voice_name = None
 PARAGRAPH_PAUSE_MS = 500
 # Duration of silence inserted at single newlines.
 LINE_PAUSE_MS = 250
+# Duration of silence after sentence-ending punctuation (. ! ?).
+SENTENCE_PAUSE_MS = 300
+# Duration of silence after clause-level punctuation (, ; :).
+CLAUSE_PAUSE_MS = 150
 
 
 class SpeechRequest(BaseModel):
@@ -82,15 +86,72 @@ def clean_for_tts(text: str) -> str:
     return text
 
 
+def split_punctuation(text: str) -> list[dict]:
+    """Split a single line into clause/sentence fragments with pause hints.
+
+    Splits at sentence-ending punctuation (. ! ?) and clause-level
+    punctuation (, ; :) so that explicit silence can be inserted between
+    them — Piper's low-quality models don't reliably pause at these marks.
+
+    Closing quotes/parens that follow punctuation stay attached to the
+    fragment (e.g. 'she said "hello!"' keeps the quote with "hello!").
+    """
+    # Regex: capture a chunk of text up to and including a punctuation mark,
+    # plus any trailing quotes/parens/whitespace that belong with it.
+    # Group 1 = the text fragment including its punctuation.
+    # Group 2 = the punctuation character itself (for choosing pause length).
+    pattern = re.compile(
+        r'(.*?'           # non-greedy leading text
+        r'([.!?;:,])'    # the punctuation mark we split on
+        r'[\"\'\)\]”’]*'  # optional closing quotes/parens
+        r')\s*'           # eat trailing whitespace
+    )
+
+    fragments = []
+    pos = 0
+    for m in pattern.finditer(text):
+        # Skip if this match starts before our cursor (overlapping).
+        if m.start() < pos:
+            continue
+        fragment = m.group(1).strip()
+        if not fragment:
+            pos = m.end()
+            continue
+
+        punct = m.group(2)
+        if punct in ".!?":
+            pause = SENTENCE_PAUSE_MS
+        else:
+            pause = CLAUSE_PAUSE_MS
+
+        fragments.append({"text": fragment, "pause_after_ms": pause})
+        pos = m.end()
+
+    # Leftover text after the last punctuation mark (e.g. trailing clause
+    # with no period). Append it with no pause — the line-level pause
+    # from preprocess_text will handle the gap.
+    remainder = text[pos:].strip()
+    if remainder:
+        fragments.append({"text": remainder, "pause_after_ms": 0})
+
+    # If the text had no punctuation at all, return it as one chunk.
+    if not fragments:
+        fragments.append({"text": text.strip(), "pause_after_ms": 0})
+
+    return fragments
+
+
 def preprocess_text(text: str) -> list[dict]:
-    """Split text on newlines into chunks with pause hints.
+    """Split text into chunks with pause hints at every natural boundary.
+
+    Hierarchy (outer to inner):
+      1. Paragraph breaks (\\n\\n) → PARAGRAPH_PAUSE_MS
+      2. Line breaks (\\n) → LINE_PAUSE_MS
+      3. Sentence-ending punctuation (. ! ?) → SENTENCE_PAUSE_MS
+      4. Clause-level punctuation (, ; :) → CLAUSE_PAUSE_MS
 
     Returns a list of dicts:
-      {"text": "...", "pause_after_ms": 500}
-
-    Double newlines (paragraph breaks) get a longer pause.
-    Single newlines get a shorter pause.
-    The last chunk has no pause after it.
+      {"text": "...", "pause_after_ms": <ms>}
     """
     text = text.strip()
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -107,14 +168,25 @@ def preprocess_text(text: str) -> list[dict]:
             is_last_line_in_para = j == len(lines) - 1
             is_last_para = i == len(paragraphs) - 1
 
+            # Determine the pause that follows this entire line.
             if is_last_para and is_last_line_in_para:
-                pause = 0
+                line_pause = 0
             elif is_last_line_in_para:
-                pause = PARAGRAPH_PAUSE_MS
+                line_pause = PARAGRAPH_PAUSE_MS
             else:
-                pause = LINE_PAUSE_MS
+                line_pause = LINE_PAUSE_MS
 
-            chunks.append({"text": line, "pause_after_ms": pause})
+            # Split the line at punctuation for intra-line pauses.
+            sub_chunks = split_punctuation(line)
+
+            # The last sub-chunk inherits the line-level pause (which is
+            # always >= the punctuation pause), so structural pauses win.
+            if sub_chunks:
+                sub_chunks[-1]["pause_after_ms"] = max(
+                    sub_chunks[-1]["pause_after_ms"], line_pause
+                )
+
+            chunks.extend(sub_chunks)
 
     return chunks
 
