@@ -344,10 +344,20 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	log.Infof("setting up %s on %s as %s", cfg.Identity.Her, hostname, currentUser.Username)
 	log.Infof("working directory: %s", workDir)
 
-	// Generate worker/wrangler.toml from config.yaml so Cloudflare IDs
-	// stay out of version control. Non-fatal — only needed if using
-	// the CF Worker for webhook routing.
-	if cfg.Cloudflare.KVNamespaceID != "" {
+	// Webhook mode: deploy the CF Worker and register with Telegram.
+	// This replaces the old manual "cd worker && npx wrangler deploy"
+	// followed by curling setWebhook. Now it's fully automatic.
+	if cfg.Telegram.Mode == "webhook" {
+		log.Info("webhook mode selected — deploying CF Worker and registering with Telegram")
+		ensureWebhookSecret(cfg)
+		if err := deployWebhook(cfg, cfgFile); err != nil {
+			log.Error("webhook setup failed", "err", err)
+			log.Warn("the bot will start in webhook mode but Telegram may not deliver updates")
+			log.Warn("fix the issue above and re-run `her setup`, or switch to poll mode")
+		}
+	} else if cfg.Cloudflare.KVNamespaceID != "" {
+		// Poll mode but CF is configured — just generate wrangler.toml
+		// in case the user wants to deploy manually later.
 		if err := generateWranglerConfig(cfg); err != nil {
 			log.Warn("could not generate wrangler.toml", "err", err)
 		}
