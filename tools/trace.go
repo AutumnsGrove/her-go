@@ -70,13 +70,26 @@ var traceRegistry = map[string]*compiledTrace{}
 // (maxLen int, s string) and default takes (fallback, value) — the piped
 // value fills the last parameter in both cases.
 var traceFuncs = template.FuncMap{
-	"escape": func(s string) string {
+	// escape and truncate accept interface{} instead of string because
+	// JSON unmarshal into map[string]interface{} can produce nil (for
+	// null fields) or non-string types. Accepting interface{} and
+	// coercing via fmt.Sprint prevents template panics like:
+	//   "invalid value; expected string"
+	"escape": func(v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		s := fmt.Sprint(v)
 		s = strings.ReplaceAll(s, "&", "&amp;")
 		s = strings.ReplaceAll(s, "<", "&lt;")
 		s = strings.ReplaceAll(s, ">", "&gt;")
 		return s
 	},
-	"truncate": func(n int, s string) string {
+	"truncate": func(n int, v interface{}) string {
+		if v == nil {
+			return ""
+		}
+		s := fmt.Sprint(v)
 		s = strings.ReplaceAll(s, "\n", " ")
 		if len(s) <= n {
 			return s

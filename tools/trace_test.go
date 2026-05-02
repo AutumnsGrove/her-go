@@ -49,6 +49,13 @@ func TestFormatTrace(t *testing.T) {
 			wantSub:  "🚫",
 		},
 		{
+			name:     "think handles null thought without panic",
+			tool:     "think",
+			argsJSON: `{"thought":null}`,
+			result:   "tool call complete",
+			wantSub:  "🧠",
+		},
+		{
 			name:     "unknown tool uses default format",
 			tool:     "unknown_tool",
 			argsJSON: `{}`,
