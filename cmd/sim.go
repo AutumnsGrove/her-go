@@ -183,6 +183,7 @@ type suite struct {
 	Tags               []string            `yaml:"tags"`
 	Messages           []simMessage        `yaml:"messages"`
 	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
+	SeedSelfMemories   []string            `yaml:"seed_self_memories"`   // self-knowledge memories (subject="self")
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
@@ -848,6 +849,33 @@ func runSim(cmd *cobra.Command, args []string) error {
 			log.Infof("    seeded #%d: %s", id, content[:min(len(content), 60)])
 		}
 		log.Info("  seeding complete")
+	}
+
+	// --- Seed self memories (if configured) ---
+	// Same pipeline as user memories but with subject="self". These are
+	// the bot's own observations about her behavior, identity, and patterns.
+	if len(s.SeedSelfMemories) > 0 {
+		log.Infof("  seeding %d self memories...", len(s.SeedSelfMemories))
+		for _, content := range s.SeedSelfMemories {
+			var vec []float32
+			if embedClient != nil {
+				var err error
+				vec, err = embedClient.Embed(content)
+				if err != nil {
+					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
+				}
+			}
+			id, err := store.SaveMemory(content, "", "self", 0, 5, vec, vec, "", "")
+			if err != nil {
+				log.Error("seed self memory failed", "err", err)
+				continue
+			}
+			if embedClient != nil && len(vec) > 0 {
+				_ = store.AutoLinkMemory(id, vec)
+			}
+			log.Infof("    seeded self #%d: %s", id, content[:min(len(content), 60)])
+		}
+		log.Info("  self memory seeding complete")
 	}
 
 	// --- Seed calendar events (if configured) ---

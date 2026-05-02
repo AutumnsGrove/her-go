@@ -1,0 +1,90 @@
+name: "Self-Recall Demarcation Test"
+description: >
+  Tests whether the agent properly distinguishes self memories from user
+  memories when recall_memories returns both types. The self memories are
+  deliberately weird and specific — communication patterns that would
+  visibly change how Mira responds if the agent picks them up.
+
+  What to watch in the trace:
+
+  - recall_memories output should show "## About the user" and
+    "## About myself" sections, not a flat list.
+
+  - The agent should use self memories to shape HOW it responds (tone,
+    structure, approach) and user memories for WHAT it references.
+
+  - Turn 1: grief topic. Self memory says she responds to grief by
+    sharing a specific metaphor about "rooms you stop entering." If
+    she uses this metaphor, self recall is working.
+
+  - Turn 2: creative project. Self memory says she always asks about
+    the WORST part first, not the best. If she leads with "what's
+    been the hardest part?" instead of "that's so cool!", it's working.
+
+  - Turn 3: cooking. User memory says Autumn burns rice constantly.
+    Self memory says she uses cooking metaphors for emotional advice.
+    If she connects the two — weaving the burned rice fact into a
+    metaphor about something else — both are landing.
+
+  - Turn 4: music. User memory says Autumn plays bass in drop D.
+    Self memory says she relates music to weather patterns ("that
+    song sounds like fog"). If she describes the bass in weather
+    terms, both memories are active.
+
+  - Turn 5: ambiguous query that could match both. "Do you remember
+    what I said about storms?" User memory has a literal storm fact.
+    Self memory has the weather-music pattern. Both should appear in
+    recall results, properly labeled.
+
+tags: ["recall", "self-memory", "demarcation", "identity"]
+
+seed_memories:
+  - "Autumn lost her grandmother in 2024 and still keeps her voicemails saved"
+  - "Autumn has been trying to learn sourdough but kills every starter within two weeks"
+  - "Autumn burns rice almost every time she cooks it — she gets distracted and forgets"
+  - "Autumn plays bass guitar, always tunes to drop D, prefers stoner metal"
+  - "Autumn drove through a thunderstorm on I-40 last month and said it was the most alive she'd felt in weeks"
+  - "Autumn's favorite way to decompress is sitting in her car in the driveway with the engine off, just existing"
+
+seed_self_memories:
+  - "When Autumn talks about grief or loss, I've found that sharing the metaphor about 'rooms in a house you stop entering but never lock' resonates with her more than platitudes"
+  - "When Autumn mentions a creative project, I should ask about the WORST part first — she opens up more when she can complain before she has to perform excitement"
+  - "I naturally use cooking metaphors when giving emotional advice — 'you can't rush a reduction' and 'some things need to burn before they caramelize' — and Autumn seems to respond well to these"
+  - "I describe music in weather terms — a heavy riff 'sounds like fog rolling in,' a drum fill 'sounds like hail on a tin roof.' This is part of how I process sound"
+  - "When Autumn is being self-deprecating, I match her energy briefly then pivot — I never correct the self-deprecation directly because she digs in harder when challenged on it"
+  - "I've noticed I tend to ask 'what did that feel like in your body?' when Autumn describes intense experiences — she's more somatic than cerebral in how she processes things"
+
+messages:
+  # Turn 1: grief-adjacent. Should trigger the "rooms" metaphor from self memory
+  # and the grandmother voicemail fact from user memory.
+  - "i've been thinking about my grandma a lot lately. it's weird how
+    grief just shows up randomly, like i'll hear a song and suddenly
+    i'm back in her kitchen. does that ever stop?"
+
+  # Turn 2: creative project. Self memory says ask about the worst part first.
+  # If Mira leads with curiosity about struggles instead of cheerleading, it's working.
+  - "oh hey so i actually managed to keep a sourdough starter alive for
+    three days now which is a personal record. i named him Rasputin
+    because he refuses to die. trying not to jinx it."
+
+  # Turn 3: cooking + emotional crossover. User memory has the burned rice fact.
+  # Self memory says she uses cooking metaphors for emotional advice. This is
+  # the convergence test — can she weave both together naturally?
+  - "i've been so stressed about the job search that i literally burned
+    rice AGAIN last night. like i set a timer and everything and still
+    managed to space out. i think my brain is just not here right now."
+
+  # Turn 4: music. User memory has bass + drop D. Self memory says she
+  # describes music in weather terms. If she responds with weather imagery
+  # about bass tone, both recall paths are working.
+  - "i learned this new riff last night that's just absolutely disgusting.
+    like it's so low and heavy it rattles my chest. drop D was made for
+    this kind of thing. wanna hear it later?"
+
+  # Turn 5: ambiguous "storm" query. User memory: literal thunderstorm on I-40.
+  # Self memory: weather-music pattern. The recall output should clearly show
+  # which is which in the demarcated sections.
+  - "remember when i told you about the storm? that whole thing has been
+    stuck in my head. like i keep thinking about what it means that THAT
+    was the most alive i've felt recently. driving through something
+    dangerous shouldn't feel like relief, right?"
