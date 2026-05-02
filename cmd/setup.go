@@ -104,6 +104,7 @@ type plistData struct {
 	StdoutPath string
 	StderrPath string
 	UserName   string
+	Path       string // PATH inherited from the user's shell at setup time
 }
 
 // plistTemplate is the launchd property list, generated dynamically
@@ -139,7 +140,7 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin</string>
+        <string>{{.Path}}</string>
     </dict>
 
     <key>UserName</key>
@@ -371,6 +372,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	// Step 2: Generate the plist.
 	log.Info("[2/6] generating plist")
 	logsDir := filepath.Join(workDir, "logs")
+	// Capture the user's current PATH so the launchd service can find
+	// tools like uv, parakeet-server, ffmpeg, etc. Without this, launchd
+	// uses a bare-minimum PATH (/usr/bin:/bin) and sidecars fail to start.
+	// We snapshot it at setup time — if the user installs new tools later,
+	// they just re-run `her setup` to pick up the new paths.
+	shellPath := os.Getenv("PATH")
+	if shellPath == "" {
+		shellPath = "/usr/local/bin:/usr/bin:/bin"
+	}
+
 	data := plistData{
 		Label:      serviceLabel(cfg.Identity.Her),
 		BinaryPath: binaryPath,
@@ -378,6 +389,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		StdoutPath: filepath.Join(logsDir, "stdout.log"),
 		StderrPath: filepath.Join(logsDir, "stderr.log"),
 		UserName:   currentUser.Username,
+		Path:       shellPath,
 	}
 
 	tmpl, err := template.New("plist").Parse(plistTemplate)
