@@ -1,12 +1,13 @@
 package cmd
 
 import (
-	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"her/config"
 )
@@ -157,7 +158,9 @@ func webhookPreflight(cfg *config.Config) error {
 // ─── Dependency checks ───────────────────────────────────────────────────────
 
 func checkWranglerInstalled() error {
-	cmd := exec.Command("npx", "wrangler", "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "--version")
 	cmd.Dir = "worker"
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -167,7 +170,9 @@ func checkWranglerInstalled() error {
 }
 
 func checkWranglerAuth() error {
-	cmd := exec.Command("npx", "wrangler", "whoami")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "whoami")
 	cmd.Dir = "worker"
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -203,7 +208,9 @@ func checkCloudflaredAuth() error {
 var kvNamespaceIDPattern = regexp.MustCompile(`"id"\s*[:=]\s*"([a-f0-9]{32})"`)
 
 func createKVNamespace() (string, error) {
-	cmd := exec.Command("npx", "wrangler", "kv", "namespace", "create", "HER_KV")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "kv", "namespace", "create", "HER_KV")
 	cmd.Dir = "worker"
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -224,7 +231,9 @@ func createKVNamespace() (string, error) {
 var accountIDPattern = regexp.MustCompile(`([a-f0-9]{32})`)
 
 func getAccountID() (string, error) {
-	cmd := exec.Command("npx", "wrangler", "whoami")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "whoami")
 	cmd.Dir = "worker"
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -276,14 +285,4 @@ func printAction(name, explanation, command, afterNote string) {
 	fmt.Println()
 	fmt.Println("    Then re-run: her setup")
 	fmt.Println()
-}
-
-// promptContinue asks the user if they want to continue or abort.
-// Used after showing information that might make them want to stop.
-func promptContinue(message string) bool {
-	fmt.Printf("  %s [Y/n] ", message)
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	return answer == "" || answer == "y" || answer == "yes"
 }

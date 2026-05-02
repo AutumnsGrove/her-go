@@ -64,6 +64,11 @@ func (b *Bot) getWebhookInfo() (*telegramWebhookInfo, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("telegram API HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	body, _ := io.ReadAll(resp.Body)
 
 	var response struct {
@@ -76,6 +81,10 @@ func (b *Bot) getWebhookInfo() (*telegramWebhookInfo, error) {
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	if !response.OK {
+		return nil, fmt.Errorf("Telegram API returned ok=false")
 	}
 
 	return &telegramWebhookInfo{
@@ -100,6 +109,11 @@ func (b *Bot) setWebhook(webhookURL, secret string) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API HTTP %d: %s", resp.StatusCode, string(body))
+	}
 
 	body, _ := io.ReadAll(resp.Body)
 
