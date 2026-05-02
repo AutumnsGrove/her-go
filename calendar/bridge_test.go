@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"her/config"
-	"github.com/charmbracelet/log"
 )
 
 // TestBridgeMissingBinary verifies that calling the bridge with a missing
@@ -19,10 +18,7 @@ func TestBridgeMissingBinary(t *testing.T) {
 		},
 	}
 
-	logger := log.New(nil)
-	logger.SetLevel(log.FatalLevel) // Silence logs during test
-
-	bridge := NewCLIBridge(cfg, logger)
+	bridge := NewCLIBridge(cfg)
 
 	req := Request{
 		Command:  "list",
