@@ -344,12 +344,29 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	log.Infof("setting up %s on %s as %s", cfg.Identity.Her, hostname, currentUser.Username)
 	log.Infof("working directory: %s", workDir)
 
-	// Webhook mode: deploy the CF Worker and register with Telegram.
-	// This replaces the old manual "cd worker && npx wrangler deploy"
-	// followed by curling setWebhook. Now it's fully automatic.
+	// Webhook mode: walk through prerequisites, deploy the CF Worker,
+	// and register with Telegram. The preflight check ensures all deps
+	// are installed and configured before we attempt the deploy.
 	if cfg.Telegram.Mode == "webhook" {
-		log.Info("webhook mode selected — deploying CF Worker and registering with Telegram")
+		log.Info("webhook mode selected — checking prerequisites")
 		ensureWebhookSecret(cfg)
+
+		if err := webhookPreflight(cfg); err != nil {
+			log.Error("webhook prerequisites not met", "err", err)
+			log.Warn("fix the issue above and re-run `her setup`")
+			log.Warn("the bot will fall back to poll mode until webhook is configured")
+			cfg.Telegram.Mode = "poll"
+			_ = saveConfig(cfg, cfgFile)
+			return nil
+		}
+
+		// Prerequisites met — save any config changes from preflight
+		// (e.g., auto-detected account ID, created KV namespace).
+		if err := saveConfig(cfg, cfgFile); err != nil {
+			return fmt.Errorf("saving config after preflight: %w", err)
+		}
+
+		log.Info("prerequisites satisfied — deploying CF Worker")
 		if err := deployWebhook(cfg, cfgFile); err != nil {
 			log.Error("webhook setup failed", "err", err)
 			log.Warn("the bot will start in webhook mode but Telegram may not deliver updates")
