@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"her/config"
-	"github.com/charmbracelet/log"
+	"her/logger"
 )
+
+var log = logger.WithPrefix("calendar")
 
 // Bridge is the interface for calendar operations. The production implementation
 // (CLIBridge) shells out to the Swift EventKit binary. The test/sim implementation
@@ -31,20 +33,19 @@ type Bridge interface {
 type CLIBridge struct {
 	binaryPath string
 	cfg        *config.Config
-	logger     *log.Logger
 }
 
 // NewCLIBridge creates a CLIBridge instance. Checks if the binary exists and is
 // executable, but doesn't fail if it's missing (fail-soft pattern — tools
 // will return clear errors later).
-func NewCLIBridge(cfg *config.Config, logger *log.Logger) *CLIBridge {
+func NewCLIBridge(cfg *config.Config) *CLIBridge {
 	// Resolve relative paths from project root
 	binaryPath := cfg.Calendar.BridgePath
 	if !filepath.IsAbs(binaryPath) {
 		// Assume relative to the working directory (project root)
 		absPath, err := filepath.Abs(binaryPath)
 		if err != nil {
-			logger.Warn("Failed to resolve bridge path", "path", binaryPath, "error", err)
+			log.Warn("Failed to resolve bridge path", "path", binaryPath, "error", err)
 		} else {
 			binaryPath = absPath
 		}
@@ -52,7 +53,7 @@ func NewCLIBridge(cfg *config.Config, logger *log.Logger) *CLIBridge {
 
 	// Check if binary exists
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
-		logger.Warn("Calendar bridge not found — calendar tools will return errors if called",
+		log.Warn("Calendar bridge not found — calendar tools will return errors if called",
 			"path", binaryPath,
 			"hint", "Build it with: cd calendar/bridge && swift build -c release")
 	}
@@ -60,7 +61,6 @@ func NewCLIBridge(cfg *config.Config, logger *log.Logger) *CLIBridge {
 	return &CLIBridge{
 		binaryPath: binaryPath,
 		cfg:        cfg,
-		logger:     logger,
 	}
 }
 
@@ -101,7 +101,7 @@ func (b *CLIBridge) Call(ctx context.Context, req Request) (Response, error) {
 		// Sleep before retry (not on first attempt)
 		if attempt > 1 {
 			backoff := backoffDurations[attempt-1]
-			b.logger.Debug("Retrying bridge call", "attempt", attempt, "backoff", backoff)
+			log.Debug("Retrying bridge call", "attempt", attempt, "backoff", backoff)
 			time.Sleep(backoff)
 		}
 
@@ -173,7 +173,7 @@ func (b *CLIBridge) callOnce(ctx context.Context, req Request) (Response, int, e
 
 	// Log stderr if present (even on success, for debugging)
 	if stderr.Len() > 0 {
-		b.logger.Debug("Bridge stderr output", "stderr", stderr.String())
+		log.Debug("Bridge stderr output", "stderr", stderr.String())
 	}
 
 	return resp, exitCode, nil

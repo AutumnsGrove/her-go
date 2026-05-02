@@ -93,12 +93,14 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 | LLM calls | `llm` | `client.ChatCompletion(...)` | Build HTTP requests to OpenRouter |
 | Embeddings | `embed` | `embed.Client.Embed(text)` | Call embedding APIs directly |
 | PII scrubbing | `scrub` | `scrub.Scrub(text)` | Run regex matching inline |
-| Config | `config` | `cfg.Models.Agent` | Parse YAML or read env vars |
+| App config | `config` | `cfg.Models.Agent` | Parse YAML or read env vars for app settings |
 | Tool definitions | `tools/<name>/tool.yaml` + handler | Registry dispatch via `tools.Dispatch()` | Hardcode tool schemas in Go |
 | Search | `search` | `search.TavilyClient.Search(...)` | Call Tavily API directly |
 | Vision | `vision` | `vision.Describe(client, ...)` | Construct multi-modal messages |
 | Voice | `voice` | `voice.TTSClient` / `voice.Client` | Call Piper/Parakeet HTTP directly |
 | Weather | `weather` | `weather.Fetch(lat, lon, ...)` | Call Open-Meteo API directly |
+
+**Config vs. domain manifests:** The `config` package owns *app configuration* (`config.yaml` — API keys, model names, thresholds, feature flags). Domain-specific manifests (`tool.yaml`, `classifiers.yaml`, `vocab.yaml`, `help.yaml`) are parsed by their owning package — `tools/` parses tool manifests, `classifier/` parses classifier definitions, etc. This is correct: the owning package knows the schema and is the single consumer. The rule is: only `config/` parses *app config*; domain manifests are parsed by their owning package.
 
 **Gold standard — the `Store` interface:** Consumers depend on the interface, not `SQLiteStore`. This is what made the D1 sync decorator (`SyncedStore`) possible with zero changes to callers. When designing a new capability boundary, ask: *"Could I wrap this in a decorator without touching callers?"* If yes, the boundary is clean.
 
