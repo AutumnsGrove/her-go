@@ -303,6 +303,12 @@ func (b *Bot) Start() {
 		if err := b.tb.RemoveWebhook(true); err != nil {
 			log.Warn("failed to clear pending updates", "err", err)
 		}
+	} else {
+		// Verify the webhook is registered with Telegram. Self-heals
+		// from manual deletions or failed deploys on previous runs.
+		if err := b.verifyWebhookRegistration(); err != nil {
+			log.Warn("webhook verification failed — updates may not arrive", "err", err)
+		}
 	}
 
 	// Start the agent event consumer before the Telegram poller.
