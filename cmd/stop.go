@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os/exec"
 
 	"github.com/spf13/cobra"
 )
@@ -22,15 +21,12 @@ func runStop(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	dest, err := plistPath(botName)
-	if err != nil {
+	// Use the modern launchctl bootout command. The old "launchctl unload"
+	// is deprecated and can silently misbehave on modern macOS.
+	label := serviceLabel(botName)
+	if err := launchdBootout(label); err != nil {
+		fmt.Printf("Failed to stop service: %v\n", err)
 		return err
-	}
-
-	out, err := exec.Command("launchctl", "unload", dest).CombinedOutput()
-	if err != nil {
-		fmt.Printf("Failed to stop service: %s\n", string(out))
-		return fmt.Errorf("launchctl unload failed: %w", err)
 	}
 
 	fmt.Println("Service stopped.")

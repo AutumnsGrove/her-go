@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/spf13/cobra"
 )
@@ -40,10 +39,11 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	out, err := exec.Command("launchctl", "load", dest).CombinedOutput()
-	if err != nil {
-		// launchctl returns an error if the service is already loaded.
-		fmt.Printf("Service may already be running: %s\n", string(out))
+	// Use the modern launchctl bootstrap command. launchdBootstrap handles
+	// the "already loaded" case automatically (bootout + retry).
+	label := serviceLabel(botName)
+	if err := launchdBootstrap(dest, label); err != nil {
+		fmt.Printf("Failed to start service: %v\n", err)
 		return nil
 	}
 

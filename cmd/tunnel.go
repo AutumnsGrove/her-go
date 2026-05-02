@@ -257,13 +257,11 @@ func runTunnelSetup(cmd *cobra.Command, args []string) error {
 	plistFile.Close()
 	log.Info("wrote tunnel plist", "path", dest)
 
-	// Step 3: Load the service.
+	// Step 3: Load the service using the modern launchctl bootstrap command.
 	log.Info("[3/3] loading tunnel service")
-	loadCmd := exec.Command("launchctl", "load", dest)
-	loadCmd.Stdout = os.Stdout
-	loadCmd.Stderr = os.Stderr
-	if err := loadCmd.Run(); err != nil {
-		log.Warn("launchctl load failed — the service may already be loaded. Try: launchctl unload "+dest, "err", err)
+	tunnelLabel := tunnelServiceLabel(cfg.Identity.Her)
+	if err := launchdBootstrap(dest, tunnelLabel); err != nil {
+		log.Warn("failed to load tunnel service", "err", err)
 	} else {
 		log.Info("tunnel service loaded")
 	}

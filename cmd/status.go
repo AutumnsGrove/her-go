@@ -30,9 +30,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	label := serviceLabel(botName)
 
-	// Get the current user's UID for the launchctl print command.
-	uid := os.Getuid()
-	target := fmt.Sprintf("gui/%d/%s", uid, label)
+	// Use the serviceTarget helper to build the launchctl print target.
+	target := serviceTarget(label)
 
 	out, err := exec.Command("launchctl", "print", target).CombinedOutput()
 	if err != nil {

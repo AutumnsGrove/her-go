@@ -21,6 +21,61 @@ func serviceLabel(botName string) string {
 	return "com." + strings.ToLower(botName) + ".her-go"
 }
 
+// domainTarget returns the launchd domain for the current user, e.g.
+// "gui/501". Used with the modern launchctl subcommands (bootstrap,
+// bootout, kickstart, print) which replaced the deprecated load/unload.
+func domainTarget() string {
+	return fmt.Sprintf("gui/%d", os.Getuid())
+}
+
+// serviceTarget returns the fully-qualified launchd service target for
+// the current user, e.g. "gui/501/com.mira.her-go". Used with bootout,
+// kickstart, and print.
+func serviceTarget(label string) string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
+}
+
+// launchdBootstrap loads a service plist into the user's launchd domain
+// using the modern bootstrap command. If the service is already loaded,
+// it bootouts first and retries — handling the common "re-setup" case
+// where the user runs setup again on a running service.
+func launchdBootstrap(plistPath, label string) error {
+	domain := domainTarget()
+	out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	outStr := strings.TrimSpace(string(out))
+
+	// When a service is already loaded, bootstrap fails with either:
+	//   - Exit 5 + "Bootstrap failed: 5: Input/output error" (macOS 13+)
+	//   - Exit 37 + text containing "already loaded" (older macOS)
+	// In both cases, bootout first then retry.
+	if strings.Contains(outStr, "Bootstrap failed: 5:") || strings.Contains(outStr, "37:") ||
+		strings.Contains(outStr, "already loaded") {
+		log.Info("service already loaded, reloading")
+		_ = exec.Command("launchctl", "bootout", serviceTarget(label)).Run()
+		out2, err2 := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
+		if err2 != nil {
+			return fmt.Errorf("launchctl bootstrap (retry): %s", strings.TrimSpace(string(out2)))
+		}
+		return nil
+	}
+
+	return fmt.Errorf("launchctl bootstrap: %s", outStr)
+}
+
+// launchdBootout unloads a service from the user's launchd domain using
+// the modern bootout command.
+func launchdBootout(label string) error {
+	out, err := exec.Command("launchctl", "bootout", serviceTarget(label)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl bootout: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // plistPath returns the full path to the plist in ~/Library/LaunchAgents.
 func plistPath(botName string) (string, error) {
 	home, err := os.UserHomeDir()
@@ -356,13 +411,14 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	// Step 4: (plist already written to ~/Library/LaunchAgents in step 2)
 	log.Info("[4/6] plist installed to ~/Library/LaunchAgents")
 
-	// Step 5: Load the service.
+	// Step 5: Load the service using the modern launchctl bootstrap command.
+	// The old "launchctl load" is deprecated and can silently fail (printing
+	// errors to stderr while returning exit 0). bootstrap has proper error
+	// codes and handles the "already loaded" case via automatic bootout+retry.
 	log.Info("[5/6] loading service")
-	loadCmd := exec.Command("launchctl", "load", dest)
-	loadCmd.Stdout = os.Stdout
-	loadCmd.Stderr = os.Stderr
-	if err := loadCmd.Run(); err != nil {
-		log.Warn("launchctl load failed — you may need to unload first: her stop", "err", err)
+	label := serviceLabel(cfg.Identity.Her)
+	if err := launchdBootstrap(dest, label); err != nil {
+		log.Warn("failed to load service", "err", err)
 	} else {
 		log.Info("service loaded")
 	}
