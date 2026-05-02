@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"her/logger"
+	"her/memory"
 	"her/tools"
 )
 
@@ -60,11 +61,18 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if ftsErr != nil || len(memories) == 0 {
 			return "memory search temporarily unavailable (embed server down)"
 		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Found %d memories (degraded: embed server unavailable — keyword search only):\n\n", len(memories))
+		var userMems, selfMems []memory.Memory
 		for _, m := range memories {
-			fmt.Fprintf(&b, "- [ID=%d, %s] %s\n", m.ID, m.Category, m.Content)
+			if m.Subject == "self" {
+				selfMems = append(selfMems, m)
+			} else {
+				userMems = append(userMems, m)
+			}
 		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Found %d memories (degraded: keyword search only):\n", len(memories))
+		writeKeywordSection(&b, "About the user", userMems)
+		writeKeywordSection(&b, "About myself", selfMems)
 		return b.String()
 	}
 
@@ -77,17 +85,52 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "no matching memories found"
 	}
 
-	// Format results for the agent. Include distance so it can judge relevance.
-	// We convert distance to similarity (1 - distance) for readability —
-	// 95% similarity is easier to reason about than 0.05 distance.
-	var b strings.Builder
-	fmt.Fprintf(&b, "Found %d matching memories:\n\n", len(memories))
+	// Split results by subject so the agent can distinguish user facts from
+	// self-observations. Without this, "I like dry humor" (self) and
+	// "Autumn likes dry humor" (user) look identical in the output.
+	var userMems, selfMems []memory.Memory
 	for _, m := range memories {
-		similarity := 1 - m.Distance
-		fmt.Fprintf(&b, "- [ID=%d, %s, similarity=%.0f%%] %s\n",
-			m.ID, m.Category, similarity*100, m.Content)
+		if m.Subject == "self" {
+			selfMems = append(selfMems, m)
+		} else {
+			userMems = append(userMems, m)
+		}
 	}
 
-	log.Infof("  recall_memories: %d results for %q", len(memories), args.Query)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Found %d matching memories:\n", len(memories))
+	writeSection(&b, "About the user", userMems)
+	writeSection(&b, "About myself", selfMems)
+
+	log.Infof("  recall_memories: %d results for %q (user=%d, self=%d)",
+		len(memories), args.Query, len(userMems), len(selfMems))
 	return b.String()
+}
+
+// writeSection formats a labeled group of memories from semantic search.
+// Skips the section entirely if there are no memories of that type.
+// Includes similarity scores (1 - cosine distance) so the agent can judge
+// relevance — 95% similarity is easier to reason about than 0.05 distance.
+func writeSection(b *strings.Builder, heading string, mems []memory.Memory) {
+	if len(mems) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## %s\n", heading)
+	for _, m := range mems {
+		similarity := 1 - m.Distance
+		fmt.Fprintf(b, "- [ID=%d, %s, similarity=%.0f%%] %s\n",
+			m.ID, m.Category, similarity*100, m.Content)
+	}
+}
+
+// writeKeywordSection formats a labeled group of memories from keyword fallback.
+// No similarity scores available — keyword search doesn't produce distances.
+func writeKeywordSection(b *strings.Builder, heading string, mems []memory.Memory) {
+	if len(mems) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n## %s\n", heading)
+	for _, m := range mems {
+		fmt.Fprintf(b, "- [ID=%d, %s] %s\n", m.ID, m.Category, m.Content)
+	}
 }
