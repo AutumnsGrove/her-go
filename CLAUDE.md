@@ -53,11 +53,13 @@ go run main.go run
 - Runs automatically via `memory.NewStore()`
 - Use `IF NOT EXISTS` for safety
 
-## Primary Design Principle
+## Primary Design Principles
+
+### Data Primacy
 
 > **Code translates data. It never defines it.**
 
-If a value could live in a config file, YAML manifest, or named constant — it must. No hardcoded strings scattered across logic. No parallel data structures that duplicate what a manifest already defines. One source of truth, read everywhere. This is the most important rule in this codebase. When in doubt, ask: "should this be in config?"
+If a value could live in a config file, YAML manifest, or named constant — it must. No hardcoded strings scattered across logic. No parallel data structures that duplicate what a manifest already defines. One source of truth, read everywhere. When in doubt, ask: "should this be in config?"
 
 Concrete rules:
 - Model names only in `config.yaml`, read via `cfg.Models.*` — never a bare model string in `.go`
@@ -66,6 +68,44 @@ Concrete rules:
 - Thresholds, token budgets, similarity cutoffs in config, not as magic literals
 - Telegram command strings defined once as constants, not re-typed in multiple handlers
 - If the same string appears twice, one instance is a bug
+
+### Standardized Function Boundaries
+
+> **Every capability is accessed through a project-owned function or interface.**
+
+This is the behavioral sibling of Data Primacy. Where Data Primacy says *values live in config, not code*, this rule says *behavior lives in owning packages, not consumers*. Together: **code translates data through standardized functions. It never defines data, and it never reimplements behavior.**
+
+**The rule:**
+1. **One package owns each capability** — it exports the functions, methods, or interfaces that define the API surface
+2. **Consumers use the exported API only** — they never construct internals, import underlying dependencies, or reimplement logic that the owning package already provides
+3. **The implementation is swappable** — change the internals, every consumer benefits. If changing how something works requires editing more than the owning package, the boundary has leaked
+
+**The test:**
+> *"If I needed to change how this works, how many files would I touch?"*
+> **1 (the owning package) = compliant. >1 = the capability has leaked.**
+
+**Capability ownership map:**
+
+| Capability | Owner | Consumers call | They do NOT |
+|---|---|---|---|
+| Logging | `logger` | `logger.WithPrefix("pkg")` | Import `charmbracelet/log` |
+| Storage | `memory` | `Store` interface methods | Open `sql.DB` or write raw SQL |
+| LLM calls | `llm` | `client.ChatCompletion(...)` | Build HTTP requests to OpenRouter |
+| Embeddings | `embed` | `embed.Client.Embed(text)` | Call embedding APIs directly |
+| PII scrubbing | `scrub` | `scrub.Scrub(text)` | Run regex matching inline |
+| Config | `config` | `cfg.Models.Agent` | Parse YAML or read env vars |
+| Tool definitions | `tools/<name>/tool.yaml` + handler | Registry dispatch via `tools.Dispatch()` | Hardcode tool schemas in Go |
+| Search | `search` | `search.TavilyClient.Search(...)` | Call Tavily API directly |
+| Vision | `vision` | `vision.Describe(client, ...)` | Construct multi-modal messages |
+| Voice | `voice` | `voice.TTSClient` / `voice.Client` | Call Piper/Parakeet HTTP directly |
+| Weather | `weather` | `weather.Fetch(lat, lon, ...)` | Call Open-Meteo API directly |
+
+**Gold standard — the `Store` interface:** Consumers depend on the interface, not `SQLiteStore`. This is what made the D1 sync decorator (`SyncedStore`) possible with zero changes to callers. When designing a new capability boundary, ask: *"Could I wrap this in a decorator without touching callers?"* If yes, the boundary is clean.
+
+**Acceptable escape hatches:** Some consumers need lower-level access (e.g., `cmd/sim.go` uses `store.DB()` for raw SQL). This is fine when:
+- The escape hatch is explicitly exported by the owning package (not an end-run around it)
+- It's used by infrastructure code (CLI tools, migrations, tests), not business logic
+- It's documented as an escape hatch, not a normal usage pattern
 
 ## Key Design Decisions
 

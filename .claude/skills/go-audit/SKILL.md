@@ -54,6 +54,36 @@ Check that the diff does not violate the single-source-of-truth rule in any of t
 - **PII patterns** — scrub rules and regex patterns must live in one place. If the same pattern appears in two files, one is a copy — find which is canonical.
 - **Status/label strings** — classifier verdicts, memory types, tool categories must be defined as typed constants or read from the manifest. No bare `"SAVE"` or `"RECALL"` strings scattered across the codebase.
 
+#### Standardized Function Boundaries
+
+> **Every capability is accessed through a project-owned function or interface.**
+
+This is the behavioral sibling of Data Primacy. Where Data Primacy governs *values*, this rule governs *behavior*. Together: code translates data through standardized functions — it never defines data, and it never reimplements behavior.
+
+**The test:** *"If I needed to change how this works, how many files would I touch?"* 1 (the owning package) = compliant. >1 = the capability has leaked.
+
+Check that the diff does not violate function boundaries:
+
+- **Logging** — consumers use `logger.WithPrefix("pkg")`, never import `charmbracelet/log` directly. No `fmt.Println` or stdlib `log.Print`. FAIL if any `.go` file outside `logger/` imports the underlying log library.
+- **Storage** — consumers use the `memory.Store` interface, never `*sql.DB` or raw SQL. Exception: explicitly exported escape hatches (e.g., `store.DB()`) used only by infrastructure code (CLI tools, migrations, tests). FAIL if business logic bypasses the Store interface.
+- **LLM calls** — consumers use `llm.Client` methods (`ChatCompletion`, `ChatCompletionWithTools`, `ChatCompletionStreaming`), never build HTTP requests to OpenRouter/OpenAI directly. FAIL if any package outside `llm/` constructs API requests.
+- **Embeddings** — consumers use `embed.Client.Embed()`, `embed.CosineSimilarity()`, `embed.FindBestMatch()`. FAIL if vector math or embedding API calls are implemented outside `embed/`.
+- **PII scrubbing** — consumers use `scrub.Scrub()` and `scrub.Deanonymize()`. FAIL if regex-based PII detection is implemented outside `scrub/`.
+- **Config** — consumers read `cfg.Models.*`, `cfg.Memory.*`, etc. FAIL if any package parses YAML, reads env vars, or opens config files directly.
+- **Tool definitions** — tool schema lives in `tools/<name>/tool.yaml`, dispatch via `tools.Dispatch()`. FAIL if tool schemas are hardcoded in Go source.
+- **Search** — consumers use `search.TavilyClient`. FAIL if Tavily API calls exist outside `search/`.
+- **Vision** — consumers use `vision.Describe()`. FAIL if multi-modal message construction happens outside `vision/`.
+- **Voice** — consumers use `voice.TTSClient` / `voice.Client`. FAIL if Piper/Parakeet HTTP calls exist outside `voice/`.
+- **Weather** — consumers use `weather.Fetch()`. FAIL if Open-Meteo API calls exist outside `weather/`.
+
+**Gold standard check:** Could the changed code be wrapped in a decorator without touching callers? If a new capability doesn't follow the Store interface pattern (consumers depend on interface, not implementation), flag it as a WARN.
+
+**Escape hatch check:** If code reaches past an owning package's API:
+- Is the escape hatch explicitly exported by the owning package? (OK if yes)
+- Is it used by infrastructure code only, not business logic? (OK if yes)
+- Is it documented? (WARN if no)
+- If none of the above: FAIL.
+
 #### Tool Registration Pattern
 New tools must follow the established registration pattern:
 - Handler lives in `tools/<name>/handler.go`
@@ -169,6 +199,12 @@ Packages changed: [list]
 | **Data primacy — no inline prompt/copy in .go files** | | |
 | **Data primacy — thresholds/tuning in config** | | |
 | **Data primacy — command strings defined once** | | |
+| **Function boundaries — logging via `logger` only** | | |
+| **Function boundaries — storage via `Store` interface** | | |
+| **Function boundaries — LLM via `llm.Client` only** | | |
+| **Function boundaries — embeddings via `embed` only** | | |
+| **Function boundaries — no leaked dependencies** | | |
+| **Function boundaries — escape hatches documented** | | |
 | Tool registration pattern | | |
 | Context bundle usage | | |
 | PII scrubbing at boundaries | | |

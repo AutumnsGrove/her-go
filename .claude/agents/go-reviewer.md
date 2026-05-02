@@ -54,6 +54,34 @@ This is the most important category. Everything else is secondary.
 - Magic threshold values (token counts, similarity scores, retry limits) appearing as bare literals instead of named config fields
 - Error message strings copy-pasted across multiple call sites instead of defined once
 
+### C0b: Standardized Function Boundaries
+
+> **Every capability is accessed through a project-owned function or interface.**
+
+This is the behavioral sibling of C0. Where C0 governs *values*, C0b governs *behavior*. Together: code translates data through standardized functions — it never defines data, and it never reimplements behavior.
+
+- No direct imports of underlying dependencies that an owning package wraps — if `logger` wraps `charmbracelet/log`, no other package imports `charmbracelet/log`
+- No raw `*sql.DB` usage or inline SQL outside `memory/` — all storage goes through the `Store` interface
+- No HTTP requests to OpenRouter/OpenAI outside `llm/` — all LLM calls go through `llm.Client`
+- No embedding API calls or vector math outside `embed/` — use `embed.Client.Embed()`, `embed.CosineSimilarity()`
+- No PII regex matching outside `scrub/` — use `scrub.Scrub()` and `scrub.Deanonymize()`
+- No YAML parsing or env var reading outside `config/` — use `cfg.*` fields
+- No Tavily API calls outside `search/`, no multi-modal message construction outside `vision/`, no Piper/Parakeet HTTP outside `voice/`, no Open-Meteo calls outside `weather/`
+- Tool schemas live in `tools/<name>/tool.yaml`, dispatch via `tools.Dispatch()` — no hardcoded tool definitions in Go source
+
+**The test:** *"If I needed to change how this works, how many files would I touch?"* 1 (the owning package) = PASS. >1 = FAIL.
+
+**Escape hatches are OK when:**
+- Explicitly exported by the owning package (e.g., `store.DB()`)
+- Used only by infrastructure code (CLI tools, migrations, tests), not business logic
+- Documented as an escape hatch
+
+**Specific patterns to flag:**
+- A `.go` file outside `logger/` that imports `github.com/charmbracelet/log`
+- A tool handler that constructs its own HTTP client instead of using a provided `llm.Client`
+- Business logic that calls `sql.Open()` or runs `db.Query()` instead of going through `Store`
+- Duplicate implementations of logic that already exists in an owning package (e.g., cosine similarity reimplemented outside `embed/`)
+
 ### C1: Error Handling
 - Every error is explicitly checked — no `_, err :=` without a subsequent `if err != nil`
 - Errors wrapped with `fmt.Errorf("context: %w", err)` at each layer boundary
@@ -154,6 +182,7 @@ Output exactly this structure:
 | Category | Rating | Notes |
 |----------|--------|-------|
 | C0: Data Primacy / Single Source of Truth | | |
+| C0b: Standardized Function Boundaries | | |
 | C1: Error Handling | | |
 | C2: Concurrency | | |
 | C3: Interface Design | | |
@@ -204,6 +233,7 @@ One of:
 ## Principles
 
 - **Code translates data. It never defines it.** If a value could live in a config or manifest, it must. — Autumn Grove
+- **Every capability is accessed through a project-owned function or interface.** If changing how something works requires editing more than the owning package, the boundary has leaked. — Autumn Grove
 - Read-only always. Evidence required for every WARN/FAIL.
 - N/A is honest. Don't manufacture findings.
 - "Clear is better than clever." — Rob Pike
