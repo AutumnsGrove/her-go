@@ -71,7 +71,7 @@ def check_health(url: str) -> bool:
         return False
 
 
-def start_tts_sidecar(tts_url: str) -> subprocess.Popen | None:
+def start_tts_sidecar(tts_url: str, pause_args: list[str] | None = None) -> subprocess.Popen | None:
     """Start the Piper TTS server if not already running."""
     if check_health(tts_url):
         return None
@@ -86,8 +86,12 @@ def start_tts_sidecar(tts_url: str) -> subprocess.Popen | None:
     host = parsed.hostname or "127.0.0.1"
     port = str(parsed.port or 8766)
 
+    cmd = ["uv", "run", str(script), "--host", host, "--port", port]
+    if pause_args:
+        cmd.extend(pause_args)
+
     proc = subprocess.Popen(
-        ["uv", "run", str(script), "--host", host, "--port", port],
+        cmd,
         stdout=sys.stderr,
         stderr=sys.stderr,
     )
@@ -153,7 +157,26 @@ def transcribe(audio_path: str, stt_url: str) -> str:
 
 def build_app(tts_url: str, stt_url: str) -> gr.Blocks:
     """Build the Gradio interface."""
-    with gr.Blocks(title="Voice Showroom", theme=gr.themes.Soft()) as app:
+    theme = gr.themes.Base(
+        primary_hue=gr.themes.colors.cyan,
+        neutral_hue=gr.themes.colors.gray,
+        font=[gr.themes.GoogleFont("IBM Plex Sans"), "system-ui", "sans-serif"],
+        font_mono=[gr.themes.GoogleFont("IBM Plex Mono"), "monospace"],
+    ).set(
+        body_background_fill="*neutral_950",
+        body_background_fill_dark="*neutral_950",
+        block_background_fill="*neutral_900",
+        block_background_fill_dark="*neutral_900",
+        input_background_fill="*neutral_800",
+        input_background_fill_dark="*neutral_800",
+        body_text_color="*neutral_200",
+        body_text_color_dark="*neutral_200",
+        block_label_text_color="*neutral_400",
+        block_label_text_color_dark="*neutral_400",
+        border_color_primary="*neutral_700",
+        border_color_primary_dark="*neutral_700",
+    )
+    with gr.Blocks(title="Voice Showroom", theme=theme) as app:
         gr.Markdown("# Voice Showroom\nTest TTS and STT sidecars interactively.")
 
         with gr.Tab("TTS — Text to Speech"):
@@ -228,10 +251,22 @@ def main():
     parser.add_argument("--tts-url", default=DEFAULT_TTS_URL)
     parser.add_argument("--stt-url", default=DEFAULT_STT_URL)
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument("--pause-paragraph", type=int, default=0)
+    parser.add_argument("--pause-line", type=int, default=0)
+    parser.add_argument("--pause-sentence", type=int, default=0)
+    parser.add_argument("--pause-comma", type=int, default=0)
+    parser.add_argument("--pause-semi", type=int, default=0)
     args = parser.parse_args()
 
+    # Forward pause config to the TTS sidecar if we need to start it.
+    pause_args = []
+    for name in ("paragraph", "line", "sentence", "comma", "semi"):
+        val = getattr(args, f"pause_{name}")
+        if val > 0:
+            pause_args.extend([f"--pause-{name}", str(val)])
+
     # Auto-start TTS sidecar if needed
-    tts_proc = start_tts_sidecar(args.tts_url)
+    tts_proc = start_tts_sidecar(args.tts_url, pause_args or None)
     if tts_proc:
         print(f"Started TTS sidecar (pid={tts_proc.pid})")
 

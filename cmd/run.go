@@ -784,7 +784,27 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 	killStaleProcess(ttsPort)
 
 	ttsScript := filepath.Join("scripts", "tts_server.py")
-	ttsProcess := exec.Command(uvPath, "run", ttsScript, "--host", ttsHost, "--port", ttsPort)
+	ttsArgs := []string{"run", ttsScript, "--host", ttsHost, "--port", ttsPort}
+
+	// Pass pause config from config.yaml so the sidecar doesn't hardcode values.
+	p := cfg.Voice.TTS.Pauses
+	if p.Paragraph > 0 {
+		ttsArgs = append(ttsArgs, "--pause-paragraph", strconv.Itoa(p.Paragraph))
+	}
+	if p.Line > 0 {
+		ttsArgs = append(ttsArgs, "--pause-line", strconv.Itoa(p.Line))
+	}
+	if p.Sentence > 0 {
+		ttsArgs = append(ttsArgs, "--pause-sentence", strconv.Itoa(p.Sentence))
+	}
+	if p.Comma > 0 {
+		ttsArgs = append(ttsArgs, "--pause-comma", strconv.Itoa(p.Comma))
+	}
+	if p.Semi > 0 {
+		ttsArgs = append(ttsArgs, "--pause-semi", strconv.Itoa(p.Semi))
+	}
+
+	ttsProcess := exec.Command(uvPath, ttsArgs...)
 	ttsProcess.Stdout = sidecarOut
 	ttsProcess.Stderr = sidecarOut
 	ttsProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

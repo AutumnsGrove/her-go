@@ -465,6 +465,18 @@ type TTSConfig struct {
 	VoiceID   string  `yaml:"voice_id"`   // voice preset (for piper: same as model)
 	Speed     float64 `yaml:"speed"`      // speaking rate (1.0 = normal)
 	ReplyMode string  `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
+	Pauses    TTSPauseConfig `yaml:"pauses"`
+}
+
+// TTSPauseConfig controls the silence durations (in milliseconds) inserted
+// between text chunks during synthesis. Piper's lightweight models don't
+// reliably pause at punctuation, so we split text and insert explicit gaps.
+type TTSPauseConfig struct {
+	Paragraph int `yaml:"paragraph_ms"` // between paragraphs (double newlines)
+	Line      int `yaml:"line_ms"`      // between single newlines
+	Sentence  int `yaml:"sentence_ms"`  // after . ! ?
+	Comma     int `yaml:"comma_ms"`     // after ,
+	Semi      int `yaml:"semi_ms"`      // after ; :
 }
 
 // envVarPattern matches "${VARIABLE_NAME}" patterns in strings.
