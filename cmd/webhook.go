@@ -1,12 +1,13 @@
 package cmd
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -87,37 +88,13 @@ func deployWebhook(cfg *config.Config, cfgPath string) error {
 	return nil
 }
 
-// verifyWebhook checks that Telegram's webhook is pointing at our Worker
-// and re-registers if it's missing or stale. Called on bot startup in
-// webhook mode so we self-heal from manual clearings or failed deploys.
-func verifyWebhook(cfg *config.Config) error {
-	if cfg.Telegram.WebhookURL == "" {
-		return fmt.Errorf("webhook_url is empty in config — run `her setup` with webhook mode to deploy")
-	}
-
-	info, err := telegramGetWebhookInfo(cfg.Telegram.Token)
-	if err != nil {
-		return fmt.Errorf("checking webhook status: %w", err)
-	}
-
-	if info.URL == cfg.Telegram.WebhookURL {
-		log.Info("webhook verified", "url", info.URL, "pending", info.PendingUpdateCount)
-		return nil
-	}
-
-	// Webhook is missing or pointing elsewhere — re-register.
-	log.Warn("webhook URL mismatch, re-registering",
-		"expected", cfg.Telegram.WebhookURL,
-		"actual", info.URL,
-	)
-	return telegramSetWebhook(cfg.Telegram.Token, cfg.Telegram.WebhookURL, cfg.Telegram.WebhookSecret)
-}
-
 // wranglerDeploy runs `npx wrangler deploy` in the worker/ directory and
 // parses the Worker URL from the output. The URL is printed on successful
 // deploy like: "https://her-router.xxx.workers.dev"
 func wranglerDeploy() (string, error) {
-	cmd := exec.Command("npx", "wrangler", "deploy")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "deploy")
 	cmd.Dir = "worker"
 	// Combine stdout+stderr — wrangler prints the URL to stdout but
 	// progress/errors to stderr.
@@ -148,7 +125,9 @@ func wranglerDeploy() (string, error) {
 // Wrangler reads from stdin when not attached to a TTY — we write the
 // value and close the pipe so it completes immediately.
 func wranglerSetSecret(name, value string) error {
-	cmd := exec.Command("npx", "wrangler", "secret", "put", name)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "npx", "wrangler", "secret", "put", name)
 	cmd.Dir = "worker"
 	cmd.Stdin = strings.NewReader(value)
 
@@ -177,6 +156,11 @@ func telegramSetWebhook(token, webhookURL, secret string) error {
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API HTTP %d: %s", resp.StatusCode, string(body))
+	}
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -215,6 +199,11 @@ func telegramGetWebhookInfo(token string) (*webhookInfo, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("telegram API HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
 	body, _ := io.ReadAll(resp.Body)
 
 	var response struct {
@@ -232,77 +221,14 @@ func telegramGetWebhookInfo(token string) (*webhookInfo, error) {
 	return &response.Result, nil
 }
 
-// telegramDeleteWebhook removes the webhook registration so Telegram
-// stops POSTing updates. Called when switching back to poll mode.
-func telegramDeleteWebhook(token string) error {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/deleteWebhook?drop_pending_updates=true", token)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(apiURL)
-	if err != nil {
-		return fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("parsing response: %w (body: %s)", err, string(body))
-	}
-
-	if !result.OK {
-		return fmt.Errorf("Telegram API error: %s", result.Description)
-	}
-
-	log.Info("webhook removed from Telegram")
-	return nil
-}
-
-// webhookURLFromDeploy is a helper used when the webhook_url is already
-// in config (from a previous deploy). Returns the stored URL without
-// re-deploying.
-func webhookURLFromConfig(cfg *config.Config) string {
-	return cfg.Telegram.WebhookURL
-}
-
-// removeWebhookConfig clears the webhook_url from config when switching
-// to poll mode, and calls Telegram's deleteWebhook to stop update delivery.
-func removeWebhookConfig(cfg *config.Config, cfgPath string) error {
-	// Delete from Telegram first.
-	if cfg.Telegram.Token != "" {
-		if err := telegramDeleteWebhook(cfg.Telegram.Token); err != nil {
-			log.Warn("failed to delete webhook from Telegram", "err", err)
-		}
-	}
-
-	// Clear from config.
-	cfg.Telegram.WebhookURL = ""
-	if err := saveConfig(cfg, cfgPath); err != nil {
-		return fmt.Errorf("saving config: %w", err)
-	}
-
-	return nil
-}
-
 // ensureWebhookSecret generates a webhook secret if one doesn't exist.
 // Returns true if a new secret was generated.
 func ensureWebhookSecret(cfg *config.Config) bool {
 	if cfg.Telegram.WebhookSecret != "" {
 		return false
 	}
-	// Read 32 bytes from /dev/urandom and hex-encode.
-	f, err := os.Open("/dev/urandom")
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
 	buf := make([]byte, 32)
-	if _, err := io.ReadFull(f, buf); err != nil {
+	if _, err := rand.Read(buf); err != nil {
 		return false
 	}
 	cfg.Telegram.WebhookSecret = fmt.Sprintf("%x", buf)
