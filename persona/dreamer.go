@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"her/config"
+	"her/embed"
 	"her/llm"
 	"her/memory"
 	"her/trace"
@@ -31,8 +32,9 @@ func init() {
 // single struct instead of many positional arguments makes call sites readable
 // and easier to extend — same pattern used by agent.RunParams.
 type DreamerParams struct {
-	LLM      *llm.Client   // model for NightlyReflect and GatedRewrite (typically the memory agent's model)
-	Store    memory.Store // SQLite store for reading/writing persona state
+	LLM      *llm.Client    // persona model for NightlyReflect and GatedRewrite
+	Embed    *embed.Client  // embedding client for reflection dedup — nil-safe, dedup skipped if nil
+	Store    memory.Store   // SQLite store for reading/writing persona state
 	Cfg      *config.Config
 	EventBus *tui.Bus // may be nil (e.g., sim mode) — all emits are nil-safe
 
@@ -115,7 +117,7 @@ func runDream(ctx context.Context, p DreamerParams) {
 	}
 
 	// Step 2: Gated rewrite — only runs if gates pass.
-	rewritten, err := GatedRewrite(p.LLM, p.Store, p.Cfg.Persona.PersonaFile, p.Cfg.Identity.Her, false, p.MinDays, p.MinRefl)
+	rewritten, err := GatedRewrite(p.LLM, p.Embed, p.Store, p.Cfg.Persona.PersonaFile, p.Cfg.Identity.Her, false, p.MinDays, p.MinRefl)
 	if err != nil {
 		log.Error("dreamer: gated rewrite failed", "err", err)
 	} else if rewritten {

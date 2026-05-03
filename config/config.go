@@ -31,8 +31,9 @@ type Config struct {
 	Driver      DriverConfig      `yaml:"driver"`
 	Vision      VisionConfig      `yaml:"vision"`
 	Classifier  ClassifierConfig  `yaml:"classifier"`
-	MemoryAgent MemoryAgentConfig `yaml:"memory_agent"`
-	MoodAgent   MoodAgentConfig   `yaml:"mood_agent"`
+	MemoryAgent  MemoryAgentConfig  `yaml:"memory_agent"`
+	PersonaAgent PersonaAgentConfig `yaml:"persona_agent"`
+	MoodAgent    MoodAgentConfig    `yaml:"mood_agent"`
 	Memory      MemoryConfig      `yaml:"memory"`
 	Mood        MoodConfig        `yaml:"mood"`
 	Embed       EmbedConfig       `yaml:"embed"`
@@ -305,6 +306,20 @@ type MemoryAgentConfig struct {
 	// Loop tuning — same as DriverConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
 	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 2
+}
+
+// PersonaAgentConfig holds settings for the persona evolution model — the
+// dreamer system that runs nightly reflections and persona rewrites. Decoupled
+// from MemoryAgentConfig so the persona model can be tuned independently
+// (different temperature, timeout, or even a different model entirely).
+// When Model is empty, the dreamer falls back to the memory agent's model.
+type PersonaAgentConfig struct {
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default)
+	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
 
 // MoodAgentConfig controls the post-turn background mood agent.

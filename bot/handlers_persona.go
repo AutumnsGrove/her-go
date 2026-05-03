@@ -202,7 +202,7 @@ func (b *Bot) handleDream(c tele.Context) error {
 	if minRefl == 0 {
 		minRefl = 3
 	}
-	rewritten, err := persona.GatedRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
+	rewritten, err := persona.GatedRewrite(b.llm, b.embedClient, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
 	if err != nil {
 		log.Error("dream rewrite", "err", err)
 		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))
@@ -231,7 +231,7 @@ func (b *Bot) handleDream(c tele.Context) error {
 func (b *Bot) handlePersonaRewrite(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
 
-	rewritten, err := persona.MaybeRewrite(b.llm, b.store, b.cfg.Persona.PersonaFile, 0, b.cfg.Identity.Her)
+	rewritten, err := persona.MaybeRewrite(b.llm, b.embedClient, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her)
 	if err != nil {
 		log.Error("manual persona rewrite", "err", err)
 		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))

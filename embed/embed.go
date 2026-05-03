@@ -43,6 +43,12 @@ const (
 	// against freeform conversation text.
 	ConversationRedundancyThreshold = 0.60
 
+	// ReflectionDedupThreshold is used to cluster similar reflections before
+	// a persona rewrite. Slightly lower than the standard duplicate threshold
+	// because reflections are short free-text and may phrase the same insight
+	// differently each time.
+	ReflectionDedupThreshold = 0.82
+
 	// HighSimilarityThreshold is the "nearly identical" tier for multi-level
 	// deduplication systems. Content above this threshold is typically dropped
 	// as a duplicate without storing.

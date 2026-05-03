@@ -518,13 +518,39 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "scheduler", Status: "ready"})
 	}
 
+	// --- Persona agent client (optional) ---
+	// Dedicated model for the dreamer system (nightly reflections + persona rewrites).
+	// Falls back to the memory agent client if persona_agent.model isn't configured —
+	// same model, decoupled so they can diverge later.
+	var personaAgentClient *llm.Client
+	if cfg.PersonaAgent.Model != "" {
+		personaAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.PersonaAgent.Model, cfg.PersonaAgent.Temperature, cfg.PersonaAgent.MaxTokens)
+		if cfg.PersonaAgent.Timeout > 0 {
+			personaAgentClient.WithTimeout(time.Duration(cfg.PersonaAgent.Timeout) * time.Second)
+		}
+		if cfg.PersonaAgent.Provider != nil {
+			personaAgentClient.WithProvider(&llm.ProviderRouting{
+				Order: cfg.PersonaAgent.Provider.Order,
+				Only:  cfg.PersonaAgent.Provider.Only,
+				Sort:  cfg.PersonaAgent.Provider.Sort,
+			})
+		}
+		if cfg.PersonaAgent.Fallback != nil {
+			personaAgentClient.WithFallback(cfg.PersonaAgent.Fallback.Model, cfg.PersonaAgent.Fallback.Temperature, cfg.PersonaAgent.Fallback.MaxTokens)
+		}
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "persona_agent", Status: "ready", Detail: cfg.PersonaAgent.Model})
+	} else if memoryAgentClient != nil {
+		personaAgentClient = memoryAgentClient
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "persona_agent", Status: "ready", Detail: "fallback → " + cfg.MemoryAgent.Model})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "persona_agent", Status: "skipped"})
+	}
+
 	// --- Dreamer ---
 	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
-	// It needs a context so it shuts down cleanly when the bot exits.
-	// We reuse the memory agent LLM for dreaming — same model, same
-	// purpose (nuanced language processing), no need for a separate config entry.
+	// Uses the dedicated persona agent client (or memory agent fallback).
 	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
-	if memoryAgentClient != nil {
+	if personaAgentClient != nil {
 		dreamHour := cfg.Persona.DreamHour
 		if dreamHour == 0 {
 			dreamHour = 4
@@ -538,7 +564,8 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			minRefl = 3
 		}
 		go persona.StartDreamer(dreamerCtx, persona.DreamerParams{
-			LLM:       memoryAgentClient,
+			LLM:       personaAgentClient,
+			Embed:     embedClient,
 			Store:     store,
 			Cfg:       cfg,
 			EventBus:  bus,
@@ -547,7 +574,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			MinRefl:   minRefl,
 		})
 	} else {
-		log.Warn("dreamer disabled — memory_agent.model not configured")
+		log.Warn("dreamer disabled — no persona or memory agent model configured")
 	}
 
 	// --- KV Sync Poller (prod only) ---

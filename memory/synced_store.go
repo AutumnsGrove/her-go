@@ -205,9 +205,9 @@ var syncedTableSpecs = map[string]tableSpec{
 		placeholders: "?, ?, ?, ?, ?",
 	},
 	"persona_state": {
-		selectCols:   "id, last_reflection_at, last_rewrite_at",
-		d1Cols:       "id, last_reflection_at, last_rewrite_at",
-		placeholders: "?, ?, ?",
+		selectCols:   "id, last_reflection_at, last_rewrite_at, last_reflected_message_id",
+		d1Cols:       "id, last_reflection_at, last_rewrite_at, last_reflected_message_id",
+		placeholders: "?, ?, ?, ?",
 	},
 	"mood_entries": {
 		selectCols:   "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at",
@@ -690,6 +690,15 @@ func (s *SyncedStore) SetLastReflectionAt(t time.Time) error {
 // SetLastRewriteAt records the last rewrite time locally and records in outbox.
 func (s *SyncedStore) SetLastRewriteAt(t time.Time) error {
 	if err := s.SQLiteStore.SetLastRewriteAt(t); err != nil {
+		return err
+	}
+	s.writeOutbox("persona_state", 1, "upsert")
+	return nil
+}
+
+// SetLastReflectedMessageID advances the message watermark and records in outbox.
+func (s *SyncedStore) SetLastReflectedMessageID(id int64) error {
+	if err := s.SQLiteStore.SetLastReflectedMessageID(id); err != nil {
 		return err
 	}
 	s.writeOutbox("persona_state", 1, "upsert")
