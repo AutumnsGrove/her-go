@@ -92,17 +92,6 @@ func runShape(cmd *cobra.Command, args []string) error {
 			ctx.RecentMessages = msgs
 		}
 
-		// Get semantically relevant memories (use a generic query).
-		if embedClient != nil {
-			queryVec, err := embedClient.Embed("general conversation")
-			if err == nil {
-				memories, err := store.SemanticSearch(queryVec, cfg.Memory.MaxFactsInContext)
-				if err == nil {
-					ctx.RelevantMemories = memories
-				}
-			}
-		}
-
 		// Get the latest conversation summary.
 		summary, _, err := store.LatestSummary("", "chat")
 		if err == nil {

@@ -1,10 +1,9 @@
 name: recall_memories
 agent: main, memory
 description: >-
-  Search through stored memories using semantic similarity. Use when the
-  user asks 'do you remember...', references something from a past
-  conversation, or when you need specific context that isn't in the current
-  memory window.
+  Search stored memories by semantic similarity. The chat model has NO memory
+  unless you call this and pass results via reply(memories=[...]). Call on
+  most turns — skip only for bare greetings or trivial acknowledgements.
 hot: true
 parameters:
   type: object

@@ -74,7 +74,6 @@ type LayerContext struct {
 	EmbedClient *embed.Client
 
 	// Runtime state — set by the agent before building the prompt.
-	RelevantMemories    []memory.Memory       // KNN results for semantic injection
 	ConversationSummary string                // from chat compaction
 	AgentActionSummary  string                // from agent compaction (tool call history)
 	RecentAgentActions  []memory.AgentAction  // recent tool calls kept in full fidelity
@@ -88,8 +87,8 @@ type LayerContext struct {
 	SearchContext string
 
 	// AgentPassedMemories holds memories the agent explicitly chose via recall_memories
-	// and passed through the reply tool's facts parameter. When set, chat_memory.go
-	// injects these instead of the auto-searched RelevantMemories.
+	// and passed through reply(memories=[...]). This is the ONLY path memories
+	// reach the chat model — there is no auto-injection fallback.
 	AgentPassedMemories []string
 }
 
