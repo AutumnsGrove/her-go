@@ -109,9 +109,10 @@ CREATE TABLE IF NOT EXISTS traits (
 -- Persona State (singleton row)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS persona_state (
-    id                 INTEGER PRIMARY KEY CHECK (id = 1),
-    last_reflection_at DATETIME,
-    last_rewrite_at    DATETIME
+    id                          INTEGER PRIMARY KEY CHECK (id = 1),
+    last_reflection_at          DATETIME,
+    last_rewrite_at             DATETIME,
+    last_reflected_message_id   INTEGER DEFAULT 0
 );
 
 -- ---------------------------------------------------------------------------
