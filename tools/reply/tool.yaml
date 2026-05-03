@@ -6,10 +6,9 @@ description: >-
   least once per turn. The instruction is a DIRECTIVE to a separate
   conversational model — describe what to say, not the words themselves.
 
-  Before calling reply, use recall_memories to search for relevant memories.
-  Pass what you find in the memories parameter — the conversational model will
-  have exactly those injected into its context. If nothing is relevant, pass
-  an empty list.
+  The chat model has NO memory unless you pass it. Use recall_memories first,
+  then pass relevant results in the memories parameter. Without memories, the
+  chat model responds with zero knowledge of past conversations.
 hot: true
 parameters:
   type: object

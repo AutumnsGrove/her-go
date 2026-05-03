@@ -135,12 +135,10 @@ type ToolCallEvent struct {
 func (e ToolCallEvent) EventTime() time.Time { return e.Time }
 func (e ToolCallEvent) EventSource() string  { return "driver" }
 
-// ContextEvent fires after the agent builds its context (facts, semantic
-// search results) at the start of a turn.
+// ContextEvent fires after the agent builds its context at the start of a turn.
 type ContextEvent struct {
-	Time          time.Time
-	TurnID        int64
-	RelevantMemories int
+	Time   time.Time
+	TurnID int64
 }
 
 func (e ContextEvent) EventTime() time.Time { return e.Time }
