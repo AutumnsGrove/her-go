@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"her/config"
+	"her/embed"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -36,11 +37,18 @@ var log = logger.WithPrefix("persona")
 //go:embed reflection_prompt.md
 var reflectionPromptTmpl string
 
-// rewritePromptTmpl is loaded from rewrite_prompt.md.
-// Parameters (in order): botName, currentPersona, reflections, selfFacts.
+// analysisPromptTmpl is Step 1 of the two-step rewrite: the LLM distills
+// reflections + traits + self-facts into 3-5 factual bullet points.
+// Parameters (in order): botName, traitSummary, reflections, selfFacts.
 //
-//go:embed rewrite_prompt.md
-var rewritePromptTmpl string
+//go:embed persona_analysis_prompt.md
+var analysisPromptTmpl string
+
+// composePromptTmpl is Step 2: the LLM writes the persona from bullet points.
+// Parameters (in order): botName, bullets, warmth, directness, humor, initiative, depth.
+//
+//go:embed persona_compose_prompt.md
+var composePromptTmpl string
 
 // Reflect generates a journal-like reflection after a memory-dense
 // conversation. Called when the agent saves >= threshold facts in one run.
@@ -94,14 +102,13 @@ func Reflect(
 	return nil
 }
 
-// MaybeRewrite performs a persona rewrite. The caller (agent) has already
-// decided it's time based on reflection count. This just does the work.
-// Returns true if a rewrite happened.
+// MaybeRewrite performs a persona rewrite using the two-step analysis→compose
+// pipeline. The caller has already decided it's time. Returns true if a rewrite happened.
 func MaybeRewrite(
 	llmClient *llm.Client,
+	embedClient *embed.Client,
 	store memory.Store,
 	personaFile string,
-	_ int, // unused, kept for API compatibility
 	botName string,
 ) (bool, error) {
 	lastRewrite, err := store.LastPersonaTimestamp()
@@ -111,86 +118,46 @@ func MaybeRewrite(
 
 	log.Info("triggering persona rewrite")
 
-	// Read current persona.md.
-	currentPersona := "(no persona description yet — this is your first one)"
-	if data, err := os.ReadFile(personaFile); err == nil && len(data) > 0 {
-		currentPersona = string(data)
-	}
-
-	// Get reflections since last rewrite.
 	reflections, err := store.ReflectionsSince(lastRewrite)
 	if err != nil {
 		return false, fmt.Errorf("loading reflections: %w", err)
 	}
 
-	var reflStr strings.Builder
-	if len(reflections) > 0 {
-		for _, r := range reflections {
-			// r is now a memory.Reflection, so we use r.Content instead of r.Fact.
-			fmt.Fprintf(&reflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Content)
-		}
-	} else {
-		reflStr.WriteString("(no reflections yet)\n")
-	}
-
-	// Get self-facts (non-reflection) for additional context.
-	selfFacts, err := store.RecentMemories("self", 20)
+	newPersona, _, changed, err := twoStepRewrite(llmClient, embedClient, store, reflections, botName)
 	if err != nil {
-		return false, fmt.Errorf("loading self-facts: %w", err)
+		return false, err
+	}
+	if !changed {
+		return false, nil
 	}
 
-	var selfStr strings.Builder
-	for _, f := range selfFacts {
-		// Reflections no longer appear in the facts table, so no
-		// category filter is needed here — every self-fact is a real observation.
-		fmt.Fprintf(&selfStr, "- %s\n", f.Content)
-	}
-	if selfStr.Len() == 0 {
-		selfStr.WriteString("(no self-observations yet)\n")
-	}
+	return commitPersona(llmClient, store, personaFile, newPersona, botName, fmt.Sprintf("auto: %d reflections", len(reflections)))
+}
 
-	prompt := fmt.Sprintf(rewritePromptTmpl, botName, currentPersona, reflStr.String(), selfStr.String())
+// commitPersona writes the new persona to disk, saves a version in the DB,
+// and runs trait extraction. Shared by MaybeRewrite and GatedRewrite.
+func commitPersona(
+	llmClient *llm.Client,
+	store memory.Store,
+	personaFile, newPersona, botName, trigger string,
+) (bool, error) {
+	// Re-template the bot name back to {{her}} so the file stays portable.
+	personaContent := strings.ReplaceAll(newPersona, botName, "{{her}}")
 
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: "Write your updated personality description now."},
-	}
-
-	resp, err := llmClient.ChatCompletion(messages)
-	if err != nil {
-		return false, fmt.Errorf("persona rewrite LLM call: %w", err)
-	}
-
-	// Swap the bot's literal name back to {{her}} before writing to disk.
-	// The LLM writes naturally ("I'm Mira...") because we expanded the
-	// template before it saw the prompt. Re-templating here ensures the
-	// file stays portable — a fork that changes the name won't inherit
-	// a hardcoded "Mira" in the persona.
-	personaContent := strings.ReplaceAll(resp.Content, botName, "{{her}}")
-
-	// Write the new persona to disk.
 	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
 		return false, fmt.Errorf("writing persona file: %w", err)
 	}
 
-	// Store the version in DB for history/rollback (raw LLM output,
-	// not the templated version — the DB records what the LLM actually said).
-	versionID, err := store.SavePersonaVersion(resp.Content, fmt.Sprintf("auto: %d reflections", len(reflections)))
+	versionID, err := store.SavePersonaVersion(newPersona, trigger)
 	if err != nil {
 		return false, fmt.Errorf("saving persona version: %w", err)
 	}
 
-	// Log metrics.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
+	log.Info("persona rewritten", "version_id", versionID, "trigger", trigger)
+	log.Info("new persona preview", "preview", truncate(newPersona, 200))
 
-	log.Info("persona rewritten", "version_id", versionID, "reflections_used", len(reflections))
-	log.Info("new persona preview", "preview", truncate(resp.Content, 200))
-
-	// Extract and save trait scores for this persona version.
-	// Runs after the rewrite so it doesn't slow down the response pipeline.
-	if err := ExtractTraits(llmClient, store, resp.Content, versionID, 0.1); err != nil {
+	if err := ExtractTraits(llmClient, store, newPersona, versionID, 0.1); err != nil {
 		log.Error("trait extraction failed", "err", err)
-		// Non-fatal — persona rewrite still succeeded.
 	}
 
 	return true, nil
@@ -329,16 +296,10 @@ func dampTrait(newVal float64, prevStr string, maxShift float64) float64 {
 }
 
 // nightlyReflectPromptTmpl is loaded from nightly_reflect_prompt.md.
-// Parameters (in order): botName, currentPersona, traitSummary, recentConvo, userFacts.
+// Parameters (in order): botName, currentPersona, traitSummary, recentConvo, userFacts, recentReflections.
 //
 //go:embed nightly_reflect_prompt.md
 var nightlyReflectPromptTmpl string
-
-// gatedRewritePromptTmpl is loaded from gated_rewrite_prompt.md.
-// Parameters (in order): botName, currentPersona, reflections, selfFacts.
-//
-//go:embed gated_rewrite_prompt.md
-var gatedRewritePromptTmpl string
 
 // NightlyReflect runs the dreaming system's reflection step. Unlike Reflect()
 // (which is triggered by fact density during a turn), this is time-triggered
@@ -355,6 +316,26 @@ func NightlyReflect(
 	botName, userName string,
 ) error {
 	log.Info("nightly reflection starting")
+
+	// Use the message watermark to fetch only messages the dreamer hasn't
+	// seen yet. This is the structural fix for duplicate reflections on
+	// quiet days — if there are no new messages, we skip the LLM call entirely.
+	state, _ := store.GetPersonaState()
+	recent, _ := store.MessagesAfterID(state.LastReflectedMessageID, 20)
+
+	if len(recent) == 0 {
+		log.Info("nightly reflection: no new messages since last reflection, skipping")
+		store.SetLastReflectionAt(time.Now())
+		return nil
+	}
+
+	// Advance watermark to the highest message ID we're about to reflect on.
+	maxID := recent[len(recent)-1].ID
+	defer func() {
+		if err := store.SetLastReflectedMessageID(maxID); err != nil {
+			log.Warn("failed to update message watermark", "err", err)
+		}
+	}()
 
 	// Read current persona as an anchor.
 	currentPersona := "(no persona description yet)"
@@ -373,23 +354,18 @@ func NightlyReflect(
 		}
 	}
 
-	// Recent conversation for context (secondary signal).
-	recent, _ := store.GlobalRecentMessages(20)
+	// Format the new messages as conversation context.
 	var convoStr strings.Builder
-	if len(recent) == 0 {
-		convoStr.WriteString("(no recent messages)")
-	} else {
-		for _, m := range recent {
-			role := userName
-			if m.Role == "assistant" {
-				role = botName
-			}
-			content := m.ContentRaw
-			if len(content) > 200 {
-				content = content[:200] + "..."
-			}
-			fmt.Fprintf(&convoStr, "%s: %s\n", role, content)
+	for _, m := range recent {
+		role := userName
+		if m.Role == "assistant" {
+			role = botName
 		}
+		content := m.ContentRaw
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		fmt.Fprintf(&convoStr, "%s: %s\n", role, content)
 	}
 
 	// Recent user facts (light context — this reflection is about the bot, not the user).
@@ -403,12 +379,25 @@ func NightlyReflect(
 		}
 	}
 
+	// Feed in recent reflections so the LLM knows what it already said
+	// and can avoid rehashing the same observations.
+	prevReflections, _ := store.RecentReflections(3)
+	var prevReflStr strings.Builder
+	if len(prevReflections) == 0 {
+		prevReflStr.WriteString("(no previous reflections)")
+	} else {
+		for _, r := range prevReflections {
+			fmt.Fprintf(&prevReflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Content)
+		}
+	}
+
 	prompt := fmt.Sprintf(nightlyReflectPromptTmpl,
 		botName,
 		currentPersona,
 		traitStr.String(),
 		convoStr.String(),
 		userFactStr.String(),
+		prevReflStr.String(),
 	)
 
 	messages := []llm.ChatMessage{
@@ -426,12 +415,10 @@ func NightlyReflect(
 	content := strings.TrimSpace(resp.Content)
 	if content == "NOTHING_NOTABLE" {
 		log.Info("nightly reflection: nothing notable, skipping save")
-		// Still update the timestamp so the dreamer knows it ran.
 		store.SetLastReflectionAt(time.Now())
 		return nil
 	}
 
-	// Save the reflection and record the timestamp.
 	if _, err := store.SaveReflection(content, 0, "", ""); err != nil {
 		return fmt.Errorf("saving nightly reflection: %w", err)
 	}
@@ -455,6 +442,7 @@ func NightlyReflect(
 // (false, nil) when gates blocked or LLM returned UNCHANGED.
 func GatedRewrite(
 	llmClient *llm.Client,
+	embedClient *embed.Client,
 	store memory.Store,
 	personaFile string,
 	botName string,
@@ -492,12 +480,6 @@ func GatedRewrite(
 		log.Info("dream rewrite: bypass mode, skipping gates")
 	}
 
-	// Read current persona.
-	currentPersona := "(no persona description yet — this is your first one)"
-	if data, err := os.ReadFile(personaFile); err == nil && len(data) > 0 {
-		currentPersona = string(data)
-	}
-
 	// Get all unconsumed reflections.
 	state, _ := store.GetPersonaState()
 	reflections, err := store.ReflectionsSince(state.LastRewriteAt)
@@ -505,21 +487,86 @@ func GatedRewrite(
 		return false, fmt.Errorf("loading reflections: %w", err)
 	}
 
+	newPersona, bullets, changed, err := twoStepRewrite(llmClient, embedClient, store, reflections, botName)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		log.Info("dream rewrite: analysis returned UNCHANGED, persona stable")
+		store.SetLastRewriteAt(time.Now())
+		return false, nil
+	}
+
+	// Stash the analysis bullets so callers (like the sim) can surface them.
+	lastAnalysisBullets = bullets
+
+	ok, err := commitPersona(llmClient, store, personaFile, newPersona, botName, fmt.Sprintf("dream: %d reflections", len(reflections)))
+	if err != nil {
+		return false, err
+	}
+
+	if err := store.SetLastRewriteAt(time.Now()); err != nil {
+		log.Warn("failed to update last_rewrite_at", "err", err)
+	}
+
+	return ok, nil
+}
+
+// lastAnalysisBullets holds the Step 1 analysis output from the most recent
+// twoStepRewrite call. Exposed via LastAnalysisBullets() for the sim reporter.
+var lastAnalysisBullets string
+
+// LastAnalysisBullets returns the analysis bullets from the most recent persona
+// rewrite and clears the buffer. Used by the sim to include the two-step
+// intermediate state in reports.
+func LastAnalysisBullets() string {
+	b := lastAnalysisBullets
+	lastAnalysisBullets = ""
+	return b
+}
+
+// twoStepRewrite is the core persona evolution pipeline:
+//   - Step 1 (analysis): LLM distills reflections + traits + self-facts into
+//     3-5 bullet points of "what is true about me right now"
+//   - Step 2 (compose): LLM writes the persona from those bullets + trait scores,
+//     never seeing the old persona text
+//
+// Returns (newPersona, analysisBullets, true, nil) on success,
+// ("", "", false, nil) if UNCHANGED.
+func twoStepRewrite(
+	llmClient *llm.Client,
+	embedClient *embed.Client,
+	store memory.Store,
+	reflections []memory.Reflection,
+	botName string,
+) (string, string, bool, error) {
+	// Deduplicate reflections via embedding similarity.
+	deduped := deduplicateReflections(reflections, embedClient)
+
 	var reflStr strings.Builder
-	if len(reflections) == 0 {
+	if len(deduped) == 0 {
 		reflStr.WriteString("(no reflections yet)\n")
 	} else {
-		for _, r := range reflections {
+		for _, r := range deduped {
 			fmt.Fprintf(&reflStr, "- [%s] %s\n", r.Timestamp.Format("Jan 2"), r.Content)
 		}
 	}
 
-	// Self-facts for additional context.
-	selfFacts, err := store.RecentMemories("self", 20)
-	if err != nil {
-		return false, fmt.Errorf("loading self-facts: %w", err)
+	// Load trait scores as structural guardrails.
+	traits, _ := store.GetCurrentTraits()
+	traitMap := make(map[string]string)
+	var traitStr strings.Builder
+	if len(traits) == 0 {
+		traitStr.WriteString("(no trait scores yet)")
+	} else {
+		for _, t := range traits {
+			traitMap[t.TraitName] = t.Value
+			fmt.Fprintf(&traitStr, "- %s: %s\n", t.TraitName, t.Value)
+		}
 	}
 
+	// Self-facts for additional context.
+	selfFacts, _ := store.RecentMemories("self", 20)
 	var selfStr strings.Builder
 	for _, f := range selfFacts {
 		fmt.Fprintf(&selfStr, "- %s\n", f.Content)
@@ -528,94 +575,113 @@ func GatedRewrite(
 		selfStr.WriteString("(no self-observations yet)\n")
 	}
 
-	prompt := fmt.Sprintf(gatedRewritePromptTmpl, botName, currentPersona, reflStr.String(), selfStr.String())
+	// --- Step 1: Analysis ---
+	analysisPrompt := fmt.Sprintf(analysisPromptTmpl, botName, traitStr.String(), reflStr.String(), selfStr.String())
 
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: prompt},
-		{Role: "user", Content: "Review your reflections and update your description if warranted."},
-	}
-
-	resp, err := llmClient.ChatCompletion(messages)
+	analysisResp, err := llmClient.ChatCompletion([]llm.ChatMessage{
+		{Role: "system", Content: analysisPrompt},
+		{Role: "user", Content: "Distill your current truths now."},
+	})
 	if err != nil {
-		return false, fmt.Errorf("gated rewrite LLM call: %w", err)
+		return "", "", false, fmt.Errorf("persona analysis LLM call: %w", err)
+	}
+	store.SaveMetric(analysisResp.Model, analysisResp.PromptTokens, analysisResp.CompletionTokens, analysisResp.TotalTokens, analysisResp.CostUSD, 0, 0, analysisResp.UsedFallback)
+
+	bullets := strings.TrimSpace(analysisResp.Content)
+	if bullets == "UNCHANGED" {
+		return "", "", false, nil
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
+	log.Info("persona analysis complete", "bullets", truncate(bullets, 300))
 
-	content := strings.TrimSpace(resp.Content)
-	if strings.HasPrefix(content, "UNCHANGED") {
-		log.Info("dream rewrite: LLM returned UNCHANGED, persona stable")
-		// Update the rewrite timestamp so the gate resets — the LLM made a
-		// deliberate decision, which counts as a "rewrite cycle" for gating purposes.
-		store.SetLastRewriteAt(time.Now())
-		return false, nil
-	}
-
-	// Parse CHANGE_SUMMARY: ... \n---\n <new persona>
-	// The expected format is:
-	//   CHANGE_SUMMARY: <one sentence>
-	//   ---
-	//   <new persona text>
-	//
-	// LLMs sometimes skip the "---" separator and just use a blank line, so we
-	// handle both: split on "\n---\n" first, then fall back to stripping the
-	// CHANGE_SUMMARY line directly. Either way, the summary line must never
-	// end up inside persona.md.
-	parts := strings.SplitN(content, "\n---\n", 2)
-	var newPersona string
-	if len(parts) == 2 {
-		// Happy path: model followed the exact format.
-		summaryLine := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(parts[0]), "CHANGE_SUMMARY:"))
-		newPersona = strings.TrimSpace(parts[1])
-		log.Info("dream rewrite: persona change", "summary", summaryLine)
-	} else if strings.HasPrefix(content, "CHANGE_SUMMARY:") {
-		// Model included the summary line but omitted the "---" separator.
-		// Strip the first line and use the rest as the persona body.
-		firstNewline := strings.Index(content, "\n")
-		if firstNewline != -1 {
-			summaryLine := strings.TrimSpace(strings.TrimPrefix(content[:firstNewline], "CHANGE_SUMMARY:"))
-			newPersona = strings.TrimSpace(content[firstNewline+1:])
-			log.Warn("dream rewrite: missing '---' separator, stripped CHANGE_SUMMARY line", "summary", summaryLine)
-		} else {
-			// Entire response is just the CHANGE_SUMMARY line with no body — unusable.
-			return false, fmt.Errorf("gated rewrite: response has CHANGE_SUMMARY but no persona body")
+	// --- Step 2: Compose ---
+	// Look up individual trait values for the compose prompt template.
+	getTraitVal := func(name, fallback string) string {
+		if v, ok := traitMap[name]; ok {
+			return v
 		}
-	} else {
-		// No recognisable structure — use the full response as-is and warn loudly.
-		newPersona = content
-		log.Warn("dream rewrite: response didn't match CHANGE_SUMMARY format, using full content")
+		return fallback
 	}
 
-	if newPersona == "" {
-		return false, fmt.Errorf("gated rewrite: parsed empty persona")
-	}
+	composePrompt := fmt.Sprintf(composePromptTmpl,
+		botName,
+		bullets,
+		getTraitVal("warmth", "?"),
+		getTraitVal("directness", "?"),
+		getTraitVal("humor_style", "?"),
+		getTraitVal("initiative", "?"),
+		getTraitVal("depth", "?"),
+	)
 
-	// Re-template the bot name back to {{her}} so the file stays portable.
-	personaContent := strings.ReplaceAll(newPersona, botName, "{{her}}")
-
-	if err := os.WriteFile(personaFile, []byte(personaContent), 0644); err != nil {
-		return false, fmt.Errorf("writing persona file: %w", err)
-	}
-
-	versionID, err := store.SavePersonaVersion(newPersona, fmt.Sprintf("dream: %d reflections", len(reflections)))
+	composeResp, err := llmClient.ChatCompletion([]llm.ChatMessage{
+		{Role: "system", Content: composePrompt},
+		{Role: "user", Content: "Write your personality description now."},
+	})
 	if err != nil {
-		return false, fmt.Errorf("saving persona version: %w", err)
+		return "", bullets, false, fmt.Errorf("persona compose LLM call: %w", err)
+	}
+	store.SaveMetric(composeResp.Model, composeResp.PromptTokens, composeResp.CompletionTokens, composeResp.TotalTokens, composeResp.CostUSD, 0, 0, composeResp.UsedFallback)
+
+	newPersona := strings.TrimSpace(composeResp.Content)
+	if newPersona == "" {
+		return "", bullets, false, fmt.Errorf("persona compose returned empty content")
 	}
 
-	if err := store.SetLastRewriteAt(time.Now()); err != nil {
-		log.Warn("failed to update last_rewrite_at", "err", err)
+	log.Info("persona compose complete", "chars", len(newPersona), "preview", truncate(newPersona, 200))
+	return newPersona, bullets, true, nil
+}
+
+// deduplicateReflections filters out near-duplicate reflections using embedding
+// similarity. Iterates chronologically — for each reflection, if it's too similar
+// (cosine ≥ ReflectionDedupThreshold) to any already-accepted reflection, it's
+// skipped. Returns the deduplicated slice.
+//
+// Nil-safe: if embedClient is nil, returns the input unchanged.
+func deduplicateReflections(reflections []memory.Reflection, embedClient *embed.Client) []memory.Reflection {
+	if embedClient == nil || len(reflections) <= 1 {
+		return reflections
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
-	log.Info("dream rewrite complete", "version_id", versionID, "reflections_used", len(reflections))
-
-	// Extract and save trait scores for the new persona version.
-	if err := ExtractTraits(llmClient, store, newPersona, versionID, 0.1); err != nil {
-		log.Error("trait extraction after dream rewrite failed", "err", err)
-		// Non-fatal — the rewrite succeeded.
+	type accepted struct {
+		reflection memory.Reflection
+		vec        []float32
 	}
 
-	return true, nil
+	var kept []accepted
+	for _, r := range reflections {
+		vec, err := embedClient.Embed(r.Content)
+		if err != nil {
+			// Embedding failed — keep the reflection rather than silently dropping it.
+			kept = append(kept, accepted{reflection: r})
+			continue
+		}
+
+		isDupe := false
+		for _, a := range kept {
+			if a.vec == nil {
+				continue
+			}
+			sim := embed.CosineSimilarity(vec, a.vec)
+			if sim >= embed.ReflectionDedupThreshold {
+				isDupe = true
+				break
+			}
+		}
+
+		if !isDupe {
+			kept = append(kept, accepted{reflection: r, vec: vec})
+		}
+	}
+
+	result := make([]memory.Reflection, len(kept))
+	for i, a := range kept {
+		result[i] = a.reflection
+	}
+
+	if len(reflections) != len(result) {
+		log.Info("reflections deduplicated", "before", len(reflections), "after", len(result))
+	}
+	return result
 }
 
 // truncate shortens a string for log output.

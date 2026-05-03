@@ -56,6 +56,14 @@ memory_agent:
   # provider:                         # optional: pin to a specific OpenRouter provider for speed
   #   order: ["Groq"]                 # try Groq first (fastest for Kimi K2)
 
+persona_agent:
+  model: "moonshotai/kimi-k2-0905"     # persona evolution model — nightly reflections + rewrites. Falls back to memory_agent if empty.
+  temperature: 0.5                     # moderate creativity for persona prose
+  max_tokens: 2048                     # persona output is short — 2K is plenty
+  timeout: 120                         # reflections process long context
+  provider:
+    order: ["Groq"]                    # pin to Groq for speed and consistency
+
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
   temperature: 0.3                         # low temp for accurate descriptions

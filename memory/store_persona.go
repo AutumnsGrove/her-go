@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -222,8 +223,9 @@ func (s *SQLiteStore) GetCurrentTraits() ([]Trait, error) {
 // to check if a catch-up dream is needed; updated after each reflection
 // and rewrite so the gates work correctly across restarts.
 type PersonaState struct {
-	LastReflectionAt time.Time // zero = never reflected
-	LastRewriteAt    time.Time // zero = never rewritten
+	LastReflectionAt       time.Time // zero = never reflected
+	LastRewriteAt          time.Time // zero = never rewritten
+	LastReflectedMessageID int64     // watermark: highest message ID already reflected on (0 = none)
 }
 
 // GetPersonaState returns the current dreaming state. Returns a zero-value
@@ -231,11 +233,11 @@ type PersonaState struct {
 // — i.e., on a fresh install before the first dream runs.
 func (s *SQLiteStore) GetPersonaState() (PersonaState, error) {
 	var lastReflStr, lastRewriteStr string
+	var watermark int64
 	err := s.db.QueryRow(
-		`SELECT COALESCE(last_reflection_at, ''), COALESCE(last_rewrite_at, '') FROM persona_state WHERE id = 1`,
-	).Scan(&lastReflStr, &lastRewriteStr)
+		`SELECT COALESCE(last_reflection_at, ''), COALESCE(last_rewrite_at, ''), COALESCE(last_reflected_message_id, 0) FROM persona_state WHERE id = 1`,
+	).Scan(&lastReflStr, &lastRewriteStr, &watermark)
 	if err != nil {
-		// No row yet — return zero state.
 		return PersonaState{}, nil
 	}
 
@@ -246,6 +248,7 @@ func (s *SQLiteStore) GetPersonaState() (PersonaState, error) {
 	if lastRewriteStr != "" {
 		state.LastRewriteAt, _ = time.Parse("2006-01-02 15:04:05", lastRewriteStr)
 	}
+	state.LastReflectedMessageID = watermark
 	return state, nil
 }
 
@@ -316,4 +319,78 @@ func (s *SQLiteStore) GetTraitHistory(traitName string, limit int) ([]Trait, err
 		traits = append(traits, t)
 	}
 	return traits, nil
+}
+
+// SetLastReflectedMessageID advances the message watermark — the dreamer
+// updates this after each nightly reflection so it knows which messages
+// have already been seen. Prevents duplicate reflections on quiet days.
+func (s *SQLiteStore) SetLastReflectedMessageID(id int64) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at, last_reflected_message_id)
+		 VALUES (1,
+		   (SELECT last_reflection_at FROM persona_state WHERE id = 1),
+		   (SELECT last_rewrite_at FROM persona_state WHERE id = 1),
+		   ?)`,
+		id,
+	)
+	return err
+}
+
+// MessagesAfterID returns up to `limit` messages with ID > afterID,
+// ordered oldest-first. Used by the dreamer to fetch only messages
+// that haven't been reflected on yet.
+func (s *SQLiteStore) MessagesAfterID(afterID int64, limit int) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
+		 FROM messages
+		 WHERE id > ?
+		 ORDER BY id ASC
+		 LIMIT ?`,
+		afterID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages after ID %d: %w", afterID, err)
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		var ts string
+		var scrubbed sql.NullString
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		if scrubbed.Valid {
+			m.ContentScrubbed = scrubbed.String
+		}
+		messages = append(messages, m)
+	}
+	return messages, nil
+}
+
+// RecentReflections returns the N most recent reflections, newest first.
+// Used to give the nightly reflection prompt context about what it already said.
+func (s *SQLiteStore) RecentReflections(limit int) ([]Reflection, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, content FROM reflections ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying recent reflections: %w", err)
+	}
+	defer rows.Close()
+
+	var reflections []Reflection
+	for rows.Next() {
+		var r Reflection
+		var ts string
+		if err := rows.Scan(&r.ID, &ts, &r.Content); err != nil {
+			return nil, fmt.Errorf("scanning reflection: %w", err)
+		}
+		r.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		reflections = append(reflections, r)
+	}
+	return reflections, nil
 }

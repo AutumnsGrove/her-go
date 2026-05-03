@@ -185,6 +185,7 @@ type suite struct {
 	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
 	SeedSelfMemories   []string            `yaml:"seed_self_memories"`   // self-knowledge memories (subject="self")
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
+	SeedPersona        string              `yaml:"seed_persona"`         // initial persona.md content (blank = empty slate)
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
@@ -304,9 +305,9 @@ type simDreamResult struct {
 	Reflection    string // NightlyReflect output (or "NOTHING_NOTABLE")
 	ReflectError  string // non-empty if NightlyReflect failed
 	PersonaText   string // new persona.md content after rewrite
-	ChangeSummary string // CHANGE_SUMMARY line from GatedRewrite
+	ChangeSummary string // analysis bullets from two-step rewrite
 	Rewritten     bool   // true if persona was actually rewritten
-	RewriteError  string // non-empty if GatedRewrite failed
+	RewriteError  string // non-empty if rewrite failed
 }
 
 // --------------------------------------------------------------------------
@@ -345,12 +346,13 @@ func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *confi
 	}
 
 	log.Infof("[dream] %s — running gated persona rewrite (bypass=true)", turnContext)
-	rewritten, err := persona.GatedRewrite(memoryAgentClient, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
+	rewritten, err := persona.GatedRewrite(memoryAgentClient, nil, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
 	if err != nil {
 		log.Error("[dream] rewrite error", "err", err)
 		result.RewriteError = err.Error()
 	} else if rewritten {
 		result.Rewritten = true
+		result.ChangeSummary = persona.LastAnalysisBullets()
 		data, _ := os.ReadFile(cfg.Persona.PersonaFile)
 		result.PersonaText = string(data)
 		log.Infof("[dream] persona rewritten:\n%s", result.PersonaText)
@@ -792,13 +794,19 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
 
-	// The persona file normally accumulates across conversations. For
-	// simulations we want a blank slate, so we create an empty temp file.
+	// Create a temp persona file. If the suite provides a seed_persona,
+	// write it in — otherwise the file starts empty (blank slate).
 	tmpPersona, err := os.CreateTemp("", "her-sim-persona-*.md")
 	if err != nil {
 		return fmt.Errorf("creating temp persona file: %w", err)
 	}
 	tmpPersonaPath := tmpPersona.Name()
+	if s.SeedPersona != "" {
+		if _, err := tmpPersona.WriteString(s.SeedPersona); err != nil {
+			tmpPersona.Close()
+			return fmt.Errorf("writing seed persona: %w", err)
+		}
+	}
 	tmpPersona.Close()
 	defer os.Remove(tmpPersonaPath)
 
@@ -1957,12 +1965,14 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 		if dream.RewriteError != "" {
 			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
 		} else if !dream.Rewritten {
-			b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
+			b.WriteString("_UNCHANGED — analysis determined no substantial shift warranted a rewrite._\n\n")
 		} else {
 			if dream.ChangeSummary != "" {
-				fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+				b.WriteString("**Step 1 — Analysis (what's true now):**\n\n")
+				fmt.Fprintf(b, "%s\n\n", dream.ChangeSummary)
 			}
-			b.WriteString("**New persona:**\n\n")
+			b.WriteString("**Step 2 — New persona:**\n\n")
+			fmt.Fprintf(b, "_(%d characters)_\n\n", len(dream.PersonaText))
 			b.WriteString("```\n")
 			b.WriteString(dream.PersonaText)
 			b.WriteString("\n```\n\n")
@@ -1990,12 +2000,14 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 		if dream.RewriteError != "" {
 			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
 		} else if !dream.Rewritten {
-			b.WriteString("_UNCHANGED — LLM determined no substantial shift warranted a rewrite._\n\n")
+			b.WriteString("_UNCHANGED — analysis determined no substantial shift warranted a rewrite._\n\n")
 		} else {
 			if dream.ChangeSummary != "" {
-				fmt.Fprintf(b, "**Change:** %s\n\n", dream.ChangeSummary)
+				b.WriteString("**Step 1 — Analysis (what's true now):**\n\n")
+				fmt.Fprintf(b, "%s\n\n", dream.ChangeSummary)
 			}
-			b.WriteString("**New persona:**\n\n")
+			b.WriteString("**Step 2 — New persona:**\n\n")
+			fmt.Fprintf(b, "_(%d characters)_\n\n", len(dream.PersonaText))
 			b.WriteString("```\n")
 			b.WriteString(dream.PersonaText)
 			b.WriteString("\n```\n\n")
