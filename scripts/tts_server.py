@@ -85,9 +85,12 @@ def clean_for_tts(text: str) -> str:
 
     Handles characters and words that Piper struggles with.
     """
-    # Em-dashes and en-dashes -> comma + pause. The model isn't
-    # supposed to use these, but they slip through sometimes.
+    # All dash-like punctuation -> comma (which triggers a pause in the splitter).
+    # Covers: em dash (—), en dash (–), double hyphen (--), spaced hyphen ( - ).
+    # Without this, Piper blows right past dashes with no breath.
     text = re.sub(r"\s*[—–]\s*", ", ", text)
+    text = re.sub(r"\s*--+\s*", ", ", text)
+    text = re.sub(r"\s+-\s+", ", ", text)
 
     # "Huh" sounds robotic in Piper -- replace with a more natural filler.
     text = re.sub(r"\bhuh\b", "hmm", text, flags=re.IGNORECASE)
