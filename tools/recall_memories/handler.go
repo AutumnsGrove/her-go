@@ -1,13 +1,10 @@
 // Package recall_memories implements the recall_memories tool — searches stored
 // memories by semantic similarity.
 //
-// The agent calls this when the user asks "do you remember..." or references
-// something from a past conversation. It embeds the query and runs a KNN
-// search against the memories table's vector index.
-//
-// This is an active recall tool — different from the automatic context injection
-// that happens at the start of every turn. That injects memories silently; this
-// tool is for when the agent needs to explicitly look something up.
+// This is the ONLY path memories reach the chat model. The agent calls this,
+// evaluates results, and passes relevant ones to reply(memories=[...]). There
+// is no automatic injection — if the agent skips recall, the chat model has
+// zero memory context.
 package recall_memories
 
 import (
