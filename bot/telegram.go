@@ -18,6 +18,7 @@ import (
 	"her/logger"
 	"her/memory"
 	"her/mood"
+	"her/retry"
 	"her/search"
 	"her/tui"
 	"her/voice"
@@ -168,26 +169,21 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	// Retry bot creation with exponential backoff. tele.NewBot calls the
 	// Telegram API to validate the token — if the network hiccups at
 	// startup, a single transient failure would kill the whole process.
-	// This is similar to Python's tenacity.retry, but Go prefers explicit
-	// loops over decorator magic.
 	var (
 		tb  *tele.Bot
 		err error
 	)
-	const maxRetries = 3
-	for attempt := range maxRetries {
-		tb, err = tele.NewBot(settings)
-		if err == nil {
-			break
-		}
-		if attempt < maxRetries-1 {
-			backoff := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s
-			log.Warn("Telegram API unreachable, retrying", "attempt", attempt+1, "backoff", backoff, "err", err)
-			time.Sleep(backoff)
-		}
-	}
+	err = retry.Do(context.Background(), retry.Config{
+		MaxAttempts: 3,
+		Backoff:     retry.Exponential,
+		InitialWait: 1 * time.Second,
+	}, func() error {
+		var e error
+		tb, e = tele.NewBot(settings)
+		return e
+	})
 	if err != nil {
-		return nil, fmt.Errorf("creating telegram bot after %d attempts: %w", maxRetries, err)
+		return nil, fmt.Errorf("creating telegram bot: %w", err)
 	}
 
 	// Load the base system prompt from prompt.md.

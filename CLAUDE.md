@@ -97,6 +97,7 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 | Tool definitions | `tools/<name>/tool.yaml` + handler | Registry dispatch via `tools.Dispatch()` | Hardcode tool schemas in Go |
 | Search | `search` | `search.TavilyClient.Search(...)` | Call Tavily API directly |
 | Vision | `vision` | `vision.Describe(client, ...)` | Construct multi-modal messages |
+| Retry | `retry` | `retry.Do(ctx, cfg, fn)` | Write ad-hoc retry loops with `time.Sleep` |
 | Voice | `voice` | `voice.TTSClient` / `voice.Client` | Call Piper/Parakeet HTTP directly |
 | Weather | `weather` | `weather.Fetch(lat, lon, ...)` | Call Open-Meteo API directly |
 
