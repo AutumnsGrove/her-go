@@ -16,6 +16,7 @@ import (
 
 	"her/config"
 	"her/logger"
+	"her/retry"
 )
 
 var log = logger.WithPrefix("calendar")
@@ -82,54 +83,59 @@ type Response struct {
 }
 
 // Call executes a command via the Swift bridge with retry logic.
-// Retries up to 3 times with exponential backoff (500ms, 1s, 2s) on exit code 1
+// errPermanent marks errors that should not be retried (exit code 2 =
+// calendar-side errors like event not found).
+type errPermanent struct{ err error }
+
+func (e *errPermanent) Error() string { return e.err.Error() }
+func (e *errPermanent) Unwrap() error { return e.err }
+
+// Call executes a command via the Swift bridge with retry logic.
+// Retries up to 3 times with exponential backoff on exit code 1
 // (bridge errors like permission flakes). Exit code 2 (calendar-side errors like
-// event not found) fails immediately. Returns an error if all retries fail or if
-// the bridge binary is missing.
+// event not found) fails immediately.
 func (b *CLIBridge) Call(ctx context.Context, req Request) (Response, error) {
-	// Check if binary exists
 	if _, err := os.Stat(b.binaryPath); os.IsNotExist(err) {
 		return Response{}, fmt.Errorf("calendar bridge not found at %s — see calendar/bridge/README.md for build instructions", b.binaryPath)
 	}
 
-	// Retry configuration: 3 attempts with exponential backoff
-	maxAttempts := 3
-	backoffDurations := []time.Duration{0, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	var resp Response
+	err := retry.Do(ctx, retry.Config{
+		MaxAttempts: 3,
+		Backoff:     retry.Exponential,
+		InitialWait: 500 * time.Millisecond,
+		IsRetriable: func(err error) bool {
+			_, permanent := err.(*errPermanent)
+			return !permanent
+		},
+	}, func() error {
+		r, exitCode, err := b.callOnce(ctx, req)
 
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Sleep before retry (not on first attempt)
-		if attempt > 1 {
-			backoff := backoffDurations[attempt-1]
-			log.Debug("Retrying bridge call", "attempt", attempt, "backoff", backoff)
-			time.Sleep(backoff)
+		if err == nil && r.OK {
+			resp = r
+			return nil
 		}
 
-		// Execute the call
-		resp, exitCode, err := b.callOnce(ctx, req)
-
-		// Success path
-		if err == nil && resp.OK {
-			return resp, nil
-		}
-
-		// Exit code 2 = calendar-side error (event not found, etc.) — fail immediately
+		// Exit code 2 = calendar-side error — not worth retrying.
 		if exitCode == 2 {
-			return resp, fmt.Errorf("calendar error: %s (%s)", resp.Message, resp.Error)
+			resp = r
+			return &errPermanent{fmt.Errorf("calendar error: %s (%s)", r.Message, r.Error)}
 		}
 
-		// Exit code 1 = bridge error (permission flake, EventKit locked, bad JSON) — retry
 		if exitCode == 1 {
-			lastErr = fmt.Errorf("bridge error (exit %d): %v", exitCode, err)
-			continue
+			return fmt.Errorf("bridge error (exit %d): %v", exitCode, err)
 		}
+		return err
+	})
 
-		// Other errors (process spawn failure, etc.) — retry
-		lastErr = err
+	if err != nil {
+		// If the permanent error wrapper survived, unwrap it for the caller.
+		if p, ok := err.(*errPermanent); ok {
+			return resp, p.err
+		}
+		return Response{}, err
 	}
-
-	// All retries exhausted
-	return Response{}, fmt.Errorf("bridge call failed after %d attempts: %w", maxAttempts, lastErr)
+	return resp, nil
 }
 
 // callOnce executes a single bridge call without retry logic.

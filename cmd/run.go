@@ -24,6 +24,7 @@ import (
 	"her/logger"
 	"her/memory"
 	"her/persona"
+	"her/retry"
 	"her/scheduler"
 	"her/search"
 	"her/tui"
@@ -157,7 +158,14 @@ func runBot(cmd *cobra.Command, args []string) error {
 				startupTimeout = 60 * time.Second
 			}
 			pullCtx, pullCancel := context.WithTimeout(context.Background(), startupTimeout)
-			if err := synced.Pull(pullCtx); err != nil {
+			err = retry.Do(pullCtx, retry.Config{
+				MaxAttempts: 3,
+				Backoff:     retry.Exponential,
+				InitialWait: 2 * time.Second,
+			}, func() error {
+				return synced.Pull(pullCtx)
+			})
+			if err != nil {
 				log.Error("d1 pull on startup failed — continuing with local data", "err", err)
 			}
 			pullCancel()
