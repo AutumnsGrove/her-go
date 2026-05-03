@@ -296,58 +296,14 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 
-	// Semantic search — find facts most relevant to what the user just said.
-	// This is the core of v0.4: instead of showing the LLM ALL facts sorted
-	// by importance, we embed the user's message and find the closest matches
-	// via sqlite-vec KNN. The results go into the system prompt so the
-	// conversational model has the right context without seeing everything.
-	//
-	// Query context: we prepend up to 2 prior user messages so the embedding
-	// captures conversational intent, not just the latest message. Without
-	// this, "vet says it might be his kidneys" embeds as health/medical —
-	// with "my dog max has been sick" prepended, it correctly pulls pet facts too.
-	var relevantMemories []memory.Memory
-	if params.EmbedClient != nil && params.Store.GetEmbedDimension() > 0 {
-		queryText := params.ScrubbedUserMessage
-		if len(recentMsgs) > 0 {
-			var priorUserMsgs []string
-			for i := len(recentMsgs) - 1; i >= 0 && len(priorUserMsgs) < 2; i-- {
-				if recentMsgs[i].Role == "user" {
-					content := recentMsgs[i].ContentScrubbed
-					if content == "" {
-						content = recentMsgs[i].ContentRaw
-					}
-					priorUserMsgs = append([]string{content}, priorUserMsgs...)
-				}
-			}
-			if len(priorUserMsgs) > 0 {
-				queryText = strings.Join(priorUserMsgs, " | ") + " | " + params.ScrubbedUserMessage
-			}
-		}
-		queryVec, err := params.EmbedClient.Embed(queryText)
-		if err != nil {
-			log.Warn("semantic search: embedding failed, falling back to importance-only", "err", err)
-		} else {
-			relevantMemories, err = params.Store.SemanticSearch(queryVec, params.Cfg.Memory.MaxFactsInContext)
-			if err != nil {
-				log.Warn("semantic search: query failed, falling back to importance-only", "err", err)
-			} else {
-				log.Infof("  semantic search: %d relevant memories", len(relevantMemories))
-			}
-		}
-	}
-
-	// Emit context event for the TUI — route through PhaseHandle when
-	// available so TurnID is centrally managed.
+	// Emit context event for the TUI.
 	if mainPhase != nil {
 		mainPhase.Emit(tui.ContextEvent{
 			Time: time.Now(), TurnID: params.TriggerMsgID,
-			RelevantMemories: len(relevantMemories),
 		})
 	} else {
 		emit(tui.ContextEvent{
 			Time: time.Now(), TurnID: params.TriggerMsgID,
-			RelevantMemories: len(relevantMemories),
 		})
 	}
 
@@ -358,7 +314,6 @@ func Run(params RunParams) (*RunResult, error) {
 		Store:               params.Store,
 		Cfg:                 params.Cfg,
 		EmbedClient:         params.EmbedClient,
-		RelevantMemories:    relevantMemories,
 		ConversationSummary: conversationSummary,
 		AgentActionSummary:  agentActionSummary,
 		RecentAgentActions:  recentAgentActions,
@@ -423,7 +378,6 @@ func Run(params RunParams) (*RunResult, error) {
 		ConversationID:            params.ConversationID,
 		TriggerMsgID:              params.TriggerMsgID,
 		ConversationSummary:       conversationSummary,
-		RelevantMemories:          relevantMemories,
 		ImageBase64:               params.ImageBase64,
 		ImageMIME:                 params.ImageMIME,
 		OCRText:                   params.OCRText,

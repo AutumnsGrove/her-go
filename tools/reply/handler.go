@@ -86,7 +86,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Store:               ctx.Store,
 		Cfg:                 ctx.Cfg,
 		EmbedClient:         ctx.EmbedClient,
-		RelevantMemories:    ctx.RelevantMemories,
 		AgentPassedMemories: ctx.AgentPassedMemories,
 		ConversationSummary: ctx.ConversationSummary,
 		ConversationID:      ctx.ConversationID,

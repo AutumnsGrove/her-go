@@ -78,7 +78,7 @@ func StartFileLogger(bus *Bus, w io.Writer) {
 
 			case ContextEvent:
 				logger.WithPrefix("driver").Info(
-					fmt.Sprintf("semantic: %d relevant memories", e.RelevantMemories),
+					"context ready (recall-driven)",
 					"turn_id", e.TurnID,
 				)
 

@@ -344,9 +344,7 @@ func renderStartupEvent(ev StartupEvent) string {
 }
 
 func renderContextEvent(ev ContextEvent) string {
-	return subHeaderStyle.Render(
-		fmt.Sprintf("semantic: %d relevant memories", ev.RelevantMemories),
-	)
+	return subHeaderStyle.Render("context ready (recall-driven)")
 }
 
 func renderAgentIterEvent(ev AgentIterEvent) string {
