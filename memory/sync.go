@@ -49,6 +49,19 @@ var fullPullTables = []string{
 	"persona_state",
 }
 
+// Pull phases — tables are grouped by FK dependencies so parent rows
+// exist before child rows are inserted. Tables within a phase run
+// concurrently; phases run sequentially.
+//
+//	Phase 1: no FK deps on other synced tables
+//	Phase 2: memories → messages, traits → persona_versions
+//	Phase 3: memory_links → memories
+var pullPhases = [][]string{
+	{"messages", "summaries", "reflections", "persona_versions", "mood_entries", "persona_state"},
+	{"memories", "traits"},
+	{"memory_links"},
+}
+
 // ---------------------------------------------------------------------------
 // Pull entry point
 // ---------------------------------------------------------------------------
@@ -69,40 +82,25 @@ func (s *SyncedStore) Pull(ctx context.Context) error {
 		return fmt.Errorf("initializing sync meta: %w", err)
 	}
 
-	// Disable FK checks for the duration of the pull. Tables are pulled
-	// concurrently, so child rows (e.g. memories with source_message_id)
-	// may arrive before their parent rows (messages). This is safe
-	// because the data in D1 already passed FK validation when it was
-	// first written — we're replicating, not creating relationships.
-	//
-	// PRAGMA foreign_keys is per-connection in SQLite, so this only
-	// affects the pull's upserts, not concurrent bot writes.
-	s.SQLiteStore.db.Exec("PRAGMA foreign_keys = OFF")
-	defer s.SQLiteStore.db.Exec("PRAGMA foreign_keys = ON")
+	// Pull tables in FK-dependency order. Each phase runs its tables
+	// concurrently, but phases are sequential — so parent rows (messages)
+	// exist before child rows (memories) are inserted.
+	for _, phase := range pullPhases {
+		var g errgroup.Group
 
-	// Use a plain errgroup (not WithContext) so one table's failure
-	// doesn't cancel the others — we want best-effort for each table.
-	// This is like asyncio.gather(return_exceptions=False) in Python,
-	// except errgroup still waits for all goroutines before returning
-	// the first error.
-	var g errgroup.Group
+		for _, table := range phase {
+			table := table
+			g.Go(func() error {
+				if isIncremental(table) {
+					return s.pullIncremental(ctx, table)
+				}
+				return s.pullFull(ctx, table)
+			})
+		}
 
-	for _, table := range incrementalTables {
-		table := table // capture for goroutine — fixed in Go 1.22 but safe either way
-		g.Go(func() error {
-			return s.pullIncremental(ctx, table)
-		})
-	}
-
-	for _, table := range fullPullTables {
-		table := table
-		g.Go(func() error {
-			return s.pullFull(ctx, table)
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("pulling from D1: %w", err)
+		if err := g.Wait(); err != nil {
+			return fmt.Errorf("pulling from D1: %w", err)
+		}
 	}
 
 	log.Info("d1 pull complete")
@@ -231,25 +229,45 @@ func (s *SyncedStore) pullFull(ctx context.Context, table string) error {
 // Runs inside a transaction for atomicity and uses a prepared statement
 // for performance — same pattern as bulk inserts in Python with
 // cursor.executemany(), but explicit.
+//
+// Uses a pinned connection (db.Conn) with PRAGMA foreign_keys = OFF to
+// handle self-referential FKs (e.g. memories.superseded_by → memories.id)
+// where a row may reference another row in the same batch. The phase
+// ordering in Pull handles cross-table FKs; this handles intra-table ones.
+//
+// Why db.Conn? Go's database/sql uses a connection pool. db.Exec("PRAGMA ...")
+// and db.Begin() can land on different pooled connections, so a PRAGMA set
+// on one connection has no effect on transactions opened from the pool.
+// db.Conn pins a single underlying connection, guaranteeing the PRAGMA and
+// the transaction share it — like Python's `with conn:` block.
 func (s *SyncedStore) upsertRows(table string, spec tableSpec, rows []d1.Row) error {
+	ctx := context.Background()
+
+	// Pin a single connection so the FK pragma and transaction share it.
+	conn, err := s.SQLiteStore.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("pinning connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Disable FK checks on this connection. Safe because the data already
+	// passed FK validation in D1 — we're replicating, not creating relationships.
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return fmt.Errorf("disabling foreign keys: %w", err)
+	}
+	defer conn.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+
 	query := fmt.Sprintf(
 		"INSERT OR REPLACE INTO %s (%s) VALUES (%s)",
 		table, spec.d1Cols, spec.placeholders,
 	)
 
-	// Wrap in a transaction — if one row fails, none are committed.
-	// Also much faster than individual INSERTs: SQLite commits once
-	// instead of once per row (each commit is an fsync to disk).
-	tx, err := s.SQLiteStore.db.Begin()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
-	defer tx.Rollback() // no-op if Commit() succeeds
+	defer tx.Rollback()
 
-	// Prepared statements inside a transaction are a Go/SQL best
-	// practice for bulk inserts. The driver parses the SQL once,
-	// then re-binds parameters for each row. In Python terms, it's
-	// like cursor.executemany(sql, rows) — same idea, more explicit.
 	prepared, err := tx.Prepare(query)
 	if err != nil {
 		return fmt.Errorf("preparing upsert for %s: %w", table, err)
