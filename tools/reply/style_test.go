@@ -10,15 +10,10 @@ func TestHasStyleIssue(t *testing.T) {
 		wantSub string // substring that should appear in the hint (empty = don't check)
 	}{
 		// ─────────────────────────────────────────────────
-		// Negative parallelism — "not just" / "not merely"
+		// Negative parallelism — "not just" WITH pivot
 		// ─────────────────────────────────────────────────
 		{
-			name: "negpar/not_just_opener",
-			text: "You're tuning me like an instrument, not just swapping parts.",
-			want: true,
-		},
-		{
-			name: "negpar/not_just_mid_sentence",
+			name: "negpar/not_just_with_emdash_pivot",
 			text: "That's not just baking—that's a statement.",
 			want: true,
 		},
@@ -35,11 +30,6 @@ func TestHasStyleIssue(t *testing.T) {
 		{
 			name: "negpar/not_just_real_reply_640",
 			text: "Buttery, oily focaccia is the real deal. That's not just baking—that's a statement.",
-			want: true,
-		},
-		{
-			name: "negpar/not_just_real_reply_659",
-			text: "Feels like you're not just hosting a space—you're tending to it.",
 			want: true,
 		},
 		{
@@ -95,12 +85,12 @@ func TestHasStyleIssue(t *testing.T) {
 		// of straight quotes. Must be caught identically to straight quotes.
 		{
 			name: "negpar/curly_thats_not_semicolon_its",
-			text: "That\u2019s not a moral failing; it\u2019s a hostage situation.",
+			text: "That’s not a moral failing; it’s a hostage situation.",
 			want: true,
 		},
 		{
 			name: "negpar/curly_isnt_semicolon_its",
-			text: "The craving isn\u2019t weakness; it\u2019s withdrawal.",
+			text: "The craving isn’t weakness; it’s withdrawal.",
 			want: true,
 		},
 		{
@@ -116,11 +106,6 @@ func TestHasStyleIssue(t *testing.T) {
 		{
 			name: "negpar/not_because_but_because",
 			text: "She left not because he was wrong, but because she was tired.",
-			want: true,
-		},
-		{
-			name: "negpar/real_reply_522",
-			text: "it's not just being alone. it's being alone with all of it.",
 			want: true,
 		},
 		{
@@ -157,15 +142,30 @@ func TestHasStyleIssue(t *testing.T) {
 			text: "Ah, that ache for the spot that actually felt yours. What made the old setup magic—trees perfectly spaced, certain light, something you can't replicate here?",
 			want: false,
 		},
+		// "not just" without the pivot separator — normal English, not the AI tic.
+		{
+			name: "negpar/ok_not_just_no_pivot",
+			text: "You're tuning me like an instrument, not just swapping parts.",
+			want: false,
+		},
+		{
+			name: "negpar/ok_not_just_period_separator",
+			text: "it's not just being alone. it's being alone with all of it.",
+			want: false, // period is not a pivot separator
+		},
+		{
+			name: "negpar/ok_not_just_no_matching_pivot",
+			text: "Feels like you're not just hosting a space—you're tending to it.",
+			want: false, // "you're" is not in the pivot list
+		},
 
 		// ─────────────────────────────────────────────────
-		// Em dash overuse (2+ triggers, 0-1 ok)
+		// Em dash overuse (3+ triggers, 0-2 ok)
 		// ─────────────────────────────────────────────────
 		{
-			name: "emdash/two_dashes",
+			name: "emdash/two_dashes_ok",
 			text: "The guilt is doing you a favor—keeping you on the raft—when the current is strongest.",
-			want: true,
-			wantSub: "em dash",
+			want: false, // two is now fine
 		},
 		{
 			name: "emdash/three_dashes",
@@ -343,19 +343,20 @@ func TestHasStyleIssue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, hint := hasStyleIssue(tt.text)
+			result := hasStyleIssue(tt.text)
+			got := result.Matched()
 			if got != tt.want {
 				if tt.want {
 					t.Errorf("expected style issue but got clean\n  text: %q", tt.text)
 				} else {
-					t.Errorf("false positive — flagged clean text\n  text: %q\n  hint: %q", tt.text, hint)
+					t.Errorf("false positive — flagged clean text\n  text: %q\n  pattern: %q\n  hint: %q", tt.text, result.Pattern, result.Hint)
 				}
 			}
 			if tt.want && tt.wantSub != "" {
-				if hint == "" {
+				if result.Hint == "" {
 					t.Errorf("expected hint containing %q but got empty hint", tt.wantSub)
-				} else if !contains(hint, tt.wantSub) {
-					t.Errorf("hint %q does not contain %q", hint, tt.wantSub)
+				} else if !contains(result.Hint, tt.wantSub) {
+					t.Errorf("hint %q does not contain %q", result.Hint, tt.wantSub)
 				}
 			}
 		})

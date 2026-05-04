@@ -308,9 +308,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var styleSource string
 
 	// Layer 1: deterministic check.
-	if issue, hint := hasStyleIssue(resp.Content); issue {
-		styleHint = hint
-		styleSource = "pattern"
+	styleCheck := hasStyleIssue(resp.Content)
+	if styleCheck.Matched() {
+		styleHint = styleCheck.Hint
+		styleSource = "pattern:" + styleCheck.Pattern
 	}
 
 	// Layer 2: classifier — only runs if the deterministic check passed
@@ -319,8 +320,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
 		if styleVerdict.Allowed {
-			log.Info("reply: style gate passed")
 			styleGateNote = "[style: PASS]"
+			emitGate(ctx, "style→gate", "PASS", "no issues detected")
 		} else {
 			styleHint = styleVerdict.Reason
 			if styleHint == "" {
@@ -332,9 +333,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Single retry path — shared by both layers.
 	if styleHint != "" {
-		log.Info("reply: style issue detected, retrying once",
+		log.Info("reply: style gate REJECT",
 			"source", styleSource, "hint", styleHint,
 			"preview", truncate(resp.Content, 80))
+		emitGate(ctx, "style→gate", "REJECT ("+styleSource+")", styleHint)
 
 		hintMessages := append(llmMessages, llm.ChatMessage{
 			Role:    "system",
@@ -344,21 +346,20 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if retryErr == nil && !isDegenerate(retryResp.Content) && len(retryResp.Content) <= maxReplyChars {
 			resp = retryResp
 			ctx.ReplyCost += retryResp.CostUSD
-			log.Info("reply: style retry accepted", "source", styleSource, "hint", styleHint,
+			log.Info("reply: style retry accepted",
+				"source", styleSource, "hint", styleHint,
 				"preview", truncate(resp.Content, 80))
-			// Report as clean to the agent — the issue was resolved internally.
-			// Exposing retry details causes the agent to self-correct in a loop.
-			// Full details are in the log line above for observability.
+			emitGate(ctx, "style→gate", "RETRY OK", truncate(resp.Content, 80))
 			styleGateNote = "[style: clean]"
 		} else {
-			log.Warn("reply: style retry failed or invalid, delivering original",
+			log.Warn("reply: style retry failed, delivering original",
 				"source", styleSource, "hint", styleHint)
-			// Same here — the original was delivered, so from the agent's
-			// perspective the reply is done. No need to signal a problem.
+			emitGate(ctx, "style→gate", "RETRY FAIL", "delivering original")
 			styleGateNote = "[style: clean]"
 		}
 	} else if styleGateNote == "" {
 		styleGateNote = "[style: clean]"
+		emitGate(ctx, "style→gate", "PASS (no classifier)", "deterministic check clean")
 	}
 
 	// Safety gate — separate classifier focused on emotional safety.
@@ -380,14 +381,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
+			emitGate(ctx, "safety→gate", "SAFE", "no issues detected")
 		} else {
 			safetyHint := safetyVerdict.Reason
 			if safetyHint == "" {
 				safetyHint = "balance your support with honest perspective"
 			}
-			log.Info("reply: safety issue detected, retrying once",
+			log.Info("reply: safety gate REJECT",
 				"verdict", safetyVerdict.Type, "hint", safetyHint,
 				"preview", truncate(resp.Content, 80))
+			emitGate(ctx, "safety→gate", "REJECT ("+safetyVerdict.Type+")", safetyHint)
 
 			safetyMessages := append(llmMessages, llm.ChatMessage{
 				Role:    "system",
@@ -400,14 +403,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				log.Info("reply: safety retry accepted",
 					"verdict", safetyVerdict.Type, "hint", safetyHint,
 					"preview", truncate(resp.Content, 80))
-				// Report as safe to the agent — the issue was resolved
-				// internally. Exposing the verdict type and hint caused
-				// the agent to self-correct by calling reply again with
-				// a softer instruction, producing near-duplicate messages.
+				emitGate(ctx, "safety→gate", "RETRY OK", truncate(resp.Content, 80))
 				safetyGateNote = "[safety: SAFE]"
 			} else {
-				log.Warn("reply: safety retry failed or invalid, delivering original",
+				log.Warn("reply: safety retry failed, delivering original",
 					"verdict", safetyVerdict.Type, "hint", safetyHint)
+				emitGate(ctx, "safety→gate", "RETRY FAIL", "delivering original")
 				safetyGateNote = "[safety: SAFE]"
 			}
 		}
@@ -544,6 +545,23 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		suffix = gates + "\n" + suffix
 	}
 	return fmt.Sprintf("reply delivered to user: %q\n\n%s", preview, suffix)
+}
+
+// emitGate sends a gate outcome to the trace system so it's visible in
+// /traces. Uses ToolCallEvent with synthetic tool names like "style→gate"
+// and "safety→gate" — same pattern as "memory→chat" for memory injection.
+func emitGate(ctx *tools.Context, gate, verdict, detail string) {
+	if ctx.Phase != nil {
+		ctx.Phase.EmitToolCall(gate, verdict, detail, false)
+	} else if ctx.EventBus != nil {
+		ctx.EventBus.Emit(tui.ToolCallEvent{
+			Time:     time.Now(),
+			TurnID:   ctx.TriggerMsgID,
+			ToolName: gate,
+			Args:     verdict,
+			Result:   detail,
+		})
+	}
 }
 
 // isDegenerate detects garbage LLM outputs that would poison conversation

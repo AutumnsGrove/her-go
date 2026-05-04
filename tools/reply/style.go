@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-// negativeParallelism catches the broader "it's not X, it's Y" family —
+// negativeParallelism catches the "it's not X, it's Y" family —
 // what tropes.fyi calls the single most identifiable AI writing tell.
 //
 // The key insight is that the SEPARATOR between the negation and the
@@ -24,6 +24,7 @@ import (
 //
 //   - "isn't X; it's Y"  /  "is not X, it's Y"  /  "wasn't X — it's Y"
 //   - "that's not X, that's Y"  /  "that's not X — it's Y"
+//   - "not just X, it's/but Y"  /  "not merely X, it's/but Y"
 //   - "less like X, more like Y"
 //   - "not because X, but because Y"
 var negativeParallelism = regexp.MustCompile(
@@ -33,6 +34,10 @@ var negativeParallelism = regexp.MustCompile(
 		`|` +
 		// "that's not X, that's Y" / "that's not X — it's Y"
 		`that's not .{1,40}[;,\x{2014}]\s*(?:it's|it is|that's|that is)` +
+		`|` +
+		// "not just/merely X, it's/but Y" — requires the pivot separator,
+		// so bare "not just" in normal English ("it's not just you") passes.
+		`not (?:just|merely) .{1,40}[;,\x{2014}]\s*(?:it's|it is|that's|that is|but)` +
 		`|` +
 		// "less like X, more like Y"
 		`less like .{1,40},\s*more like` +
@@ -44,46 +49,51 @@ var negativeParallelism = regexp.MustCompile(
 
 const negParHint = "drop the 'it's not X, it's Y' reframe — say what it is directly"
 
+// StyleResult holds the outcome of a deterministic style check.
+// Pattern identifies which check matched (for logging and traces).
+// Empty Pattern means no issue was found.
+type StyleResult struct {
+	Pattern string // machine-readable: "neg_parallelism", "em_dashes", etc.
+	Hint    string // human-readable retry instruction for the chat model
+}
+
+// Matched returns true if a style issue was detected.
+func (r StyleResult) Matched() bool { return r.Pattern != "" }
+
 // hasStyleIssue checks the reply for common AI writing tics that are
-// mechanically detectable. Returns true and a short, actionable hint
-// for the retry prompt if an issue is found. Only the first match
-// fires — one problem at a time keeps the retry focused.
-func hasStyleIssue(text string) (bool, string) {
+// mechanically detectable. Returns a StyleResult with the first matching
+// pattern and a short, actionable hint. Only the first match fires —
+// one problem at a time keeps the retry focused.
+func hasStyleIssue(text string) StyleResult {
 	// Normalize curly/smart quotes to straight ASCII before matching.
-	// Many LLMs output U+2018/U+2019 (''') instead of U+0027 ('),
+	// Many LLMs output U+2018/U+2019 instead of U+0027,
 	// which silently breaks every contraction in our regex patterns
 	// ("that's", "isn't", "it's"). One replace fixes all branches.
-	text = strings.ReplaceAll(text, "\u2019", "'")
-	text = strings.ReplaceAll(text, "\u2018", "'")
+	text = strings.ReplaceAll(text, "’", "'")
+	text = strings.ReplaceAll(text, "‘", "'")
 	lower := strings.ToLower(text)
 
 	// --- Negative parallelism (the big one) ---
 
-	// Fast path: literal "not just" / "not merely" — the most common
-	// variant, cheaper to catch with Contains than regex.
-	if strings.Contains(lower, "not just") || strings.Contains(lower, "not merely") {
-		return true, negParHint
-	}
-
-	// Broad structural check: catches "isn't X; it's Y", "less like X,
-	// more like Y", and other variants the literal check misses.
+	// Structural check: requires the full "negation + separator + pivot"
+	// shape. Bare "not just" without a pivot is normal English.
 	if negativeParallelism.MatchString(text) {
-		return true, negParHint
+		return StyleResult{Pattern: "neg_parallelism", Hint: negParHint}
 	}
 
 	// --- Other mechanical tics ---
 
 	// Em dash overuse. prompt.md bans them outright but models can't resist.
-	// Allow one (sometimes natural punctuation); flag two or more.
-	if strings.Count(text, "\u2014") >= 2 {
-		return true, "too many em dashes — rephrase without them"
+	// Allow two (common in natural multi-sentence replies); flag three+.
+	if strings.Count(text, "—") >= 3 {
+		return StyleResult{Pattern: "em_dashes", Hint: "too many em dashes — rephrase without them"}
 	}
 
 	// "I love that" as a hollow affirmation. Fine buried in a sentence
 	// ("I love that you tried"), but as a standalone opener it's a tic.
 	if strings.HasPrefix(lower, "i love that") ||
 		strings.Contains(lower, "\ni love that") {
-		return true, "drop 'I love that' as an opener — react to the specific detail instead"
+		return StyleResult{Pattern: "i_love_that", Hint: "drop 'I love that' as an opener — react to the specific detail instead"}
 	}
 
 	// "Here's the thing" family — manufactured reveal / fake drama.
@@ -94,7 +104,7 @@ func hasStyleIssue(text string) (bool, string) {
 		"here's what most people",
 	} {
 		if strings.Contains(lower, phrase) {
-			return true, "drop '" + phrase + "' — just say it directly"
+			return StyleResult{Pattern: "heres_the_thing", Hint: "drop '" + phrase + "' — just say it directly"}
 		}
 	}
 
@@ -102,8 +112,8 @@ func hasStyleIssue(text string) (bool, string) {
 	// that add nothing. Already banned in prompt.md but models ignore it.
 	if strings.Contains(lower, "it's worth noting") ||
 		strings.Contains(lower, "it bears mentioning") {
-		return true, "drop the filler transition — just state the point"
+		return StyleResult{Pattern: "filler_transition", Hint: "drop the filler transition — just state the point"}
 	}
 
-	return false, ""
+	return StyleResult{}
 }
