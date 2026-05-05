@@ -21,21 +21,19 @@ User sends message
   │
   ▼
   2. Chat Compaction ────── compact/compact.go → MaybeCompact()
-  │   Loads 100-message window from DB.
-  │   Two triggers (either can fire):
-  │     a) Context-aware: last user msg's prompt tokens vs chat_context_budget
-  │     b) Estimation: len/4 heuristic vs max_history_tokens budget
-  │   If triggered → calls chatLLM (Deepseek) to summarize older messages.
+  │   Loads message window from DB.
+  │   Trigger: estimated tokens vs max_history_tokens budget (75% threshold).
+  │   If triggered → calls chatLLM (Kimi K2) to summarize older messages.
   │   Summary stored with stream="chat" in summaries table.
   │   Result: conversationSummary string + keptMessages slice.
   │
   ▼
   3. Agent Compaction ───── compact/compact.go → MaybeCompactAgent()
-  │   Loads last 30 messages worth of tool calls from agent_turns table.
-  │   Checks estimated tokens vs agent_context_budget (75% threshold).
+  │   Loads tool calls from agent_turns table.
+  │   Checks estimated tokens vs driver_context_budget (75% threshold).
   │   If triggered → calls chatLLM to summarize older actions.
-  │   Smart filtering: verbose tool results (web_search, book_search,
-  │   find_skill, recall_memories) are truncated; action outcomes preserved.
+  │   Smart filtering: verbose tool results (web_search, search_books,
+  │   recall_memories) are truncated; action outcomes preserved.
   │   Summary stored with stream="agent" in summaries table.
   │   Result: agentActionSummary string + recentAgentActions slice.
   │
@@ -46,23 +44,24 @@ User sends message
   │   Result: relevantFacts slice (used by both agent and chat).
   │
   ▼
-  5. Agent Loop ─────────── agent/agent.go → Run()
-  │   Kimi K2.5 orchestrates the response. Up to 10 iterations.
-  │   Decides what to do: think, search, save facts, reply, etc.
+  5. Driver Loop ────────── agent/agent.go → Run()
+  │   Qwen3 235B orchestrates the response. Up to 15 iterations.
+  │   Decides what to do: think, search, reply, etc.
   │   Tool calls stored in agent_turns table for future action history.
   │   Tool calls may trigger other models (see below).
   │
   ▼
   6. Reply Delivery ─────── agent/agent.go → execReply()
   │   Agent calls the `reply` tool, which invokes the chat model.
-  │   Deepseek V3.2 generates the actual text the user sees.
+  │   Kimi K2 generates the actual text the user sees.
   │   PII tokens are deanonymized before sending to Telegram.
   │
   ▼
-  7. Post-Reply ─────────── (within agent loop, after reply)
-     Agent may save facts, update mood, etc.
-     Each fact write triggers the classifier (Haiku 4.5).
-     Agent calls `done` to end the loop.
+  7. Post-Turn ──────────── (background goroutines, parallel)
+     Memory agent reviews turn → save/update/remove facts.
+     Mood agent infers valence + labels → auto-log/propose/drop.
+     Each write gated by classifier (Gemini Flash Lite).
+     User never waits — reply already sent.
 ```
 
 ---
@@ -76,15 +75,15 @@ register themselves via `init()` in `agent/layers/` and are sorted by Order.
 The same registry is used by runtime (`layers.BuildAll`) and the CLI
 (`her shape`) — impossible for them to drift out of sync.
 
-### Agent Layers (StreamAgent)
+### Driver Layers (StreamAgent)
 
 | Order | Layer | File | Description |
 |-------|-------|------|-------------|
-| 10 | Agent Prompt | `agent_prompt.go` | Overhead: reports `agent_prompt.md` token size |
+| 10 | Driver Prompt | `agent_prompt.go` | Overhead: reports `driver_agent_prompt.md` token size |
 | 50 | Tool Schemas | `agent_tools.go` | Overhead: reports hot tool schema token size |
 | 100 | Time | `agent_time.go` | ISO timestamp + timezone |
-| 150 | Action History | `agent_action_history.go` | Agent's own tool call history (summary + recent actions) |
-| 200 | Recent Conversation | `agent_history.go` | Last 10 messages with day boundary markers |
+| 150 | Action History | `agent_action_history.go` | Driver's own tool call history (summary + recent actions) |
+| 200 | Recent Conversation | `agent_history.go` | Last 6 messages with day boundary markers |
 | 300 | Current Message | `agent_message.go` | The scrubbed user message |
 | 350 | Image Context | `agent_image.go` | OCR text + image description (if image sent) |
 | 400 | User Memories | `agent_user_facts.go` | Semantically relevant user facts (KNN-filtered) |
@@ -97,28 +96,25 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 |-------|-------|------|-------------|
 | 100 | Base Identity | `chat_prompt.go` | `prompt.md` — static personality template |
 | 200 | Persona | `chat_persona.go` | `persona.md` — evolving self-image (bot-authored) |
-| 250 | Traits | `chat_traits.go` | Personality trait scores from last rewrite |
 | 300 | Time | `chat_time.go` | Current date/time in human format |
 | 400 | Memory | `chat_memory.go` | Semantic facts (KNN-filtered, redundancy-filtered) |
 | 450 | Weather | `chat_weather.go` | Current conditions (if configured) |
 | 500 | Mood | `chat_mood.go` | Recent mood entries + trend |
-| 550 | Expenses | `chat_expenses.go` | Receipt scan data (if just scanned) |
 | 600 | Summary | `chat_summary.go` | Chat compaction summary of older conversation |
 
 ---
 
 ## Model Call Reference
 
-### 1. Agent Model — Kimi K2.5
+### 1. Driver Agent — Qwen3 235B
 
 **Purpose:** Orchestrate the response. Decide what tools to call, in what order.
 
-**Called from:** `agent/agent.go:445` — `params.AgentLLM.ChatCompletionWithTools()`
+**Called from:** `agent/agent.go` — `params.DriverLLM.ChatCompletionWithTools()`
 
-**System prompt:** `agent_prompt.md` (loaded by `loadAgentPrompt()`)
-- ~19KB / ~4,800 tokens
+**System prompt:** `driver_agent_prompt.md` (loaded by `loadAgentPrompt()`)
 - Hot-reloadable from disk (changes take effect next message)
-- Contains: agent rules, tool usage instructions, memory management guidelines
+- Contains: agent rules, tool usage instructions, orchestration guidelines
 - Auto-generated sections injected between `<!-- BEGIN -->` / `<!-- END -->` markers:
   - `HOT_TOOLS`: list of always-available tools
   - `CATEGORY_TABLE`: deferred tool categories
@@ -129,28 +125,27 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 |-------|--------|-------------|
 | Time | `time.Now()` | ISO timestamp + timezone |
 | Action History | `store.RecentAgentActions()` + compaction | Summary of past actions + recent tool calls in full |
-| Recent Conversation | `store.RecentMessages()` | Last 10 messages (sliding window post-compaction) |
+| Recent Conversation | `store.RecentMessages()` | Last 6 messages (sliding window post-compaction) |
 | Current Message | `params.ScrubbedUserMessage` | The user's message (PII-scrubbed) |
 | Image Context | `params.OCRText` | OCR text if image was sent |
 | User Memories | Semantic search results | KNN-filtered user facts + recall_memories hint |
 | Self Memories | Semantic search results | KNN-filtered self facts + recall_memories hint |
 
-**Tools:** Starts with ~7 hot tools, agent can load more via `use_tools`.
+**Tools:** Starts with 8 hot tools, agent can load more via `use_tools`.
+- Hot tools: done, reply, think, recall_memories, get_time, send_task, list_calendars, view_image
+- Deferred categories: search (web_search, web_read, search_books), context (get_weather, set_location, nearby_search), calendar (calendar_create, calendar_list, etc.)
 - Defined in: `tools/<name>/tool.yaml` (YAML manifests)
 - Loaded by: `tools/loader.go`
-- Hot vs deferred split: `tools/loader.go → HotToolDefs()`
-
-**Typical prompt size:** ~6,000-8,000 tokens (agent_prompt + semantic facts + 10 messages + action history + tool schemas)
 
 **Token storage:** Metrics only (`SaveMetric`). Does NOT update message `token_count`.
 
 ---
 
-### 2. Chat Model — Deepseek V3.2
+### 2. Chat Model — Kimi K2
 
 **Purpose:** Generate the actual reply the user sees.
 
-**Called from:** `agent/agent.go:999` — `tctx.ChatLLM.ChatCompletion()` inside `execReply()`
+**Called from:** `agent/agent.go` — `tctx.ChatLLM.ChatCompletion()` inside `execReply()`
 
 **System prompt:** Built by `layers.BuildAll(StreamChat, ctx)`, layered:
 
@@ -182,11 +177,11 @@ Layers are joined with `\n\n---\n\n` separators.
 
 ---
 
-### 3. Classifier — Claude Haiku 4.5
+### 3. Classifier — Gemini 3.1 Flash Lite
 
 **Purpose:** Validate memory writes. Returns one word: SAVE, FICTIONAL, MOOD_NOT_FACT, etc.
 
-**Called from:** `agent/classifier.go:232` — `classifierLLM.ChatCompletion()`
+**Called from:** `classifier/classifier.go` — `classifierLLM.ChatCompletion()`
 (invoked via `tctx.ClassifyWriteFunc` from tool handlers in `tools/`)
 
 **System prompt:** Pre-rendered at init from `agent/classifiers.yaml` template.
@@ -227,7 +222,7 @@ if the agent tries multiple writes that get rejected.
 
 ---
 
-### 5. Chat Compaction Model — Deepseek V3.2 (same client as chat)
+### 5. Chat Compaction Model — Kimi K2 (same client as chat)
 
 **Purpose:** Summarize older conversation messages into a running summary.
 
@@ -256,7 +251,7 @@ Mira: message text
 
 ---
 
-### 6. Agent Compaction Model — Deepseek V3.2 (same client as chat)
+### 6. Agent Compaction Model — Kimi K2 (same client as chat)
 
 **Purpose:** Summarize the agent's older tool call history into a running summary.
 
@@ -293,7 +288,7 @@ keep full results.
 
 ---
 
-### 7. Reflection Model — Deepseek V3.2 (same client as chat)
+### 7. Reflection Model — Kimi K2 (same client as chat)
 
 **Purpose:** After memory-dense conversations, generate a private journal-like
 reflection about what was learned.
@@ -312,7 +307,7 @@ facts were saved in one turn.
 
 ---
 
-### 8. Persona Rewrite Model — Deepseek V3.2 (same client as chat)
+### 8. Persona Rewrite Model — Kimi K2 (same client as chat)
 
 **Purpose:** Every N reflections, rewrite `persona.md` — the bot's evolving self-image.
 
@@ -327,19 +322,21 @@ Triggered by `MaybeRewrite()` after every `rewrite_every_n_reflections` reflecti
 
 ---
 
-### 9. Embedding Model — nomic (local)
+### 9. Embedding Model — Nomic Embed Text (local)
 
 **Purpose:** Convert text to vectors for semantic search and dedup.
 
 **Called from:** `embed/embed.go → Embed()`
 
 **Used by:**
-- Semantic fact search (agent.go)
-- Fact dedup on save (memory/store.go)
-- Conversation redundancy filtering (memory/context.go)
-- Zettelkasten link creation (memory/store.go)
+- Semantic fact search (agent.go, recall_memories tool)
+- Fact dedup on save (memory agent)
+- Mood dedup (mood agent)
+- Memory linking (Zettelkasten-style connections)
 
 **Not an LLM call** — no system prompt, no tokens, no cost. Just text → vector.
+
+**Server:** Ollama recommended (`ollama pull nomic-embed-text`), LM Studio also supported.
 
 ---
 
@@ -354,12 +351,11 @@ budget, trigger, summary prompt, and DB storage.
 |--------|--------|
 | **What it summarizes** | Conversation messages (user + assistant) |
 | **Focus** | Conversational flow, emotional tone, commitments, arc |
-| **Budget config** | `chat_context_budget` (default: 8000) |
-| **Estimation config** | `max_history_tokens` (default: 3000) |
-| **Trigger** | Two independent triggers (either can fire): context-aware (actual prompt tokens from previous turn vs budget at 75%) or estimation-based (len/4 heuristic over 100-message window at 75%) |
-| **Keeps in full** | 6 most recent messages (3 exchanges) |
+| **Budget config** | `max_history_tokens` (default: 8000) |
+| **Trigger** | Estimation-based (75% of budget) |
+| **Keeps in full** | 6 most recent messages (configured via `recent_messages`) |
 | **DB storage** | `summaries` table, `stream='chat'` |
-| **Injected into** | Chat model Layer 6 (`chat_summary.go`) |
+| **Injected into** | Chat model (`chat_summary.go` layer) |
 
 ### Agent Compaction (tool call history)
 
@@ -367,12 +363,12 @@ budget, trigger, summary prompt, and DB storage.
 |--------|--------|
 | **What it summarizes** | Agent tool calls and results from `agent_turns` table |
 | **Focus** | Actions taken, decisions made, outcomes, fact operations |
-| **Budget config** | `agent_context_budget` (default: 6000) |
-| **Trigger** | Estimation-based only (estimated action tokens vs budget at 75%) |
+| **Budget config** | `driver_context_budget` (default: 16000) |
+| **Trigger** | Estimation-based (75% of budget) |
 | **Keeps in full** | 10 most recent actions |
 | **Smart filtering** | Verbose tool results (search, books) truncated to ~200 chars |
 | **DB storage** | `summaries` table, `stream='agent'` |
-| **Injected into** | Agent model Layer 150 (`agent_action_history.go`) |
+| **Injected into** | Driver model (`agent_action_history.go` layer) |
 
 ### Why Two Streams?
 
@@ -414,18 +410,17 @@ From `config.yaml`:
 
 ```yaml
 memory:
-  recent_messages: 10             # sliding window for agent + chat context
+  recent_messages: 6              # sliding window for agent + chat context
   max_facts_in_context: 10        # top-K facts from semantic search
-  max_history_tokens: 3000        # estimation-based compaction budget (chat)
-  chat_context_budget: 8000       # chat model total prompt budget (compaction at 75%)
-  agent_context_budget: 6000      # agent model action history budget (compaction at 75%)
+  max_history_tokens: 8000        # chat compaction budget (triggers at 75%)
+  driver_context_budget: 16000    # driver action history budget (triggers at 75%)
 ```
 
 ```yaml
-agent:
-  max_tokens: 1024          # agent response budget (tool call JSON)
+driver:
+  max_tokens: 4096          # driver response budget (tool call JSON)
 
-llm:
+chat:
   max_tokens: 4096          # chat response budget
 
 classifier:
@@ -434,16 +429,16 @@ classifier:
 
 ---
 
-## Key Differences: Agent vs Chat Context
+## Key Differences: Driver vs Chat Context
 
-| | Agent (Kimi K2.5) | Chat (Deepseek V3.2) |
+| | Driver (Qwen3 235B) | Chat (Kimi K2) |
 |--|---|---|
 | **Facts** | Semantically relevant only (KNN-filtered) + recall_memories tool hint | Semantically relevant only (KNN-filtered, redundancy-filtered) |
 | **Compaction summary** | Agent action summary (what it DID) | Chat conversation summary (what was DISCUSSED) |
 | **Action history** | Full tool call log from previous turns | Not included |
-| **History** | Last 10 messages (with day boundary markers) | Last 10 messages (with day boundary markers) |
-| **Tools** | Yes (7 hot + deferred via use_tools) | No tools |
-| **Persona** | Not included (personality rules in agent_prompt.md) | prompt.md + persona.md + traits |
+| **History** | Last 6 messages (with day boundary markers) | Last 6 messages (with day boundary markers) |
+| **Tools** | Yes (8 hot + deferred via use_tools) | No tools |
+| **Persona** | Not included (personality rules in driver_agent_prompt.md) | prompt.md + persona.md |
 | **Prompt assembly** | `layers.BuildAll(StreamAgent, ctx)` | `layers.BuildAll(StreamChat, ctx)` |
 
 ---
@@ -456,14 +451,13 @@ User Message (Telegram)
     ▼
 bot/telegram.go → PII scrub → agent.Run(RunParams)
     │
-    ├─ Chat Compaction (100-message window)
-    │  ├─ Two triggers: context-aware (75% of chat_context_budget)
-    │  │                 + estimation (75% of max_history_tokens)
+    ├─ Chat Compaction (sliding window)
+    │  ├─ Trigger: 75% of max_history_tokens budget
     │  ├─ If triggered → chatLLM summarization call
     │  └─ Result: conversationSummary string (stream="chat")
     │
-    ├─ Agent Compaction (30-message action window)
-    │  ├─ One trigger: estimation (75% of agent_context_budget)
+    ├─ Agent Compaction (action window)
+    │  ├─ Trigger: 75% of driver_context_budget
     │  ├─ Smart filtering: truncates verbose tool outputs
     │  ├─ If triggered → chatLLM summarization call
     │  └─ Result: agentActionSummary string (stream="agent")
@@ -472,37 +466,43 @@ bot/telegram.go → PII scrub → agent.Run(RunParams)
     │  └─ Result: relevantFacts slice
     │
     ├─ Build agent context (layers.BuildAll StreamAgent):
-    │  ├─ agent_prompt.md (system) + tool schemas (hot only)
+    │  ├─ driver_agent_prompt.md (system) + tool schemas (hot only)
     │  ├─ Action history (summary + recent tool calls)
-    │  ├─ Recent 10 msgs + current message
+    │  ├─ Recent 6 msgs + current message
     │  └─ Semantic facts (user + self) + recall hint
     │
-    └─ Agent Loop (0-10 iterations, Kimi K2.5):
+    └─ Driver Loop (up to 15 iterations, Qwen3 235B):
         │
-        ├─ think ──────── internal reasoning (no external call)
+        ├─ think ──────── internal reasoning (surfaces in traces)
         │
-        ├─ reply ──────── builds chat prompt (9 layers), calls Deepseek
-        │  │               ├─ prompt.md + persona.md + traits
+        ├─ reply ──────── builds chat prompt, calls Kimi K2
+        │  │               ├─ prompt.md + persona.md
         │  │               ├─ time + SEMANTIC facts + weather + mood
         │  │               ├─ conversation summary (stream="chat")
-        │  │               └─ 10 recent messages + instruction
+        │  │               └─ 6 recent messages + instruction
         │  │
         │  └─ Deanonymize PII → send to Telegram → fire TTS
         │
-        ├─ save_fact ──── local gates → classifier (Haiku) → embed → save
-        │
         ├─ view_image ── vision model (Gemini Flash)
         │
-        ├─ web_search ── Tavily API
+        ├─ web_search ── Tavily API (via use_tools → search category)
         │
         ├─ use_tools ─── loads deferred tool schemas into active set
         │
         └─ done ───────── exit loop
             │
             ▼
-        Post-agent (if many facts saved):
-            ├─ Reflection (chatLLM) → save to reflections table
-            └─ Maybe Persona Rewrite (chatLLM) → update persona.md
+        Post-turn (background goroutines, parallel):
+            │
+            ├─ Memory Agent (Kimi K2):
+            │  ├─ save_memory → classifier (Gemini Flash Lite) → embed → save
+            │  ├─ update_memory, remove_memory
+            │  └─ done
+            │
+            └─ Mood Agent (Kimi K2):
+               ├─ infer valence (1-7) + labels + associations
+               ├─ classifier check + KNN dedup
+               └─ auto-log / propose / drop based on confidence
 ```
 
 ---
@@ -513,30 +513,30 @@ bot/telegram.go → PII scrub → agent.Run(RunParams)
 
 | Package | Description |
 |---------|-------------|
-| `agent/` | Tool-calling orchestrator, thinking traces, reply generation |
-| `agent/layers/` | Prompt layer registry — 20 files, one per layer |
-| `bot/` | Telegram handler |
-| `cmd/` | Cobra CLI commands (run, setup, start, stop, status, logs, shape) |
+| `agent/` | Driver agent + memory agent, reply generation, thinking traces |
+| `bot/` | Telegram handler, commands, mood wizard |
+| `calendar/` | Apple Calendar EventKit bridge |
+| `classifier/` | Memory + mood write classifiers (Gemini Flash Lite) |
+| `cmd/` | Cobra CLI commands (run, sim, shape, logs, tunnel, sync) |
 | `compact/` | Dual compaction system (chat + agent streams) |
 | `config/` | YAML + env var loading |
-| `embed/` | Local embedding model client for semantic similarity |
-| `llm/` | OpenRouter client |
+| `d1/` | Cloudflare D1 HTTP client for cross-machine sync |
+| `embed/` | Local embedding model client (Ollama/LM Studio) |
+| `integrate/` | External integrations (Nominatim geocoding, Foursquare places) |
+| `layers/` | Prompt layer registry — one file per layer |
+| `llm/` | OpenRouter client with fallbacks |
 | `logger/` | Shared structured logger (charmbracelet/log) |
-| `memory/` | SQLite store, fact CRUD, agent_turns, summaries, metrics |
-| `persona/` | Evolution system, trait tracking, reflection |
-| `scheduler/` | Reminder delivery |
+| `memory/` | SQLite store + SyncedStore decorator for D1 mirroring |
+| `mood/` | Mood agent, vocab loader, daily rollup, PNG graphs |
+| `persona/` | Dreaming system, persona evolution, trait tracking |
+| `retry/` | Unified retry package with configurable backoff |
+| `scheduler/` | Extension-based cron system (registry, runner, retry) |
 | `scrub/` | Tiered PII detection + deanonymization |
 | `search/` | Tavily web search, Open Library book search |
-| `tools/` | Tool YAML manifests + handlers (init-registered) |
-| `vision/` | Image understanding via Gemini Flash VLM |
-| `voice/` | Piper TTS + Parakeet STT |
+| `tools/` | Tool YAML manifests + handlers (per-tool directories) |
+| `trace/` | Trace inbox (Stream registry + Board) |
+| `turn/` | Turn phase tracking (driver → memory → mood) |
+| `vision/` | Image understanding via Gemini Flash |
+| `voice/` | Parakeet STT + Piper TTS clients |
 | `weather/` | Open-Meteo weather integration |
-
-### Largest Files
-
-| File | Lines | Responsibilities |
-|------|-------|-----------------|
-| `memory/store.go` | 2,711 | SQLite operations, fact CRUD, message CRUD, agent_turns, summaries, metrics, embeddings, Zettelkasten links |
-| `agent/agent.go` | 1,176 | Agent loop, reply generation, compaction orchestration |
-| `tools/loader.go` | 557 | YAML tool loading, hot/deferred split, tool rendering |
-| `compact/compact.go` | 485 | Dual compaction logic (chat + agent), summarization, token estimation |
+| `worker/` | Cloudflare Worker for webhook routing |
