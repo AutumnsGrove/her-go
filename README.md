@@ -8,7 +8,7 @@ Mira is an AI companion you chat with on Telegram. She remembers your conversati
 
 ```bash
 # Clone and enter
-git clone <your-repo-url>
+git clone https://github.com/AutumnsGrove/her-go.git
 cd her-go
 
 # Copy config and fill in your API keys
