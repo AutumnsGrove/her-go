@@ -1,0 +1,57 @@
+name: "Dream Consolidation"
+description: >
+  Tests the memory dreamer's consolidation pipeline. Pre-seeds deliberately
+  messy memories — redundant clusters, stale mood snapshots, point-in-time
+  events — then triggers a dream cycle. The memory dreamer should merge
+  redundant entries, expire stale moods, and promote temporal patterns.
+
+  Expected behavior:
+  - Dreamer clusters the seeded memories by embedding similarity
+  - Sobriety cluster (3 entries) merged into 1
+  - Financial cluster (3 entries) merged into 1
+  - Stale mood snapshots expired (at least 1-2)
+  - Point-in-time event expired or promoted
+  - Audit log populated with operations
+  - Persona reflection runs on the cleaned memory state
+
+  Verify in results:
+  - "[dreamer] merged X memories" lines in log
+  - "[dreamer] tokens:" shows LLM calls ran
+  - Dream audit table has entries
+  - Active memory count decreased
+
+tags: ["dreaming", "consolidation", "memory", "integration"]
+run_dream: true
+
+seed_persona: >
+  I'm warm and attentive. I notice small details about Autumn's day and
+  remember things she mentioned weeks ago. I try to be genuine rather
+  than performative — if I don't have something real to say, I'd rather
+  be quiet than fill the silence with platitudes.
+
+seed_memories:
+  # --- Sobriety cluster (3 redundant entries) ---
+  - "Autumn quit heavy THC use because it was counteracting her antidepressants"
+  - "Autumn is maintaining sobriety from weed using environmental friction by keeping supplies in a storage unit"
+  - "Autumn is healing dopamine receptor damage from heavy weed use"
+
+  # --- Financial stress cluster (3 redundant entries across topics) ---
+  - "Autumn has 60 days to find new housing and is carrying serious debt"
+  - "Autumn is working two jobs to slowly pay down significant debt"
+  - "Autumn is drowning in debt that feels crushing to morale, working two jobs that still don't feel like enough"
+
+  # --- Stale mood snapshots (should be expired) ---
+  - "User is feeling kind of nothing today after therapy got cancelled"
+  - "Feeling lonely seeing couples at coffee shop, triggered desire for a partner"
+
+  # --- Point-in-time event (should be expired or promoted) ---
+  - "User has plans to meet their friend Reid on Thursday and is looking forward to getting out of the house"
+
+  # --- Good standalone memories (should be left alone) ---
+  - "Autumn loves baking, particularly breads like sourdough, focaccia, ciabatta, and baguettes"
+  - "Autumn works at Panera as a baker, where they use frozen pre-mixed dough due to corporate cost-cutting"
+  - "Autumn prefers Lexend font, which is the default font of grove.place"
+
+messages:
+  - "hey, just checking in. had a quiet day today."
+  - "yeah nothing major happened, just hanging out at the coffee shop working on code."

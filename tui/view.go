@@ -147,6 +147,7 @@ func (m Model) renderTurnContent(sec *Section) []string {
 		{"persona", "🪞", sec.PersonaLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
 		{"memory", "🧩", sec.MemoryLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
 		{"mood", "🎭", sec.MoodLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
+		{"dreamer", "🌙", sec.DreamerLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorCyan).Width(boxWidth).Padding(0, 1)},
 	}
 
 	for _, g := range groups {
@@ -458,6 +459,12 @@ func renderPersonaEvent(ev PersonaEvent) string {
 	case "reflection_triggered":
 		icon = "💭"
 	case "rewrite_triggered":
+		icon = "✨"
+	case "dream_consolidate":
+		icon = "🌙"
+	case "dream_reflect":
+		icon = "💭"
+	case "dream_rewrite":
 		icon = "✨"
 	}
 	return personaStyle.Render(fmt.Sprintf("%s %s %s", icon, ev.Action, ev.Detail))

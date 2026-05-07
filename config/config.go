@@ -33,6 +33,7 @@ type Config struct {
 	Classifier  ClassifierConfig  `yaml:"classifier"`
 	MemoryAgent  MemoryAgentConfig  `yaml:"memory_agent"`
 	PersonaAgent PersonaAgentConfig `yaml:"persona_agent"`
+	DreamAgent   DreamAgentConfig   `yaml:"dream_agent"`
 	MoodAgent    MoodAgentConfig    `yaml:"mood_agent"`
 	Memory      MemoryConfig      `yaml:"memory"`
 	Mood        MoodConfig        `yaml:"mood"`
@@ -41,6 +42,7 @@ type Config struct {
 	Foursquare  FoursquareConfig  `yaml:"foursquare"`
 	Scrub       ScrubConfig       `yaml:"scrub"`
 	Persona     PersonaConfig     `yaml:"persona"`
+	Dream       DreamConfig       `yaml:"dream"`
 	Voice       VoiceConfig       `yaml:"voice"`
 	Location    LocationConfig    `yaml:"location,omitempty"`
 	Calendar    CalendarConfig    `yaml:"calendar"`
@@ -320,6 +322,49 @@ type PersonaAgentConfig struct {
 	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default)
 	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
+// DreamAgentConfig holds settings for the memory dreamer — the autonomous
+// consolidation agent that runs as Step 0 of the nightly dream cycle.
+// When Model is empty, falls back to the memory agent's model.
+type DreamAgentConfig struct {
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 120s default)
+	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+
+	// Loop tuning — same pattern as DriverConfig and MemoryAgentConfig.
+	// Defaults: 15 iterations, 2 continuations (= 45 max tool calls).
+	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
+	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 2
+}
+
+// DreamConfig controls the memory dreamer's consolidation behavior.
+// The dreamer clusters active memories by embedding similarity and
+// reviews them for merge, expire, and promote operations.
+type DreamConfig struct {
+	// ClusterThreshold is the minimum cosine similarity for grouping
+	// memories into clusters. 0 uses the default of 0.70.
+	ClusterThreshold float64 `yaml:"cluster_threshold"`
+	// MaxOperations caps the total tool calls per dream cycle (safety).
+	// 0 uses the default of 20.
+	MaxOperations int `yaml:"max_operations"`
+	// DryRun logs what would change without touching the DB.
+	DryRun bool `yaml:"dry_run"`
+	// Enabled is the master switch. Default true (enabled when config
+	// section is absent — zero value false means we need to check).
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// DreamEnabled returns whether the memory dreamer is enabled.
+// Defaults to true when the field is nil (not set in config).
+func (d DreamConfig) DreamEnabled() bool {
+	if d.Enabled == nil {
+		return true
+	}
+	return *d.Enabled
 }
 
 // MoodAgentConfig controls the post-turn background mood agent.
