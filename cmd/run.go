@@ -486,9 +486,39 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 	}
 
+	// --- Dream agent client (optional) ---
+	// Dedicated model for the memory dreamer — autonomous memory consolidation
+	// that runs as Step 0 of the nightly dream cycle. Falls back to the memory
+	// agent client if dream_agent.model isn't configured.
+	var dreamAgentClient *llm.Client
+	if cfg.DreamAgent.Model != "" {
+		dreamAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.DreamAgent.Model, cfg.DreamAgent.Temperature, cfg.DreamAgent.MaxTokens)
+		timeout := cfg.DreamAgent.Timeout
+		if timeout == 0 {
+			timeout = 120
+		}
+		dreamAgentClient.WithTimeout(time.Duration(timeout) * time.Second)
+		if cfg.DreamAgent.Provider != nil {
+			dreamAgentClient.WithProvider(&llm.ProviderRouting{
+				Order: cfg.DreamAgent.Provider.Order,
+				Only:  cfg.DreamAgent.Provider.Only,
+				Sort:  cfg.DreamAgent.Provider.Sort,
+			})
+		}
+		if cfg.DreamAgent.Fallback != nil {
+			dreamAgentClient.WithFallback(cfg.DreamAgent.Fallback.Model, cfg.DreamAgent.Fallback.Temperature, cfg.DreamAgent.Fallback.MaxTokens)
+		}
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dream_agent", Status: "ready", Detail: cfg.DreamAgent.Model})
+	} else if memoryAgentClient != nil {
+		dreamAgentClient = memoryAgentClient
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dream_agent", Status: "ready", Detail: "fallback → " + cfg.MemoryAgent.Model})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dream_agent", Status: "skipped"})
+	}
+
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()
@@ -573,6 +603,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 		go persona.StartDreamer(dreamerCtx, persona.DreamerParams{
 			LLM:       personaAgentClient,
+			DreamLLM:  dreamAgentClient,
 			Embed:     embedClient,
 			Store:     store,
 			Cfg:       cfg,

@@ -73,6 +73,10 @@ type Store interface {
 	VecMemoriesCount() (int, error)
 	FindMemoriesByKeyword(keyword string) ([]Memory, error)
 
+	// Dream audit
+	SaveDreamAudit(op string, sourceIDs []int64, resultID int64, before, after, reason string, dryRun bool) error
+	RecentDreamAudits(limit int) ([]DreamAudit, error)
+
 	// Agent
 	RecentAgentActions(conversationID string, messageLimit int) ([]AgentAction, error)
 	SaveAgentTurn(messageID int64, turnIndex int, role, toolName, toolArgs, content string) error

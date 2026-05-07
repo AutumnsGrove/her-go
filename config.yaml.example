@@ -64,6 +64,12 @@ persona_agent:
   provider:
     order: ["Groq"]                    # pin to Groq for speed and consistency
 
+dream_agent:
+  model: "moonshotai/kimi-k2-0905"     # memory dreamer model — autonomous consolidation. Falls back to memory_agent if empty.
+  temperature: 0.3                     # low temp for analytical merge/expire decisions
+  max_tokens: 4096                     # needs room for tool call sequences
+  timeout: 120                         # processes all active memories
+
 vision:
   model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
   temperature: 0.3                         # low temp for accurate descriptions
@@ -141,6 +147,12 @@ persona:
   dream_hour: 4                      # hour (0-23) to run nightly reflection (4 = 04:00 local time)
   min_rewrite_days: 7                # minimum days between persona rewrites
   min_reflections: 3                 # minimum unconsumed reflections required before a rewrite is allowed
+
+dream:
+  cluster_threshold: 0.70             # cosine similarity for memory clustering (lower = bigger clusters)
+  max_operations: 20                  # max tool calls per dream cycle (safety cap)
+  dry_run: false                      # true = log what would change without touching DB
+  # enabled: true                     # master switch — omit or set true to enable
 
 location:
   latitude: 0                   # written by set_location — leave 0/0 until set

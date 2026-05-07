@@ -180,20 +180,45 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// handleDream manually triggers a full dream cycle — nightly reflection +
-// gated persona rewrite — bypassing all cooldown gates. Equivalent to what
-// the dreamer goroutine does at 04:00, but on demand. Useful after a
-// particularly significant conversation or for testing the dreaming pipeline.
+// handleDream manually triggers a full dream cycle — memory consolidation +
+// nightly reflection + gated persona rewrite — bypassing all cooldown gates.
+// Equivalent to what the dreamer goroutine does at 04:00, but on demand.
 func (b *Bot) handleDream(c tele.Context) error {
 	_ = c.Notify(tele.Typing)
 
-	// Run nightly reflection immediately (no timing gate on manual trigger).
+	var msg strings.Builder
+	msg.WriteString("\U0001F4AD <b>Dream complete</b>\n\n")
+
+	// Step 0: Memory consolidation.
+	dreamLLM := b.dreamAgentLLM
+	if dreamLLM == nil {
+		dreamLLM = b.memoryAgentLLM
+	}
+	if dreamLLM != nil && b.cfg.Dream.DreamEnabled() {
+		dreamerResult := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
+			LLM:         dreamLLM,
+			Store:       b.store,
+			EmbedClient: b.embedClient,
+			Cfg:         b.cfg,
+		})
+		if dreamerResult.Error != nil {
+			log.Error("dream consolidation", "err", dreamerResult.Error)
+			msg.WriteString(fmt.Sprintf("⚠️ Consolidation error: %v\n\n", dreamerResult.Error))
+		} else if dreamerResult.Merges+dreamerResult.Expires+dreamerResult.Promotes > 0 {
+			msg.WriteString(fmt.Sprintf("🧹 <b>Consolidated:</b> %d merges, %d expires, %d promotes\n\n",
+				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
+		} else {
+			msg.WriteString("<i>Memories look tidy — nothing to consolidate.</i>\n\n")
+		}
+	}
+
+	// Step 1: Nightly reflection.
 	if err := persona.NightlyReflect(b.llm, b.store, b.cfg, b.cfg.Identity.Her, b.cfg.Identity.User); err != nil {
 		log.Error("dream reflection", "err", err)
 		return c.Send(fmt.Sprintf("Reflection failed: %v", err))
 	}
 
-	// Run rewrite with bypass=true — skip both the 7-day and 3-reflection gates.
+	// Step 2: Gated rewrite with bypass=true.
 	minDays := b.cfg.Persona.MinRewriteDays
 	if minDays == 0 {
 		minDays = 7
@@ -208,12 +233,9 @@ func (b *Bot) handleDream(c tele.Context) error {
 		return c.Send(fmt.Sprintf("Rewrite failed: %v", err))
 	}
 
-	// Show the fresh reflection (saved in the last 30 seconds) and rewrite status.
 	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-30 * time.Second))
-	var msg strings.Builder
-	msg.WriteString("\U0001F4AD <b>Dream complete</b>\n\n")
 	if len(reflections) > 0 {
-		msg.WriteString(fmt.Sprintf("<i>%s</i>\n\n", reflections[len(reflections)-1].Content))
+		msg.WriteString(fmt.Sprintf("💭 <b>Reflection:</b>\n<i>%s</i>\n\n", reflections[len(reflections)-1].Content))
 	} else {
 		msg.WriteString("<i>Nothing notable to reflect on right now.</i>\n\n")
 	}
@@ -221,6 +243,41 @@ func (b *Bot) handleDream(c tele.Context) error {
 		msg.WriteString("✨ Persona rewritten. Use /persona to see the update.")
 	} else {
 		msg.WriteString("<i>No persona changes — not enough has shifted yet.</i>")
+	}
+	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
+}
+
+// handleDreamLog shows recent memory dreamer audit entries — what was
+// merged, expired, or promoted during dream cycles.
+func (b *Bot) handleDreamLog(c tele.Context) error {
+	audits, err := b.store.RecentDreamAudits(10)
+	if err != nil || len(audits) == 0 {
+		return c.Send("No dream audit entries yet. Run /dream to trigger a consolidation cycle.")
+	}
+
+	var msg strings.Builder
+	msg.WriteString("🧹 <b>Recent Dream Operations</b>\n\n")
+	for _, a := range audits {
+		ts := a.Timestamp.Format("Jan 2, 3:04 PM")
+		emoji := "🔀"
+		switch a.Operation {
+		case "expire":
+			emoji = "🗑"
+		case "promote":
+			emoji = "⬆️"
+		case "split":
+			emoji = "✂️"
+		}
+		dryTag := ""
+		if a.DryRun {
+			dryTag = " [DRY RUN]"
+		}
+		afterPreview := a.AfterText
+		if len(afterPreview) > 100 {
+			afterPreview = afterPreview[:100] + "..."
+		}
+		fmt.Fprintf(&msg, "%s <b>%s</b>%s — %s\n<i>%s</i>\n<code>IDs: %v → %d</code>\n\n",
+			emoji, a.Operation, dryTag, ts, afterPreview, a.SourceIDs, a.ResultID)
 	}
 	return c.Send(msg.String(), &tele.SendOptions{ParseMode: tele.ModeHTML})
 }

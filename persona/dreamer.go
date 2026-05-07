@@ -11,6 +11,7 @@ package persona
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"her/config"
@@ -33,6 +34,7 @@ func init() {
 // and easier to extend — same pattern used by agent.RunParams.
 type DreamerParams struct {
 	LLM      *llm.Client    // persona model for NightlyReflect and GatedRewrite
+	DreamLLM *llm.Client    // memory dreamer model — nil disables consolidation
 	Embed    *embed.Client  // embedding client for reflection dedup — nil-safe, dedup skipped if nil
 	Store    memory.Store   // SQLite store for reading/writing persona state
 	Cfg      *config.Config
@@ -108,6 +110,27 @@ func runDream(ctx context.Context, p DreamerParams) {
 	}
 
 	log.Info("dreamer: running dream cycle")
+
+	// Step 0: Memory consolidation — clean house before reflecting.
+	// Only runs if the dream agent is configured and consolidation is enabled.
+	if p.DreamLLM != nil && p.Cfg.Dream.DreamEnabled() {
+		dreamerResult := RunMemoryDreamer(MemoryDreamerParams{
+			LLM:         p.DreamLLM,
+			Store:       p.Store,
+			EmbedClient: p.Embed,
+			Cfg:         p.Cfg,
+			EventBus:    p.EventBus,
+		})
+		if dreamerResult.Error != nil {
+			log.Error("dreamer: memory consolidation failed", "err", dreamerResult.Error)
+		} else {
+			log.Infof("dreamer: consolidated %d merges, %d expires, %d promotes",
+				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes)
+			emitPersonaEvent(p.EventBus, "dream_consolidate",
+				fmt.Sprintf("%d merges, %d expires, %d promotes",
+					dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
+		}
+	}
 
 	// Step 1: Nightly reflection — always runs.
 	if err := NightlyReflect(p.LLM, p.Store, p.Cfg, p.Cfg.Identity.Her, p.Cfg.Identity.User); err != nil {

@@ -308,6 +308,13 @@ type simDreamResult struct {
 	ChangeSummary string // analysis bullets from two-step rewrite
 	Rewritten     bool   // true if persona was actually rewritten
 	RewriteError  string // non-empty if rewrite failed
+
+	// Memory dreamer results.
+	ConsolidationMerges   int
+	ConsolidationExpires  int
+	ConsolidationPromotes int
+	ConsolidationError    string
+	ConsolidationAudits   []memory.DreamAudit // full audit trail for the report
 }
 
 // --------------------------------------------------------------------------
@@ -320,6 +327,30 @@ type simDreamResult struct {
 func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *config.Config, turnContext string) simDreamResult {
 	var result simDreamResult
 	result.Ran = true
+
+	// Step 0: Memory consolidation.
+	if memoryAgentClient != nil && cfg.Dream.DreamEnabled() {
+		log.Infof("[dream] %s — running memory consolidation", turnContext)
+		dreamerResult := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
+			LLM:   memoryAgentClient,
+			Store:  store,
+			Cfg:    cfg,
+		})
+		result.ConsolidationMerges = dreamerResult.Merges
+		result.ConsolidationExpires = dreamerResult.Expires
+		result.ConsolidationPromotes = dreamerResult.Promotes
+		if dreamerResult.Error != nil {
+			result.ConsolidationError = dreamerResult.Error.Error()
+			log.Error("[dream] consolidation error", "err", dreamerResult.Error)
+		} else {
+			log.Infof("[dream] consolidated: %d merges, %d expires, %d promotes",
+				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes)
+		}
+		// Capture audit trail for the report.
+		if audits, err := store.RecentDreamAudits(50); err == nil {
+			result.ConsolidationAudits = audits
+		}
+	}
 
 	log.Infof("[dream] %s — running nightly reflection", turnContext)
 	if err := persona.NightlyReflect(memoryAgentClient, store, cfg, cfg.Identity.Her, cfg.Identity.User); err != nil {
@@ -1945,12 +1976,27 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 		return
 	}
 
-	// Single dream: use the original format
-	if len(dreams) == 1 {
-		dream := dreams[0]
-		b.WriteString("## Dream Cycle\n\n")
+	for i, dream := range dreams {
+		if len(dreams) == 1 {
+			b.WriteString("## Dream Cycle\n\n")
+		} else {
+			fmt.Fprintf(b, "## Dream Cycle %d\n\n", i+1)
+		}
 
-		// Reflection
+		// Memory consolidation (Step 0).
+		hasConsolidation := dream.ConsolidationMerges+dream.ConsolidationExpires+dream.ConsolidationPromotes > 0 || dream.ConsolidationError != ""
+		if hasConsolidation {
+			b.WriteString("### Memory Consolidation\n\n")
+			if dream.ConsolidationError != "" {
+				fmt.Fprintf(b, "**Error:** %s\n\n", dream.ConsolidationError)
+			}
+			fmt.Fprintf(b, "| Operation | Count |\n|---|---|\n")
+			fmt.Fprintf(b, "| Merges | %d |\n", dream.ConsolidationMerges)
+			fmt.Fprintf(b, "| Expires | %d |\n", dream.ConsolidationExpires)
+			fmt.Fprintf(b, "| Promotes | %d |\n\n", dream.ConsolidationPromotes)
+		}
+
+		// Reflection (Step 1).
 		b.WriteString("### Nightly Reflection\n\n")
 		if dream.ReflectError != "" {
 			fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
@@ -1960,7 +2006,7 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 			fmt.Fprintf(b, "%s\n\n", dream.Reflection)
 		}
 
-		// Persona rewrite
+		// Persona rewrite (Step 2).
 		b.WriteString("### Persona Rewrite\n\n")
 		if dream.RewriteError != "" {
 			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
@@ -1977,41 +2023,56 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 			b.WriteString(dream.PersonaText)
 			b.WriteString("\n```\n\n")
 		}
+	}
+
+	// Dream audit log — write audit entries from the struct data.
+	writeDreamAuditSection(b, dreams)
+}
+
+// writeDreamAuditSection renders the dream audit trail from all dream results.
+func writeDreamAuditSection(b *strings.Builder, dreams []simDreamResult) {
+	var allAudits []memory.DreamAudit
+	for _, d := range dreams {
+		allAudits = append(allAudits, d.ConsolidationAudits...)
+	}
+	if len(allAudits) == 0 {
 		return
 	}
 
-	// Multiple dreams: number them
-	b.WriteString("## Dream Cycles\n\n")
-	for i, dream := range dreams {
-		fmt.Fprintf(b, "### Dream %d\n\n", i+1)
-
-		// Reflection
-		b.WriteString("**Nightly Reflection:**\n\n")
-		if dream.ReflectError != "" {
-			fmt.Fprintf(b, "**Error:** %s\n\n", dream.ReflectError)
-		} else if dream.Reflection == "NOTHING_NOTABLE" {
-			b.WriteString("_NOTHING_NOTABLE — reflection found no patterns worth recording._\n\n")
-		} else {
-			fmt.Fprintf(b, "%s\n\n", dream.Reflection)
+	b.WriteString("### Dream Audit Log\n\n")
+	for i, a := range allAudits {
+		emoji := "🔀"
+		switch a.Operation {
+		case "expire":
+			emoji = "🗑"
+		case "promote":
+			emoji = "⬆️"
+		case "split":
+			emoji = "✂️"
 		}
-
-		// Persona rewrite
-		b.WriteString("**Persona Rewrite:**\n\n")
-		if dream.RewriteError != "" {
-			fmt.Fprintf(b, "**Error:** %s\n\n", dream.RewriteError)
-		} else if !dream.Rewritten {
-			b.WriteString("_UNCHANGED — analysis determined no substantial shift warranted a rewrite._\n\n")
-		} else {
-			if dream.ChangeSummary != "" {
-				b.WriteString("**Step 1 — Analysis (what's true now):**\n\n")
-				fmt.Fprintf(b, "%s\n\n", dream.ChangeSummary)
+		dryTag := ""
+		if a.DryRun {
+			dryTag = " [DRY RUN]"
+		}
+		fmt.Fprintf(b, "**%d. %s %s%s** (sources: %v → ID=%d)\n", i+1, emoji, a.Operation, dryTag, a.SourceIDs, a.ResultID)
+		if a.Reason != "" {
+			fmt.Fprintf(b, "- **Reason:** %s\n", a.Reason)
+		}
+		if a.BeforeText != "" {
+			before := a.BeforeText
+			if len(before) > 200 {
+				before = before[:200] + "..."
 			}
-			b.WriteString("**Step 2 — New persona:**\n\n")
-			fmt.Fprintf(b, "_(%d characters)_\n\n", len(dream.PersonaText))
-			b.WriteString("```\n")
-			b.WriteString(dream.PersonaText)
-			b.WriteString("\n```\n\n")
+			fmt.Fprintf(b, "- **Before:** %s\n", before)
 		}
+		if a.AfterText != "" {
+			after := a.AfterText
+			if len(after) > 200 {
+				after = after[:200] + "..."
+			}
+			fmt.Fprintf(b, "- **After:** %s\n", after)
+		}
+		b.WriteString("\n")
 	}
 }
 
