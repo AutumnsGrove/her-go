@@ -1857,6 +1857,12 @@ func generateReport(
 	if reportVisionModel == "" {
 		reportVisionModel = "(none)"
 	}
+	reportDreamModel := cfg.DreamAgent.Model
+	if reportDreamModel == "" && cfg.MemoryAgent.Model != "" {
+		reportDreamModel = cfg.MemoryAgent.Model + " (fallback)"
+	} else if reportDreamModel == "" {
+		reportDreamModel = "(none)"
+	}
 
 	// Header
 	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
@@ -1872,6 +1878,7 @@ func generateReport(
 	fmt.Fprintf(&b, "| Mood | %s |\n", reportMoodModel)
 	fmt.Fprintf(&b, "| Classifier | %s |\n", reportClassifierModel)
 	fmt.Fprintf(&b, "| Vision | %s |\n", reportVisionModel)
+	fmt.Fprintf(&b, "| Dream | %s |\n", reportDreamModel)
 	fmt.Fprintf(&b, "| Embed | %s |\n\n", reportEmbedModel)
 
 	// Conversation section
