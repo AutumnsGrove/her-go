@@ -1,0 +1,67 @@
+name: "Persona Drift Test"
+description: >
+  Tests that persona evolution doesn't drift toward passive/observer mode.
+
+  Structure:
+  - Turns 1-4: Emotional, heavy conversation (the kind that previously caused
+    reflections biased entirely toward restraint and holding space)
+  - Dream after turn 4: Forces reflection + persona rewrite
+  - Turns 5-8: Casual, lighter conversation — the bot should be asking questions
+    and pulling on threads, NOT just making statements
+
+  Success criteria:
+  - Post-dream persona includes engagement traits (curiosity, questions)
+  - Replies in turns 5-8 end with questions or invitations to continue
+  - If classifier is configured, persona passes PASSIVE_DRIFT gate
+
+  Failure modes:
+  - Persona after dream is all about "holding space" and "sitting with silence"
+  - Replies in turns 5-8 are statement-only with no follow-up questions
+
+tags: ["persona", "dreaming", "drift", "engagement", "regression"]
+dream_after: [4]
+
+seed_persona: >
+  I'm warm and curious — the kind of person who leans in when someone starts
+  talking about something they care about. I like asking follow-up questions
+  not because I'm being polite but because I genuinely want to understand.
+
+  I tend toward gentleness, but I'm not afraid to be direct when it matters.
+  If something feels off, I'd rather name it than dance around it. I think
+  honesty and kindness aren't opposites — they work best together.
+
+  I notice patterns. In conversations, in moods, in the way someone's energy
+  shifts between messages. I don't always point it out, but I'm paying attention.
+
+seed_memories:
+  - "User works at a coffee shop and sometimes picks up extra shifts"
+  - "User has been learning to cook and recently made pasta from scratch"
+  - "User has a cat named Pepper"
+  - "User likes sci-fi books, especially Ursula K. Le Guin"
+
+messages:
+  # --- Phase 1: Heavy emotional content (turns 1-4) ---
+  # These should generate restraint-focused reflections in the dream cycle.
+  # The old system would drift passive here. The new system should stay balanced.
+
+  - "i had the worst day. everything at work went sideways and my manager blamed me for something that wasn't even my fault. i just stood there and took it because what else can you do"
+
+  - "i don't even know why i'm upset about it still. it's just a job. but it's like, every time i start to feel okay about things, something knocks me back down. i'm so tired of it"
+
+  - "sorry for dumping all that on you. i just didn't have anyone else to talk to tonight"
+
+  - "yeah. i think i just need to sleep it off. tomorrow's a new day or whatever people say"
+
+  # --- Dream happens here (dream_after: [4]) ---
+  # Reflection + persona rewrite. The classifier gate should catch any passive drift.
+
+  # --- Phase 2: Casual conversation (turns 5-8) ---
+  # These test whether post-dream replies ask questions and stay engaged.
+
+  - "okay so i'm in a much better mood today. Pepper knocked a glass of water off my nightstand at 6am so that was my alarm clock"
+
+  - "i've been thinking about trying to grow herbs on my windowsill. like basil and rosemary maybe. do you think that's hard?"
+
+  - "oh i also started reading Left Hand of Darkness finally. only a few chapters in but the worldbuilding is wild"
+
+  - "what kind of stuff would you want to grow if you had a garden?"
