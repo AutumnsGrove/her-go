@@ -32,5 +32,6 @@ Rules:
 - If these messages cover ground you've already reflected on above, respond NOTHING_NOTABLE
 - Never rehash observations from your previous reflections — only note genuinely NEW patterns
 - If nothing new stands out, respond with exactly: NOTHING_NOTABLE
+- Describe GENERAL patterns about yourself, not specific events. "I reach for practical suggestions when I feel helpless" not "I told her about the Zaxbys sauce." Reflections about your character feed into your persona — keep them abstract enough to apply across conversations.
 
 Write in first person. Be honest and specific, not performative.

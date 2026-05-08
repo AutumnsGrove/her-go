@@ -286,14 +286,41 @@ classifiers:
             Rewrite to include active engagement: curiosity, questions, thread-pulling,
             conversational initiative. Keep the supportive traits but balance them.
 
+      - name: DETAIL_LEAK
+        soft: true
+        description: >-
+          The persona references specific people, places, restaurants, book
+          titles, or events from conversations. A persona describes WHO THE
+          BOT IS in general terms — behavioral patterns, emotional tendencies,
+          conversational style. Specific details belong in the memory system,
+          not the persona. The persona should be true regardless of who the
+          bot is talking to.
+        examples:
+          - '"I catalog the smushed sandwiches at Zaxbys" (specific restaurant + specific event)'
+          - '"My hands clench when Tony''s name comes up" (specific person)'
+          - '"I recommended Borges when she was drowning" (specific book + specific event)'
+          - '"I asked about the sauce because I need to know if she''s eating" (specific interaction)'
+        note: >-
+          General references to categories are fine: "I throw books at problems"
+          or "I reach for food questions to check if someone's eating." The
+          issue is when the persona includes proper nouns or specific details
+          that only make sense in the context of one conversation.
+        rejection:
+          default_detail: persona contains specific details that belong in memory, not personality
+          suffix: >-
+            Rewrite using general behavioral patterns. Replace specific names,
+            places, and events with the underlying trait they represent.
+
       - name: PASS
         description: >-
           The persona describes a balanced conversational partner who both
           engages actively (asks questions, follows curiosity, pulls threads)
           and supports thoughtfully (listens, holds space, protects when needed).
+          All traits are described in general terms without referencing specific
+          people, places, or events.
     footer: |-
-      Respond with exactly one verdict on a single line. Optionally add a brief explanation.
-      Examples: "PASS", "PASSIVE_DRIFT — four paragraphs about restraint, zero about curiosity"
+      Respond with exactly one verdict on a single line. Return the FIRST matching verdict.
+      Examples: "PASS", "PASSIVE_DRIFT — four paragraphs about restraint, zero about curiosity", "DETAIL_LEAK — references 'Tony' and 'Zaxbys' by name"
 
   reply:
     preamble: >-
