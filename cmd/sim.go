@@ -309,12 +309,22 @@ type simDreamResult struct {
 	Rewritten     bool   // true if persona was actually rewritten
 	RewriteError  string // non-empty if rewrite failed
 
+	// Persona classifier gate results.
+	ClassifierVerdicts []simClassifierVerdict // persona gate verdicts (initial + retry if any)
+
 	// Memory dreamer results.
 	ConsolidationMerges   int
 	ConsolidationExpires  int
 	ConsolidationPromotes int
 	ConsolidationError    string
 	ConsolidationAudits   []memory.DreamAudit // full audit trail for the report
+}
+
+// simClassifierVerdict captures a single persona classifier verdict for the report.
+type simClassifierVerdict struct {
+	Verdict string // PASS, PASSIVE_DRIFT, etc.
+	Reason  string // classifier explanation
+	IsRetry bool   // true if this was the verdict on the retry attempt
 }
 
 // --------------------------------------------------------------------------
@@ -324,7 +334,7 @@ type simDreamResult struct {
 // runDreamCycle executes a full dream cycle (NightlyReflect + GatedRewrite).
 // Used by both dream_after (mid-suite) and run_dream (end of suite).
 // Returns a simDreamResult with the reflection and persona rewrite output.
-func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *config.Config, turnContext string) simDreamResult {
+func runDreamCycle(memoryAgentClient *llm.Client, classifierClient *llm.Client, store memory.Store, cfg *config.Config, turnContext string) simDreamResult {
 	var result simDreamResult
 	result.Ran = true
 
@@ -377,7 +387,7 @@ func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *confi
 	}
 
 	log.Infof("[dream] %s — running gated persona rewrite (bypass=true)", turnContext)
-	rewritten, err := persona.GatedRewrite(memoryAgentClient, nil, nil, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
+	rewritten, err := persona.GatedRewrite(memoryAgentClient, classifierClient, nil, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
 	if err != nil {
 		log.Error("[dream] rewrite error", "err", err)
 		result.RewriteError = err.Error()
@@ -1237,7 +1247,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		for _, dreamTurn := range s.DreamAfter {
 			if (i+1) == dreamTurn && memoryAgentClient != nil {
 				turnCtx := fmt.Sprintf("turn %d/%d", i+1, total)
-				dreamRes := runDreamCycle(memoryAgentClient, store, cfg, turnCtx)
+				dreamRes := runDreamCycle(memoryAgentClient, classifierClient, store, cfg, turnCtx)
 				dreamResults = append(dreamResults, dreamRes)
 				break
 			}
@@ -1333,7 +1343,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// real conversations. The dream uses bypass=true so both gates are skipped —
 	// same behaviour as /dream in the Telegram bot.
 	if s.RunDream && memoryAgentClient != nil {
-		dreamResult := runDreamCycle(memoryAgentClient, store, cfg, "end of suite")
+		dreamResult := runDreamCycle(memoryAgentClient, classifierClient, store, cfg, "end of suite")
 		dreamResults = append(dreamResults, dreamResult)
 	} else if s.RunDream && memoryAgentClient == nil {
 		log.Warn("[dream] skipped — memory_agent.model not configured in config.yaml")
