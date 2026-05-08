@@ -377,7 +377,7 @@ func runDreamCycle(memoryAgentClient *llm.Client, store memory.Store, cfg *confi
 	}
 
 	log.Infof("[dream] %s — running gated persona rewrite (bypass=true)", turnContext)
-	rewritten, err := persona.GatedRewrite(memoryAgentClient, nil, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
+	rewritten, err := persona.GatedRewrite(memoryAgentClient, nil, nil, store, cfg.Persona.PersonaFile, cfg.Identity.Her, true, minDays, minRefl)
 	if err != nil {
 		log.Error("[dream] rewrite error", "err", err)
 		result.RewriteError = err.Error()
