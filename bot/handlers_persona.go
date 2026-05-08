@@ -184,8 +184,8 @@ func (b *Bot) handlePersonaHistory(c tele.Context) error {
 // nightly reflection + gated persona rewrite — bypassing all cooldown gates.
 // Equivalent to what the dreamer goroutine does at 04:00, but on demand.
 //
-// Runs asynchronously in a goroutine so it doesn't block message handling.
-// Sends a live-updating Telegram message with progress for each step.
+// Already runs in a goroutine via cmd() wrapper. Sends a live-updating
+// Telegram message with progress for each step.
 func (b *Bot) handleDream(c tele.Context) error {
 	// Send initial placeholder — we'll edit this as each step completes.
 	statusMsg, err := c.Bot().Send(c.Recipient(), "💤 <b>Dream cycle starting...</b>\n\n⏳ Step 0: Memory consolidation...", &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -193,107 +193,95 @@ func (b *Bot) handleDream(c tele.Context) error {
 		return c.Send("Failed to start dream cycle.")
 	}
 
-	// Capture what we need for the goroutine — Bot is safe to use across
-	// goroutines (it's just an interface value pointing to the telebot instance).
-	bot := c.Bot()
-
-	// editStatus updates the live dream message. Swallows "not modified" errors
-	// (Telegram returns this if the text hasn't actually changed).
+	// editStatus updates the live dream message. Swallows "not modified" errors.
 	editStatus := func(text string) {
-		_, err := bot.Edit(statusMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := c.Bot().Edit(statusMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		if err != nil && !strings.Contains(err.Error(), "not modified") {
 			log.Warn("dream: failed to edit status", "err", err)
 		}
 	}
 
-	go func() {
-		var progress strings.Builder
-		progress.WriteString("💤 <b>Dream cycle in progress...</b>\n\n")
+	var progress strings.Builder
+	progress.WriteString("💤 <b>Dream cycle in progress...</b>\n\n")
 
-		// --- Step 0: Memory consolidation ---
-		dreamLLM := b.dreamAgentLLM
-		if dreamLLM == nil {
-			dreamLLM = b.memoryAgentLLM
-		}
-		if dreamLLM != nil && b.cfg.Dream.DreamEnabled() {
-			dreamerResult := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
-				LLM:         dreamLLM,
-				Store:       b.store,
-				EmbedClient: b.embedClient,
-				Cfg:         b.cfg,
-			})
-			if dreamerResult.Error != nil {
-				log.Error("dream consolidation", "err", dreamerResult.Error)
-				progress.WriteString(fmt.Sprintf("⚠️ Consolidation error: %v\n\n", dreamerResult.Error))
-			} else if dreamerResult.Merges+dreamerResult.Expires+dreamerResult.Promotes > 0 {
-				progress.WriteString(fmt.Sprintf("✅ <b>Consolidated:</b> %d merges, %d expires, %d promotes\n\n",
-					dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
-			} else {
-				progress.WriteString("✅ <i>Memories look tidy — nothing to consolidate.</i>\n\n")
-			}
+	// --- Step 0: Memory consolidation ---
+	dreamLLM := b.dreamAgentLLM
+	if dreamLLM == nil {
+		dreamLLM = b.memoryAgentLLM
+	}
+	if dreamLLM != nil && b.cfg.Dream.DreamEnabled() {
+		dreamerResult := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
+			LLM:         dreamLLM,
+			Store:       b.store,
+			EmbedClient: b.embedClient,
+			Cfg:         b.cfg,
+		})
+		if dreamerResult.Error != nil {
+			log.Error("dream consolidation", "err", dreamerResult.Error)
+			progress.WriteString(fmt.Sprintf("⚠️ Consolidation error: %v\n\n", dreamerResult.Error))
+		} else if dreamerResult.Merges+dreamerResult.Expires+dreamerResult.Promotes > 0 {
+			progress.WriteString(fmt.Sprintf("✅ <b>Consolidated:</b> %d merges, %d expires, %d promotes\n\n",
+				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
 		} else {
-			progress.WriteString("⏭ <i>Consolidation skipped (not configured).</i>\n\n")
+			progress.WriteString("✅ <i>Memories look tidy — nothing to consolidate.</i>\n\n")
 		}
-		progress.WriteString("⏳ Step 1: Nightly reflection...")
-		editStatus(progress.String())
+	} else {
+		progress.WriteString("⏭ <i>Consolidation skipped (not configured).</i>\n\n")
+	}
+	progress.WriteString("⏳ Step 1: Nightly reflection...")
+	editStatus(progress.String())
 
-		// --- Step 1: Nightly reflection ---
-		if err := persona.NightlyReflect(b.llm, b.store, b.cfg, b.cfg.Identity.Her, b.cfg.Identity.User); err != nil {
-			log.Error("dream reflection", "err", err)
-			progress.Reset()
-			progress.WriteString("💤 <b>Dream cycle failed</b>\n\n")
-			progress.WriteString(fmt.Sprintf("❌ Reflection error: %v", err))
-			editStatus(progress.String())
-			return
-		}
-
-		reflections, _ := b.store.ReflectionsSince(time.Now().Add(-30 * time.Second))
-		// Rewind the "⏳ Step 1" line and replace with result.
-		text := progress.String()
-		text = strings.TrimSuffix(text, "⏳ Step 1: Nightly reflection...")
+	// --- Step 1: Nightly reflection ---
+	if err := persona.NightlyReflect(b.llm, b.store, b.cfg, b.cfg.Identity.Her, b.cfg.Identity.User); err != nil {
+		log.Error("dream reflection", "err", err)
 		progress.Reset()
-		progress.WriteString(text)
-		if len(reflections) > 0 {
-			progress.WriteString(fmt.Sprintf("✅ <b>Reflection:</b>\n<i>%s</i>\n\n", reflections[len(reflections)-1].Content))
-		} else {
-			progress.WriteString("✅ <i>Nothing notable to reflect on.</i>\n\n")
-		}
-		progress.WriteString("⏳ Step 2: Persona rewrite...")
+		progress.WriteString("💤 <b>Dream cycle failed</b>\n\n")
+		progress.WriteString(fmt.Sprintf("❌ Reflection error: %v", err))
 		editStatus(progress.String())
+		return nil
+	}
 
-		// --- Step 2: Gated rewrite ---
-		minDays := b.cfg.Persona.MinRewriteDays
-		if minDays == 0 {
-			minDays = 7
-		}
-		minRefl := b.cfg.Persona.MinReflections
-		if minRefl == 0 {
-			minRefl = 3
-		}
-		rewritten, err := persona.GatedRewrite(b.llm, b.classifierLLM, b.embedClient, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
+	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-30 * time.Second))
+	text := progress.String()
+	text = strings.TrimSuffix(text, "⏳ Step 1: Nightly reflection...")
+	progress.Reset()
+	progress.WriteString(text)
+	if len(reflections) > 0 {
+		progress.WriteString(fmt.Sprintf("✅ <b>Reflection:</b>\n<i>%s</i>\n\n", reflections[len(reflections)-1].Content))
+	} else {
+		progress.WriteString("✅ <i>Nothing notable to reflect on.</i>\n\n")
+	}
+	progress.WriteString("⏳ Step 2: Persona rewrite...")
+	editStatus(progress.String())
 
-		// Replace the "⏳ Step 2" line with result.
-		text = progress.String()
-		text = strings.TrimSuffix(text, "⏳ Step 2: Persona rewrite...")
-		progress.Reset()
-		progress.WriteString(text)
+	// --- Step 2: Gated rewrite ---
+	minDays := b.cfg.Persona.MinRewriteDays
+	if minDays == 0 {
+		minDays = 7
+	}
+	minRefl := b.cfg.Persona.MinReflections
+	if minRefl == 0 {
+		minRefl = 3
+	}
+	rewritten, err := persona.GatedRewrite(b.llm, b.classifierLLM, b.embedClient, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
 
-		if err != nil {
-			log.Error("dream rewrite", "err", err)
-			progress.WriteString(fmt.Sprintf("❌ Rewrite error: %v\n\n", err))
-		} else if rewritten {
-			progress.WriteString("✅ <b>Persona rewritten.</b> Use /persona to see the update.\n\n")
-		} else {
-			progress.WriteString("✅ <i>No persona changes — not enough has shifted yet.</i>\n\n")
-		}
+	text = progress.String()
+	text = strings.TrimSuffix(text, "⏳ Step 2: Persona rewrite...")
+	progress.Reset()
+	progress.WriteString(text)
 
-		// Replace header with "complete".
-		final := strings.Replace(progress.String(), "Dream cycle in progress...", "Dream cycle complete", 1)
-		final = strings.Replace(final, "💤", "💭", 1)
-		editStatus(final)
-	}()
+	if err != nil {
+		log.Error("dream rewrite", "err", err)
+		progress.WriteString(fmt.Sprintf("❌ Rewrite error: %v\n\n", err))
+	} else if rewritten {
+		progress.WriteString("✅ <b>Persona rewritten.</b> Use /persona to see the update.\n\n")
+	} else {
+		progress.WriteString("✅ <i>No persona changes — not enough has shifted yet.</i>\n\n")
+	}
 
-	// Return immediately — the goroutine handles the rest.
+	final := strings.Replace(progress.String(), "Dream cycle in progress...", "Dream cycle complete", 1)
+	final = strings.Replace(final, "💤", "💭", 1)
+	editStatus(final)
 	return nil
 }
 
