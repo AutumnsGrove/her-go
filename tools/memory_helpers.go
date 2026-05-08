@@ -76,7 +76,7 @@ var styleBlocklist = []string{
 // persona evolution system, not in individual memories.
 // The SPLIT classifier is the primary gate for packed memories — this hard
 // limit is a last resort for genuinely run-on sentences.
-const maxMemoryLength = 300
+const maxMemoryLength = 1000
 
 // StyleBlocklist returns the style blocklist so tools/update_memory can apply
 // the same gates without importing agent (which would create a circular import).

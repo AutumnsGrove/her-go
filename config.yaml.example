@@ -130,7 +130,7 @@ memory:
   driver_context_budget: 16000   # driver model action history budget — when accumulated tool call history exceeds 75% of this, older actions get summarized. 0 = use 6000 default.
   auto_link_count: 3             # max links per new memory (0 = disabled). Links connect related memories into a knowledge graph.
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
-  max_memory_length: 300         # hard character limit per memory. The SPLIT classifier catches packed memories before this fires.
+  max_memory_length: 1000        # hard character limit per memory. Raised from 300 to support dream consolidation merges. The SPLIT classifier catches packed memories before this fires.
 
 scrub:
   enabled: true

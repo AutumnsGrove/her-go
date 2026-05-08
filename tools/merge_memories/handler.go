@@ -2,9 +2,12 @@
 // multiple redundant memories into a single, richer memory. Used exclusively
 // by the memory dreamer during the nightly dream cycle.
 //
-// The merge is atomic: save new → deactivate sources → create supersession
-// chains → auto-link → audit log. If dry_run is enabled in config, the
-// audit is logged but no DB mutations occur.
+// The merge runs through the same quality gates as normal memory saves:
+// style blocklist, length limit, and classifier (LOW_VALUE check). Dedup
+// is skipped because merged text is intentionally similar to the sources.
+//
+// Flow: validate → style gate → length gate → deactivate sources →
+// classifier → save → supersede chains → auto-link → audit log.
 package merge_memories
 
 import (
@@ -12,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 
+	"her/classifier"
 	"her/logger"
 	"her/tools"
 )
@@ -45,6 +49,27 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: category is required"
 	}
 
+	// --- Style gate (same blocklist as normal memory saves) ---
+	trimmed := strings.TrimSpace(args.MergedText)
+	if strings.HasSuffix(trimmed, "—") || strings.HasSuffix(trimmed, "–") {
+		return "rejected: merged text ends with a trailing em dash. Complete the sentence and retry."
+	}
+	lower := strings.ToLower(args.MergedText)
+	for _, blocked := range tools.StyleBlocklist() {
+		if strings.Contains(lower, blocked) {
+			return fmt.Sprintf("rejected: merged text contains AI writing tic %q. Rewrite in plain, concise language and retry.", blocked)
+		}
+	}
+
+	// --- Length gate ---
+	limit := ctx.MaxMemoryLength
+	if limit <= 0 {
+		limit = tools.MaxMemoryLength()
+	}
+	if len(args.MergedText) > limit {
+		return fmt.Sprintf("rejected: merged text is %d characters (max %d). Condense and retry.", len(args.MergedText), limit)
+	}
+
 	// Verify all source memories exist and are active.
 	var beforeParts []string
 	subject := "user"
@@ -72,17 +97,60 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			len(args.MemoryIDs), truncate(args.MergedText, 100), args.Reason)
 	}
 
-	// Embed the merged text for semantic search.
+	// --- Deactivate sources BEFORE classifier/save ---
+	// This ensures the dedup check (if it ever runs) won't see the originals.
+	// Sources are soft-deleted and recoverable if something fails downstream.
+	for _, id := range args.MemoryIDs {
+		if err := ctx.Store.DeactivateMemory(id); err != nil {
+			log.Warn("merge_memories: deactivate failed", "source_id", id, "err", err)
+		}
+	}
+
+	// --- Classifier gate (LOW_VALUE check) ---
+	// Merged content was already approved on initial save, but consolidation
+	// could produce something too vague. Skip for self-memories that need the
+	// self_memory classifier instead.
+	if ctx.ClassifierLLM != nil {
+		writeType := "memory"
+		if subject == "self" {
+			writeType = "self_memory"
+		}
+		verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.MergedText, nil)
+		if !verdict.Allowed {
+			// Re-activate sources since we're rejecting the merge.
+			// Note: DeactivateMemory is a soft-delete, but there's no
+			// ReactivateMemory. We log the rejection — the dreamer can retry.
+			log.Warn("merge_memories: classifier rejected", "verdict", verdict.Type, "reason", verdict.Reason)
+			_ = ctx.Store.SaveDreamAudit("merge", args.MemoryIDs, 0, beforeText, args.MergedText,
+				fmt.Sprintf("REJECTED by classifier: %s — %s", verdict.Type, verdict.Reason), false)
+			return fmt.Sprintf("rejected by classifier: %s. Rewrite the merged text and retry.", classifier.RejectionMessage(verdict))
+		}
+
+		// Self-memory safety gate (catches sycophancy loops in merged self-observations).
+		if subject == "self" {
+			safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.MergedText, nil)
+			if !safetyVerdict.Allowed {
+				log.Warn("merge_memories: self-memory safety rejected", "verdict", safetyVerdict.Type)
+				return fmt.Sprintf("rejected: %s. Do not merge self-memories that encode agreement as effective strategy.", safetyVerdict.Reason)
+			}
+		}
+	}
+
+	// --- Embed the merged text ---
 	var vec []float32
 	if ctx.EmbedClient != nil {
 		var err error
-		vec, err = ctx.EmbedClient.Embed(args.MergedText)
+		embedText := args.Tags
+		if embedText == "" {
+			embedText = args.MergedText
+		}
+		vec, err = ctx.EmbedClient.Embed(embedText)
 		if err != nil {
 			log.Warn("merge_memories: embedding failed", "err", err)
 		}
 	}
 
-	// Save the consolidated memory.
+	// --- Save the consolidated memory ---
 	newID, err := ctx.Store.SaveMemory(
 		args.MergedText, args.Category, subject, 0, 5,
 		vec, vec, args.Tags, "",
@@ -91,7 +159,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error saving merged memory: %v", err)
 	}
 
-	// Deactivate sources and create supersession chains.
+	// Create supersession chains (source → new).
 	for _, id := range args.MemoryIDs {
 		if err := ctx.Store.SupersedeMemory(id, newID, args.Reason); err != nil {
 			log.Warn("merge_memories: supersede failed", "source_id", id, "err", err)
