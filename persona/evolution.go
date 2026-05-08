@@ -542,9 +542,9 @@ func LastAnalysisBullets() string {
 }
 
 // classifyAndRetryPersona runs the persona classifier gate on a newly composed
-// persona. If the classifier returns PASSIVE_DRIFT, the compose step is retried
-// once with the original analysis bullets plus a corrective hint. Nil-safe: if
-// classifierLLM is nil, the gate is skipped and the persona passes through.
+// persona. If the classifier rejects it (PASSIVE_DRIFT or DETAIL_LEAK), the
+// compose step is retried once with a verdict-specific corrective hint. Nil-safe:
+// if classifierLLM is nil, the gate is skipped and the persona passes through.
 func classifyAndRetryPersona(
 	classifierLLM *llm.Client,
 	personaLLM *llm.Client,
@@ -567,10 +567,24 @@ func classifyAndRetryPersona(
 
 	log.Warn("persona classifier: rejected", "verdict", verdict.Type, "reason", verdict.Reason)
 
-	// Retry compose with corrective hint appended to the bullets.
-	correctedBullets := bullets + "\n\nIMPORTANT CORRECTION: The previous version was rejected for passive drift. " +
-		"Your persona MUST include active engagement traits: curiosity, asking questions, " +
-		"pulling on threads, following interesting details. Balance listening with engaging."
+	// Build verdict-specific corrective hint for the retry.
+	var correction string
+	switch verdict.Type {
+	case "PASSIVE_DRIFT":
+		correction = "IMPORTANT CORRECTION: The previous version was rejected for passive drift. " +
+			"Your persona MUST include active engagement traits: curiosity, asking questions, " +
+			"pulling on threads, following interesting details. Balance listening with engaging."
+	case "DETAIL_LEAK":
+		correction = "IMPORTANT CORRECTION: The previous version was rejected for leaking specific details. " +
+			"NEVER reference specific people, places, restaurants, book titles, or events. " +
+			"Describe general behavioral patterns only. Replace proper nouns with the underlying trait: " +
+			"\"I ask about food to check if someone's eating\" not \"I asked about the Zaxbys sauce.\""
+	default:
+		correction = "IMPORTANT CORRECTION: The previous version was rejected (" + verdict.Type + "). " +
+			"Please fix the issue and try again."
+	}
+
+	correctedBullets := bullets + "\n\n" + correction
 
 	traits, _ := store.GetCurrentTraits()
 	traitMap := make(map[string]string)
