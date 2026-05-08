@@ -225,33 +225,16 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		}
 	}
 
-	// cmd wraps a handler to log the command and run it asynchronously.
-	// Running in a goroutine is critical in webhook mode: telebot processes
-	// each webhook update synchronously, so a slow handler blocks ALL other
-	// updates. By returning nil immediately and running the handler in a
-	// goroutine, we release the webhook HTTP response and let the next
-	// update through. c.Send() works from goroutines because it makes
-	// independent HTTP calls to the Telegram API (not tied to the webhook
-	// request/response cycle).
+	// cmd wraps a handler to log the command to the command_log table.
+	// This gives us usage analytics (how often /clear is used, etc.)
+	// without touching any of the individual handler functions.
 	cmd := func(command string, handler func(tele.Context) error) func(tele.Context) error {
 		return func(c tele.Context) error {
 			chatID := c.Message().Chat.ID
 			convID := bot.getConversationID(chatID)
 			args := strings.TrimSpace(strings.TrimPrefix(c.Message().Text, command))
 			bot.store.LogCommand(command, chatID, convID, args)
-
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Error("command panic", "command", command, "panic", r)
-					}
-				}()
-				if err := handler(c); err != nil {
-					log.Error("command error", "command", command, "err", err)
-				}
-			}()
-
-			return nil
+			return handler(c)
 		}
 	}
 
@@ -274,44 +257,25 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	tb.Handle("/update", cmd("/update", bot.handleUpdate))
 	tb.Handle("/lasttrace", cmd("/lasttrace", bot.handleLastTrace))
 
-	// async wraps a handler to run in a goroutine, same as cmd() but
-	// without command logging. Used for non-command handlers (text,
-	// photo, voice, location) that also need to be non-blocking.
-	async := func(handler func(tele.Context) error) func(tele.Context) error {
-		return func(c tele.Context) error {
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Error("handler panic", "panic", r)
-					}
-				}()
-				if err := handler(c); err != nil {
-					log.Error("handler error", "err", err)
-				}
-			}()
-			return nil
-		}
-	}
-
 	// Register message handler for all text messages.
-	tb.Handle(tele.OnText, async(bot.handleMessage))
+	tb.Handle(tele.OnText, bot.handleMessage)
 
 	// Register photo handler for image understanding (v0.2.5).
 	// In telebot, tele.OnPhoto fires when a user sends an image.
 	// Photos can optionally have a caption (text alongside the image).
-	tb.Handle(tele.OnPhoto, async(bot.handlePhoto))
+	tb.Handle(tele.OnPhoto, bot.handlePhoto)
 
 	// Register voice handler for speech-to-text (v0.3).
 	// tele.OnVoice fires when a user sends a voice memo (the
 	// microphone button in Telegram). Audio files sent as documents
 	// use tele.OnDocument instead — we only handle voice memos here.
-	tb.Handle(tele.OnVoice, async(bot.handleVoice))
+	tb.Handle(tele.OnVoice, bot.handleVoice)
 
 	// Register location handlers for pin drops and venue shares (v0.6).
 	// Locations get saved to location_history and run through the agent
 	// so Mira can respond naturally or offer nearby searches.
-	tb.Handle(tele.OnLocation, async(bot.handleLocation))
-	tb.Handle(tele.OnVenue, async(bot.handleVenue))
+	tb.Handle(tele.OnLocation, bot.handleLocation)
+	tb.Handle(tele.OnVenue, bot.handleVenue)
 
 	// Register inline keyboard callback handlers (v0.6).
 	// Each Action value in scheduler.Button needs a handler here.
