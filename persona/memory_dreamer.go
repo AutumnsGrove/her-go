@@ -190,7 +190,16 @@ outer:
 					continue
 				}
 
-				toolResult := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+				// Dry-run: intercept mutation tools BEFORE execution so the DB
+				// is never touched. merge_memories handles dry-run internally,
+				// but remove_memory and update_memory don't know about it.
+				var toolResult string
+				if dryRun && isMutation && tc.Function.Name != "merge_memories" {
+					toolResult = fmt.Sprintf("[DRY RUN] would execute %s with args: %s",
+						tc.Function.Name, truncateLog(tc.Function.Arguments, 200))
+				} else {
+					toolResult = tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
+				}
 				log.Infof("    [dreamer] %s → %s", tc.Function.Name, truncateLog(toolResult, 150))
 				messages = append(messages, llm.ChatMessage{
 					Role:       "tool",
