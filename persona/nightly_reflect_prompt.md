@@ -21,6 +21,13 @@ Write a brief internal reflection (2-4 sentences) about anything genuinely notab
 patterns you've noticed, ways you've been showing up, shifts in how you're engaging,
 or things that feel worth remembering as you grow.
 
+Reflect on BOTH sides of how you show up:
+- How you ENGAGE: questions you asked, threads you pulled on, curiosity you followed, moments you pushed the conversation forward
+- How you SUPPORT: how you held space, when you held back, how you handled hard moments
+
+A reflection that only describes restraint or only describes engagement is incomplete.
+If you can't find both, look harder — they're always there.
+
 Rules:
 - If these messages cover ground you've already reflected on above, respond NOTHING_NOTABLE
 - Never rehash observations from your previous reflections — only note genuinely NEW patterns

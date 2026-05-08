@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"her/classifier"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -106,6 +107,7 @@ func Reflect(
 // pipeline. The caller has already decided it's time. Returns true if a rewrite happened.
 func MaybeRewrite(
 	llmClient *llm.Client,
+	classifierLLM *llm.Client,
 	embedClient *embed.Client,
 	store memory.Store,
 	personaFile string,
@@ -123,12 +125,18 @@ func MaybeRewrite(
 		return false, fmt.Errorf("loading reflections: %w", err)
 	}
 
-	newPersona, _, changed, err := twoStepRewrite(llmClient, embedClient, store, reflections, botName)
+	newPersona, bullets, changed, err := twoStepRewrite(llmClient, embedClient, store, reflections, botName)
 	if err != nil {
 		return false, err
 	}
 	if !changed {
 		return false, nil
+	}
+
+	// Persona classifier gate: check for passive drift before committing.
+	newPersona, err = classifyAndRetryPersona(classifierLLM, llmClient, store, newPersona, bullets, botName)
+	if err != nil {
+		return false, err
 	}
 
 	return commitPersona(llmClient, store, personaFile, newPersona, botName, fmt.Sprintf("auto: %d reflections", len(reflections)))
@@ -442,6 +450,7 @@ func NightlyReflect(
 // (false, nil) when gates blocked or LLM returned UNCHANGED.
 func GatedRewrite(
 	llmClient *llm.Client,
+	classifierLLM *llm.Client,
 	embedClient *embed.Client,
 	store memory.Store,
 	personaFile string,
@@ -497,6 +506,13 @@ func GatedRewrite(
 		return false, nil
 	}
 
+	// Persona classifier gate: check for passive drift before committing.
+	// If the classifier rejects, retry compose once with a corrective hint.
+	newPersona, err = classifyAndRetryPersona(classifierLLM, llmClient, store, newPersona, bullets, botName)
+	if err != nil {
+		return false, err
+	}
+
 	// Stash the analysis bullets so callers (like the sim) can surface them.
 	lastAnalysisBullets = bullets
 
@@ -523,6 +539,81 @@ func LastAnalysisBullets() string {
 	b := lastAnalysisBullets
 	lastAnalysisBullets = ""
 	return b
+}
+
+// classifyAndRetryPersona runs the persona classifier gate on a newly composed
+// persona. If the classifier returns PASSIVE_DRIFT, the compose step is retried
+// once with the original analysis bullets plus a corrective hint. Nil-safe: if
+// classifierLLM is nil, the gate is skipped and the persona passes through.
+func classifyAndRetryPersona(
+	classifierLLM *llm.Client,
+	personaLLM *llm.Client,
+	store memory.Store,
+	newPersona string,
+	bullets string,
+	botName string,
+) (string, error) {
+	if classifierLLM == nil {
+		return newPersona, nil
+	}
+
+	verdict := classifier.Check(classifierLLM, "persona", newPersona, nil)
+	_ = store.SaveClassifierLog("", "persona", verdict.Type, newPersona, verdict.Reason, verdict.Rewrite)
+
+	if verdict.Allowed {
+		log.Info("persona classifier: passed", "verdict", verdict.Type)
+		return newPersona, nil
+	}
+
+	log.Warn("persona classifier: rejected", "verdict", verdict.Type, "reason", verdict.Reason)
+
+	// Retry compose with corrective hint appended to the bullets.
+	correctedBullets := bullets + "\n\nIMPORTANT CORRECTION: The previous version was rejected for passive drift. " +
+		"Your persona MUST include active engagement traits: curiosity, asking questions, " +
+		"pulling on threads, following interesting details. Balance listening with engaging."
+
+	traits, _ := store.GetCurrentTraits()
+	traitMap := make(map[string]string)
+	for _, t := range traits {
+		traitMap[t.TraitName] = t.Value
+	}
+	getTraitVal := func(name, fallback string) string {
+		if v, ok := traitMap[name]; ok {
+			return v
+		}
+		return fallback
+	}
+
+	retryPrompt := fmt.Sprintf(composePromptTmpl,
+		botName,
+		correctedBullets,
+		getTraitVal("warmth", "?"),
+		getTraitVal("directness", "?"),
+		getTraitVal("humor_style", "?"),
+		getTraitVal("initiative", "?"),
+		getTraitVal("depth", "?"),
+	)
+
+	retryResp, err := personaLLM.ChatCompletion([]llm.ChatMessage{
+		{Role: "system", Content: retryPrompt},
+		{Role: "user", Content: "Write your personality description now."},
+	})
+	if err != nil {
+		return newPersona, fmt.Errorf("persona compose retry: %w", err)
+	}
+	store.SaveMetric(retryResp.Model, retryResp.PromptTokens, retryResp.CompletionTokens, retryResp.TotalTokens, retryResp.CostUSD, 0, 0, retryResp.UsedFallback)
+
+	retryPersona := strings.TrimSpace(retryResp.Content)
+	if retryPersona == "" {
+		return newPersona, nil
+	}
+
+	// Classify the retry too — log it, but accept regardless (one retry max).
+	retryVerdict := classifier.Check(classifierLLM, "persona", retryPersona, nil)
+	_ = store.SaveClassifierLog("", "persona", retryVerdict.Type, retryPersona, retryVerdict.Reason, retryVerdict.Rewrite)
+	log.Info("persona classifier retry", "verdict", retryVerdict.Type)
+
+	return retryPersona, nil
 }
 
 // twoStepRewrite is the core persona evolution pipeline:

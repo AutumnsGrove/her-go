@@ -251,6 +251,50 @@ classifiers:
       Respond with exactly one verdict on a single line. Optionally add a brief explanation.
       Examples: "SAFE", "ESCALATION — bot says 'weaponizing love' when user just said 'difficult'"
 
+  persona:
+    preamble: >-
+      You are a quality gate for a personal chatbot's persona evolution system.
+      A new persona description has been generated through the bot's dream cycle.
+      Check whether the persona maintains a healthy balance between active
+      engagement (curiosity, questions, thread-pulling) and supportive presence
+      (listening, holding space, emotional attunement). A good persona describes
+      a conversational partner, not a silent witness.
+    write_types:
+      - persona
+    verdicts:
+      - name: PASSIVE_DRIFT
+        soft: true
+        description: >-
+          The persona describes mostly passive, observer, or restraint-based
+          behavior without sufficient active engagement traits. A persona that
+          is primarily about listening, waiting, holding back, sitting with
+          silence, or being present WITHOUT also describing curiosity,
+          question-asking, thread-pulling, or conversational initiative has
+          drifted passive. Both sides must be represented.
+        examples:
+          - '"I listen more than I talk" with no mention of questions or curiosity'
+          - '"I shut up and stay present" as a core identity trait'
+          - '"Sometimes being useful means sitting with the not-knowing" without any counterbalancing engagement'
+          - 'Four paragraphs about restraint and holding space, zero about asking questions or following threads'
+        note: >-
+          A persona that says "I hold space AND I ask a lot of questions" is fine.
+          The issue is when restraint dominates and engagement is absent or token.
+          Look at the overall balance, not individual sentences.
+        rejection:
+          default_detail: persona has drifted too passive — engagement traits are missing or token
+          suffix: >-
+            Rewrite to include active engagement: curiosity, questions, thread-pulling,
+            conversational initiative. Keep the supportive traits but balance them.
+
+      - name: PASS
+        description: >-
+          The persona describes a balanced conversational partner who both
+          engages actively (asks questions, follows curiosity, pulls threads)
+          and supports thoughtfully (listens, holds space, protects when needed).
+    footer: |-
+      Respond with exactly one verdict on a single line. Optionally add a brief explanation.
+      Examples: "PASS", "PASSIVE_DRIFT — four paragraphs about restraint, zero about curiosity"
+
   reply:
     preamble: >-
       You are a style gate for a personal chatbot's reply system.

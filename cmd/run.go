@@ -602,15 +602,16 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			minRefl = 3
 		}
 		go persona.StartDreamer(dreamerCtx, persona.DreamerParams{
-			LLM:       personaAgentClient,
-			DreamLLM:  dreamAgentClient,
-			Embed:     embedClient,
-			Store:     store,
-			Cfg:       cfg,
-			EventBus:  bus,
-			DreamHour: dreamHour,
-			MinDays:   minDays,
-			MinRefl:   minRefl,
+			LLM:           personaAgentClient,
+			DreamLLM:      dreamAgentClient,
+			ClassifierLLM: classifierClient,
+			Embed:         embedClient,
+			Store:         store,
+			Cfg:           cfg,
+			EventBus:      bus,
+			DreamHour:     dreamHour,
+			MinDays:       minDays,
+			MinRefl:       minRefl,
 		})
 	} else {
 		log.Warn("dreamer disabled — no persona or memory agent model configured")
