@@ -457,9 +457,17 @@ func Run(params RunParams) (*RunResult, error) {
 	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 15
 	}
+	if iterationsPerWindow > 50 {
+		log.Warn("capping iterationsPerWindow", "requested", iterationsPerWindow, "max", 50)
+		iterationsPerWindow = 50
+	}
 	maxContinuations := params.Cfg.Driver.MaxContinuations
 	if maxContinuations <= 0 {
 		maxContinuations = 3
+	}
+	if maxContinuations > 10 {
+		log.Warn("capping maxContinuations", "requested", maxContinuations, "max", 10)
+		maxContinuations = 10
 	}
 
 outer:
@@ -627,6 +635,9 @@ outer:
 
 				result := executeTool(tc, tctx)
 				isError := strings.HasPrefix(result, "error:")
+				if isError {
+					log.Warn("tool call failed", "tool", tc.Function.Name, "result", truncateLog(result, 200))
+				}
 				log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
 				if mainPhase != nil {
 					mainPhase.EmitToolCall(

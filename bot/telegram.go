@@ -59,6 +59,7 @@ type Bot struct {
 	moodRunner      *mood.Runner
 	moodSweeper     *mood.ProposalSweeper
 	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
+	shutdownCh      chan struct{}       // closed on Stop(); goroutines select on this to exit cleanly
 
 	// moodVocab is the loaded vocab used by both the agent and the
 	// /mood wizard. Shared so the two paths can't drift.
@@ -101,7 +102,8 @@ type Bot struct {
 	// goroutines communicate by sending messages on channels, not by
 	// sharing memory. Like Python's asyncio.Queue, but built into the
 	// language.
-	agentEvents chan agent.AgentEvent
+	agentEvents        chan agent.AgentEvent
+	agentEventsStopped atomic.Bool
 
 	// lastTraceSnapshot stores the full Board snapshot from the most
 	// recent completed turn. /lasttrace re-sends this via sendPaginated
@@ -214,6 +216,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		startTime:      time.Now(),
 		eventBus:       eventBus,
 		agentEvents:    make(chan agent.AgentEvent, 16),
+		shutdownCh:     make(chan struct{}),
 	}
 
 	// Build the mood runner + sweeper if the mood agent is configured.
@@ -337,6 +340,8 @@ func (b *Bot) Stop() {
 		b.moodSweeperStop() // cancels the sweeper goroutine
 	}
 	b.tb.Stop()
+	close(b.shutdownCh) // unblocks any goroutine selecting on this
+	b.agentEventsStopped.Store(true)
 	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }
 

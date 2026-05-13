@@ -165,7 +165,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 				return synced.Pull(pullCtx)
 			})
 			if err != nil {
-				log.Error("d1 pull on startup failed — continuing with local data", "err", err)
+				log.Error("d1 pull on startup failed — continuing with local data (sync may be stale)", "err", err)
 			}
 			pullCancel()
 
