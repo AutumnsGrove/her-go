@@ -358,6 +358,9 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		// Non-blocking send: if the channel is full (16 buffered events),
 		// drop the event rather than deadlocking the memory agent goroutine.
 		AgentEventCB: func(summary, directMessage string) {
+			if b.agentEventsStopped.Load() {
+				return
+			}
 			evt := agent.AgentEvent{
 				Type:          agent.EventInboxReady,
 				Summary:       summary,

@@ -249,7 +249,13 @@ func (b *Bot) finalizeWizard(c tele.Context, w *wizardState, note string) error 
 // still present and the same instance. Safe to call many times per
 // wizard; only one runs per wizard because we guard on equality.
 func (b *Bot) expireWizardAfter(chatID int64, w *wizardState, d time.Duration) {
-	time.Sleep(d)
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-b.shutdownCh:
+		return
+	}
 	raw, ok := b.moodWizards.Load(chatID)
 	if !ok || raw.(*wizardState) != w {
 		return

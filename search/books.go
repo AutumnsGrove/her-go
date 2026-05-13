@@ -21,6 +21,8 @@ import (
 	"time"
 )
 
+var bookHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 // BookResult holds the fields we show from a single Open Library hit.
 type BookResult struct {
 	Title          string
@@ -64,8 +66,7 @@ func SearchBooks(query string, maxResults int) ([]BookResult, error) {
 		url.QueryEscape(query), maxResults,
 	)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(searchURL)
+	resp, err := bookHTTPClient.Get(searchURL)
 	if err != nil {
 		return nil, fmt.Errorf("open library request: %w", err)
 	}

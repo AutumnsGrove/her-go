@@ -13,6 +13,7 @@
 package layers
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -116,6 +117,9 @@ var registry []PromptLayer
 // run automatically. No blank imports needed (unlike the tool handlers
 // in tools/<name>/handler.go, which live in separate packages).
 func Register(layer PromptLayer) {
+	if layer.Builder == nil {
+		panic(fmt.Sprintf("layers.Register: layer %q has nil Builder", layer.Name))
+	}
 	registry = append(registry, layer)
 }
 

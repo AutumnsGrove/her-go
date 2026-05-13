@@ -593,6 +593,11 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
+	// Validate embed dimension — a bad value silently breaks semantic search.
+	if cfg.Embed.Dimension < 0 || cfg.Embed.Dimension > 4096 {
+		return nil, fmt.Errorf("embed.dimension must be 0 (disabled) or 1-4096, got %d", cfg.Embed.Dimension)
+	}
+
 	return &cfg, nil
 }
 
