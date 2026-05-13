@@ -95,13 +95,11 @@ func Do(ctx context.Context, cfg Config, fn func() error) error {
 			"err", lastErr,
 		)
 
+		timer := time.NewTimer(wait)
 		select {
-		case <-time.After(wait):
+		case <-timer.C:
 		case <-ctx.Done():
-			// Wrap the last error with context cancellation info so callers
-			// can see both why we stopped AND what the last failure was.
-			// Without this, callers only see the retriable error and have no
-			// idea the context was cancelled — which makes debugging much harder.
+			timer.Stop()
 			if lastErr != nil {
 				return fmt.Errorf("%w (context cancelled during retry backoff)", lastErr)
 			}
