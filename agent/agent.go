@@ -666,7 +666,9 @@ outer:
 						var rArgs struct {
 							Instruction string `json:"instruction"`
 						}
-						json.Unmarshal([]byte(tc.Function.Arguments), &rArgs)
+						if err := json.Unmarshal([]byte(tc.Function.Arguments), &rArgs); err != nil {
+							rArgs.Instruction = truncateLog(tc.Function.Arguments, 100)
+						}
 						line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
 							tctx.ReplyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
 					}

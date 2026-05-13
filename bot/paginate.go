@@ -303,7 +303,10 @@ func (b *Bot) handlePageCallback(c tele.Context) error {
 	if !ok {
 		return c.Respond(&tele.CallbackResponse{Text: "Session expired — run the command again."})
 	}
-	session := val.(*pageSession)
+	session, ok := val.(*pageSession)
+	if !ok {
+		return c.Respond(&tele.CallbackResponse{Text: "Session corrupted — run the command again."})
+	}
 
 	// Parse the target page number from the callback data.
 	data := strings.TrimSpace(c.Callback().Data)
