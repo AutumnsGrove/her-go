@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	tele "gopkg.in/telebot.v4"
@@ -211,14 +212,12 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	transcript, err := b.voiceClient.Transcribe(audioBytes, "voice.ogg")
 	if err != nil {
 		close(stopTyping)
+		if strings.Contains(err.Error(), "empty text") {
+			log.Warn("empty transcription", "err", err)
+			return c.Send("I couldn't make out what you said. Could you try again?")
+		}
 		log.Error("transcription failed", "err", err)
 		return c.Send("I couldn't transcribe that voice memo. Is the speech server running? (parakeet-server)")
-	}
-
-	if transcript == "" {
-		close(stopTyping)
-		log.Warn("empty transcription")
-		return c.Send("I couldn't make out what you said. Could you try again?")
 	}
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))

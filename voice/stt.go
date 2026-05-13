@@ -159,12 +159,23 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 	}
 
 	elapsed := time.Since(start)
+
+	trimmed := strings.TrimSpace(result.Text)
+	if trimmed == "" {
+		// An empty response isn't a transport error — the server replied
+		// successfully but produced no text. This usually means the audio
+		// was silent, too short, or below the model's confidence threshold.
+		// Return a descriptive error instead of silently giving the caller
+		// an empty string, which would produce a confusing blank reply.
+		return "", fmt.Errorf("transcription returned empty text (audio may be silent or too short)")
+	}
+
 	log.Info("transcription complete",
 		"duration", elapsed.Round(time.Millisecond),
-		"text_len", len(result.Text),
+		"text_len", len(trimmed),
 	)
 
-	return strings.TrimSpace(result.Text), nil
+	return trimmed, nil
 }
 
 // IsAvailable checks if the parakeet-server is reachable by hitting

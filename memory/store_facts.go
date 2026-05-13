@@ -391,13 +391,22 @@ func (s *SQLiteStore) AutoLinkMemory(memoryID int64, embedding []float32) error 
 		return nil // no vector index
 	}
 
+	// Safety cap: an excessively large AutoLinkCount would issue a huge KNN
+	// query and build a very dense graph. 20 links per memory is already
+	// generous — cap here rather than in the struct so config stays expressive.
+	linkCount := s.AutoLinkCount
+	if linkCount > 20 {
+		log.Warn("AutoLinkCount exceeds maximum, capping", "configured", linkCount, "cap", 20)
+		linkCount = 20
+	}
+
 	queryBytes, err := serializeEmbedding(embedding)
 	if err != nil {
 		return fmt.Errorf("serializing embedding for auto-link: %w", err)
 	}
 
 	// Request extra results to account for the self-match and inactive memories.
-	k := s.AutoLinkCount + 2
+	k := linkCount + 2
 	rows, err := s.db.Query(`
 		SELECT v.rowid, v.distance
 		FROM vec_memories v
@@ -413,7 +422,7 @@ func (s *SQLiteStore) AutoLinkMemory(memoryID int64, embedding []float32) error 
 	defer rows.Close()
 
 	linked := 0
-	for rows.Next() && linked < s.AutoLinkCount {
+	for rows.Next() && linked < linkCount {
 		var neighborID int64
 		var distance float64
 		if err := rows.Scan(&neighborID, &distance); err != nil {

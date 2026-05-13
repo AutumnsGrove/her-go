@@ -109,6 +109,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Try Foursquare first (structured results with distance, categories).
 	fsqClient := integrate.NewFoursquareClient(ctx.Cfg.Foursquare.APIKey)
+	if fsqClient == nil {
+		log.Info("Foursquare disabled (no API key), falling back to Tavily for nearby search")
+	}
 
 	if fsqClient != nil && resolved {
 		places, err := fsqClient.SearchNearby(lat, lon, args.Query, radiusM, args.Limit)
