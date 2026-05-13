@@ -107,6 +107,11 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Fatal("LLM API key is required — set OPENROUTER_API_KEY env var or fill in config.yaml")
 	}
 
+	// If the launchd service is running (`her start`), stop it before
+	// we start a foreground run. Two instances racing for the same
+	// Telegram token causes dropped messages and PID file conflicts.
+	stopLaunchdServiceIfRunning(cfg)
+
 	// Kill any stale her process from a previous run before we start.
 	// This prevents two instances racing for the same Telegram token.
 	const herPIDFile = "her.pid"
@@ -812,6 +817,31 @@ func killStaleSelf(pidFile string) {
 	// Force-kill if SIGTERM wasn't enough (e.g., process was stuck in I/O).
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	_ = os.Remove(pidFile)
+}
+
+// stopLaunchdServiceIfRunning checks if the launchd service (`her start`)
+// is active and stops it before a foreground `her run`. Without this, two
+// instances race for the same Telegram token and PID file, causing one to
+// SIGTERM the other mid-startup.
+func stopLaunchdServiceIfRunning(cfg *config.Config) {
+	botName := cfg.Identity.Her
+	if botName == "" {
+		return
+	}
+	label := serviceLabel(botName)
+	target := serviceTarget(label)
+
+	// launchctl print exits 0 if the service is loaded, non-zero otherwise.
+	if err := exec.Command("launchctl", "print", target).Run(); err != nil {
+		return // not loaded — nothing to do
+	}
+
+	log.Info("stopping launchd service before foreground run", "label", label)
+	if err := launchdBootout(label); err != nil {
+		log.Warn("could not stop launchd service", "err", err)
+	}
+	// Give the old process a moment to release the Telegram token.
+	time.Sleep(500 * time.Millisecond)
 }
 
 // startSTTSidecar launches the parakeet-server process.
