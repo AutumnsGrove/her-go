@@ -116,6 +116,11 @@ func runBot(cmd *cobra.Command, args []string) error {
 	}
 	defer os.Remove(herPIDFile)
 
+	if dbDir := filepath.Dir(cfg.Memory.DBPath); dbDir != "." && dbDir != "" {
+		if err := os.MkdirAll(dbDir, 0755); err != nil {
+			log.Fatal("cannot create database directory", "path", dbDir, "err", err)
+		}
+	}
 	store, err := memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
 		log.Fatal("Failed to initialize database", "err", err)
@@ -589,6 +594,15 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// --- Dreamer ---
 	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
 	// Uses the dedicated persona agent client (or memory agent fallback).
+	// Validate persona files exist before starting the dreamer.
+	for _, pf := range []string{cfg.Persona.PromptFile, cfg.Persona.PersonaFile, cfg.Persona.AgentPromptFile} {
+		if pf != "" {
+			if _, err := os.Stat(pf); err != nil {
+				log.Warn("persona file missing — dreamer may fail", "path", pf, "err", err)
+			}
+		}
+	}
+
 	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
 	dreamerDone := make(chan struct{})
 	if personaAgentClient != nil {

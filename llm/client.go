@@ -695,6 +695,7 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	var costUSD float64
 	var respModel string
 
+readLoop:
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -707,8 +708,6 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 
 		var chunk sseChunk
 		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
-			// Malformed chunk — skip. OpenRouter sometimes sends keep-alive
-			// pings or comment lines that aren't valid JSON.
 			continue
 		}
 
@@ -736,10 +735,10 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 		for _, tc := range delta.ToolCalls {
 			if tc.Index >= 1 {
 				// Second tool call detected — model is batching.
-				// Close the body to abort the stream, then jump
-				// to response assembly with only call index 0.
+				// Close the body to abort the stream, then assemble
+				// the response with only call index 0.
 				bodyClose()
-				goto buildResponse
+				break readLoop
 			}
 			p, ok := partials[tc.Index]
 			if !ok {
@@ -763,7 +762,6 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 		return nil, fmt.Errorf("reading SSE stream: %w", err)
 	}
 
-buildResponse:
 	var toolCalls []ToolCall
 	if p, ok := partials[0]; ok && p.name != "" {
 		args := p.arguments.String()

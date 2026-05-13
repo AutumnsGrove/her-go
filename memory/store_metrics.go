@@ -70,30 +70,40 @@ type Stats struct {
 func (s *SQLiteStore) GetStats() (*Stats, error) {
 	st := &Stats{}
 
+	// scanInt runs a single-column QueryRow and scans the result into *dest.
+	// On error it logs a warning and leaves *dest at its zero value (0).
+	// This keeps GetStats fault-tolerant — a missing table or schema change
+	// won't blow up the whole /stats command.
+	scanInt := func(query string, dest ...interface{}) {
+		if err := s.db.QueryRow(query).Scan(dest...); err != nil {
+			log.Warn("GetStats: scan failed", "query", query, "err", err)
+		}
+	}
+
 	// Message counts by role.
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&st.TotalMessages)
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE role = 'user'`).Scan(&st.UserMessages)
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE role = 'assistant'`).Scan(&st.MiraMessages)
+	scanInt(`SELECT COUNT(*) FROM messages`, &st.TotalMessages)
+	scanInt(`SELECT COUNT(*) FROM messages WHERE role = 'user'`, &st.UserMessages)
+	scanInt(`SELECT COUNT(*) FROM messages WHERE role = 'assistant'`, &st.MiraMessages)
 
 	// Fact counts by subject.
-	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1`).Scan(&st.TotalFacts)
-	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'user'`).Scan(&st.UserFacts)
-	s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'self'`).Scan(&st.SelfFacts)
+	scanInt(`SELECT COUNT(*) FROM facts WHERE active = 1`, &st.TotalFacts)
+	scanInt(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'user'`, &st.UserFacts)
+	scanInt(`SELECT COUNT(*) FROM facts WHERE active = 1 AND COALESCE(subject, 'user') = 'self'`, &st.SelfFacts)
 
 	// Token + cost totals, split by chat vs agent model.
 	// Chat models have latency_ms > 0 (agent calls log latency as 0).
-	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics`).Scan(&st.TotalTokens, &st.TotalCostUSD)
-	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms > 0`).Scan(&st.ChatTokens, &st.ChatCostUSD)
-	s.db.QueryRow(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms = 0`).Scan(&st.AgentTokens, &st.AgentCostUSD)
+	scanInt(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics`, &st.TotalTokens, &st.TotalCostUSD)
+	scanInt(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms > 0`, &st.ChatTokens, &st.ChatCostUSD)
+	scanInt(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms = 0`, &st.AgentTokens, &st.AgentCostUSD)
 
 	// Average chat latency (exclude agent calls which have 0 latency).
-	s.db.QueryRow(`SELECT COALESCE(AVG(latency_ms), 0) FROM metrics WHERE latency_ms > 0`).Scan(&st.AvgLatencyMs)
+	scanInt(`SELECT COALESCE(AVG(latency_ms), 0) FROM metrics WHERE latency_ms > 0`, &st.AvgLatencyMs)
 
 	// Distinct days with messages (gives a sense of how many days active).
-	s.db.QueryRow(`SELECT COUNT(DISTINCT DATE(timestamp)) FROM messages`).Scan(&st.ConversationDays)
+	scanInt(`SELECT COUNT(DISTINCT DATE(timestamp)) FROM messages`, &st.ConversationDays)
 
 	// Command usage from the command_log table.
-	s.db.QueryRow(`SELECT COUNT(*) FROM command_log`).Scan(&st.TotalCommands)
+	scanInt(`SELECT COUNT(*) FROM command_log`, &st.TotalCommands)
 	rows, err := s.db.Query(
 		`SELECT command, COUNT(*) as cnt FROM command_log
 		 GROUP BY command ORDER BY cnt DESC`)
