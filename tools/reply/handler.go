@@ -464,6 +464,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		InitialWait: 500 * time.Millisecond,
 	}
 
+	// Use the turn context so retries respect shutdown/cancellation.
+	sendCtx := ctx.Ctx
+	if sendCtx == nil {
+		sendCtx = context.Background()
+	}
+
 	if len(replyText) > tools.TelegramMaxMessageLen && ctx.SendPaginatedCallback != nil {
 		log.Info("reply: message exceeds limit, using pagination",
 			"chars", len(replyText), "limit", tools.TelegramMaxMessageLen)
@@ -474,16 +480,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			}
 		}
 
-		sendErr = retry.Do(context.Background(), sendRetry, func() error {
+		sendErr = retry.Do(sendCtx, sendRetry, func() error {
 			return ctx.SendPaginatedCallback(replyText)
 		})
 	} else {
 		if ctx.ReplyCalled && ctx.SendCallback != nil {
-			sendErr = retry.Do(context.Background(), sendRetry, func() error {
+			sendErr = retry.Do(sendCtx, sendRetry, func() error {
 				return ctx.SendCallback(replyText)
 			})
 		} else if ctx.StatusCallback != nil {
-			sendErr = retry.Do(context.Background(), sendRetry, func() error {
+			sendErr = retry.Do(sendCtx, sendRetry, func() error {
 				return ctx.StatusCallback(replyText)
 			})
 		}

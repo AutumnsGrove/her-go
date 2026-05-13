@@ -14,6 +14,7 @@
 package tools
 
 import (
+	"context"
 	"strings"
 
 	"her/calendar"
@@ -179,6 +180,11 @@ func FormatPlaceCards(cards []PlaceCard) string {
 // tool call. Mutable fields (ReplyCalled, DoneCalled, etc.) track
 // execution state across the agent loop.
 type Context struct {
+	// Ctx is the parent context for this turn. Tools that spawn retries
+	// or background work should derive from this so they respect shutdown
+	// and turn cancellation. Defaults to context.Background() if unset.
+	Ctx context.Context
+
 	// --- LLM clients ---
 
 	// ChatLLM is the conversational model (configured via cfg.Chat). The reply

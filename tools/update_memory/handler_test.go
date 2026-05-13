@@ -287,8 +287,8 @@ func TestHandle_StyleGate(t *testing.T) {
 // Length gate
 // ---------------------------------------------------------------------------
 
-// TestHandle_LengthGate verifies that a memory over 300 characters is rejected
-// before any DB write. The old memory is left untouched.
+// TestHandle_LengthGate verifies that a memory over maxMemoryLength characters
+// is rejected before any DB write. The old memory is left untouched.
 func TestHandle_LengthGate(t *testing.T) {
 	store := newTestStore(t)
 	ctx := &tools.Context{Store: store}
@@ -296,8 +296,7 @@ func TestHandle_LengthGate(t *testing.T) {
 	oldID := saveMemory(t, store, "Autumn writes code", "work", "user")
 
 	// Build a memory that's exactly maxMemoryLength+1 characters.
-	// 300 is the package constant — we go one over to guarantee rejection.
-	longMem := strings.Repeat("x", 301)
+	longMem := strings.Repeat("x", tools.MaxMemoryLength()+1)
 	argsJSON := fmt.Sprintf(
 		`{"memory_id":%d,"memory":%q,"category":"work"}`,
 		oldID, longMem,
