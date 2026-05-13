@@ -304,9 +304,8 @@ func TestHandle_LengthGate_OverLimit_ReturnsRejection(t *testing.T) {
 	store := newTestStore(t)
 	ctx := newCtx(store)
 
-	// Build a memory that is clearly over the 300-character default limit.
-	// Uses plain characters to avoid triggering the style gate.
-	longText := "Autumn studied programming for many years. " + strings.Repeat("She enjoys working on complex systems. ", 10)
+	// Build a memory that exceeds maxMemoryLength.
+	longText := strings.Repeat("x", tools.MaxMemoryLength()+1)
 	argsJSON := `{"memory":"` + longText + `","category":"other","tags":"test"}`
 
 	result := Handle(argsJSON, ctx)
@@ -324,24 +323,24 @@ func TestHandle_LengthGate_OverLimit_ReturnsRejection(t *testing.T) {
 	}
 }
 
-// ctx.MaxMemoryLength=0 means "use package default (300)". Verify a
+// ctx.MaxMemoryLength=0 means "use package default". Verify a
 // memory right at the limit is not rejected by the length gate.
 func TestHandle_LengthGate_AtDefaultLimit_Passes(t *testing.T) {
 	store := newTestStore(t)
-	ctx := newCtx(store) // MaxMemoryLength=0 → uses 300
+	ctx := newCtx(store)
 
-	// Build exactly 300 safe characters.
+	limit := tools.MaxMemoryLength()
 	base := "Autumn reads science fiction novels in her spare time. "
-	for len(base) < 300 {
+	for len(base) < limit {
 		base += "a"
 	}
-	exactText := base[:300]
+	exactText := base[:limit]
 
 	argsJSON := `{"memory":"` + exactText + `","category":"other","tags":"test"}`
 	result := Handle(argsJSON, ctx)
 
 	if strings.Contains(result, "characters (max") {
-		t.Errorf("memory at exactly 300 chars should not be length-rejected, got: %s", result)
+		t.Errorf("memory at exactly %d chars should not be length-rejected, got: %s", limit, result)
 	}
 }
 
