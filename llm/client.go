@@ -676,7 +676,10 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	defer bodyClose()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("LLM API returned %d (body unreadable: %w)", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -850,7 +853,10 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("LLM API returned %d (body unreadable: %w)", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("LLM API returned %d: %s", resp.StatusCode, string(body))
 	}
 

@@ -27,9 +27,8 @@ var toolHandlers = map[string]Handler{}
 // Register adds a tool handler to the registry. Called from each tool's
 // init() function (e.g., tools/reply/handler.go calls Register("reply", Handle)).
 //
-// Panics if a handler is already registered for the given name — this
-// catches duplicate registrations at startup rather than silently
-// overwriting, which would be a nasty bug to track down.
+// Warns and skips if a handler is already registered for the given name —
+// first registration wins.
 func Register(name string, h Handler) {
 	if _, exists := toolHandlers[name]; exists {
 		// Duplicate registrations can happen if a tool's init() fires twice

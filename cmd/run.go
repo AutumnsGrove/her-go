@@ -694,20 +694,26 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 	}
 
-	if sttProcess != nil && sttProcess.Process != nil {
-		log.Info("stopping parakeet-server", "pid", sttProcess.Process.Pid)
-		_ = syscall.Kill(-sttProcess.Process.Pid, syscall.SIGKILL)
-		_, _ = sttProcess.Process.Wait()
-	}
-	if ttsProcess != nil && ttsProcess.Process != nil {
-		log.Info("stopping piper TTS server", "pid", ttsProcess.Process.Pid)
-		_ = syscall.Kill(-ttsProcess.Process.Pid, syscall.SIGKILL)
-		_, _ = ttsProcess.Process.Wait()
-	}
-	if embedProcess != nil && embedProcess.Process != nil {
-		log.Info("stopping embed sidecar", "pid", embedProcess.Process.Pid)
-		_ = syscall.Kill(-embedProcess.Process.Pid, syscall.SIGKILL)
-		_, _ = embedProcess.Process.Wait()
+	for _, sc := range []struct {
+		name string
+		cmd  *exec.Cmd
+	}{
+		{"parakeet-server", sttProcess},
+		{"piper TTS server", ttsProcess},
+		{"embed sidecar", embedProcess},
+	} {
+		if sc.cmd != nil && sc.cmd.Process != nil {
+			log.Info("stopping "+sc.name, "pid", sc.cmd.Process.Pid)
+			_ = syscall.Kill(-sc.cmd.Process.Pid, syscall.SIGTERM)
+			done := make(chan struct{})
+			go func() { sc.cmd.Process.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				_ = syscall.Kill(-sc.cmd.Process.Pid, syscall.SIGKILL)
+				sc.cmd.Process.Wait()
+			}
+		}
 	}
 	tgBot.Stop()
 	<-botDone // wait for tgBot.Start() to return
