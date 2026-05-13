@@ -53,6 +53,7 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 		}
 		vec, err := embedClient.Embed(content)
 		if err != nil {
+			log.Warn("embedding failed for message, skipping", "len", len(content), "err", err)
 			continue
 		}
 		msgVecs = append(msgVecs, vec)
@@ -81,7 +82,7 @@ func FilterRedundantMemories(memories []Memory, recentMessages []Message, embedC
 			var err error
 			memVec, err = embedClient.Embed(m.Content)
 			if err != nil {
-				// Can't check — keep the memory to be safe.
+				log.Warn("embedding failed for memory, keeping it", "id", m.ID, "err", err)
 				filtered = append(filtered, m)
 				continue
 			}

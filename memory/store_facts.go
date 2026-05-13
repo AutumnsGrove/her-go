@@ -233,11 +233,18 @@ func (s *SQLiteStore) RecentMemories(subject string, limit int) ([]Memory, error
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		var parseErr error
+		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+		if parseErr != nil {
+			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+		}
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		m.EmbeddingText = deserializeEmbedding(embTextData)
 		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 	return memories, nil
 }
@@ -362,6 +369,9 @@ func (s *SQLiteStore) LinkedMemories(memoryID int64, limit int) ([]Memory, error
 		m.Source = "linked"
 		memories = append(memories, m)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
 	return memories, nil
 }
 
@@ -428,6 +438,9 @@ func (s *SQLiteStore) AutoLinkMemory(memoryID int64, embedding []float32) error 
 		log.Debugf("auto-link: %d ↔ %d (similarity=%.3f)", memoryID, neighborID, similarity)
 		linked++
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating rows: %w", err)
+	}
 	return nil
 }
 
@@ -472,7 +485,11 @@ func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting memory %d: %w", memoryID, err)
 	}
-	m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+	var parseErr error
+	m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+	if parseErr != nil {
+		log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+	}
 	m.Active = active
 	if supersededBy.Valid {
 		m.SupersededBy = supersededBy.Int64
@@ -593,11 +610,18 @@ func (s *SQLiteStore) AllActiveMemories() ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		var parseErr error
+		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+		if parseErr != nil {
+			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+		}
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		m.EmbeddingText = deserializeEmbedding(embTextData)
 		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 	return memories, nil
 }
@@ -650,7 +674,11 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embTextData, &m.Distance); err != nil {
 			return nil, fmt.Errorf("scanning semantic search result: %w", err)
 		}
-		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		var parseErr error
+		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+		if parseErr != nil {
+			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+		}
 		m.Active = true
 		m.Source = "semantic"
 		m.EmbeddingText = deserializeEmbedding(embTextData)
@@ -660,6 +688,9 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 		if len(memories) >= topK {
 			break
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 
 	// Zettelkasten 1-hop traversal: for each primary KNN result, pull in
@@ -713,9 +744,16 @@ func (s *SQLiteStore) MemoriesWithoutEmbeddings() ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags); err != nil {
 			return nil, fmt.Errorf("scanning memory: %w", err)
 		}
-		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		var parseErr error
+		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+		if parseErr != nil {
+			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+		}
 		m.Active = true
 		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 	return memories, nil
 }
@@ -755,10 +793,17 @@ func (s *SQLiteStore) FindMemoriesByKeyword(keyword string) ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		m.Timestamp, _ = time.Parse("2006-01-02 15:04:05", ts)
+		var parseErr error
+		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
+		if parseErr != nil {
+			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
+		}
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 	return memories, nil
 }

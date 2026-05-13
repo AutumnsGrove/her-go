@@ -15,6 +15,7 @@
 package reply
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"her/llm"
 	"her/logger"
 	"her/memory"
+	"her/retry"
 	"her/scrub"
 	"her/tools"
 	"her/tui"
@@ -453,33 +455,37 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// to the agent so it can retry shorter).
 	var sendErr error
 
+	// Telegram sends are retried up to 3 times with exponential backoff.
+	// Transient errors (rate limits, network blips) are common enough that
+	// a single failure shouldn't drop the user's reply.
+	sendRetry := retry.Config{
+		MaxAttempts: 3,
+		Backoff:     retry.Exponential,
+		InitialWait: 500 * time.Millisecond,
+	}
+
 	if len(replyText) > tools.TelegramMaxMessageLen && ctx.SendPaginatedCallback != nil {
-		// Message is too long and pagination is available — use it.
-		// Paginated sends always create a new message (can't edit a
-		// placeholder into a paginated view), so we delete the placeholder
-		// first if this is the first reply (ReplyCalled is false).
 		log.Info("reply: message exceeds limit, using pagination",
 			"chars", len(replyText), "limit", tools.TelegramMaxMessageLen)
 
-		// Delete placeholder before sending the paginated message, but only
-		// for the first reply. Follow-up replies don't have a placeholder
-		// (it was already replaced by the first reply).
 		if !ctx.ReplyCalled && ctx.DeletePlaceholderCallback != nil {
 			if err := ctx.DeletePlaceholderCallback(); err != nil {
 				log.Warn("reply: failed to delete placeholder before pagination", "err", err)
-				// Non-fatal — proceed with pagination anyway. The orphan
-				// placeholder is annoying but not a blocker.
 			}
 		}
 
-		sendErr = ctx.SendPaginatedCallback(replyText)
+		sendErr = retry.Do(context.Background(), sendRetry, func() error {
+			return ctx.SendPaginatedCallback(replyText)
+		})
 	} else {
-		// Normal delivery path — first reply edits placeholder,
-		// follow-up replies send new messages.
 		if ctx.ReplyCalled && ctx.SendCallback != nil {
-			sendErr = ctx.SendCallback(replyText)
+			sendErr = retry.Do(context.Background(), sendRetry, func() error {
+				return ctx.SendCallback(replyText)
+			})
 		} else if ctx.StatusCallback != nil {
-			sendErr = ctx.StatusCallback(replyText)
+			sendErr = retry.Do(context.Background(), sendRetry, func() error {
+				return ctx.StatusCallback(replyText)
+			})
 		}
 	}
 

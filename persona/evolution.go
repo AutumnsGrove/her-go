@@ -337,13 +337,7 @@ func NightlyReflect(
 		return nil
 	}
 
-	// Advance watermark to the highest message ID we're about to reflect on.
 	maxID := recent[len(recent)-1].ID
-	defer func() {
-		if err := store.SetLastReflectedMessageID(maxID); err != nil {
-			log.Warn("failed to update message watermark", "err", err)
-		}
-	}()
 
 	// Read current persona as an anchor.
 	currentPersona := "(no persona description yet)"
@@ -424,6 +418,9 @@ func NightlyReflect(
 	if content == "NOTHING_NOTABLE" {
 		log.Info("nightly reflection: nothing notable, skipping save")
 		store.SetLastReflectionAt(time.Now())
+		if err := store.SetLastReflectedMessageID(maxID); err != nil {
+			log.Warn("failed to update message watermark", "err", err)
+		}
 		return nil
 	}
 
@@ -432,6 +429,12 @@ func NightlyReflect(
 	}
 	if err := store.SetLastReflectionAt(time.Now()); err != nil {
 		log.Warn("failed to update last_reflection_at", "err", err)
+	}
+
+	// Advance watermark only after successful reflection. If the LLM call
+	// or save failed, we leave the watermark so these messages are retried.
+	if err := store.SetLastReflectedMessageID(maxID); err != nil {
+		log.Warn("failed to update message watermark", "err", err)
 	}
 
 	log.Info("nightly reflection saved", "preview", truncate(content, 120))

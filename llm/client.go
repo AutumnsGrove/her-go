@@ -6,6 +6,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -642,7 +643,14 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 		)
 	}
 
-	req, err := http.NewRequest("POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
+	// Streaming requests get a generous 3-minute deadline. The regular
+	// httpClient.Timeout (60s) is too short for long streaming responses
+	// but too coarse to catch stuck connections. This context guarantees
+	// we never block longer than 3 minutes on a single streaming call.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -656,9 +664,16 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	if err != nil {
 		return nil, fmt.Errorf("calling LLM API (stream): %w", err)
 	}
-	// resp.Body is closed by the defer below (normal path) or explicitly
-	// inside the loop (abort path). The defer is a safety net for both.
-	defer resp.Body.Close()
+	// bodyClose is safe to call multiple times: the abort path (second
+	// tool-call detected) closes early, and the defer catches everything else.
+	bodyClosed := false
+	bodyClose := func() {
+		if !bodyClosed {
+			resp.Body.Close()
+			bodyClosed = true
+		}
+	}
+	defer bodyClose()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -718,9 +733,9 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 		for _, tc := range delta.ToolCalls {
 			if tc.Index >= 1 {
 				// Second tool call detected — model is batching.
-				// Close the body to abort the connection, then jump
+				// Close the body to abort the stream, then jump
 				// to response assembly with only call index 0.
-				resp.Body.Close()
+				bodyClose()
 				goto buildResponse
 			}
 			p, ok := partials[tc.Index]

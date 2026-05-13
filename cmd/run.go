@@ -112,10 +112,9 @@ func runBot(cmd *cobra.Command, args []string) error {
 	const herPIDFile = "her.pid"
 	killStaleSelf(herPIDFile)
 	if err := os.WriteFile(herPIDFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		log.Warn("failed to write PID file", "err", err)
-	} else {
-		defer os.Remove(herPIDFile)
+		log.Fatal("failed to write PID file — cannot ensure single instance", "err", err)
 	}
+	defer os.Remove(herPIDFile)
 
 	store, err := memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
@@ -533,6 +532,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// task.yaml at startup and dispatches on a 30s ticker. Extensions
 	// self-register via init(); the scheduler just orchestrates.
 	schedCtx, schedCancel := context.WithCancel(context.Background())
+	schedDone := make(chan struct{})
 	rootDir, err := os.Getwd()
 	if err != nil {
 		log.Error("scheduler: getting cwd", "err", err)
@@ -547,8 +547,10 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	if err != nil {
 		log.Error("scheduler startup failed; daily rollup disabled", "err", err)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "scheduler", Status: "failed", Detail: err.Error()})
+		close(schedDone) // nothing to wait for
 	} else {
 		go func() {
+			defer close(schedDone)
 			if err := sched.Run(schedCtx); err != nil {
 				log.Error("scheduler stopped", "err", err)
 			}
@@ -588,6 +590,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// The dreamer goroutine runs nightly reflection and gated persona rewrites.
 	// Uses the dedicated persona agent client (or memory agent fallback).
 	dreamerCtx, dreamerCancel := context.WithCancel(context.Background())
+	dreamerDone := make(chan struct{})
 	if personaAgentClient != nil {
 		dreamHour := cfg.Persona.DreamHour
 		if dreamHour == 0 {
@@ -601,20 +604,24 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		if minRefl == 0 {
 			minRefl = 3
 		}
-		go persona.StartDreamer(dreamerCtx, persona.DreamerParams{
-			LLM:           personaAgentClient,
-			DreamLLM:      dreamAgentClient,
-			ClassifierLLM: classifierClient,
-			Embed:         embedClient,
-			Store:         store,
-			Cfg:           cfg,
-			EventBus:      bus,
-			DreamHour:     dreamHour,
-			MinDays:       minDays,
-			MinRefl:       minRefl,
-		})
+		go func() {
+			defer close(dreamerDone)
+			persona.StartDreamer(dreamerCtx, persona.DreamerParams{
+				LLM:           personaAgentClient,
+				DreamLLM:      dreamAgentClient,
+				ClassifierLLM: classifierClient,
+				Embed:         embedClient,
+				Store:         store,
+				Cfg:           cfg,
+				EventBus:      bus,
+				DreamHour:     dreamHour,
+				MinDays:       minDays,
+				MinRefl:       minRefl,
+			})
+		}()
 	} else {
 		log.Warn("dreamer disabled — no persona or memory agent model configured")
+		close(dreamerDone) // nothing to wait for
 	}
 
 	// --- KV Sync Poller (prod only) ---
@@ -674,6 +681,17 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	schedCancel()   // same for the scheduler runner
 	if kvPollerCancel != nil {
 		kvPollerCancel()
+	}
+
+	// Wait for background goroutines to finish (up to 10s). This prevents
+	// mid-transaction database corruption from interrupted writes.
+	shutdownTimeout := time.After(10 * time.Second)
+	for _, ch := range []chan struct{}{dreamerDone, schedDone} {
+		select {
+		case <-ch:
+		case <-shutdownTimeout:
+			log.Warn("shutdown timeout waiting for background goroutines")
+		}
 	}
 
 	if sttProcess != nil && sttProcess.Process != nil {

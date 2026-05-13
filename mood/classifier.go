@@ -46,15 +46,33 @@ func classifyReal(ctx context.Context, client *llm.Client, inf *Inference, turns
 		transcript,
 	)
 
-	resp, err := client.ChatCompletion([]llm.ChatMessage{
-		{Role: "user", Content: prompt},
-	})
-	if err != nil {
-		log.Warn("mood classifier LLM call failed; failing open", "err", err)
-		return true, ""
+	// Run the LLM call in a goroutine bounded by the parent context.
+	// If the context expires (e.g., turn timeout), we fail open rather
+	// than blocking the mood pipeline indefinitely.
+	type classResult struct {
+		resp *llm.ChatResponse
+		err  error
 	}
-	// TODO: pass ctx to ChatCompletion when the client supports context-based cancellation.
-	_ = ctx
+	ch := make(chan classResult, 1)
+	go func() {
+		r, e := client.ChatCompletion([]llm.ChatMessage{
+			{Role: "user", Content: prompt},
+		})
+		ch <- classResult{r, e}
+	}()
+
+	var resp *llm.ChatResponse
+	select {
+	case <-ctx.Done():
+		log.Warn("mood classifier timed out; failing open", "err", ctx.Err())
+		return true, ""
+	case res := <-ch:
+		if res.err != nil {
+			log.Warn("mood classifier LLM call failed; failing open", "err", res.err)
+			return true, ""
+		}
+		resp = res.resp
+	}
 
 	verdict := strings.ToUpper(strings.TrimSpace(resp.Content))
 	// Strip any trailing punctuation the model adds.
