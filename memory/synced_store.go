@@ -311,8 +311,20 @@ func (s *SyncedStore) processOutbox() {
 
 		if stmt != nil {
 			stmts = append(stmts, *stmt)
+			processedIDs = append(processedIDs, e.id)
+		} else if e.op == "upsert" {
+			// Row was deleted locally before the carrier could read it.
+			// Convert to a delete on D1 so both sides stay in sync.
+			delStmt := s.buildDeleteStatement(e)
+			if delStmt != nil {
+				stmts = append(stmts, *delStmt)
+			}
+			processedIDs = append(processedIDs, e.id)
+			log.Debug("outbox upsert converted to delete (row gone locally)", "table", e.table, "row_id", e.rowID)
+		} else {
+			processedIDs = append(processedIDs, e.id)
+			log.Warn("outbox entry produced no statement", "table", e.table, "row_id", e.rowID, "op", e.op)
 		}
-		processedIDs = append(processedIDs, e.id)
 	}
 
 	if len(stmts) == 0 {
@@ -323,11 +335,20 @@ func (s *SyncedStore) processOutbox() {
 	}
 
 	// 3. Push to D1 in one batch.
-	if _, err := s.d1Client.Batch(stmts); err != nil {
+	results, err := s.d1Client.Batch(stmts)
+	if err != nil {
 		// D1 is down or returned an error. Leave outbox entries for retry.
 		// Local data is safe — this is purely best-effort sync.
 		log.Error("d1 batch push failed", "statements", len(stmts), "err", err)
 		return
+	}
+
+	// D1 batches are transactional (all-or-nothing), but we still check
+	// per-statement success as defense-in-depth.
+	for i, r := range results {
+		if !r.Success {
+			log.Error("d1 batch statement failed", "index", i, "statement_count", len(stmts))
+		}
 	}
 
 	log.Debug("d1 batch pushed", "statements", len(stmts))
@@ -673,6 +694,9 @@ func (s *SyncedStore) SaveTraits(traits []Trait, personaVersionID int64) error {
 			continue
 		}
 		s.writeOutbox("traits", id, "upsert")
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating rows: %w", err)
 	}
 	return nil
 }

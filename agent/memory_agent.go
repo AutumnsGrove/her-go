@@ -212,7 +212,13 @@ outer:
 		for i := 0; i < iterationsPerWindow; i++ {
 			resp, err := params.LLM.ChatCompletionWithTools(messages, memToolDefs)
 			if err != nil {
-				log.Error("memory agent: LLM error", "err", err)
+				log.Error("memory agent: LLM error — memories from this turn may be lost",
+					"err", err,
+					"iteration", i,
+					"window", window,
+					"memories_saved_so_far", len(tctx.SavedMemories),
+					"trigger_msg", input.TriggerMsgID,
+				)
 				break outer
 			}
 

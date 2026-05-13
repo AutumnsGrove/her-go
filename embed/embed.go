@@ -105,7 +105,7 @@ func NewClient(baseURL, model, apiKey string, dimension int) *Client {
 		apiKey:    apiKey,
 		Dimension: dimension,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 5 * time.Second,
 		},
 	}
 }

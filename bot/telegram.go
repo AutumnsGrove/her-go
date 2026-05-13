@@ -72,7 +72,8 @@ type Bot struct {
 	// conversationIDs tracks the active conversation ID per chat.
 	// When /clear is called, we rotate to a new ID so the history
 	// window starts fresh.
-	conversationIDs sync.Map
+	conversationIDs   sync.Map
+	conversationIDsMu sync.Mutex // serialises the load-or-create path
 
 	// pageSessions stores active paginated views per chat.
 	// When a command produces output longer than Telegram's 4096-char

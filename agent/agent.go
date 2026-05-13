@@ -776,8 +776,12 @@ outer:
 	}
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("memory agent panic (recovered)", "panic", r)
+			}
+		}()
 		if params.MemoryAgentLLM != nil {
-			// Defer memPhase.Done() so it fires even if RunMemoryAgent panics.
 			if memPhase != nil {
 				defer memPhase.Done(turn.PhaseMetrics{})
 			}

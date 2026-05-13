@@ -65,10 +65,10 @@ func NewClient(cfg *config.VoiceConfig) *Client {
 		baseURL: baseURL,
 		model:   cfg.STT.Model,
 		httpClient: &http.Client{
-			// 2 minutes should be plenty even for long voice memos.
-			// Parakeet transcribes ~68 minutes of audio in ~62 seconds
-			// on M3, so normal voice memos (under 1 min) are near-instant.
-			Timeout: 2 * time.Minute,
+			// 30 seconds is generous for normal voice memos (under 1 min
+			// of audio transcribes near-instantly on M3). A hung sidecar
+			// shouldn't block the bot for minutes.
+			Timeout: 30 * time.Second,
 		},
 	}
 }

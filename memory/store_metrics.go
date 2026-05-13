@@ -105,6 +105,9 @@ func (s *SQLiteStore) GetStats() (*Stats, error) {
 				st.CommandCounts = append(st.CommandCounts, cc)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterating rows: %w", err)
+		}
 	}
 
 	return st, nil
@@ -186,6 +189,9 @@ func (s *SQLiteStore) GetUsageReport() (*UsageReport, error) {
 			return nil, fmt.Errorf("scanning model row: %w", err)
 		}
 		r.ByModel = append(r.ByModel, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 
 	return r, nil
