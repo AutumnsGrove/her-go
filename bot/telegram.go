@@ -339,10 +339,10 @@ func (b *Bot) Stop() {
 	if b.moodSweeperStop != nil {
 		b.moodSweeperStop() // cancels the sweeper goroutine
 	}
-	b.tb.Stop()
-	close(b.shutdownCh) // unblocks any goroutine selecting on this
-	b.agentEventsStopped.Store(true)
-	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
+	b.agentEventsStopped.Store(true) // prevent sends before channel close
+	close(b.shutdownCh)              // unblocks wizard expiry + other goroutines
+	b.tb.Stop()                      // stop accepting new Telegram updates
+	close(b.agentEvents)             // signals consumeAgentEvents goroutine to exit
 }
 
 // IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).
