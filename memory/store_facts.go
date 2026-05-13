@@ -9,6 +9,25 @@ import (
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 )
 
+// parseTimestamp tries multiple time formats that appear in the DB.
+// SQLite stores timestamps as text — some rows use "2006-01-02 15:04:05"
+// (from datetime('now')), others use RFC3339 ("2006-01-02T15:04:05Z")
+// (from Go's time.Format). Only warns if ALL formats fail.
+func parseTimestamp(raw string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05-07:00",
+	} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	log.Warn("unparseable timestamp in DB", "value", raw)
+	return time.Time{}
+}
+
 // Memory represents an extracted piece of long-term memory.
 // Subject is "user" for memories about the user, or "self" for Mira's
 // own self-knowledge (her identity, observations, patterns).
@@ -233,11 +252,7 @@ func (s *SQLiteStore) RecentMemories(subject string, limit int) ([]Memory, error
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		m.EmbeddingText = deserializeEmbedding(embTextData)
@@ -495,11 +510,7 @@ func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting memory %d: %w", memoryID, err)
 	}
-	var parseErr error
-	m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-	if parseErr != nil {
-		log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-	}
+	m.Timestamp = parseTimestamp(ts)
 	m.Active = active
 	if supersededBy.Valid {
 		m.SupersededBy = supersededBy.Int64
@@ -620,11 +631,7 @@ func (s *SQLiteStore) AllActiveMemories() ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData, &embTextData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		m.EmbeddingText = deserializeEmbedding(embTextData)
@@ -684,11 +691,7 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embTextData, &m.Distance); err != nil {
 			return nil, fmt.Errorf("scanning semantic search result: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		m.Active = true
 		m.Source = "semantic"
 		m.EmbeddingText = deserializeEmbedding(embTextData)
@@ -754,11 +757,7 @@ func (s *SQLiteStore) MemoriesWithoutEmbeddings() ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags); err != nil {
 			return nil, fmt.Errorf("scanning memory: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		m.Active = true
 		memories = append(memories, m)
 	}
@@ -803,11 +802,7 @@ func (s *SQLiteStore) FindMemoriesByKeyword(keyword string) ([]Memory, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embData); err != nil {
 			return nil, fmt.Errorf("scanning memory row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in memories row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		m.Active = true
 		m.Embedding = deserializeEmbedding(embData)
 		memories = append(memories, m)

@@ -66,11 +66,7 @@ func (s *SQLiteStore) GlobalRecentMessages(limit int) ([]Message, error) {
 		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in messages row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		if scrubbed.Valid {
 			m.ContentScrubbed = scrubbed.String
 		}
@@ -121,11 +117,7 @@ func (s *SQLiteStore) RecentMessages(conversationID string, limit int) ([]Messag
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in messages row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		if scrubbed.Valid {
 			m.ContentScrubbed = scrubbed.String
 		}
@@ -160,11 +152,7 @@ func (s *SQLiteStore) MessagesAfter(conversationID string, sinceID int64) ([]Mes
 		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in messages row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		if scrubbed.Valid {
 			m.ContentScrubbed = scrubbed.String
 		}
@@ -198,11 +186,7 @@ func (s *SQLiteStore) MessagesInRange(conversationID string, startID, endID int6
 		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in messages row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		if scrubbed.Valid {
 			m.ContentScrubbed = scrubbed.String
 		}

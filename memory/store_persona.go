@@ -35,11 +35,7 @@ func (s *SQLiteStore) PersonaHistory(limit int) ([]PersonaVersion, error) {
 		if err := rows.Scan(&v.ID, &ts, &v.Content, &v.Trigger); err != nil {
 			return nil, fmt.Errorf("scanning persona version: %w", err)
 		}
-		var parseErr error
-		v.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in persona_versions row", "value", ts, "err", parseErr)
-		}
+		v.Timestamp = parseTimestamp(ts)
 		versions = append(versions, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -129,11 +125,7 @@ func (s *SQLiteStore) LastPersonaTimestamp() (time.Time, error) {
 	if err != nil {
 		return time.Time{}, nil // no versions yet, return zero time
 	}
-	t, parseErr := time.Parse("2006-01-02 15:04:05", ts)
-	if parseErr != nil {
-		log.Warn("invalid timestamp in persona_versions row", "value", ts, "err", parseErr)
-	}
-	return t, nil
+	return parseTimestamp(ts), nil
 }
 
 // ReflectionsSince returns all reflections created after the given timestamp.
@@ -157,11 +149,7 @@ func (s *SQLiteStore) ReflectionsSince(since time.Time) ([]Reflection, error) {
 		if err := rows.Scan(&r.ID, &ts, &r.Content); err != nil {
 			return nil, fmt.Errorf("scanning reflection: %w", err)
 		}
-		var parseErr error
-		r.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in reflections row", "value", ts, "err", parseErr)
-		}
+		r.Timestamp = parseTimestamp(ts)
 		reflections = append(reflections, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -232,11 +220,7 @@ func (s *SQLiteStore) GetCurrentTraits() ([]Trait, error) {
 		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
 			return nil, fmt.Errorf("scanning trait: %w", err)
 		}
-		var parseErr error
-		t.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in traits row", "value", ts, "err", parseErr)
-		}
+		t.Timestamp = parseTimestamp(ts)
 		traits = append(traits, t)
 	}
 	if err := rows.Err(); err != nil {
@@ -271,18 +255,10 @@ func (s *SQLiteStore) GetPersonaState() (PersonaState, error) {
 
 	var state PersonaState
 	if lastReflStr != "" {
-		var parseErr error
-		state.LastReflectionAt, parseErr = time.Parse("2006-01-02 15:04:05", lastReflStr)
-		if parseErr != nil {
-			log.Warn("invalid last_reflection_at in persona_state", "value", lastReflStr, "err", parseErr)
-		}
+		state.LastReflectionAt = parseTimestamp(lastReflStr)
 	}
 	if lastRewriteStr != "" {
-		var parseErr error
-		state.LastRewriteAt, parseErr = time.Parse("2006-01-02 15:04:05", lastRewriteStr)
-		if parseErr != nil {
-			log.Warn("invalid last_rewrite_at in persona_state", "value", lastRewriteStr, "err", parseErr)
-		}
+		state.LastRewriteAt = parseTimestamp(lastRewriteStr)
 	}
 	state.LastReflectedMessageID = watermark
 	return state, nil
@@ -351,11 +327,7 @@ func (s *SQLiteStore) GetTraitHistory(traitName string, limit int) ([]Trait, err
 		if err := rows.Scan(&t.ID, &t.TraitName, &t.Value, &t.PersonaVersionID, &ts); err != nil {
 			return nil, fmt.Errorf("scanning trait history: %w", err)
 		}
-		var parseErr error
-		t.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in traits row", "value", ts, "err", parseErr)
-		}
+		t.Timestamp = parseTimestamp(ts)
 		traits = append(traits, t)
 	}
 	if err := rows.Err(); err != nil {
@@ -404,11 +376,7 @@ func (s *SQLiteStore) MessagesAfterID(afterID int64, limit int) ([]Message, erro
 		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
-		var parseErr error
-		m.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in messages row", "value", ts, "err", parseErr)
-		}
+		m.Timestamp = parseTimestamp(ts)
 		if scrubbed.Valid {
 			m.ContentScrubbed = scrubbed.String
 		}
@@ -439,11 +407,7 @@ func (s *SQLiteStore) RecentReflections(limit int) ([]Reflection, error) {
 		if err := rows.Scan(&r.ID, &ts, &r.Content); err != nil {
 			return nil, fmt.Errorf("scanning reflection: %w", err)
 		}
-		var parseErr error
-		r.Timestamp, parseErr = time.Parse("2006-01-02 15:04:05", ts)
-		if parseErr != nil {
-			log.Warn("invalid timestamp in reflections row", "value", ts, "err", parseErr)
-		}
+		r.Timestamp = parseTimestamp(ts)
 		reflections = append(reflections, r)
 	}
 	if err := rows.Err(); err != nil {

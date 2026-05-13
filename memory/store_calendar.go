@@ -225,27 +225,14 @@ func (s *SQLiteStore) ListCalendarEvents(start, end, job string, shiftsOnly bool
 			return nil, fmt.Errorf("scanning calendar event row: %w", err)
 		}
 
-		// Parse ISO 8601 timestamps into time.Time. We use time.RFC3339
-		// because the database stores full ISO 8601 with timezone
-		// (e.g., "2026-04-14T05:00:00-04:00"), not just date+time.
-		var parseErr error
-		e.Start, parseErr = time.Parse(time.RFC3339, startStr)
-		if parseErr != nil {
-			log.Warn("invalid start timestamp in calendar_events row", "value", startStr, "err", parseErr)
-		}
-		e.End, parseErr = time.Parse(time.RFC3339, endStr)
-		if parseErr != nil {
-			log.Warn("invalid end timestamp in calendar_events row", "value", endStr, "err", parseErr)
-		}
-		e.CreatedAt, parseErr = time.Parse(time.RFC3339, createdAtStr)
-		if parseErr != nil {
-			log.Warn("invalid created_at timestamp in calendar_events row", "value", createdAtStr, "err", parseErr)
-		}
+		// Parse ISO 8601 timestamps into time.Time. parseTimestamp handles
+		// both RFC3339 (from EventKit, e.g., "2026-04-14T05:00:00-04:00")
+		// and the space-separated format written by SQLite's datetime('now').
+		e.Start = parseTimestamp(startStr)
+		e.End = parseTimestamp(endStr)
+		e.CreatedAt = parseTimestamp(createdAtStr)
 		if updatedAtStr != "" {
-			e.UpdatedAt, parseErr = time.Parse(time.RFC3339, updatedAtStr)
-			if parseErr != nil {
-				log.Warn("invalid updated_at timestamp in calendar_events row", "value", updatedAtStr, "err", parseErr)
-			}
+			e.UpdatedAt = parseTimestamp(updatedAtStr)
 		}
 
 		events = append(events, e)
@@ -296,24 +283,11 @@ func (s *SQLiteStore) GetCalendarEventByEventID(eventID string) (*CalendarEvent,
 	}
 
 	// Parse timestamps
-	var parseErr error
-	e.Start, parseErr = time.Parse("2006-01-02 15:04:05", startStr)
-	if parseErr != nil {
-		log.Warn("invalid start timestamp in calendar_events row", "value", startStr, "err", parseErr)
-	}
-	e.End, parseErr = time.Parse("2006-01-02 15:04:05", endStr)
-	if parseErr != nil {
-		log.Warn("invalid end timestamp in calendar_events row", "value", endStr, "err", parseErr)
-	}
-	e.CreatedAt, parseErr = time.Parse("2006-01-02 15:04:05", createdAtStr)
-	if parseErr != nil {
-		log.Warn("invalid created_at timestamp in calendar_events row", "value", createdAtStr, "err", parseErr)
-	}
+	e.Start = parseTimestamp(startStr)
+	e.End = parseTimestamp(endStr)
+	e.CreatedAt = parseTimestamp(createdAtStr)
 	if updatedAtVal.Valid {
-		e.UpdatedAt, parseErr = time.Parse("2006-01-02 15:04:05", updatedAtVal.String)
-		if parseErr != nil {
-			log.Warn("invalid updated_at timestamp in calendar_events row", "value", updatedAtVal.String, "err", parseErr)
-		}
+		e.UpdatedAt = parseTimestamp(updatedAtVal.String)
 	}
 
 	return &e, nil
