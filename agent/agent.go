@@ -71,9 +71,14 @@ func init() {
 // (tools/context.go). The agent imports them as tools.Context,
 // tools.StatusCallback, etc. See tools/context.go for documentation.
 
-// defaultAgentPrompt is used as a fallback if main_agent_prompt.md can't be loaded.
-// Uses {{her}} placeholder so it still works with the template expansion.
-const defaultAgentPrompt = `You are {{her}}'s brain. You orchestrate every response. Call think to reason, reply to respond, memory tools to remember, and done when finished. Every turn must include reply and done.`
+const (
+	// defaultAgentPrompt is used as a fallback if main_agent_prompt.md can't be loaded.
+	defaultAgentPrompt = `You are {{her}}'s brain. You orchestrate every response. Call think to reason, reply to respond, memory tools to remember, and done when finished. Every turn must include reply and done.`
+
+	// Safety caps — hard limits regardless of config, to prevent runaway loops.
+	maxIterationsPerWindowCap = 50
+	maxContinuationsCap       = 10
+)
 
 // loadAgentPrompt reads the agent prompt from disk (hot-reloadable),
 // falling back to a minimal default if the file doesn't exist.
@@ -457,17 +462,17 @@ func Run(params RunParams) (*RunResult, error) {
 	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 15
 	}
-	if iterationsPerWindow > 50 {
-		log.Warn("capping iterationsPerWindow", "requested", iterationsPerWindow, "max", 50)
-		iterationsPerWindow = 50
+	if iterationsPerWindow > maxIterationsPerWindowCap {
+		log.Warn("capping iterationsPerWindow", "requested", iterationsPerWindow, "max", maxIterationsPerWindowCap)
+		iterationsPerWindow = maxIterationsPerWindowCap
 	}
 	maxContinuations := params.Cfg.Driver.MaxContinuations
 	if maxContinuations <= 0 {
 		maxContinuations = 3
 	}
-	if maxContinuations > 10 {
-		log.Warn("capping maxContinuations", "requested", maxContinuations, "max", 10)
-		maxContinuations = 10
+	if maxContinuations > maxContinuationsCap {
+		log.Warn("capping maxContinuations", "requested", maxContinuations, "max", maxContinuationsCap)
+		maxContinuations = maxContinuationsCap
 	}
 
 outer:

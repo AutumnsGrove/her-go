@@ -394,10 +394,11 @@ func (s *SQLiteStore) AutoLinkMemory(memoryID int64, embedding []float32) error 
 	// Safety cap: an excessively large AutoLinkCount would issue a huge KNN
 	// query and build a very dense graph. 20 links per memory is already
 	// generous — cap here rather than in the struct so config stays expressive.
+	const maxAutoLinkCount = 20
 	linkCount := s.AutoLinkCount
-	if linkCount > 20 {
-		log.Warn("AutoLinkCount exceeds maximum, capping", "configured", linkCount, "cap", 20)
-		linkCount = 20
+	if linkCount > maxAutoLinkCount {
+		log.Warn("AutoLinkCount exceeds maximum, capping", "configured", linkCount, "cap", maxAutoLinkCount)
+		linkCount = maxAutoLinkCount
 	}
 
 	queryBytes, err := serializeEmbedding(embedding)

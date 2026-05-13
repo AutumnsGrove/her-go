@@ -55,6 +55,11 @@ func classifyReal(ctx context.Context, client *llm.Client, inf *Inference, turns
 	}
 	ch := make(chan classResult, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- classResult{nil, fmt.Errorf("mood classifier panic: %v", r)}
+			}
+		}()
 		r, e := client.ChatCompletion([]llm.ChatMessage{
 			{Role: "user", Content: prompt},
 		})
