@@ -1,0 +1,39 @@
+name: update_card
+agent: memory
+hint: "rewrite a memory card with new information"
+description: >-
+  Rewrite a memory card's content to incorporate new information.
+  Always read the card first so you can produce a complete, updated
+  version. The new content should be a full rewrite — not an append.
+  Weave new facts into existing text naturally, remove superseded
+  details, and keep it dense.
+hot: false
+parameters:
+  type: object
+  properties:
+    topic_slug:
+      type: string
+      description: >-
+        The topic slug of the card to update.
+    content:
+      type: string
+      description: >-
+        The complete new content for the card. This replaces the
+        existing content entirely. Should incorporate both old and
+        new information in a dense, coherent block.
+    delta:
+      type: string
+      description: >-
+        A short description of what changed, for the changelog.
+        Example: "added Costco application status and manager contact"
+  required:
+    - topic_slug
+    - content
+    - delta
+trace:
+  emoji: "✏️"
+  format: "updating card: {{.topic_slug}}\n    delta: {{.delta | escape}}"
+  on_reject:
+    prefix: "rejected:"
+    emoji: "🚫"
+    format: "<i>{{.Result | truncate 120 | escape}}</i>"
