@@ -1,8 +1,18 @@
 # Memory System Redesign: Topic Cards as Folders
 
-**Status:** Planning (revised)
+**Status:** In Progress
 **Date:** 2026-05-14
 **Scope:** memory/, persona/, agent/, classifier/, tools/, migrations/
+**Branch:** `feat/memory-cards`
+
+### Progress
+
+- [x] **Phase 1: Schema migration** — `000013_memory_cards.up.sql` rewritten for folder model (`summary` not `content`), includes card assignments for 92 memories, deactivation of 82 stale/junk memories, 16 memory rewrites/combines, and 1 organic card (`patterns`). Tested against DB copy. Not yet applied to production DB (runs on next `her run`).
+- [x] **Phase 2: Manual consolidation** — All 174 active memories reviewed with Autumn. Assigned to 15 cards (14 seed + 1 organic). Stale data corrected (THC years, job situation, friend count, financial MMI update, etc). Technique logs, mood snapshots, changelogs, and duplicates identified and marked for deactivation.
+- [ ] **Phase 3: Memory agent refactor** — Store layer done (`UpdateCardSummary`, `CreateCard`, `MemoriesByCard`, `MergeCards` with child memory moves). Tool handlers updated (`list_cards`, `read_card`, `update_card`, `create_card`). **Remaining:** update `save_memory` to require `card_slug`, add `card_slug` to `recall_memories` for scoped search, rewrite `memory_agent_prompt.md`.
+- [ ] **Phase 4: Dream cycle refactor** — Transcript builder updated for summary display. **Remaining:** flesh out dreamer to show child memories per card, update dreamer prompt, add `expire_memory` tool.
+- [ ] **Phase 5: D1 sync** — Not started. Need to add `memory_cards` and `memory_log` to `syncedTableSpecs`, add SyncedStore overrides. Also discovered `active = 'true'` vs `active = 1` type mismatch from D1 pulls — needs fixing.
+- [ ] **Phase 6: Testing & sims** — Not started.
 
 ---
 
