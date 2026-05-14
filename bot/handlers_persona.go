@@ -204,9 +204,9 @@ func (b *Bot) handleDream(c tele.Context) error {
 		if dreamerResult.Error != nil {
 			log.Error("dream consolidation", "err", dreamerResult.Error)
 			msg.WriteString(fmt.Sprintf("⚠️ Consolidation error: %v\n\n", dreamerResult.Error))
-		} else if dreamerResult.Merges+dreamerResult.Expires+dreamerResult.Promotes > 0 {
-			msg.WriteString(fmt.Sprintf("🧹 <b>Consolidated:</b> %d merges, %d expires, %d promotes\n\n",
-				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
+		} else if dreamerResult.Rewrites+dreamerResult.Merges+dreamerResult.Expires+dreamerResult.Creates > 0 {
+			msg.WriteString(fmt.Sprintf("🧹 <b>Consolidated:</b> %d rewrites, %d merges, %d expires, %d creates\n\n",
+				dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates))
 		} else {
 			msg.WriteString("<i>Memories look tidy — nothing to consolidate.</i>\n\n")
 		}

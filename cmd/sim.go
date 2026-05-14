@@ -313,9 +313,10 @@ type simDreamResult struct {
 	ClassifierVerdicts []simClassifierVerdict // persona gate verdicts (initial + retry if any)
 
 	// Memory dreamer results.
+	ConsolidationRewrites int
 	ConsolidationMerges   int
 	ConsolidationExpires  int
-	ConsolidationPromotes int
+	ConsolidationCreates  int
 	ConsolidationError    string
 	ConsolidationAudits   []memory.DreamAudit // full audit trail for the report
 }
@@ -346,15 +347,16 @@ func runDreamCycle(memoryAgentClient *llm.Client, classifierClient *llm.Client, 
 			Store:  store,
 			Cfg:    cfg,
 		})
+		result.ConsolidationRewrites = dreamerResult.Rewrites
 		result.ConsolidationMerges = dreamerResult.Merges
 		result.ConsolidationExpires = dreamerResult.Expires
-		result.ConsolidationPromotes = dreamerResult.Promotes
+		result.ConsolidationCreates = dreamerResult.Creates
 		if dreamerResult.Error != nil {
 			result.ConsolidationError = dreamerResult.Error.Error()
 			log.Error("[dream] consolidation error", "err", dreamerResult.Error)
 		} else {
-			log.Infof("[dream] consolidated: %d merges, %d expires, %d promotes",
-				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes)
+			log.Infof("[dream] consolidated: %d rewrites, %d merges, %d expires, %d creates",
+				dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates)
 		}
 		// Capture audit trail for the report.
 		if audits, err := store.RecentDreamAudits(50); err == nil {
@@ -2001,16 +2003,17 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 		}
 
 		// Memory consolidation (Step 0).
-		hasConsolidation := dream.ConsolidationMerges+dream.ConsolidationExpires+dream.ConsolidationPromotes > 0 || dream.ConsolidationError != ""
+		hasConsolidation := dream.ConsolidationRewrites+dream.ConsolidationMerges+dream.ConsolidationExpires+dream.ConsolidationCreates > 0 || dream.ConsolidationError != ""
 		if hasConsolidation {
 			b.WriteString("### Memory Consolidation\n\n")
 			if dream.ConsolidationError != "" {
 				fmt.Fprintf(b, "**Error:** %s\n\n", dream.ConsolidationError)
 			}
 			fmt.Fprintf(b, "| Operation | Count |\n|---|---|\n")
+			fmt.Fprintf(b, "| Rewrites | %d |\n", dream.ConsolidationRewrites)
 			fmt.Fprintf(b, "| Merges | %d |\n", dream.ConsolidationMerges)
 			fmt.Fprintf(b, "| Expires | %d |\n", dream.ConsolidationExpires)
-			fmt.Fprintf(b, "| Promotes | %d |\n\n", dream.ConsolidationPromotes)
+			fmt.Fprintf(b, "| Creates | %d |\n\n", dream.ConsolidationCreates)
 		}
 
 		// Reflection (Step 1).
