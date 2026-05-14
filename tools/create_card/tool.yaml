@@ -1,0 +1,42 @@
+name: create_card
+agent: memory
+hint: "create a new memory topic card"
+description: >-
+  Create a new topic card when information doesn't fit any existing
+  card. Use sparingly — most information belongs in an existing card.
+  New cards should represent a distinct life domain, not a single fact.
+hot: false
+parameters:
+  type: object
+  properties:
+    topic_slug:
+      type: string
+      description: >-
+        A short, URL-safe slug for the topic. Use lowercase with
+        hyphens. Examples: "therapy", "grove-platform", "gaming".
+        Self cards should start with "my-": "my-curiosity".
+    name:
+      type: string
+      description: >-
+        Human-readable name for the card. Examples: "Therapy",
+        "Grove Platform", "Gaming Preferences".
+    content:
+      type: string
+      description: >-
+        Initial content for the card. Should be dense and factual.
+    subject:
+      type: string
+      description: >-
+        Who this card is about: "user" for the human, "self" for
+        the bot's own identity/observations.
+      enum:
+        - user
+        - self
+  required:
+    - topic_slug
+    - name
+    - content
+    - subject
+trace:
+  emoji: "🆕"
+  format: "creating card: {{.topic_slug}} ({{.subject}})\n    {{.content | truncate 80 | escape}}"
