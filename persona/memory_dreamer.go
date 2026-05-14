@@ -304,12 +304,12 @@ func writeCardEntry(b *strings.Builder, c memory.MemoryCard) {
 		protectedLabel = ", PROTECTED"
 	}
 	age := time.Since(c.UpdatedAt).Hours() / 24
-	content := c.Content
-	if content == "" {
-		content = "(empty)"
+	summary := c.Summary
+	if summary == "" {
+		summary = "(no summary yet)"
 	}
-	fmt.Fprintf(b, "### [%s] %s (v%d, updated %.0fd ago%s)\n%s\n\n",
-		c.TopicSlug, c.Name, c.Version, age, protectedLabel, content)
+	fmt.Fprintf(b, "### [%s] %s (v%d, updated %.0fd ago%s)\nSummary: %s\n\n",
+		c.TopicSlug, c.Name, c.Version, age, protectedLabel, summary)
 }
 
 func truncateLog(s string, n int) string {

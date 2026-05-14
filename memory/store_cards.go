@@ -1,12 +1,12 @@
 // Package memory — store_cards.go provides CRUD for the memory_cards and
-// memory_log tables. Memory cards are dense, topic-based storage that
-// replace the flat memories table. Each card holds a consolidated view
-// of one topic (e.g. "financial", "my-identity") and is updated in-place
-// as new information arrives.
+// memory_log tables. Memory cards are organizational folders that group
+// related individual memories by topic (e.g. "financial", "my-identity").
+// Each card has a dreamer-maintained summary — the actual content lives
+// in the individual memories linked via card_id.
 //
-// The memory_log is an append-only changelog — every card mutation is
-// recorded with a delta description so the dream cycle (and humans)
-// can trace what changed and when.
+// The memory_log is an append-only changelog — every card and memory
+// mutation is recorded with a delta description so the dream cycle
+// (and humans) can trace what changed and when.
 package memory
 
 import (
@@ -15,14 +15,15 @@ import (
 	"time"
 )
 
-// MemoryCard represents a single topic card in the memory system.
-// Think of it like a dense index card — one per topic, continuously
-// updated with the latest information.
+// MemoryCard represents a topic folder in the memory system.
+// Each card groups related individual memories by topic. The Summary
+// field is a brief dreamer-maintained overview — the actual knowledge
+// lives in the Memory rows linked via card_id.
 type MemoryCard struct {
 	ID        int64
 	TopicSlug string
 	Name      string
-	Content   string
+	Summary   string
 	Subject   string // "user" or "self"
 	Protected bool   // seed cards can't be expired
 	CreatedAt time.Time
@@ -46,12 +47,12 @@ type MemoryLogEntry struct {
 // GetCard returns a single card by topic slug, or nil if not found.
 func (s *SQLiteStore) GetCard(topicSlug string) (*MemoryCard, error) {
 	row := s.db.QueryRow(`
-		SELECT id, topic_slug, name, content, subject, protected,
+		SELECT id, topic_slug, name, summary, subject, protected,
 		       created_at, updated_at, version
 		FROM memory_cards WHERE topic_slug = ?`, topicSlug)
 
 	c := &MemoryCard{}
-	err := row.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Content, &c.Subject,
+	err := row.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Summary, &c.Subject,
 		&c.Protected, &c.CreatedAt, &c.UpdatedAt, &c.Version)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -65,12 +66,12 @@ func (s *SQLiteStore) GetCard(topicSlug string) (*MemoryCard, error) {
 // GetCardByID returns a single card by its numeric ID.
 func (s *SQLiteStore) GetCardByID(id int64) (*MemoryCard, error) {
 	row := s.db.QueryRow(`
-		SELECT id, topic_slug, name, content, subject, protected,
+		SELECT id, topic_slug, name, summary, subject, protected,
 		       created_at, updated_at, version
 		FROM memory_cards WHERE id = ?`, id)
 
 	c := &MemoryCard{}
-	err := row.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Content, &c.Subject,
+	err := row.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Summary, &c.Subject,
 		&c.Protected, &c.CreatedAt, &c.UpdatedAt, &c.Version)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -86,7 +87,7 @@ func (s *SQLiteStore) GetCardByID(id int64) (*MemoryCard, error) {
 // the dream cycle to review everything.
 func (s *SQLiteStore) AllCards() ([]MemoryCard, error) {
 	rows, err := s.db.Query(`
-		SELECT id, topic_slug, name, content, subject, protected,
+		SELECT id, topic_slug, name, summary, subject, protected,
 		       created_at, updated_at, version
 		FROM memory_cards
 		ORDER BY subject, topic_slug`)
@@ -98,7 +99,7 @@ func (s *SQLiteStore) AllCards() ([]MemoryCard, error) {
 	var cards []MemoryCard
 	for rows.Next() {
 		var c MemoryCard
-		if err := rows.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Content,
+		if err := rows.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Summary,
 			&c.Subject, &c.Protected, &c.CreatedAt, &c.UpdatedAt, &c.Version); err != nil {
 			return nil, fmt.Errorf("AllCards scan: %w", err)
 		}
@@ -110,7 +111,7 @@ func (s *SQLiteStore) AllCards() ([]MemoryCard, error) {
 // CardsBySubject returns all cards for a given subject ("user" or "self").
 func (s *SQLiteStore) CardsBySubject(subject string) ([]MemoryCard, error) {
 	rows, err := s.db.Query(`
-		SELECT id, topic_slug, name, content, subject, protected,
+		SELECT id, topic_slug, name, summary, subject, protected,
 		       created_at, updated_at, version
 		FROM memory_cards
 		WHERE subject = ?
@@ -123,7 +124,7 @@ func (s *SQLiteStore) CardsBySubject(subject string) ([]MemoryCard, error) {
 	var cards []MemoryCard
 	for rows.Next() {
 		var c MemoryCard
-		if err := rows.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Content,
+		if err := rows.Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Summary,
 			&c.Subject, &c.Protected, &c.CreatedAt, &c.UpdatedAt, &c.Version); err != nil {
 			return nil, fmt.Errorf("CardsBySubject scan: %w", err)
 		}
@@ -132,35 +133,37 @@ func (s *SQLiteStore) CardsBySubject(subject string) ([]MemoryCard, error) {
 	return cards, rows.Err()
 }
 
-// UpdateCard rewrites a card's content in-place, increments the version,
-// and appends a log entry recording the delta (what changed).
+// UpdateCardSummary rewrites a card's dreamer-maintained summary, increments
+// the version, and appends a log entry recording the delta.
 //
-// Returns the updated card. Callers should re-embed the card after updating.
-func (s *SQLiteStore) UpdateCard(topicSlug, newContent, delta string, sourceMessageID int64) (*MemoryCard, error) {
+// This is a dreamer-only operation — the real-time memory agent never
+// calls this. Individual memories are the source of truth; the summary
+// is a distillation maintained by the dream cycle.
+func (s *SQLiteStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("UpdateCard begin: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummarySummary begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Update the card.
+	// Update the card summary.
 	res, err := tx.Exec(`
 		UPDATE memory_cards
-		SET content = ?, updated_at = CURRENT_TIMESTAMP, version = version + 1
-		WHERE topic_slug = ?`, newContent, topicSlug)
+		SET summary = ?, updated_at = CURRENT_TIMESTAMP, version = version + 1
+		WHERE topic_slug = ?`, newSummary, topicSlug)
 	if err != nil {
-		return nil, fmt.Errorf("UpdateCard update: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummary update: %w", err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
-		return nil, fmt.Errorf("UpdateCard: card %q not found", topicSlug)
+		return nil, fmt.Errorf("UpdateCardSummary: card %q not found", topicSlug)
 	}
 
 	// Get the card ID for the log entry.
 	var cardID int64
 	err = tx.QueryRow(`SELECT id FROM memory_cards WHERE topic_slug = ?`, topicSlug).Scan(&cardID)
 	if err != nil {
-		return nil, fmt.Errorf("UpdateCard get id: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummary get id: %w", err)
 	}
 
 	// Append log entry.
@@ -168,11 +171,11 @@ func (s *SQLiteStore) UpdateCard(topicSlug, newContent, delta string, sourceMess
 		INSERT INTO memory_log (card_id, delta, operation, source_message_id)
 		VALUES (?, ?, 'update', ?)`, cardID, delta, sourceMessageID)
 	if err != nil {
-		return nil, fmt.Errorf("UpdateCard log: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummary log: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("UpdateCard commit: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummary commit: %w", err)
 	}
 
 	return s.GetCard(topicSlug)
@@ -180,16 +183,17 @@ func (s *SQLiteStore) UpdateCard(topicSlug, newContent, delta string, sourceMess
 
 // CreateCard creates a new organic (unprotected) memory card and logs
 // the creation. Returns the new card.
-func (s *SQLiteStore) CreateCard(topicSlug, name, content, subject string, sourceMessageID int64) (*MemoryCard, error) {
+func (s *SQLiteStore) CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*MemoryCard, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("CreateCard begin: %w", err)
 	}
 	defer tx.Rollback()
 
+	// New cards start with an empty summary — the dream cycle populates it.
 	res, err := tx.Exec(`
-		INSERT INTO memory_cards (topic_slug, name, content, subject, protected)
-		VALUES (?, ?, ?, ?, 0)`, topicSlug, name, content, subject)
+		INSERT INTO memory_cards (topic_slug, name, summary, subject, protected)
+		VALUES (?, ?, '', ?, 0)`, topicSlug, name, subject)
 	if err != nil {
 		return nil, fmt.Errorf("CreateCard insert: %w", err)
 	}
@@ -197,7 +201,7 @@ func (s *SQLiteStore) CreateCard(topicSlug, name, content, subject string, sourc
 
 	_, err = tx.Exec(`
 		INSERT INTO memory_log (card_id, delta, operation, source_message_id)
-		VALUES (?, ?, 'create', ?)`, cardID, content, sourceMessageID)
+		VALUES (?, ?, 'create', ?)`, cardID, fmt.Sprintf("created card: %s", name), sourceMessageID)
 	if err != nil {
 		return nil, fmt.Errorf("CreateCard log: %w", err)
 	}
@@ -250,10 +254,10 @@ func (s *SQLiteStore) ExpireCard(topicSlug, reason string) error {
 	return tx.Commit()
 }
 
-// MergeCards combines two or more organic cards into one. The target card
-// gets the merged content; source cards are expired. Returns the updated
-// target card.
-func (s *SQLiteStore) MergeCards(targetSlug string, sourceSlug string, mergedContent, reason string) (*MemoryCard, error) {
+// MergeCards combines two organic cards into one. All memories from the
+// source card are moved to the target card. The target card's summary is
+// updated and the source card is deleted. Returns the updated target card.
+func (s *SQLiteStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*MemoryCard, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("MergeCards begin: %w", err)
@@ -272,17 +276,24 @@ func (s *SQLiteStore) MergeCards(targetSlug string, sourceSlug string, mergedCon
 		return nil, fmt.Errorf("MergeCards: source card %q is protected", sourceSlug)
 	}
 
-	// Update target content.
+	// Look up target.
 	var targetID int64
 	err = tx.QueryRow(`SELECT id FROM memory_cards WHERE topic_slug = ?`, targetSlug).Scan(&targetID)
 	if err != nil {
 		return nil, fmt.Errorf("MergeCards target lookup: %w", err)
 	}
 
+	// Move all memories from source card to target card.
+	_, err = tx.Exec(`UPDATE memories SET card_id = ? WHERE card_id = ?`, targetID, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("MergeCards move memories: %w", err)
+	}
+
+	// Update target summary.
 	_, err = tx.Exec(`
 		UPDATE memory_cards
-		SET content = ?, updated_at = CURRENT_TIMESTAMP, version = version + 1
-		WHERE topic_slug = ?`, mergedContent, targetSlug)
+		SET summary = ?, updated_at = CURRENT_TIMESTAMP, version = version + 1
+		WHERE topic_slug = ?`, mergedSummary, targetSlug)
 	if err != nil {
 		return nil, fmt.Errorf("MergeCards update target: %w", err)
 	}
@@ -303,7 +314,7 @@ func (s *SQLiteStore) MergeCards(targetSlug string, sourceSlug string, mergedCon
 		return nil, fmt.Errorf("MergeCards log source: %w", err)
 	}
 
-	// Delete source.
+	// Delete source card.
 	_, err = tx.Exec(`DELETE FROM memory_cards WHERE id = ?`, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("MergeCards delete source: %w", err)
@@ -370,4 +381,36 @@ func (s *SQLiteStore) CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry,
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// MemoriesByCard returns all active memories belonging to a specific card,
+// ordered by most recent first. Used by the dream cycle to see a card's
+// children, and by recall_memories for card-scoped search.
+func (s *SQLiteStore) MemoriesByCard(cardID int64) ([]Memory, error) {
+	rows, err := s.db.Query(`
+		SELECT id, timestamp, memory, category, source_message_id,
+		       importance, subject, tags, context
+		FROM memories
+		WHERE card_id = ? AND active = 1
+		ORDER BY id DESC`, cardID)
+	if err != nil {
+		return nil, fmt.Errorf("MemoriesByCard(%d): %w", cardID, err)
+	}
+	defer rows.Close()
+
+	var mems []Memory
+	for rows.Next() {
+		var m Memory
+		var srcMsg sql.NullInt64
+		var tags, ctx sql.NullString
+		if err := rows.Scan(&m.ID, &m.Timestamp, &m.Content, &m.Category,
+			&srcMsg, &m.Importance, &m.Subject, &tags, &ctx); err != nil {
+			return nil, fmt.Errorf("MemoriesByCard scan: %w", err)
+		}
+		m.SourceMessageID = srcMsg.Int64
+		m.Tags = tags.String
+		m.Context = ctx.String
+		mems = append(mems, m)
+	}
+	return mems, rows.Err()
 }

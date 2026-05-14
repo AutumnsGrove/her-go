@@ -1,5 +1,5 @@
 // Package list_cards implements the list_cards tool — shows all memory topic
-// cards with their slugs, names, and content previews.
+// cards with their slugs, names, and summary previews.
 package list_cards
 
 import (
@@ -30,7 +30,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Slug    string
 		Name    string
 		Subject string
-		Content string
+		Summary string
 		Version int
 	}
 
@@ -43,9 +43,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				Slug    string
 				Name    string
 				Subject string
-				Content string
+				Summary string
 				Version int
-			}{c.TopicSlug, c.Name, c.Subject, c.Content, c.Version})
+			}{c.TopicSlug, c.Name, c.Subject, c.Summary, c.Version})
 		}
 	} else {
 		raw, e := ctx.Store.AllCards()
@@ -55,9 +55,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				Slug    string
 				Name    string
 				Subject string
-				Content string
+				Summary string
 				Version int
-			}{c.TopicSlug, c.Name, c.Subject, c.Content, c.Version})
+			}{c.TopicSlug, c.Name, c.Subject, c.Summary, c.Version})
 		}
 	}
 	if err != nil {
@@ -72,12 +72,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d cards:\n\n", len(cards))
 	for _, c := range cards {
-		preview := c.Content
+		preview := c.Summary
 		if len(preview) > 100 {
 			preview = preview[:100] + "..."
 		}
 		if preview == "" {
-			preview = "(empty)"
+			preview = "(no summary yet)"
 		}
 		fmt.Fprintf(&b, "- **%s** [%s, v%d] %s\n  %s\n", c.Slug, c.Subject, c.Version, c.Name, preview)
 	}
