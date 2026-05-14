@@ -73,6 +73,18 @@ type Store interface {
 	VecMemoriesCount() (int, error)
 	FindMemoriesByKeyword(keyword string) ([]Memory, error)
 
+	// Memory Cards
+	GetCard(topicSlug string) (*MemoryCard, error)
+	GetCardByID(id int64) (*MemoryCard, error)
+	AllCards() ([]MemoryCard, error)
+	CardsBySubject(subject string) ([]MemoryCard, error)
+	UpdateCard(topicSlug, newContent, delta string, sourceMessageID int64) (*MemoryCard, error)
+	CreateCard(topicSlug, name, content, subject string, sourceMessageID int64) (*MemoryCard, error)
+	ExpireCard(topicSlug, reason string) error
+	MergeCards(targetSlug, sourceSlug, mergedContent, reason string) (*MemoryCard, error)
+	RecentLogEntries(hours int) ([]MemoryLogEntry, error)
+	CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry, error)
+
 	// Dream audit
 	SaveDreamAudit(op string, sourceIDs []int64, resultID int64, before, after, reason string, dryRun bool) error
 	RecentDreamAudits(limit int) ([]DreamAudit, error)
