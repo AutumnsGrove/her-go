@@ -5,6 +5,7 @@ description: >-
   Create a new topic card when information doesn't fit any existing
   card. Use sparingly — most information belongs in an existing card.
   New cards should represent a distinct life domain, not a single fact.
+  The card starts with an empty summary; the dream cycle populates it.
 hot: false
 parameters:
   type: object
@@ -20,10 +21,6 @@ parameters:
       description: >-
         Human-readable name for the card. Examples: "Therapy",
         "Grove Platform", "Gaming Preferences".
-    content:
-      type: string
-      description: >-
-        Initial content for the card. Should be dense and factual.
     subject:
       type: string
       description: >-
@@ -35,8 +32,7 @@ parameters:
   required:
     - topic_slug
     - name
-    - content
     - subject
 trace:
   emoji: "🆕"
-  format: "creating card: {{.topic_slug}} ({{.subject}})\n    {{.content | truncate 80 | escape}}"
+  format: "creating card: {{.topic_slug}} ({{.subject}})"

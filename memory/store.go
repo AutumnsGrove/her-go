@@ -78,10 +78,11 @@ type Store interface {
 	GetCardByID(id int64) (*MemoryCard, error)
 	AllCards() ([]MemoryCard, error)
 	CardsBySubject(subject string) ([]MemoryCard, error)
-	UpdateCard(topicSlug, newContent, delta string, sourceMessageID int64) (*MemoryCard, error)
-	CreateCard(topicSlug, name, content, subject string, sourceMessageID int64) (*MemoryCard, error)
+	UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error)
+	CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*MemoryCard, error)
 	ExpireCard(topicSlug, reason string) error
-	MergeCards(targetSlug, sourceSlug, mergedContent, reason string) (*MemoryCard, error)
+	MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*MemoryCard, error)
+	MemoriesByCard(cardID int64) ([]Memory, error)
 	RecentLogEntries(hours int) ([]MemoryLogEntry, error)
 	CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry, error)
 
