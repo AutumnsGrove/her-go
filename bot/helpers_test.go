@@ -57,7 +57,7 @@ func (s stubStore) ConversationCountSince(since time.Time) (int, error) { return
 func (s stubStore) LatestConversationID(prefix string) string { return "" }
 
 func (s stubStore) LastExtractionMessageID() (int64, error) { return 0, nil }
-func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
+func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
 	return 0, nil
 }
 func (s stubStore) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {

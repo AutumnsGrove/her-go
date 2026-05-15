@@ -246,7 +246,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		return "error: no store configured"
 	}
 
-	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context)
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context, 0)
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
@@ -291,7 +291,7 @@ func ExecSplitMemories(splits []string, category, subject string, ctx *Context) 
 			}
 		}
 
-		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "")
+		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", 0)
 		if err != nil {
 			memoryLog.Error("split memory: save failed", "err", err)
 			continue

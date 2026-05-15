@@ -572,8 +572,8 @@ func (s *SyncedStore) UpdateMessageTokenCount(messageID int64, tokenCount int) e
 
 // SaveMemory stores a memory locally and records in outbox for D1 push.
 // Embeddings are not synced — D1 has no vector tables.
-func (s *SyncedStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
-	id, err := s.SQLiteStore.SaveMemory(content, category, subject, sourceMessageID, importance, embedding, embeddingText, tags, context)
+func (s *SyncedStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
+	id, err := s.SQLiteStore.SaveMemory(content, category, subject, sourceMessageID, importance, embedding, embeddingText, tags, context, cardID)
 	if err != nil {
 		return 0, err
 	}

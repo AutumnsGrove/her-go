@@ -102,7 +102,7 @@ func deserializeEmbedding(data []byte) []float32 {
 // embedding is the tag-based vector (used for KNN search via vec_memories).
 // embeddingText is the raw-text vector (used for dedup and redundancy filtering).
 // Both are optional — pass nil if not yet computed.
-func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
+func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -139,10 +139,16 @@ func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessag
 		ctxVal = context
 	}
 
+	// Normalize zero cardID to nil so it stores as NULL (no card association).
+	var cardVal interface{}
+	if cardID != 0 {
+		cardVal = cardID
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO memories (memory, category, subject, source_message_id, importance, embedding, embedding_text, tags, context)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		content, category, subject, srcID, importance, embBlob, embTextBlob, tags, ctxVal,
+		`INSERT INTO memories (memory, category, subject, source_message_id, importance, embedding, embedding_text, tags, context, card_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		content, category, subject, srcID, importance, embBlob, embTextBlob, tags, ctxVal, cardVal,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving memory: %w", err)
