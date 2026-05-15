@@ -24,7 +24,10 @@ import (
 	// Blank imports register the tool handlers the dreamer uses.
 	_ "her/tools/create_card"
 	_ "her/tools/done"
+	_ "her/tools/list_cards"
+	_ "her/tools/merge_memories"
 	_ "her/tools/read_card"
+	_ "her/tools/remove_memory"
 	_ "her/tools/think"
 	_ "her/tools/update_card"
 )
@@ -85,17 +88,22 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 		// Non-fatal — we can still review cards without the log.
 	}
 
-	// Compute pairwise similarity hints for organic cards.
-	threshold := params.Cfg.Dream.ClusterThreshold
-	if threshold == 0 {
-		threshold = 0.70
+	// Load child memories for each card so the dreamer can see what's inside.
+	childrenByCard := make(map[int64][]memory.Memory)
+	totalMemories := 0
+	for _, c := range cards {
+		children, err := params.Store.MemoriesByCard(c.ID)
+		if err != nil {
+			log.Warn("memory dreamer: failed to load children", "card", c.TopicSlug, "err", err)
+			continue
+		}
+		childrenByCard[c.ID] = children
+		totalMemories += len(children)
 	}
-	// Note: similarity hints require card embeddings, which we don't have yet.
-	// For now, skip similarity hints. TODO: add card embedding support.
 
 	// Build the transcript.
-	transcript := buildCardDreamerTranscript(cards, logEntries)
-	log.Infof("memory dreamer: %d cards, %d recent log entries", len(cards), len(logEntries))
+	transcript := buildCardDreamerTranscript(cards, childrenByCard, logEntries)
+	log.Infof("memory dreamer: %d cards, %d memories, %d recent log entries", len(cards), totalMemories, len(logEntries))
 
 	// Expand prompt template with bot/user names.
 	promptContent := params.Cfg.ExpandPrompt(memoryDreamerPromptTmpl)
@@ -111,7 +119,7 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 
 	// Load tool definitions — card-based tools for the dreamer.
 	dreamerToolDefs := tools.LookupToolDefs(
-		[]string{"think", "read_card", "update_card", "create_card", "done"},
+		[]string{"think", "list_cards", "read_card", "update_card", "create_card", "remove_memory", "merge_memories", "done"},
 		params.Cfg,
 	)
 
@@ -176,7 +184,7 @@ outer:
 
 			for _, tc := range resp.ToolCalls {
 				// Safety cap — stop executing mutation tools if we hit the limit.
-				isMutation := tc.Function.Name != "think" && tc.Function.Name != "read_card" && tc.Function.Name != "done"
+				isMutation := tc.Function.Name != "think" && tc.Function.Name != "read_card" && tc.Function.Name != "list_cards" && tc.Function.Name != "done"
 				if isMutation && opCount >= maxOps {
 					toolResult := fmt.Sprintf("error: max operations reached (%d). Call done to finish.", maxOps)
 					messages = append(messages, llm.ChatMessage{
@@ -212,6 +220,12 @@ outer:
 					case "create_card":
 						result.Creates++
 						logDreamerAudit(params.Store, "create", tc.Function.Arguments, toolResult, dryRun)
+					case "remove_memory":
+						result.Expires++
+						logDreamerAudit(params.Store, "expire_memory", tc.Function.Arguments, toolResult, dryRun)
+					case "merge_memories":
+						result.Merges++
+						logDreamerAudit(params.Store, "merge_memory", tc.Function.Arguments, toolResult, dryRun)
 					}
 				}
 
@@ -250,13 +264,14 @@ outer:
 	return result
 }
 
-// buildCardDreamerTranscript formats all cards and recent log entries into
-// a structured transcript for the memory dreamer agent.
-func buildCardDreamerTranscript(cards []memory.MemoryCard, logEntries []memory.MemoryLogEntry) string {
+// buildCardDreamerTranscript formats all cards with their child memories
+// and recent log entries into a structured transcript for the dreamer.
+func buildCardDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64][]memory.Memory, logEntries []memory.MemoryLogEntry) string {
 	var b strings.Builder
 
 	b.WriteString("# Memory Card Review\n\n")
-	b.WriteString("Review each card for quality, density, and accuracy.\n\n")
+	b.WriteString("Review each card's summary and children for quality, staleness, and accuracy.\n")
+	b.WriteString("Use read_card for a closer look at any card. Use update_card to rewrite summaries.\n\n")
 
 	// Build a map of card IDs to slugs for the log section.
 	cardSlugByID := make(map[int64]string)
@@ -264,13 +279,13 @@ func buildCardDreamerTranscript(cards []memory.MemoryCard, logEntries []memory.M
 		cardSlugByID[c.ID] = c.TopicSlug
 	}
 
-	// Cards grouped by subject.
+	// Cards grouped by subject, each with their children.
 	b.WriteString("## User Cards\n\n")
 	for _, c := range cards {
 		if c.Subject != "user" {
 			continue
 		}
-		writeCardEntry(&b, c)
+		writeCardEntry(&b, c, childrenByCard[c.ID])
 	}
 
 	b.WriteString("## Self Cards\n\n")
@@ -278,7 +293,7 @@ func buildCardDreamerTranscript(cards []memory.MemoryCard, logEntries []memory.M
 		if c.Subject != "self" {
 			continue
 		}
-		writeCardEntry(&b, c)
+		writeCardEntry(&b, c, childrenByCard[c.ID])
 	}
 
 	// Recent changelog.
@@ -298,7 +313,7 @@ func buildCardDreamerTranscript(cards []memory.MemoryCard, logEntries []memory.M
 	return b.String()
 }
 
-func writeCardEntry(b *strings.Builder, c memory.MemoryCard) {
+func writeCardEntry(b *strings.Builder, c memory.MemoryCard, children []memory.Memory) {
 	protectedLabel := ""
 	if c.Protected {
 		protectedLabel = ", PROTECTED"
@@ -308,8 +323,17 @@ func writeCardEntry(b *strings.Builder, c memory.MemoryCard) {
 	if summary == "" {
 		summary = "(no summary yet)"
 	}
-	fmt.Fprintf(b, "### [%s] %s (v%d, updated %.0fd ago%s)\nSummary: %s\n\n",
-		c.TopicSlug, c.Name, c.Version, age, protectedLabel, summary)
+	fmt.Fprintf(b, "### [%s] %s (v%d, %d memories, updated %.0fd ago%s)\nSummary: %s\n",
+		c.TopicSlug, c.Name, c.Version, len(children), age, protectedLabel, summary)
+
+	if len(children) == 0 {
+		b.WriteString("(empty)\n\n")
+		return
+	}
+	for _, m := range children {
+		fmt.Fprintf(b, "- [#%d] %s\n", m.ID, m.Content)
+	}
+	b.WriteString("\n")
 }
 
 func truncateLog(s string, n int) string {
