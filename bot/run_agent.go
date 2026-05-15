@@ -140,6 +140,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	var memoryTraceCallback tools.TraceCallback
 	var moodTraceCallback tools.TraceCallback
 	var personaTraceCallback tools.TraceCallback
+	var introspectionTraceCallback tools.TraceCallback
 	var traceFinalize func()
 	if b.cfg.Driver.Trace {
 		tr := b.makeTraceCallbacks(c)
@@ -147,6 +148,7 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 		memoryTraceCallback = tr.getCallback("memory")
 		moodTraceCallback = tr.getCallback("mood")
 		personaTraceCallback = tr.getCallback("persona")
+		introspectionTraceCallback = tr.getCallback("introspection")
 		traceFinalize = tr.finalize
 	}
 	// Suppress unused-variable warning — personaTraceCallback is wired
@@ -264,8 +266,13 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	}
 
 	// --- Run the agent ---
+	// WaitGroup for introspection coordination — memory and mood goroutines
+	// call Done() when they finish, introspection goroutine calls Wait().
+	var introWG sync.WaitGroup
+
 	params := b.baseRunParams()
 	params.Tracker = tracker
+	params.IntrospectionWG = &introWG
 	params.ScrubbedUserMessage = scrubbedText
 	params.ScrubVault = vault
 	params.ConversationID = input.ConversationID
@@ -308,7 +315,11 @@ func (b *Bot) runAgent(c tele.Context, input AgentInput) error {
 	// Fire the mood agent in a goroutine. Begin the phase BEFORE
 	// launching the goroutine to prevent a race where all known phases
 	// finish and TurnEndEvent fires before the mood goroutine starts.
-	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker)
+	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker, &introWG)
+
+	// Fire the introspection agent — waits for memory + mood to finish
+	// before snapshotting self-memories and starting its loop.
+	b.launchIntrospectionAgent(result, params, &introWG, introspectionTraceCallback, tracker)
 
 	// Finalize the trace — store the snapshot for /lasttrace and
 	// paginate overflow if the trace exceeds Telegram's char limit.

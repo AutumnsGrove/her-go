@@ -72,6 +72,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("memory ID=%d not found", args.MemoryID)
 	}
 
+	// SelfOnly guard — the introspection agent should only modify self-memories.
+	if ctx.SelfOnly && oldMemory.Subject != "self" {
+		return fmt.Sprintf("rejected: memory ID=%d is a %s memory, not a self-memory", args.MemoryID, oldMemory.Subject)
+	}
+
 	// --- Classifier gate ---
 	// Show the classifier BOTH old and new text so it can evaluate the
 	// delta — without this, it can't tell that an addition was inferred.

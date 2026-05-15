@@ -237,6 +237,9 @@ func (s stubStore) CardLogEntries(cardID int64, limit int) ([]memory.MemoryLogEn
 func (s stubStore) SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]memory.Memory, error) {
 	return nil, nil
 }
+func (s stubStore) SemanticSearchBySubject(queryVec []float32, subject string, topK int) ([]memory.Memory, error) {
+	return nil, nil
+}
 
 // Ensure stubStore satisfies the full Store interface at compile time.
 // This blank-identifier assignment is a Go idiom: if stubStore is

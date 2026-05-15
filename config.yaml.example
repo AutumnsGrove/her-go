@@ -105,6 +105,17 @@ mood_agent:
   # provider:
   #   order: ["Groq"]
 
+introspection_agent:
+  # Self-reflection agent — runs after memory + mood, reviews the turn's
+  # think traces and reply for self-observations. Most turns it just skips.
+  # Empty model falls back to memory_agent model.
+  model: ""
+  temperature: 0.3
+  max_tokens: 2048
+  timeout: 60
+  iterations_per_window: 5   # smaller than other agents — should be fast
+  max_continuations: 1       # one window is enough, skip or save and move on
+
 mood:
   # Point at a custom vocab file to override Apple's embedded lists.
   # Empty → use mood/vocab.yaml embedded at build time.
