@@ -11,6 +11,12 @@ hot: false
 parameters:
   type: object
   properties:
+    card_slug:
+      type: string
+      description: >-
+        The topic card this memory belongs to. Use list_cards to see
+        available slugs. Every memory MUST go in a card. If nothing
+        fits, create_card first, then save_memory into it.
     memory:
       type: string
       description: >-
@@ -46,12 +52,13 @@ parameters:
         obvious from the memory itself. Example: 'Primary project language —
         she knows Python/TS but is new to Go. Teaching mode matters.'
   required:
+    - card_slug
     - memory
     - category
     - tags
 trace:
   emoji: "💾"
-  format: "{{.memory | escape}}\n    category={{.category}}"
+  format: "[{{.card_slug}}] {{.memory | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"
