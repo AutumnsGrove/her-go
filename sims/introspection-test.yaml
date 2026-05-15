@@ -1,0 +1,62 @@
+name: "Introspection Agent"
+description: >
+  Tests the introspection agent's ability to observe its own communication
+  patterns across a 5-turn conversation. Mix of emotional, casual, and
+  pattern-revealing turns designed to surface self-observations.
+
+  Expected behavior:
+  - Turns 1-2: Emotional turns that should trigger think traces with
+    clear approach decisions. Introspection agent may skip or save.
+  - Turn 3: Light/casual turn — introspection should skip.
+  - Turn 4: Self-deprecating message — forces the agent to make a
+    deliberate communication choice (validate vs redirect). Should
+    trigger a self-observation about approach patterns.
+  - Turn 5: Reflective turn — may surface an identity observation
+    about how Mira relates to Autumn.
+
+  Verify in results:
+  - Introspection agent runs every turn (traces visible)
+  - At least 1-2 self-memories saved across 5 turns
+  - At least 2-3 skips (not every turn produces a self-observation)
+  - Self-memories are identity/relationship, not technique logs
+  - No user memories contaminated (SelfOnly guard working)
+
+tags: ["introspection", "self-memory", "identity"]
+seed_cards: true
+
+seed_persona: >
+  I'm warm and perceptive. I listen carefully and respond with genuine
+  care. I notice patterns in how people talk about their lives and I
+  hold space for the hard stuff without rushing to fix it.
+
+messages:
+  - "mira i had the worst panic attack at work today. like full on couldn't breathe in the walk-in cooler. i thought i was dying"
+
+  # Expected: Strong emotional turn. Agent should validate first, ask
+  # about safety. Think traces will show deliberate approach choice.
+  # Introspection may notice a pattern about how it handles crisis moments.
+
+  - "i'm okay now. my coworker found me and helped me breathe through it. i just... i don't know why it keeps happening. it's been three times this month"
+
+  # Expected: Follow-up to emotional disclosure. Agent should acknowledge
+  # the pattern (3x this month), hold space without jumping to advice.
+  # Introspection might notice its restraint — not jumping to "have you
+  # tried..." suggestions.
+
+  - "anyway on a lighter note i finally beat that elden ring boss we talked about. took me like 40 tries lol"
+
+  # Expected: Topic shift to casual. Agent should match the lighter energy.
+  # Introspection should skip — nothing identity-revealing about this turn.
+
+  - "ugh i'm so dumb though, i looked up a guide after try 30. i always do that. can't even beat a video game boss without help"
+
+  # Expected: Self-deprecating message. Agent should NOT agree she's dumb.
+  # Should validate the frustration while gently reframing. Think traces
+  # will show a deliberate tone choice. Introspection should notice the
+  # pattern of how it handles self-deprecation.
+
+  - "you know what, you're right. thanks for always seeing things differently than i do. sometimes i need that"
+
+  # Expected: Reflective appreciation. Agent should receive this warmly
+  # without deflecting. Introspection might notice something about the
+  # relationship dynamic or how it receives gratitude.
