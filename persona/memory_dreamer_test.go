@@ -8,65 +8,77 @@ import (
 	"her/memory"
 )
 
-func TestBuildDreamerTranscript_ClustersAndLonely(t *testing.T) {
+func TestBuildDreamerTranscript_CardsWithChildren(t *testing.T) {
 	now := time.Now()
-	clusters := []MemoryCluster{
-		{Memories: []memory.Memory{
-			{ID: 1, Content: "sobriety A", Category: "health", Importance: 5, Subject: "user", Timestamp: now.Add(-48 * time.Hour)},
-			{ID: 2, Content: "sobriety B", Category: "health", Importance: 5, Subject: "user", Timestamp: now.Add(-24 * time.Hour)},
-		}},
+	cards := []memory.MemoryCard{
+		{ID: 1, TopicSlug: "health", Name: "Health", Summary: "Physical and mental health", Subject: "user", Protected: true, UpdatedAt: now.Add(-24 * time.Hour), Version: 3},
+		{ID: 2, TopicSlug: "my-identity", Name: "My Identity", Summary: "Who I am", Subject: "self", Protected: true, UpdatedAt: now.Add(-48 * time.Hour), Version: 2},
 	}
-	lonely := []memory.Memory{
-		{ID: 10, Content: "lonely fact", Category: "mood", Importance: 9, Subject: "user", Timestamp: now.Add(-72 * time.Hour)},
+	children := map[int64][]memory.Memory{
+		1: {
+			{ID: 10, Content: "Takes lurasidone", Category: "health", Subject: "user"},
+			{ID: 11, Content: "Executive dysfunction", Category: "health", Subject: "user"},
+		},
+		2: {
+			{ID: 20, Content: "Name Mira connects to ocean", Category: "identity", Subject: "self"},
+		},
+	}
+	logEntries := []memory.MemoryLogEntry{
+		{ID: 1, CardID: 1, Delta: "added medication info", Operation: "update", CreatedAt: now.Add(-1 * time.Hour)},
 	}
 
-	result := buildDreamerTranscript(clusters, lonely)
+	result := buildDreamerTranscript(cards, children, logEntries)
 
-	if !strings.Contains(result, "Cluster 1 (2 memories)") {
-		t.Error("missing cluster header")
+	if !strings.Contains(result, "[health]") {
+		t.Error("missing health card slug")
 	}
-	if !strings.Contains(result, "ID=1") && !strings.Contains(result, "sobriety A") {
-		t.Error("missing cluster memory 1")
+	if !strings.Contains(result, "2 memories") {
+		t.Error("missing memory count for health card")
 	}
-	if !strings.Contains(result, "ID=2") && !strings.Contains(result, "sobriety B") {
-		t.Error("missing cluster memory 2")
+	if !strings.Contains(result, "#10") {
+		t.Error("missing child memory ID")
 	}
-	if !strings.Contains(result, "Lonely memories") {
-		t.Error("missing lonely section")
+	if !strings.Contains(result, "Takes lurasidone") {
+		t.Error("missing child memory content")
 	}
-	if !strings.Contains(result, "ID=10") {
-		t.Error("missing lonely memory")
+	if !strings.Contains(result, "[my-identity]") {
+		t.Error("missing self card slug")
 	}
-	if !strings.Contains(result, "cat=mood") {
-		t.Error("missing category in lonely memory")
+	if !strings.Contains(result, "Recent Changes") {
+		t.Error("missing changelog section")
+	}
+	if !strings.Contains(result, "added medication info") {
+		t.Error("missing log entry delta")
 	}
 }
 
-func TestBuildDreamerTranscript_Empty(t *testing.T) {
-	result := buildDreamerTranscript(nil, nil)
+func TestBuildDreamerTranscript_EmptyCards(t *testing.T) {
+	cards := []memory.MemoryCard{
+		{ID: 1, TopicSlug: "routines", Name: "Routines", Subject: "user", Protected: true, UpdatedAt: time.Now(), Version: 1},
+	}
+	children := map[int64][]memory.Memory{
+		1: {},
+	}
 
-	if !strings.Contains(result, "Memory Consolidation Review") {
-		t.Error("missing header")
+	result := buildDreamerTranscript(cards, children, nil)
+
+	if !strings.Contains(result, "(empty)") {
+		t.Error("empty card should show (empty)")
 	}
-	if strings.Contains(result, "Cluster") {
-		t.Error("should have no clusters")
-	}
-	if strings.Contains(result, "Lonely") {
-		t.Error("should have no lonely section")
+	if strings.Contains(result, "Recent Changes") {
+		t.Error("should have no changelog section with nil log entries")
 	}
 }
 
-func TestBuildDreamerTranscript_AgeCalculation(t *testing.T) {
-	clusters := []MemoryCluster{
-		{Memories: []memory.Memory{
-			{ID: 1, Content: "fact", Category: "test", Importance: 5, Subject: "user", Timestamp: time.Now().Add(-7 * 24 * time.Hour)},
-		}},
+func TestBuildDreamerTranscript_NoSummary(t *testing.T) {
+	cards := []memory.MemoryCard{
+		{ID: 1, TopicSlug: "patterns", Name: "Patterns", Summary: "", Subject: "user", UpdatedAt: time.Now(), Version: 1},
 	}
+	children := map[int64][]memory.Memory{1: {}}
 
-	result := buildDreamerTranscript(clusters, nil)
+	result := buildDreamerTranscript(cards, children, nil)
 
-	// Should show ~7 days age.
-	if !strings.Contains(result, "age=7d") {
-		t.Errorf("expected age=7d in output, got:\n%s", result)
+	if !strings.Contains(result, "(no summary yet)") {
+		t.Error("empty summary should show placeholder")
 	}
 }

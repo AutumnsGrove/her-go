@@ -55,13 +55,13 @@ var fullPullTables = []string{
 // exist before child rows are inserted. Tables within a phase run
 // concurrently; phases run sequentially.
 //
-//	Phase 1: no FK deps on other synced tables
-//	Phase 2: memories → messages, traits → persona_versions
+//	Phase 1: no FK deps on other synced tables (memory_cards before memories)
+//	Phase 2: memories → messages, traits → persona_versions, memory_log → memory_cards + memories
 //	Phase 3: memory_links → memories
 var pullPhases = [][]string{
-	{"messages", "summaries", "reflections", "persona_versions", "mood_entries", "persona_state"},
+	{"messages", "summaries", "reflections", "persona_versions", "mood_entries", "persona_state", "memory_cards"},
 	{"memories", "traits"},
-	{"memory_links"},
+	{"memory_links", "memory_log"},
 }
 
 // ---------------------------------------------------------------------------

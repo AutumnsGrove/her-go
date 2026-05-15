@@ -24,7 +24,9 @@ type args struct {
 // Handle returns a formatted list of all memory cards.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var a args
-	_ = json.Unmarshal([]byte(argsJSON), &a)
+	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+		return "error: invalid arguments"
+	}
 
 	var cards []struct {
 		Slug    string

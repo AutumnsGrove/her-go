@@ -142,7 +142,7 @@ func (s *SQLiteStore) CardsBySubject(subject string) ([]MemoryCard, error) {
 func (s *SQLiteStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("UpdateCardSummarySummary begin: %w", err)
+		return nil, fmt.Errorf("UpdateCardSummary begin: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -154,7 +154,11 @@ func (s *SQLiteStore) UpdateCardSummary(topicSlug, newSummary, delta string, sou
 	if err != nil {
 		return nil, fmt.Errorf("UpdateCardSummary update: %w", err)
 	}
-	affected, _ := res.RowsAffected()
+	// SQLite's driver never errors on RowsAffected, but check for correctness.
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("UpdateCardSummary rows affected: %w", err)
+	}
 	if affected == 0 {
 		return nil, fmt.Errorf("UpdateCardSummary: card %q not found", topicSlug)
 	}
