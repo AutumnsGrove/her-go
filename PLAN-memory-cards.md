@@ -11,7 +11,7 @@
 - [x] **Phase 2: Manual consolidation** — All 174 active memories reviewed with Autumn. Assigned to 15 cards (14 seed + 1 organic). Stale data corrected (THC years, job situation, friend count, financial MMI update, etc). Technique logs, mood snapshots, changelogs, and duplicates identified and marked for deactivation.
 - [x] **Phase 3: Memory agent refactor** — Complete. `SaveMemory` takes `cardID`, `save_memory`/`save_self_memory` tools require `card_slug`, `recall_memories` accepts optional `card_slug` for scoped search, `SemanticSearchByCard` added to Store, `memory_agent_prompt.md` rewritten for card-folder workflow, `list_cards`/`create_card` added to memory agent tool list.
 - [x] **Phase 4: Dream cycle refactor** — Complete. Transcript builder loads + displays child memories per card. Dreamer tools expanded with `remove_memory`, `merge_memories`, `list_cards`. Dreamer prompt rewritten for editor role. Operation counter tracks memory-level ops. Using existing `remove_memory` instead of new `expire_memory` (same function).
-- [ ] **Phase 5: D1 sync** — Not started. Need to add `memory_cards` and `memory_log` to `syncedTableSpecs`, add SyncedStore overrides. Also discovered `active = 'true'` vs `active = 1` type mismatch from D1 pulls — needs fixing.
+- [x] **Phase 5: D1 sync** — Complete. `memory_cards` and `memory_log` added to `syncedTableSpecs` and incremental pull tables. SyncedStore overrides for `UpdateCardSummary`, `CreateCard`, `ExpireCard`, `MergeCards`. `memories` table spec updated with `card_id`. D1 schema file (`d1/schema.sql`) updated. Note: `active = 'true'` vs `active = 1` type mismatch from D1 pulls still needs fixing separately.
 - [ ] **Phase 6: Testing & sims** — Not started.
 
 ---
