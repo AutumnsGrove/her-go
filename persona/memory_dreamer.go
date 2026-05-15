@@ -102,7 +102,7 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 	}
 
 	// Build the transcript.
-	transcript := buildCardDreamerTranscript(cards, childrenByCard, logEntries)
+	transcript := buildDreamerTranscript(cards, childrenByCard, logEntries)
 	log.Infof("memory dreamer: %d cards, %d memories, %d recent log entries", len(cards), totalMemories, len(logEntries))
 
 	// Expand prompt template with bot/user names.
@@ -264,9 +264,9 @@ outer:
 	return result
 }
 
-// buildCardDreamerTranscript formats all cards with their child memories
+// buildDreamerTranscript formats all cards with their child memories
 // and recent log entries into a structured transcript for the dreamer.
-func buildCardDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64][]memory.Memory, logEntries []memory.MemoryLogEntry) string {
+func buildDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64][]memory.Memory, logEntries []memory.MemoryLogEntry) string {
 	var b strings.Builder
 
 	b.WriteString("# Memory Card Review\n\n")

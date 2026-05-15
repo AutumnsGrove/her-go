@@ -790,6 +790,21 @@ func (s *SyncedStore) DeleteMoodEntry(id int64) error {
 // Memory Cards
 // ---------------------------------------------------------------------------
 
+// pushRecentCardLog queries the most recent memory_log entry for a card
+// and writes it to the outbox. Called after card mutations that create
+// log entries inside SQLiteStore (where we don't have the log entry ID).
+func (s *SyncedStore) pushRecentCardLog(cardID int64) {
+	var logID int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM memory_log WHERE card_id = ? ORDER BY id DESC LIMIT 1`, cardID,
+	).Scan(&logID)
+	if err != nil {
+		log.Debug("no log entry to push for card", "card_id", cardID)
+		return
+	}
+	s.writeOutbox("memory_log", logID, "upsert")
+}
+
 // UpdateCardSummary rewrites a card's summary locally and records in outbox.
 func (s *SyncedStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error) {
 	card, err := s.SQLiteStore.UpdateCardSummary(topicSlug, newSummary, delta, sourceMessageID)
@@ -797,9 +812,7 @@ func (s *SyncedStore) UpdateCardSummary(topicSlug, newSummary, delta string, sou
 		return nil, err
 	}
 	s.writeOutbox("memory_cards", card.ID, "upsert")
-	// Log entry was created inside UpdateCardSummary — push it too.
-	// The log entry ID isn't returned, but the carrier will pick it up
-	// from the outbox on the next cycle via the memory_log table spec.
+	s.pushRecentCardLog(card.ID)
 	return card, nil
 }
 
@@ -810,6 +823,7 @@ func (s *SyncedStore) CreateCard(topicSlug, name, subject string, sourceMessageI
 		return nil, err
 	}
 	s.writeOutbox("memory_cards", card.ID, "upsert")
+	s.pushRecentCardLog(card.ID)
 	return card, nil
 }
 
@@ -826,6 +840,7 @@ func (s *SyncedStore) ExpireCard(topicSlug, reason string) error {
 		return err
 	}
 	s.writeOutbox("memory_cards", cardID, "delete")
+	s.pushRecentCardLog(cardID)
 	return nil
 }
 
@@ -846,6 +861,11 @@ func (s *SyncedStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason s
 	s.writeOutbox("memory_cards", card.ID, "upsert")
 	if sourceID > 0 {
 		s.writeOutbox("memory_cards", sourceID, "delete")
+	}
+	// MergeCards creates two log entries (merge on target, expire on source).
+	s.pushRecentCardLog(card.ID)
+	if sourceID > 0 {
+		s.pushRecentCardLog(sourceID)
 	}
 	return card, nil
 }
