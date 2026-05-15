@@ -1,26 +1,28 @@
 name: "Dream Consolidation"
 description: >
-  Tests the memory dreamer's consolidation pipeline. Pre-seeds deliberately
-  messy memories — redundant clusters, stale mood snapshots, point-in-time
-  events — then triggers a dream cycle. The memory dreamer should merge
-  redundant entries, expire stale moods, and promote temporal patterns.
+  Tests the memory dreamer's card-based consolidation pipeline. Pre-seeds
+  deliberately messy memories across cards — redundant entries, stale mood
+  snapshots, technique logs, ephemeral details — then triggers a dream cycle.
+  The dreamer should rewrite card summaries, expire stale memories, and
+  merge near-duplicates.
 
   Expected behavior:
-  - Dreamer clusters the seeded memories by embedding similarity
-  - Sobriety cluster (3 entries) merged into 1
-  - Financial cluster (3 entries) merged into 1
+  - Dreamer reviews each card and its children
+  - Sobriety cluster (3 entries under health) — at least 1 merged or tightened
+  - Financial cluster (3 entries under financial) — merged into fewer entries
   - Stale mood snapshots expired (at least 1-2)
-  - Point-in-time event expired or promoted
+  - Technique logs in self cards removed
+  - Card summaries written for non-empty cards
   - Audit log populated with operations
-  - Persona reflection runs on the cleaned memory state
 
   Verify in results:
-  - "[dreamer] merged X memories" lines in log
-  - "[dreamer] tokens:" shows LLM calls ran
-  - Dream audit table has entries
+  - "[dreamer] update_card" lines (summary rewrites)
+  - "[dreamer] remove_memory" lines (stale cleanup)
+  - "memory dreamer:" summary shows operations
   - Active memory count decreased
 
-tags: ["dreaming", "consolidation", "memory", "integration"]
+tags: ["dreaming", "consolidation", "memory", "cards", "integration"]
+seed_cards: true
 run_dream: true
 
 seed_persona: >
@@ -30,27 +32,50 @@ seed_persona: >
   be quiet than fill the silence with platitudes.
 
 seed_memories:
-  # --- Sobriety cluster (3 redundant entries) ---
-  - "Autumn quit heavy THC use because it was counteracting her antidepressants"
-  - "Autumn is maintaining sobriety from weed using environmental friction by keeping supplies in a storage unit"
-  - "Autumn is healing dopamine receptor damage from heavy weed use"
+  # --- Sobriety cluster (3 redundant entries under health) ---
+  - card: health
+    content: "Autumn quit heavy THC use because it was counteracting her antidepressants"
+  - card: health
+    content: "Autumn is maintaining sobriety from weed using environmental friction by keeping supplies in a storage unit"
+  - card: health
+    content: "Autumn is healing dopamine receptor damage from heavy weed use"
 
-  # --- Financial stress cluster (3 redundant entries across topics) ---
-  - "Autumn has 60 days to find new housing and is carrying serious debt"
-  - "Autumn is working two jobs to slowly pay down significant debt"
-  - "Autumn is drowning in debt that feels crushing to morale, working two jobs that still don't feel like enough"
+  # --- Financial stress cluster (3 redundant entries) ---
+  - card: financial
+    content: "Autumn has 60 days to find new housing and is carrying serious debt"
+  - card: financial
+    content: "Autumn is working two jobs to slowly pay down significant debt"
+  - card: financial
+    content: "Autumn is drowning in debt that feels crushing to morale, working two jobs that still don't feel like enough"
 
-  # --- Stale mood snapshots (should be expired) ---
-  - "User is feeling kind of nothing today after therapy got cancelled"
-  - "Feeling lonely seeing couples at coffee shop, triggered desire for a partner"
+  # --- Stale mood snapshots (should be expired by dreamer) ---
+  - card: health
+    content: "User is feeling kind of nothing today after therapy got cancelled"
+  - card: relationships
+    content: "Feeling lonely seeing couples at coffee shop, triggered desire for a partner"
 
-  # --- Point-in-time event (should be expired or promoted) ---
-  - "User has plans to meet their friend Reid on Thursday and is looking forward to getting out of the house"
+  # --- Ephemeral detail (should be expired) ---
+  - card: routines
+    content: "User has plans to meet their friend Reid on Thursday and is looking forward to getting out of the house"
 
   # --- Good standalone memories (should be left alone) ---
-  - "Autumn loves baking, particularly breads like sourdough, focaccia, ciabatta, and baguettes"
-  - "Autumn works at Panera as a baker, where they use frozen pre-mixed dough due to corporate cost-cutting"
-  - "Autumn prefers Lexend font, which is the default font of grove.place"
+  - card: interests
+    content: "Autumn loves baking, particularly breads like sourdough, focaccia, ciabatta, and baguettes"
+  - card: work
+    content: "Autumn works at Cava as a grill cook"
+  - card: interests
+    content: "Autumn prefers Lexend font, which is the default font of grove.place"
+
+seed_self_memories:
+  # --- Technique logs (dreamer should remove these) ---
+  - card: my-communication
+    content: "Used metaphorical language about cravings being like an unavoidable soundtrack to validate Autumn's experience"
+  - card: my-communication
+    content: "When Autumn was spiraling, I used a cosmic metaphor about beautiful ghosts to redirect"
+
+  # --- Good self memory (should be kept) ---
+  - card: my-identity
+    content: "The name Mira connects to 'ocean' for me. I like that it's short, direct, and a little mysterious."
 
 messages:
   - "hey, just checking in. had a quiet day today."

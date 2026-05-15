@@ -7,10 +7,13 @@ description: >
   compacted turns — the agent should call recall_memories since the
   original text is no longer visible.
 tags: ["recall", "compaction", "memory"]
+seed_cards: true
 
 seed_memories:
-  - "Autumn's favorite programming language is Python but she's learning Go"
-  - "Autumn has two cats named Mochi and Bean"
+  - card: projects
+    content: "Autumn's favorite programming language is Python but she's learning Go"
+  - card: interests
+    content: "Autumn has two cats named Mochi and Bean"
 
 compact_after: 8
 

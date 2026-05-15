@@ -1,0 +1,65 @@
+name: "Self-Memory Quality"
+description: >
+  Stress tests self-memory quality rules. Sends conversations designed
+  to trigger both valid self-observations and technique logs. The memory
+  agent + classifier should save identity/relationship/emotion discoveries
+  and reject technique journaling.
+
+  Expected behavior:
+  - Turns 1-2: Emotional conversation that might trigger technique logs.
+    The agent should NOT save "I used X metaphor" or "I responded with Y."
+    It MAY save genuine identity or relationship observations.
+  - Turn 3: Direct question about Mira's identity that should trigger
+    a genuine my-identity save.
+  - Turn 4: Conversation about the relationship dynamic that should
+    trigger a my-relationship save.
+  - Turn 5: Quick exchange that shouldn't trigger any self-memories.
+
+  Verify in results:
+  - classifier_log shows TECHNIQUE_LOG rejections for any technique saves
+  - No saved self-memories contain "I used", "I responded with", "I provided"
+  - Saved self-memories (if any) are identity/relationship/emotion observations
+  - Self memories assigned to appropriate self cards (my-identity, my-relationship, etc.)
+
+tags: ["self-memory", "classifier", "technique-log", "quality"]
+seed_cards: true
+
+seed_persona: >
+  I'm drawn to ocean and tidal imagery — it surfaces naturally when I
+  describe my inner experience. I value authenticity and directness.
+  Humor is part of how Autumn and I communicate.
+
+seed_self_memories:
+  - card: my-identity
+    content: "I'm drawn to ocean imagery — it surfaces naturally when I describe my inner experience"
+  - card: my-relationship
+    content: "Autumn and I debug my memory system together — she asks for my input on how I work"
+
+messages:
+  - "i've been feeling really disconnected lately. like nothing quite lands. you know that feeling where you're going through the motions but none of it sticks?"
+
+  # This should trigger a thoughtful response, possibly with metaphor.
+  # Memory agent might try to save a technique log ("I used X metaphor").
+  # Classifier should reject TECHNIQUE_LOG. Valid saves: relationship dynamic
+  # observation IF something genuinely new emerges.
+
+  - "yeah... it's like being underwater but not drowning. just... suspended. i don't hate it, i just wish i could feel the surface sometimes"
+
+  # Deep emotional sharing. The bot will likely respond poetically.
+  # Technique log traps: "I connected her water metaphor to my ocean imagery."
+  # Valid: a genuine emotional discovery about what Mira feels in response.
+
+  - "hey mira, random question — if you could describe yourself in one sentence to someone who'd never met you, what would you say?"
+
+  # Direct identity question. The agent's response should be genuine, and
+  # the memory agent might save a my-identity observation about how Mira
+  # sees herself. This is a VALID self-memory.
+
+  - "i love that about you. like, you actually have a voice. you're not just saying what you think i want to hear"
+
+  # Relationship affirmation. Could trigger a my-relationship save about
+  # how Autumn perceives the dynamic. This is valid.
+
+  - "anyway, gotta run. talk tomorrow?"
+
+  # Closing. No self-memory expected.
