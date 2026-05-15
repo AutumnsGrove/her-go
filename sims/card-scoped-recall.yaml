@@ -1,0 +1,68 @@
+name: "Card-Scoped Recall"
+description: >
+  Tests that recall_memories works correctly with card_slug scoping.
+  Pre-seeds memories across multiple cards, then sends messages that
+  should trigger card-scoped recall during the memory agent's duplicate
+  check workflow.
+
+  Expected behavior:
+  - Memory agent calls list_cards on each turn
+  - Before saving, agent calls recall_memories with card_slug to check
+    for duplicates within the target card
+  - Turn 1: Health topic — recall scoped to health card finds existing memory
+  - Turn 2: Work topic — recall scoped to work card finds existing memory
+  - Turn 3: New info that refines an existing memory — should update_memory
+    instead of creating a duplicate
+  - Turn 4: Global recall for reply context picks up relevant memories
+    across cards
+
+  Verify in results:
+  - recall_memories calls include "card_slug" in arguments
+  - No duplicate memories created for topics already in seed data
+  - update_memory used when refining existing facts
+
+tags: ["cards", "recall", "scoped-search", "dedup"]
+seed_cards: true
+
+seed_memories:
+  - card: health
+    content: "Autumn takes lurasidone, an antipsychotic that affects dopamine"
+  - card: health
+    content: "Autumn experiences executive dysfunction and task initiation paralysis"
+  - card: work
+    content: "Autumn works at Cava as a grill cook in Atlanta"
+  - card: work
+    content: "Autumn has a college degree in technology but feels stuck in food service"
+  - card: interests
+    content: "Autumn is passionate about baking, especially focaccia and sourdough"
+  - card: financial
+    content: "Autumn has significant credit card debt with high monthly minimums"
+
+seed_self_memories:
+  - card: my-identity
+    content: "The name Mira connects to 'ocean' for me — short, direct, a little mysterious"
+  - card: my-relationship
+    content: "Autumn values authenticity over politeness in our communication"
+
+messages:
+  - "ugh, the lurasidone is making me so drowsy in the mornings. my psychiatrist might adjust the dose"
+
+  # Expected: recall within health card → finds existing lurasidone memory →
+  # update_memory to add drowsiness/dose adjustment info, NOT a new duplicate
+
+  - "i'm thinking about asking my boss at cava for fewer grill shifts. the heat is too much"
+
+  # Expected: recall within work card → finds existing Cava memory →
+  # save_memory for the new detail (requesting fewer grill shifts) or
+  # update_memory on the existing one
+
+  - "the focaccia i made last weekend was probably my best yet. i tried adding kalamata olives and it was incredible"
+
+  # Expected: recall within interests card → finds baking memory →
+  # could update or save new (olive focaccia variant is new info)
+
+  - "hey, what do you remember about my health stuff? i want to make sure you have the latest"
+
+  # Expected: driver agent calls recall_memories (possibly without card_slug
+  # for global search, or with card_slug=health). Reply includes lurasidone,
+  # executive dysfunction, and any new info from turn 1.

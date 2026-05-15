@@ -1,0 +1,49 @@
+name: "Card Lifecycle"
+description: >
+  End-to-end test of the memory card system. Verifies:
+  1. Memory agent calls list_cards to see the landscape
+  2. save_memory uses card_slug to assign memories to cards
+  3. New information goes to the right card
+  4. Dream cycle generates summaries from card children
+  5. Organic card creation works when no existing card fits
+
+  Expected behavior:
+  - Turns 1-3: Agent saves memories to existing cards (health, work, interests)
+  - Turn 4: Agent creates an organic card for a topic that doesn't fit
+  - Turn 5: Dream cycle runs, writes summaries for populated cards
+  - Post-dream: verify card summaries exist and are non-empty
+
+  Verify in results:
+  - "list_cards" appears in memory agent traces
+  - "save_memory" calls include card_slug in arguments
+  - Memory rows have non-null card_id
+  - After dream: card summaries populated for health, work, interests
+
+tags: ["cards", "memory", "lifecycle", "integration"]
+seed_cards: true
+dream_after: [5]
+
+seed_persona: >
+  I'm warm and genuine. I pay attention to what matters in Autumn's life
+  and remember the details that count.
+
+messages:
+  - "hey mira. rough day — the kitchen was brutal today. harissa chicken again and my hands are killing me from the sanitizer"
+
+  # Expected: health card (hands/sensory) or work card (kitchen conditions)
+
+  - "on the plus side i've been reading this great sci-fi book, it's called Children of Time. it's about spiders evolving intelligence. kinda wild"
+
+  # Expected: interests card (reading preferences, specific book)
+
+  - "oh and i've been thinking about switching to costco. the grill work is just destroying my body and i need something more physical but less damaging"
+
+  # Expected: work card (job search/costco pursuit)
+
+  - "also random but i've been getting really into mechanical keyboards lately. built my first one last week with lubed gateron yellows. the sound is so satisfying"
+
+  # Expected: no existing card fits well — agent should create_card (e.g. "hobbies" or "tech-hobbies")
+
+  - "anyway, just wanted to vent. thanks for listening mira"
+
+  # Expected: minimal or no memory save (just a closing). Dream triggers after this turn.
