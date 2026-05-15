@@ -1,12 +1,10 @@
-// Package persona — memory_dreamer.go runs autonomous memory consolidation
+// Package persona — memory_dreamer.go runs autonomous memory card review
 // as Step 0 of the nightly dream cycle.
 //
-// The memory dreamer is a tool-calling agent (same pattern as the memory agent
-// in agent/memory_agent.go) that reviews all active memories, clusters them
-// by embedding similarity, and decides which to merge, expire, or promote.
-//
-// It runs BEFORE persona reflection so the reflection sees clean, consolidated
-// data rather than duplicates and stale mood snapshots.
+// The memory dreamer is a tool-calling agent that reviews all memory cards,
+// checks recent changes via the memory log, and decides which cards to
+// rewrite, merge, split, or expire. It runs BEFORE persona reflection so
+// the reflection sees clean, consolidated data.
 package persona
 
 import (
@@ -24,13 +22,14 @@ import (
 	"her/tui"
 
 	// Blank imports register the tool handlers the dreamer uses.
+	_ "her/tools/create_card"
 	_ "her/tools/done"
+	_ "her/tools/list_cards"
 	_ "her/tools/merge_memories"
-	_ "her/tools/recall_memories"
+	_ "her/tools/read_card"
 	_ "her/tools/remove_memory"
-	_ "her/tools/split_memory"
 	_ "her/tools/think"
-	_ "her/tools/update_memory"
+	_ "her/tools/update_card"
 )
 
 //go:embed memory_dreamer_prompt.md
@@ -47,15 +46,16 @@ type MemoryDreamerParams struct {
 
 // MemoryDreamerResult summarizes what the dream consolidation cycle did.
 type MemoryDreamerResult struct {
+	Rewrites int
 	Merges   int
 	Expires  int
-	Promotes int
+	Creates  int
 	Cost     float64
 	Error    error
 }
 
-// RunMemoryDreamer reviews all active memories, clusters them by embedding
-// similarity, and runs a tool-calling agent to merge/expire/promote as needed.
+// RunMemoryDreamer reviews all memory cards, checks recent changes, and
+// runs a tool-calling agent to rewrite/merge/expire as needed.
 //
 // Returns a result summary. Designed to be called from runDream() before
 // NightlyReflect — errors are logged but never fatal.
@@ -69,39 +69,46 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 
 	log.Info("─── memory dreamer ───")
 
-	// Load all active memories.
-	allMemories, err := params.Store.AllActiveMemories()
+	// Load all cards.
+	cards, err := params.Store.AllCards()
 	if err != nil {
-		result.Error = fmt.Errorf("loading memories: %w", err)
+		result.Error = fmt.Errorf("loading cards: %w", err)
 		return result
 	}
 
-	if len(allMemories) < 3 {
-		log.Info("memory dreamer: too few memories to consolidate", "count", len(allMemories))
+	if len(cards) < 2 {
+		log.Info("memory dreamer: too few cards to review", "count", len(cards))
 		return result
 	}
 
-	// Cluster by embedding similarity.
-	threshold := params.Cfg.Dream.ClusterThreshold
-	if threshold == 0 {
-		threshold = 0.70
-	}
-	clusters, lonely := ClusterMemories(allMemories, threshold)
-	log.Infof("memory dreamer: %d memories → %d clusters + %d lonely", len(allMemories), len(clusters), len(lonely))
-
-	// If nothing to review, skip the LLM call.
-	if len(clusters) == 0 && len(lonely) == 0 {
-		log.Info("memory dreamer: nothing to review")
-		return result
+	// Load recent log entries (last 48 hours).
+	logEntries, err := params.Store.RecentLogEntries(48)
+	if err != nil {
+		log.Warn("memory dreamer: failed to load log entries", "err", err)
+		// Non-fatal — we can still review cards without the log.
 	}
 
-	// Build the transcript the model will review.
-	transcript := buildDreamerTranscript(clusters, lonely)
+	// Load child memories for each card so the dreamer can see what's inside.
+	childrenByCard := make(map[int64][]memory.Memory)
+	totalMemories := 0
+	for _, c := range cards {
+		children, err := params.Store.MemoriesByCard(c.ID)
+		if err != nil {
+			log.Warn("memory dreamer: failed to load children", "card", c.TopicSlug, "err", err)
+			continue
+		}
+		childrenByCard[c.ID] = children
+		totalMemories += len(children)
+	}
+
+	// Build the transcript.
+	transcript := buildDreamerTranscript(cards, childrenByCard, logEntries)
+	log.Infof("memory dreamer: %d cards, %d memories, %d recent log entries", len(cards), totalMemories, len(logEntries))
 
 	// Expand prompt template with bot/user names.
 	promptContent := params.Cfg.ExpandPrompt(memoryDreamerPromptTmpl)
 
-	// Build tools.Context — minimal, like the memory agent's.
+	// Build tools.Context.
 	dryRun := params.Cfg.Dream.DryRun
 	tctx := &tools.Context{
 		Store:               params.Store,
@@ -110,9 +117,9 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 		Cfg:                 params.Cfg,
 	}
 
-	// Load tool definitions.
+	// Load tool definitions — card-based tools for the dreamer.
 	dreamerToolDefs := tools.LookupToolDefs(
-		[]string{"think", "recall_memories", "update_memory", "remove_memory", "split_memory", "merge_memories", "done"},
+		[]string{"think", "list_cards", "read_card", "update_card", "create_card", "remove_memory", "merge_memories", "done"},
 		params.Cfg,
 	)
 
@@ -129,7 +136,6 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 	opCount := 0
 
 	// Tool-calling loop — same continuation window pattern as memory agent.
-	// Read from config with sensible defaults.
 	iterationsPerWindow := params.Cfg.DreamAgent.IterationsPerWindow
 	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 15
@@ -146,7 +152,7 @@ outer:
 				Role: "system",
 				Content: fmt.Sprintf(
 					"Continuation window %d of %d. You've performed %d operations so far. "+
-						"Continue reviewing remaining clusters/memories and call done when finished.",
+						"Continue reviewing remaining cards and call done when finished.",
 					window, maxContinuations, opCount,
 				),
 			})
@@ -178,7 +184,7 @@ outer:
 
 			for _, tc := range resp.ToolCalls {
 				// Safety cap — stop executing mutation tools if we hit the limit.
-				isMutation := tc.Function.Name != "think" && tc.Function.Name != "recall_memories" && tc.Function.Name != "done"
+				isMutation := tc.Function.Name != "think" && tc.Function.Name != "read_card" && tc.Function.Name != "list_cards" && tc.Function.Name != "done"
 				if isMutation && opCount >= maxOps {
 					toolResult := fmt.Sprintf("error: max operations reached (%d). Call done to finish.", maxOps)
 					messages = append(messages, llm.ChatMessage{
@@ -190,11 +196,9 @@ outer:
 					continue
 				}
 
-				// Dry-run: intercept mutation tools BEFORE execution so the DB
-				// is never touched. merge_memories handles dry-run internally,
-				// but remove_memory and update_memory don't know about it.
+				// Dry-run: intercept mutation tools BEFORE execution.
 				var toolResult string
-				if dryRun && isMutation && tc.Function.Name != "merge_memories" {
+				if dryRun && isMutation {
 					toolResult = fmt.Sprintf("[DRY RUN] would execute %s with args: %s",
 						tc.Function.Name, truncateLog(tc.Function.Arguments, 200))
 				} else {
@@ -210,17 +214,18 @@ outer:
 				if isMutation {
 					opCount++
 					switch tc.Function.Name {
-					case "merge_memories":
-						result.Merges++
-						// merge_memories handler writes its own audit entry
+					case "update_card":
+						result.Rewrites++
+						logDreamerAudit(params.Store, "rewrite", tc.Function.Arguments, toolResult, dryRun)
+					case "create_card":
+						result.Creates++
+						logDreamerAudit(params.Store, "create", tc.Function.Arguments, toolResult, dryRun)
 					case "remove_memory":
 						result.Expires++
-						logDreamerAudit(params.Store, "expire", tc.Function.Arguments, toolResult, dryRun)
-					case "update_memory":
-						result.Promotes++
-						logDreamerAudit(params.Store, "promote", tc.Function.Arguments, toolResult, dryRun)
-					case "split_memory":
-						logDreamerAudit(params.Store, "split", tc.Function.Arguments, toolResult, dryRun)
+						logDreamerAudit(params.Store, "expire_memory", tc.Function.Arguments, toolResult, dryRun)
+					case "merge_memories":
+						result.Merges++
+						logDreamerAudit(params.Store, "merge_memory", tc.Function.Arguments, toolResult, dryRun)
 					}
 				}
 
@@ -249,47 +254,86 @@ outer:
 	}
 
 	if dryRun {
-		log.Infof("memory dreamer [DRY RUN]: %d merges, %d expires, %d promotes | $%.6f",
-			result.Merges, result.Expires, result.Promotes, result.Cost)
+		log.Infof("memory dreamer [DRY RUN]: %d rewrites, %d merges, %d expires, %d creates | $%.6f",
+			result.Rewrites, result.Merges, result.Expires, result.Creates, result.Cost)
 	} else {
-		log.Infof("memory dreamer: %d merges, %d expires, %d promotes | $%.6f",
-			result.Merges, result.Expires, result.Promotes, result.Cost)
+		log.Infof("memory dreamer: %d rewrites, %d merges, %d expires, %d creates | $%.6f",
+			result.Rewrites, result.Merges, result.Expires, result.Creates, result.Cost)
 	}
 
 	return result
 }
 
-// buildDreamerTranscript formats clusters and lonely memories into a structured
-// transcript for the memory dreamer agent.
-func buildDreamerTranscript(clusters []MemoryCluster, lonely []memory.Memory) string {
+// buildDreamerTranscript formats all cards with their child memories
+// and recent log entries into a structured transcript for the dreamer.
+func buildDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64][]memory.Memory, logEntries []memory.MemoryLogEntry) string {
 	var b strings.Builder
 
-	b.WriteString("# Memory Consolidation Review\n\n")
-	b.WriteString("Review each cluster for merge opportunities and each lonely memory for staleness.\n\n")
+	b.WriteString("# Memory Card Review\n\n")
+	b.WriteString("Review each card's summary and children for quality, staleness, and accuracy.\n")
+	b.WriteString("Use read_card for a closer look at any card. Use update_card to rewrite summaries.\n\n")
 
-	// Clusters — potential merge candidates.
-	for i, c := range clusters {
-		fmt.Fprintf(&b, "## Cluster %d (%d memories)\n", i+1, len(c.Memories))
-		for _, m := range c.Memories {
-			age := time.Since(m.Timestamp).Hours() / 24
-			fmt.Fprintf(&b, "- [ID=%d, cat=%s, imp=%d, subj=%s, age=%.0fd] %s\n",
-				m.ID, m.Category, m.Importance, m.Subject, age, m.Content)
+	// Build a map of card IDs to slugs for the log section.
+	cardSlugByID := make(map[int64]string)
+	for _, c := range cards {
+		cardSlugByID[c.ID] = c.TopicSlug
+	}
+
+	// Cards grouped by subject, each with their children.
+	b.WriteString("## User Cards\n\n")
+	for _, c := range cards {
+		if c.Subject != "user" {
+			continue
+		}
+		writeCardEntry(&b, c, childrenByCard[c.ID])
+	}
+
+	b.WriteString("## Self Cards\n\n")
+	for _, c := range cards {
+		if c.Subject != "self" {
+			continue
+		}
+		writeCardEntry(&b, c, childrenByCard[c.ID])
+	}
+
+	// Recent changelog.
+	if len(logEntries) > 0 {
+		b.WriteString("## Recent Changes (last 48h)\n\n")
+		for _, e := range logEntries {
+			slug := cardSlugByID[e.CardID]
+			if slug == "" {
+				slug = fmt.Sprintf("card#%d", e.CardID)
+			}
+			fmt.Fprintf(&b, "- [%s] %s → %s: %s\n",
+				e.CreatedAt.Format("Jan 02 15:04"), slug, e.Operation, e.Delta)
 		}
 		b.WriteString("\n")
 	}
 
-	// Lonely memories — staleness review.
-	if len(lonely) > 0 {
-		b.WriteString("## Lonely memories (staleness review)\n")
-		b.WriteString("These don't cluster with anything. Check if they're stale moods, past events, or still relevant.\n\n")
-		for _, m := range lonely {
-			age := time.Since(m.Timestamp).Hours() / 24
-			fmt.Fprintf(&b, "- [ID=%d, cat=%s, imp=%d, subj=%s, age=%.0fd] %s\n",
-				m.ID, m.Category, m.Importance, m.Subject, age, m.Content)
-		}
-	}
-
 	return b.String()
+}
+
+func writeCardEntry(b *strings.Builder, c memory.MemoryCard, children []memory.Memory) {
+	protectedLabel := ""
+	if c.Protected {
+		protectedLabel = ", PROTECTED"
+	}
+	age := time.Since(c.UpdatedAt).Hours() / 24
+	summary := c.Summary
+	if summary == "" {
+		summary = "(no summary yet)"
+	}
+	fmt.Fprintf(b, "### [%s] %s (v%d, %d memories, updated %.0fd ago%s)\nSummary: %s\n",
+		c.TopicSlug, c.Name, c.Version, len(children), age, protectedLabel, summary)
+
+	if len(children) == 0 {
+		b.WriteString("(empty)\n\n")
+		return
+	}
+	for _, m := range children {
+		fmt.Fprintf(b, "- [#%d] %s\n", m.ID, m.Content)
+	}
+	b.WriteString("\n")
 }
 
 func truncateLog(s string, n int) string {
@@ -299,28 +343,18 @@ func truncateLog(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// logDreamerAudit writes an audit entry for expire/promote/split operations.
-// merge_memories writes its own audit entry; this covers tools that don't
-// know they're being called by the dreamer.
+// logDreamerAudit writes an audit entry for dreamer operations.
 func logDreamerAudit(store memory.Store, op, argsJSON, result string, dryRun bool) {
 	if store == nil {
 		return
 	}
 
 	var args struct {
-		MemoryID  int64   `json:"memory_id"`
-		MemoryIDs []int64 `json:"memory_ids"`
-		Reason    string  `json:"reason"`
-		Content   string  `json:"content"`
+		TopicSlug string `json:"topic_slug"`
+		Delta     string `json:"delta"`
+		Reason    string `json:"reason"`
 	}
 	_ = json.Unmarshal([]byte(argsJSON), &args)
 
-	var sourceIDs []int64
-	if len(args.MemoryIDs) > 0 {
-		sourceIDs = args.MemoryIDs
-	} else if args.MemoryID > 0 {
-		sourceIDs = []int64{args.MemoryID}
-	}
-
-	_ = store.SaveDreamAudit(op, sourceIDs, 0, "", result, args.Reason, dryRun)
+	_ = store.SaveDreamAudit(op, nil, 0, args.TopicSlug, result, args.Delta, dryRun)
 }

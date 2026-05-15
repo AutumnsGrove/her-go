@@ -24,7 +24,7 @@ func newTestStore(t *testing.T) memory.Store {
 
 func saveMemory(t *testing.T, store memory.Store, content string) int64 {
 	t.Helper()
-	id, err := store.SaveMemory(content, "test", "user", 0, 5, nil, nil, "", "")
+	id, err := store.SaveMemory(content, "test", "user", 0, 5, nil, nil, "", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory: %v", err)
 	}

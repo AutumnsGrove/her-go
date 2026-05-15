@@ -39,6 +39,23 @@ CREATE INDEX IF NOT EXISTS idx_summaries_conv_stream
     ON summaries(conversation_id, stream);
 
 -- ---------------------------------------------------------------------------
+-- Memory Cards (must come before memories — FK reference)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_cards (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_slug  TEXT    UNIQUE NOT NULL,
+    name        TEXT    NOT NULL,
+    summary     TEXT    NOT NULL DEFAULT '',
+    subject     TEXT    NOT NULL DEFAULT 'user',
+    protected   BOOLEAN NOT NULL DEFAULT 0,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    version     INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_cards_subject ON memory_cards(subject);
+
+-- ---------------------------------------------------------------------------
 -- Memories (no embedding / embedding_text columns)
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS memories (
@@ -53,8 +70,27 @@ CREATE TABLE IF NOT EXISTS memories (
     tags              TEXT,
     superseded_by     INTEGER,
     supersede_reason  TEXT,
-    context           TEXT
+    context           TEXT,
+    card_id           INTEGER REFERENCES memory_cards(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_memories_card_id ON memories(card_id);
+
+-- ---------------------------------------------------------------------------
+-- Memory Log (append-only changelog for card + memory mutations)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id           INTEGER REFERENCES memory_cards(id),
+    memory_id         INTEGER REFERENCES memories(id),
+    delta             TEXT    NOT NULL,
+    operation         TEXT    NOT NULL,
+    source_message_id INTEGER,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_log_card_id ON memory_log(card_id);
+CREATE INDEX IF NOT EXISTS idx_memory_log_created_at ON memory_log(created_at);
 
 -- ---------------------------------------------------------------------------
 -- Memory Links

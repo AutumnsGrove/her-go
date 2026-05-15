@@ -122,7 +122,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	newID, err := ctx.Store.SaveMemory(
 		args.Memory, args.Category, oldMemory.Subject,
 		oldMemory.SourceMessageID, 5,
-		tagVec, textVec, args.Tags, args.Context,
+		tagVec, textVec, args.Tags, args.Context, 0,
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving updated memory: %v", err)

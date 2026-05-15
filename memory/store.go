@@ -53,7 +53,7 @@ type Store interface {
 	LastExtractionMessageID() (int64, error)
 
 	// Memories
-	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error)
+	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error)
 	UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error
 	RecentMemories(subject string, limit int) ([]Memory, error)
 	GetMemoryContent(memoryID int64) (string, error)
@@ -69,9 +69,23 @@ type Store interface {
 	CountMemoryLinks() (int, error)
 	AllActiveMemories() ([]Memory, error)
 	SemanticSearch(queryVec []float32, topK int) ([]Memory, error)
+	SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]Memory, error)
 	MemoriesWithoutEmbeddings() ([]Memory, error)
 	VecMemoriesCount() (int, error)
 	FindMemoriesByKeyword(keyword string) ([]Memory, error)
+
+	// Memory Cards
+	GetCard(topicSlug string) (*MemoryCard, error)
+	GetCardByID(id int64) (*MemoryCard, error)
+	AllCards() ([]MemoryCard, error)
+	CardsBySubject(subject string) ([]MemoryCard, error)
+	UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error)
+	CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*MemoryCard, error)
+	ExpireCard(topicSlug, reason string) error
+	MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*MemoryCard, error)
+	MemoriesByCard(cardID int64) ([]Memory, error)
+	RecentLogEntries(hours int) ([]MemoryLogEntry, error)
+	CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry, error)
 
 	// Dream audit
 	SaveDreamAudit(op string, sourceIDs []int64, resultID int64, before, after, reason string, dryRun bool) error

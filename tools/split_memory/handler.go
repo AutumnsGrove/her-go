@@ -60,7 +60,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Save each new fact via the shared split pipeline. This handles
 	// embedding, autolink, and SavedMemories tracking — same path the
 	// classifier's SPLIT verdict uses.
-	result := tools.ExecSplitMemories(args.NewFacts, original.Category, original.Subject, ctx)
+	result := tools.ExecSplitMemories(args.NewFacts, original.Category, original.Subject, 0, ctx)
 
 	return fmt.Sprintf("split #%d (%s): %s", args.MemoryID, args.Reason, result)
 }

@@ -38,7 +38,7 @@ func newTestStore(t *testing.T) memory.Store {
 // Fatally fails on error so call sites stay clean.
 func saveMemory(t *testing.T, store memory.Store, content, category, subject string) int64 {
 	t.Helper()
-	id, err := store.SaveMemory(content, category, subject, 0, 5, nil, nil, "", "")
+	id, err := store.SaveMemory(content, category, subject, 0, 5, nil, nil, "", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory(%q): %v", content, err)
 	}

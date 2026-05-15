@@ -13,6 +13,12 @@ hot: false
 parameters:
   type: object
   properties:
+    card_slug:
+      type: string
+      description: >-
+        The self-memory card this belongs to. Self cards start with
+        "my-": my-identity, my-emotions, my-communication,
+        my-relationship, my-growth. Use list_cards to see all options.
     memory:
       type: string
       description: "A self-observation or identity memory about {{her}}"
@@ -37,12 +43,13 @@ parameters:
         Optional 1-2 sentence note explaining WHY this self-memory matters or
         how it connects to other knowledge.
   required:
+    - card_slug
     - memory
     - category
     - tags
 trace:
   emoji: "🪞"
-  format: "{{.memory | escape}}\n    category={{.category}}"
+  format: "[{{.card_slug}}] {{.memory | escape}}\n    category={{.category}}"
   on_reject:
     prefix: "rejected:"
     emoji: "🚫"

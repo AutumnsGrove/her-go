@@ -1,0 +1,23 @@
+name: list_cards
+agent: memory
+hint: "list all memory topic cards"
+description: >-
+  List all memory topic cards with their slugs, names, subjects, and a
+  preview of each card's content (first 100 characters). Use this to
+  see what cards exist before deciding where to save new information.
+hot: false
+parameters:
+  type: object
+  properties:
+    subject:
+      type: string
+      description: >-
+        Optional filter: "user" for user cards only, "self" for self
+        cards only. Omit to see all cards.
+      enum:
+        - user
+        - self
+  required: []
+trace:
+  emoji: "📋"
+  format: "listing cards{{if .subject}} (subject={{.subject}}){{end}}"

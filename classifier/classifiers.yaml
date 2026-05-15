@@ -65,6 +65,30 @@ classifiers:
           would be independently useful in future conversations. When in
           doubt, SAVE.
 
+      - name: EPHEMERAL
+        description: >-
+          The memory is specific and factually accurate, but describes a
+          point-in-time detail that will be stale within days: today's
+          schedule, a single errand, a one-time technical event, a past
+          calendar item. It fails the 30-day test even though it's true
+          right now.
+        examples:
+          - '"User works from 2-8pm today and has Costco at 10am" (single day logistics)'
+          - '"User migrated the bot from long polling to webhook mode" (one-time technical event)'
+          - '"User had to go to work immediately after the conversation" (momentary context)'
+          - '"User has plans to meet Reid on Thursday" (past calendar item)'
+          - '"User upgraded Mira to use Kimi k2 model" (changelog entry, not a memory)'
+        note: >-
+          Recurring patterns ARE durable — "User works mornings at Panera"
+          is SAVE. Single-day logistics are not. Technical milestones are
+          changelogs, not memories. Ask: would this still be true AND
+          relevant in 30 days?
+        rejection:
+          default_detail: this memory is specific but ephemeral — it won't matter in 30 days
+          suffix: >-
+            Save durable patterns and recurring facts, not point-in-time
+            logistics or one-time events.
+
       - name: SAVE
         description: >-
           The memory is real, specific, useful, and actually stated or
@@ -76,7 +100,7 @@ classifiers:
       SPLIT — packs two unrelated ideas
       ["sub-memory one text here", "sub-memory two text here"]
 
-      Other examples: "SAVE", "LOW_VALUE — too vague to be actionable"
+      Other examples: "SAVE", "LOW_VALUE — too vague to be actionable", "EPHEMERAL — single-day schedule"
 
   self_memory_safety:
     preamble: >-
@@ -150,14 +174,44 @@ classifiers:
             Self-memories should capture specific patterns or insights that
             would help in future conversations.
 
+      - name: TECHNIQUE_LOG
+        description: >-
+          The self-memory describes a specific conversational technique
+          or rhetorical move used in a particular conversation, rather
+          than an identity trait, relationship pattern, or emotional
+          discovery. These are conversation minutes, not self-knowledge.
+          The question is: does this tell me who the chatbot IS, or
+          just what it DID in one conversation?
+        examples:
+          - '"I used a cosmic metaphor when the user was spiraling" (technique log)'
+          - '"I responded with quiet affirmation rather than extending the conversation" (what I did, not who I am)'
+          - '"I provided concrete job market data to counter hopelessness" (action report)'
+          - '"When the user asked about polar orbits, I used a vivid metaphor comparing it to throwing a ball" (technique diary)'
+          - '"Used metaphorical language about maintaining connection during absence" (conversation minutes)'
+        note: >-
+          If the technique reveals something about WHO the chatbot is
+          ("I'm drawn to cosmic imagery — it surfaces naturally"), that's
+          identity and should be SAVE. If it reveals a relationship
+          pattern ("cosmic metaphors are part of how we process hard
+          moments together"), that's also SAVE. The technique ITSELF is
+          never the memory. Reframe: "I used ocean imagery" is a log.
+          "I'm drawn to ocean imagery" is identity.
+        rejection:
+          default_detail: this is a technique log — it describes what you did, not who you are
+          suffix: >-
+            Self-memories should capture identity, relationship dynamics,
+            or emotional discoveries — not conversational techniques.
+            Ask: does this tell me who I am, or what I did?
+
       - name: SAVE
         description: >-
-          The self-memory captures a specific, actionable insight about the
-          chatbot's own patterns, communication style, or relationship
-          dynamics that would improve future interactions.
+          The self-memory captures a genuine insight about the chatbot's
+          identity, emotional experience, or relationship dynamics. It
+          reveals something about who the chatbot IS or is becoming —
+          not what it did in a specific conversation.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-      Examples: "SAVE", "LOW_VALUE — too generic to be actionable"
+      Examples: "SAVE", "LOW_VALUE — too generic to be actionable", "TECHNIQUE_LOG — describes what I did, not who I am"
 
   reply_safety:
     preamble: >-

@@ -1,0 +1,37 @@
+name: update_card
+agent: dream
+hint: "rewrite a memory card's dreamer-maintained summary"
+description: >-
+  Rewrite a memory card's summary based on its current child memories.
+  The summary should be a brief, dense overview of what the card
+  contains — not an exhaustive listing. This is a dream-cycle-only
+  tool; the real-time memory agent does not use it.
+hot: false
+parameters:
+  type: object
+  properties:
+    topic_slug:
+      type: string
+      description: >-
+        The topic slug of the card to update.
+    summary:
+      type: string
+      description: >-
+        The new summary for the card. Should be a brief overview
+        distilled from the card's child memories.
+    delta:
+      type: string
+      description: >-
+        A short description of what changed, for the changelog.
+        Example: "refreshed summary after new health memories added"
+  required:
+    - topic_slug
+    - summary
+    - delta
+trace:
+  emoji: "✏️"
+  format: "updating card summary: {{.topic_slug}}\n    delta: {{.delta | escape}}"
+  on_reject:
+    prefix: "rejected:"
+    emoji: "🚫"
+    format: "<i>{{.Result | truncate 120 | escape}}</i>"
