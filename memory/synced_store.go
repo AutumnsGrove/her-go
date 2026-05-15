@@ -180,9 +180,19 @@ var syncedTableSpecs = map[string]tableSpec{
 		placeholders: "?, ?, ?, ?, ?, ?, ?",
 	},
 	"memories": {
-		selectCols:   "id, timestamp, memory, category, source_message_id, importance, active, subject, tags, superseded_by, supersede_reason, context",
-		d1Cols:       "id, timestamp, memory, category, source_message_id, importance, active, subject, tags, superseded_by, supersede_reason, context",
-		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+		selectCols:   "id, timestamp, memory, category, source_message_id, importance, active, subject, tags, superseded_by, supersede_reason, context, card_id",
+		d1Cols:       "id, timestamp, memory, category, source_message_id, importance, active, subject, tags, superseded_by, supersede_reason, context, card_id",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+	},
+	"memory_cards": {
+		selectCols:   "id, topic_slug, name, summary, subject, protected, created_at, updated_at, version",
+		d1Cols:       "id, topic_slug, name, summary, subject, protected, created_at, updated_at, version",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?",
+	},
+	"memory_log": {
+		selectCols:   "id, card_id, memory_id, delta, operation, source_message_id, created_at",
+		d1Cols:       "id, card_id, memory_id, delta, operation, source_message_id, created_at",
+		placeholders: "?, ?, ?, ?, ?, ?, ?",
 	},
 	"memory_links": {
 		selectCols:   "source_id, target_id, similarity, created_at",
@@ -774,6 +784,70 @@ func (s *SyncedStore) DeleteMoodEntry(id int64) error {
 	}
 	s.writeOutbox("mood_entries", id, "delete")
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Memory Cards
+// ---------------------------------------------------------------------------
+
+// UpdateCardSummary rewrites a card's summary locally and records in outbox.
+func (s *SyncedStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*MemoryCard, error) {
+	card, err := s.SQLiteStore.UpdateCardSummary(topicSlug, newSummary, delta, sourceMessageID)
+	if err != nil {
+		return nil, err
+	}
+	s.writeOutbox("memory_cards", card.ID, "upsert")
+	// Log entry was created inside UpdateCardSummary — push it too.
+	// The log entry ID isn't returned, but the carrier will pick it up
+	// from the outbox on the next cycle via the memory_log table spec.
+	return card, nil
+}
+
+// CreateCard creates a new organic card locally and records in outbox.
+func (s *SyncedStore) CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*MemoryCard, error) {
+	card, err := s.SQLiteStore.CreateCard(topicSlug, name, subject, sourceMessageID)
+	if err != nil {
+		return nil, err
+	}
+	s.writeOutbox("memory_cards", card.ID, "upsert")
+	return card, nil
+}
+
+// ExpireCard deletes an organic card locally and records a delete in outbox.
+func (s *SyncedStore) ExpireCard(topicSlug, reason string) error {
+	// Look up ID before expiring (ExpireCard deletes the row).
+	card, err := s.SQLiteStore.GetCard(topicSlug)
+	if err != nil || card == nil {
+		return s.SQLiteStore.ExpireCard(topicSlug, reason)
+	}
+	cardID := card.ID
+
+	if err := s.SQLiteStore.ExpireCard(topicSlug, reason); err != nil {
+		return err
+	}
+	s.writeOutbox("memory_cards", cardID, "delete")
+	return nil
+}
+
+// MergeCards combines two cards locally and records in outbox.
+func (s *SyncedStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*MemoryCard, error) {
+	// Look up source ID before merge (it gets deleted).
+	source, _ := s.SQLiteStore.GetCard(sourceSlug)
+	var sourceID int64
+	if source != nil {
+		sourceID = source.ID
+	}
+
+	card, err := s.SQLiteStore.MergeCards(targetSlug, sourceSlug, mergedSummary, reason)
+	if err != nil {
+		return nil, err
+	}
+	// Target was updated, source was deleted.
+	s.writeOutbox("memory_cards", card.ID, "upsert")
+	if sourceID > 0 {
+		s.writeOutbox("memory_cards", sourceID, "delete")
+	}
+	return card, nil
 }
 
 // Compile-time check: SyncedStore must satisfy the Store interface.

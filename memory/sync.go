@@ -35,6 +35,8 @@ var incrementalTables = []string{
 	"messages",
 	"summaries",
 	"memories",
+	"memory_cards",
+	"memory_log",
 	"reflections",
 	"persona_versions",
 	"traits",
