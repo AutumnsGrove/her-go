@@ -265,6 +265,11 @@ func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *
 	}
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("mood agent panic (recovered)", "panic", r)
+			}
+		}()
 		// Signal introspection WaitGroup after mood work completes.
 		if introspectionWG != nil {
 			defer introspectionWG.Done()
