@@ -126,6 +126,7 @@ type Store interface {
 	MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEntry, error)
 	SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]MoodEntry, error)
 	DeleteMoodEntry(id int64) error
+	SupersedeMoodEntry(oldID, newID int64, reason string) error
 	SavePendingMoodProposal(p *PendingMoodProposal) (int64, error)
 	PendingMoodProposalByMessageID(chatID, msgID int64) (*PendingMoodProposal, error)
 	DuePendingMoodProposals(now time.Time) ([]PendingMoodProposal, error)

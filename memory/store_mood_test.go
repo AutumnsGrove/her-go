@@ -302,6 +302,104 @@ func TestDeleteMoodEntry(t *testing.T) {
 	}
 }
 
+func TestSupersedeMoodEntry(t *testing.T) {
+	store := newMoodTestStore(t)
+
+	oldID, err := store.SaveMoodEntry(&MoodEntry{Valence: 3, Note: "frustrated about work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, err := store.SaveMoodEntry(&MoodEntry{Valence: 5, Note: "hopeful about switching jobs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SupersedeMoodEntry(oldID, newID, "mood evolved"); err != nil {
+		t.Fatalf("SupersedeMoodEntry: %v", err)
+	}
+
+	// The old entry should have superseded_by set.
+	got, err := store.LatestMoodEntry("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// LatestMoodEntry doesn't filter superseded, so the newest entry
+	// (newID) comes back. Query the old entry directly.
+	var supBy, supReason *string
+	err = store.db.QueryRow(
+		`SELECT superseded_by, supersede_reason FROM mood_entries WHERE id = ?`, oldID,
+	).Scan(&supBy, &supReason)
+	if err != nil {
+		t.Fatalf("query old entry: %v", err)
+	}
+	if supBy == nil {
+		t.Fatal("superseded_by is NULL, want non-NULL")
+	}
+	if supReason == nil || *supReason != "mood evolved" {
+		t.Errorf("supersede_reason = %v, want 'mood evolved'", supReason)
+	}
+	_ = got
+}
+
+func TestMoodEntriesInRange_ExcludesSuperseded(t *testing.T) {
+	store := newMoodTestStore(t)
+
+	base := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	oldID, err := store.SaveMoodEntry(&MoodEntry{
+		Valence: 3, Note: "old mood", Timestamp: base,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, err := store.SaveMoodEntry(&MoodEntry{
+		Valence: 5, Note: "new mood", Timestamp: base.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SupersedeMoodEntry(oldID, newID, "evolved"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Range query covering both entries — only the non-superseded one should appear.
+	got, err := store.MoodEntriesInRange("", base.Add(-1*time.Hour), base.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (superseded entry excluded)", len(got))
+	}
+	if got[0].ID != newID {
+		t.Errorf("got entry #%d, want #%d (the non-superseded one)", got[0].ID, newID)
+	}
+}
+
+func TestRecentMoodEntries_IncludesSuperseded(t *testing.T) {
+	store := newMoodTestStore(t)
+
+	oldID, err := store.SaveMoodEntry(&MoodEntry{Valence: 3, Note: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, err := store.SaveMoodEntry(&MoodEntry{Valence: 5, Note: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SupersedeMoodEntry(oldID, newID, "evolved"); err != nil {
+		t.Fatal(err)
+	}
+
+	// RecentMoodEntries is the timeline view — shows everything.
+	got, err := store.RecentMoodEntries("", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (timeline shows superseded entries)", len(got))
+	}
+}
+
 // --- Embedding / KNN dedup (requires EmbedDimension > 0) ---------
 
 // makeEmbedding produces a deterministic dim-sized vector for tests.

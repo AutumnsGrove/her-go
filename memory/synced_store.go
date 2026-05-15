@@ -220,9 +220,9 @@ var syncedTableSpecs = map[string]tableSpec{
 		placeholders: "?, ?, ?, ?",
 	},
 	"mood_entries": {
-		selectCols:   "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at",
-		d1Cols:       "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at",
-		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+		selectCols:   "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at, superseded_by, supersede_reason",
+		d1Cols:       "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at, superseded_by, supersede_reason",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
 	},
 }
 
@@ -774,6 +774,16 @@ func (s *SyncedStore) UpdateMoodEntry(id int64, entry *MoodEntry) error {
 		return err
 	}
 	s.writeOutbox("mood_entries", id, "upsert")
+	return nil
+}
+
+// SupersedeMoodEntry marks a mood entry as replaced locally and records in outbox.
+// The vec_moods cleanup only happens locally — D1 has no vector tables.
+func (s *SyncedStore) SupersedeMoodEntry(oldID, newID int64, reason string) error {
+	if err := s.SQLiteStore.SupersedeMoodEntry(oldID, newID, reason); err != nil {
+		return err
+	}
+	s.writeOutbox("mood_entries", oldID, "upsert")
 	return nil
 }
 
