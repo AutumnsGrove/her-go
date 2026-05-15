@@ -124,6 +124,10 @@ var fallbackModelFlag string
 // Example: --fallback-vision-model "google/gemini-2.5-flash-lite"
 var fallbackVisionModelFlag string
 
+// introspectionModelFlag overrides the introspection agent model for this run.
+// Example: --introspection-model "moonshotai/kimi-k2-0905"
+var introspectionModelFlag string
+
 // disableReasoningFlag disables reasoning mode for hybrid models that support
 // both reasoning and non-reasoning modes (e.g., Qwen3.6, DeepSeek V3.2).
 // Pure reasoning models (DeepSeek R1, V4) will ignore this flag — they always reason.
@@ -162,6 +166,7 @@ func init() {
 	simCmd.Flags().StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model for this run (e.g., anthropic/claude-haiku-4.5)")
 	simCmd.Flags().StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated (e.g., \"Groq\" or \"Groq,Together\")")
 	simCmd.Flags().StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model for this run (e.g., google/gemini-2.5-flash-lite)")
+	simCmd.Flags().StringVar(&introspectionModelFlag, "introspection-model", "", "override introspection agent model for this run (e.g., moonshotai/kimi-k2-0905)")
 	simCmd.Flags().StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for chat/agent/memory/mood (e.g., google/gemini-2.5-flash-lite)")
 	simCmd.Flags().StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision only (must support multi-modal)")
 	simCmd.Flags().BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models (Qwen3.6, DeepSeek V3.2)")
@@ -509,6 +514,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if memoryModelFlag != "" {
 		log.Info("Memory agent model overridden via --memory-model", "model", memoryModelFlag)
 		cfg.MemoryAgent.Model = memoryModelFlag
+	}
+	if introspectionModelFlag != "" {
+		log.Info("Introspection agent model overridden via --introspection-model", "model", introspectionModelFlag)
+		cfg.IntrospectionAgent.Model = introspectionModelFlag
 	}
 	if chatModelFlag != "" {
 		log.Info("Chat model overridden via --chat-model", "model", chatModelFlag)

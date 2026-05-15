@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"her/memory"
@@ -245,7 +246,7 @@ func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
 // The tracker manages the phase lifecycle: Begin is called here
 // (before launching the goroutine to prevent a race) and Done fires
 // inside the goroutine when the mood agent finishes.
-func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *turn.Tracker) {
+func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *turn.Tracker, introspectionWG *sync.WaitGroup) {
 	if b.moodRunner == nil || convID == "" {
 		return
 	}
@@ -258,7 +259,16 @@ func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *
 		moodPhase = tracker.Begin("mood")
 	}
 
+	// Signal introspection WaitGroup — Add before goroutine, Done inside.
+	if introspectionWG != nil {
+		introspectionWG.Add(1)
+	}
+
 	go func() {
+		// Signal introspection WaitGroup after mood work completes.
+		if introspectionWG != nil {
+			defer introspectionWG.Done()
+		}
 		// Ensure phase completion even if the mood agent panics.
 		if moodPhase != nil {
 			defer moodPhase.Done(turn.PhaseMetrics{})
