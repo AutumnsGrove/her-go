@@ -76,21 +76,24 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		for _, m := range memories {
 			if m.Subject == "self" {
 				selfMems = append(selfMems, m)
-			} else {
+			} else if !ctx.SelfOnly {
 				userMems = append(userMems, m)
 			}
 		}
+		filtered := len(selfMems) + len(userMems)
 		var b strings.Builder
-		fmt.Fprintf(&b, "Found %d memories (degraded: keyword search only):\n", len(memories))
+		fmt.Fprintf(&b, "Found %d memories (degraded: keyword search only):\n", filtered)
 		writeKeywordSection(&b, "About the user", userMems)
 		writeKeywordSection(&b, "About myself", selfMems)
 		return b.String()
 	}
 
-	// Use card-scoped search when a card_slug was provided.
+	// Use card-scoped or subject-scoped search when narrowing is requested.
 	var memories []memory.Memory
 	if cardID > 0 {
 		memories, err = ctx.Store.SemanticSearchByCard(queryVec, cardID, args.Limit)
+	} else if ctx.SelfOnly {
+		memories, err = ctx.Store.SemanticSearchBySubject(queryVec, "self", args.Limit)
 	} else {
 		memories, err = ctx.Store.SemanticSearch(queryVec, args.Limit)
 	}

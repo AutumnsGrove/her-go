@@ -8,13 +8,13 @@
 
 ### Progress
 
-- [ ] **Phase 1: Config & model wiring** — New `models.self_reflection` config field, sim flag `--self-reflection-model`, defaults to memory model
-- [ ] **Phase 2: Introspection agent core** — New `agent/introspection_agent.go`, transcript builder, tool-calling loop, pipeline integration (4th after mood)
-- [ ] **Phase 3: Self-reflection prompt** — `introspection_agent_prompt.md` with 70/20/10 balance, technique log rejection, skip guidance
-- [ ] **Phase 4: Self-only tool variants** — `list_cards` and `recall_memories` filtered to `subject='self'` when called from introspection context
-- [ ] **Phase 5: Skip tool** — New `tools/skip/` tool as the escape hatch for turns with nothing to reflect on
-- [ ] **Phase 6: Auto-inject self-memories into replies** — New chat layer in `layers/chat_self_memory.go`, semantic search using think traces + reply instruction
-- [ ] **Phase 7: Enriched memory agent transcript** — Add existing self-memories to memory agent context for awareness
+- [x] **Phase 1: Config & model wiring** — `IntrospectionAgentConfig` struct, `--introspection-model` sim flag, defaults to memory model
+- [x] **Phase 2: Introspection agent core** — `agent/introspection_agent.go`, `bot/introspection.go`, WaitGroup coordination, trace/turn registration
+- [x] **Phase 3: Self-reflection prompt** — `introspection_agent_prompt.md` with 70/20/10 balance, technique log rejection, skip guidance
+- [x] **Phase 4: Self-only tool variants** — `SelfOnly` flag on `tools.Context`, `SemanticSearchBySubject` store method, filtered handlers
+- [x] **Phase 5: Skip tool** — `tools/skip/` with tool.yaml + handler.go
+- [x] **Phase 6: Auto-inject self-memories into replies** — `layers/chat_self_memory.go`, `ThinkTraces`/`ReplyInstruction` on LayerContext
+- [x] **Phase 7: Enriched memory agent transcript** — Self-knowledge section in `buildMemoryTranscript`
 - [ ] **Phase 8: Testing & sims** — New sim for self-memory generation, update card-lifecycle sim, verify end-to-end
 
 ---

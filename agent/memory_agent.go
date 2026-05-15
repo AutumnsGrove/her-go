@@ -371,5 +371,25 @@ func buildMemoryTranscript(input MemoryAgentInput, store memory.Store) string {
 		}
 	}
 
+	// Self-knowledge section — gives the memory agent awareness of existing
+	// self-memories so it can avoid duplicating them and understands the
+	// landscape when it encounters self-relevant information.
+	selfCards, scErr := store.CardsBySubject("self")
+	if scErr == nil && len(selfCards) > 0 {
+		var selfMems []memory.Memory
+		for _, card := range selfCards {
+			mems, err := store.MemoriesByCard(card.ID)
+			if err == nil {
+				selfMems = append(selfMems, mems...)
+			}
+		}
+		if len(selfMems) > 0 {
+			b.WriteString("\n## Self-knowledge (existing self-observations)\n")
+			for _, m := range selfMems {
+				fmt.Fprintf(&b, "- [ID=%d] %s\n", m.ID, m.Content)
+			}
+		}
+	}
+
 	return b.String()
 }

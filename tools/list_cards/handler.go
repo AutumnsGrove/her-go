@@ -36,9 +36,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Version int
 	}
 
+	// When SelfOnly is set (introspection agent), force subject to "self"
+	// regardless of what the agent passed.
+	subject := a.Subject
+	if ctx.SelfOnly {
+		subject = "self"
+	}
+
 	var err error
-	if a.Subject != "" {
-		raw, e := ctx.Store.CardsBySubject(a.Subject)
+	if subject != "" {
+		raw, e := ctx.Store.CardsBySubject(subject)
 		err = e
 		for _, c := range raw {
 			cards = append(cards, struct {

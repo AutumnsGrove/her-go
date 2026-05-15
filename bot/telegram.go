@@ -41,7 +41,8 @@ type Bot struct {
 	moodAgentLLM   *llm.Client          // post-turn mood agent — nil if not configured
 	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
 	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
-	dreamAgentLLM  *llm.Client          // memory dreamer — nil falls back to memoryAgentLLM
+	dreamAgentLLM       *llm.Client     // memory dreamer — nil falls back to memoryAgentLLM
+	introspectionLLM    *llm.Client     // self-reflection agent — nil falls back to memoryAgentLLM
 	embedClient    *embed.Client        // local embedding model for similarity
 	tavilyClient   *search.TavilyClient // web search and URL extraction
 	voiceClient    *voice.Client        // local STT via parakeet-server — nil if voice disabled
@@ -133,7 +134,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	// Choose update transport based on config. In poll mode (the default),
 	// the bot calls Telegram every 10 seconds asking for new messages.
 	// In webhook mode, Telegram POSTs updates to us — used when a CF
@@ -204,7 +205,8 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		moodAgentLLM:   moodAgentLLM,
 		visionLLM:      visionLLM,
 		classifierLLM:  classifierLLM,
-		dreamAgentLLM:  dreamAgentLLM,
+		dreamAgentLLM:       dreamAgentLLM,
+		introspectionLLM:    introspectionLLM,
 		embedClient:    embedClient,
 		tavilyClient:   tavilyClient,
 		voiceClient:    voiceClient,

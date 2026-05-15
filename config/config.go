@@ -34,7 +34,8 @@ type Config struct {
 	MemoryAgent  MemoryAgentConfig  `yaml:"memory_agent"`
 	PersonaAgent PersonaAgentConfig `yaml:"persona_agent"`
 	DreamAgent   DreamAgentConfig   `yaml:"dream_agent"`
-	MoodAgent    MoodAgentConfig    `yaml:"mood_agent"`
+	MoodAgent           MoodAgentConfig           `yaml:"mood_agent"`
+	IntrospectionAgent  IntrospectionAgentConfig  `yaml:"introspection_agent"`
 	Memory      MemoryConfig      `yaml:"memory"`
 	Mood        MoodConfig        `yaml:"mood"`
 	Embed       EmbedConfig       `yaml:"embed"`
@@ -379,6 +380,27 @@ type MoodAgentConfig struct {
 	Timeout     int             `yaml:"timeout"` // HTTP timeout in seconds (0 = 60s default)
 	Provider    *ProviderConfig `yaml:"provider,omitempty"`
 	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
+}
+
+// IntrospectionAgentConfig controls the post-turn introspection agent — a
+// self-reflection system that runs after memory + mood complete. It reviews
+// the turn's think traces and reply to extract observations about Mira's own
+// communication patterns, identity, and relationship dynamics. These self-memories
+// feed back into future replies via the auto-inject chat layer.
+// When Model is empty, falls back to the memory agent's model.
+type IntrospectionAgentConfig struct {
+	Model       string           `yaml:"model"`
+	Temperature float64          `yaml:"temperature"`
+	MaxTokens   int              `yaml:"max_tokens"`
+	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 60s default)
+	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing (optional)
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
+	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"`
+
+	// Loop tuning — smaller defaults than other agents since most turns
+	// should just skip. Defaults: 5 iterations, 1 continuation (= 10 max).
+	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 5
+	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 1
 }
 
 // MoodConfig holds behavior knobs for the mood agent + sweeper.
