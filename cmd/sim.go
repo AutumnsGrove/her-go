@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"her/agent"
@@ -306,11 +307,12 @@ func (m simMessage) DisplayText() string {
 // inside a function are scoped to that function — they can't be used as
 // parameters elsewhere.
 type simTurnResult struct {
-	userMsg       string
-	botReply      string
-	followUpReply string // from EventInboxReady — empty if no background task reported back
-	moodVerdict   string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
-	elapsed       time.Duration
+	userMsg                string
+	botReply               string
+	followUpReply          string // from EventInboxReady — empty if no background task reported back
+	moodVerdict            string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
+	introspectionVerdict   string // per-turn introspection agent outcome (skip/save/update)
+	elapsed                time.Duration
 }
 
 // simRollupResult captures the output of a forced daily mood rollup
@@ -873,6 +875,38 @@ func runSim(cmd *cobra.Command, args []string) error {
 			"model", cfg.MoodAgent.Model, "threshold", low)
 	}
 
+	// --- Introspection agent client (optional) ---
+	// Self-reflection agent — runs synchronously after mood in sim mode.
+	// Falls back to the memory agent client if no dedicated model configured.
+	var introspectionClient *llm.Client
+	introModel := cfg.IntrospectionAgent.Model
+	if introspectionModelFlag != "" {
+		introModel = introspectionModelFlag
+	}
+	if introModel != "" {
+		iTemp := cfg.IntrospectionAgent.Temperature
+		if iTemp == 0 {
+			iTemp = 0.3
+		}
+		iTokens := cfg.IntrospectionAgent.MaxTokens
+		if iTokens == 0 {
+			iTokens = 2048
+		}
+		introspectionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, introModel, iTemp, iTokens)
+		iTimeout := cfg.IntrospectionAgent.Timeout
+		if iTimeout == 0 {
+			iTimeout = 60
+		}
+		introspectionClient.WithTimeout(time.Duration(iTimeout) * time.Second)
+		if cfg.IntrospectionAgent.Fallback != nil {
+			introspectionClient.WithFallback(cfg.IntrospectionAgent.Fallback.Model, cfg.IntrospectionAgent.Fallback.Temperature, cfg.IntrospectionAgent.Fallback.MaxTokens)
+		}
+		log.Info("introspection agent enabled for sim", "model", introModel)
+	} else if memoryAgentClient != nil {
+		introspectionClient = memoryAgentClient
+		log.Info("introspection agent enabled for sim (fallback → memory model)", "model", cfg.MemoryAgent.Model)
+	}
+
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
@@ -1202,6 +1236,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// WaitGroup for introspection coordination — memory goroutine
+		// inside agent.Run() signals Done; we Wait before introspection.
+		var introWG sync.WaitGroup
+
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
 			DriverLLM:            driverClient,
@@ -1227,6 +1265,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			ConfigPath:          cfgFile,
 			AgentEventCB:        agentEventCB,
 			Tracker:             tracker,
+			IntrospectionWG:     &introWG,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
@@ -1294,6 +1333,74 @@ func runSim(cmd *cobra.Command, args []string) error {
 			if verdict != "" {
 				fmt.Printf("       [mood] %s\n", verdict)
 				turnResults[len(turnResults)-1].moodVerdict = verdict
+			}
+		}
+
+		// --- Introspection agent ---
+		// Runs synchronously after mood in sim mode. Waits for the
+		// memory goroutine's WaitGroup signal (already done by now since
+		// tracker.Wait() completed above), snapshots self-memories,
+		// then runs the introspection tool-calling loop.
+		if introspectionClient != nil {
+			// Wait for memory goroutine's WG signal (should be instant
+			// since tracker.Wait() already ensured it finished).
+			introWG.Wait()
+
+			// Snapshot self-memories + persona (same as bot/introspection.go).
+			selfCards, scErr := store.CardsBySubject("self")
+			var selfMemories []memory.Memory
+			if scErr == nil {
+				for _, card := range selfCards {
+					mems, err := store.MemoriesByCard(card.ID)
+					if err == nil {
+						selfMemories = append(selfMemories, mems...)
+					}
+				}
+			}
+			var personaText string
+			if cfg.Persona.PersonaFile != "" {
+				if data, err := os.ReadFile(cfg.Persona.PersonaFile); err == nil {
+					personaText = string(data)
+				}
+			}
+
+			agent.RunIntrospectionAgent(
+				agent.IntrospectionAgentInput{
+					UserMessage:    scrubResult.Text,
+					ThinkTraces:    result.ThinkTraces,
+					ReplyText:      result.ReplyText,
+					TriggerMsgID:   msgID,
+					ConversationID: conversationID,
+					SelfMemories:   selfMemories,
+					PersonaText:    personaText,
+				},
+				agent.IntrospectionAgentParams{
+					LLM:           introspectionClient,
+					ClassifierLLM: classifierClient,
+					Store:         store,
+					EmbedClient:   embedClient,
+					Cfg:           cfg,
+				},
+			)
+
+			// Build verdict from what the introspection agent saved.
+			postSelfCards, _ := store.CardsBySubject("self")
+			var postCount int
+			for _, card := range postSelfCards {
+				mems, err := store.MemoriesByCard(card.ID)
+				if err == nil {
+					postCount += len(mems)
+				}
+			}
+			preCount := len(selfMemories)
+			saved := postCount - preCount
+			if saved > 0 {
+				verdict := fmt.Sprintf("saved %d self-memories", saved)
+				fmt.Printf("       [introspection] %s\n", verdict)
+				turnResults[len(turnResults)-1].introspectionVerdict = verdict
+			} else {
+				fmt.Printf("       [introspection] skip\n")
+				turnResults[len(turnResults)-1].introspectionVerdict = "skip"
 			}
 		}
 
@@ -1966,6 +2073,12 @@ func generateReport(
 	} else if reportDreamModel == "" {
 		reportDreamModel = "(none)"
 	}
+	reportIntrospectionModel := cfg.IntrospectionAgent.Model
+	if reportIntrospectionModel == "" && cfg.MemoryAgent.Model != "" {
+		reportIntrospectionModel = cfg.MemoryAgent.Model + " (fallback)"
+	} else if reportIntrospectionModel == "" {
+		reportIntrospectionModel = "(none)"
+	}
 
 	// Header
 	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
@@ -1982,6 +2095,7 @@ func generateReport(
 	fmt.Fprintf(&b, "| Classifier | %s |\n", reportClassifierModel)
 	fmt.Fprintf(&b, "| Vision | %s |\n", reportVisionModel)
 	fmt.Fprintf(&b, "| Dream | %s |\n", reportDreamModel)
+	fmt.Fprintf(&b, "| Introspection | %s |\n", reportIntrospectionModel)
 	fmt.Fprintf(&b, "| Embed | %s |\n\n", reportEmbedModel)
 
 	// Conversation section
@@ -1997,6 +2111,9 @@ func generateReport(
 
 		if turn.moodVerdict != "" {
 			fmt.Fprintf(&b, "> 🎭 **mood:** %s\n\n", turn.moodVerdict)
+		}
+		if turn.introspectionVerdict != "" {
+			fmt.Fprintf(&b, "> 🪡 **introspection:** %s\n\n", turn.introspectionVerdict)
 		}
 
 		// Add agent trace as a collapsible details block.
