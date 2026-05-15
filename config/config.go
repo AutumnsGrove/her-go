@@ -405,6 +405,10 @@ type MoodConfig struct {
 	// mood again". Default 0.80.
 	DedupSimilarity float64 `yaml:"dedup_similarity"`
 
+	// UpdateWindowMinutes is the lookback for the supersede path.
+	// Shorter than dedup window. Default 60.
+	UpdateWindowMinutes int `yaml:"update_window_minutes"`
+
 	// ProposalExpiryMinutes is how long a Telegram proposal stays
 	// tappable. Default 30.
 	ProposalExpiryMinutes int `yaml:"proposal_expiry_minutes"`
