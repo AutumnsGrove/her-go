@@ -69,6 +69,7 @@ type Store interface {
 	CountMemoryLinks() (int, error)
 	AllActiveMemories() ([]Memory, error)
 	SemanticSearch(queryVec []float32, topK int) ([]Memory, error)
+	SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]Memory, error)
 	MemoriesWithoutEmbeddings() ([]Memory, error)
 	VecMemoriesCount() (int, error)
 	FindMemoriesByKeyword(keyword string) ([]Memory, error)

@@ -740,6 +740,59 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 	return memories, nil
 }
 
+// SemanticSearchByCard searches memories scoped to a specific card.
+// Same KNN approach as SemanticSearch but filtered to card_id. Skips
+// the Zettelkasten link traversal since we want precise card-scoped
+// results, not graph expansion across cards.
+func (s *SQLiteStore) SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]Memory, error) {
+	if s.EmbedDimension == 0 {
+		return nil, fmt.Errorf("semantic search not available: embed dimension is 0")
+	}
+
+	queryBytes, err := serializeEmbedding(queryVec)
+	if err != nil {
+		return nil, fmt.Errorf("serializing query vector: %w", err)
+	}
+
+	// Request extra results since the card_id filter runs after KNN.
+	rows, err := s.db.Query(
+		`SELECT m.id, m.timestamp, m.memory, m.category, COALESCE(m.subject, 'user'),
+		        m.importance, COALESCE(m.tags, ''), m.embedding_text, v.distance
+		 FROM vec_memories v
+		 JOIN memories m ON m.id = v.rowid
+		 WHERE v.embedding MATCH ?
+		   AND k = ?
+		   AND m.active = 1
+		   AND m.card_id = ?
+		 ORDER BY v.distance ASC`,
+		queryBytes, topK*3, cardID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("card-scoped semantic search: %w", err)
+	}
+	defer rows.Close()
+
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		var ts string
+		var embTextData []byte
+		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embTextData, &m.Distance); err != nil {
+			return nil, fmt.Errorf("scanning card-scoped search result: %w", err)
+		}
+		m.Timestamp = parseTimestamp(ts)
+		m.Active = true
+		m.Source = "semantic"
+		m.EmbeddingText = deserializeEmbedding(embTextData)
+		memories = append(memories, m)
+
+		if len(memories) >= topK {
+			break
+		}
+	}
+	return memories, rows.Err()
+}
+
 // MemoriesWithoutEmbeddings returns all active memories that don't have an
 // embedding yet (embedding BLOB is NULL or empty). The caller should embed
 // each memory and call UpdateMemoryEmbedding to populate both the BLOB and

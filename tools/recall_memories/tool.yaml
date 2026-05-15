@@ -4,6 +4,7 @@ description: >-
   Search stored memories by semantic similarity. The chat model has NO memory
   unless you call this and pass results via reply(memories=[...]). Call on
   most turns — skip only for bare greetings or trivial acknowledgements.
+  Optionally scope to a specific card for more precise results.
 hot: true
 parameters:
   type: object
@@ -13,6 +14,12 @@ parameters:
       description: >-
         What to search for in memory. Be specific — 'user's dog' works
         better than 'pet'.
+    card_slug:
+      type: string
+      description: >-
+        Optional: scope search to a specific card's memories only.
+        When provided, only memories under this card are searched.
+        Omit for global search across all cards.
   required:
     - query
 trace:

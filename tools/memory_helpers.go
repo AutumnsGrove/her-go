@@ -96,6 +96,7 @@ func MaxMemoryLength() int {
 // gates, same embedding strategy, same classifier check.
 func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	var args struct {
+		CardSlug string `json:"card_slug"`
 		Memory   string `json:"memory"`
 		Category string `json:"category"`
 		Tags     string `json:"tags"`
@@ -103,6 +104,19 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	// Resolve card_slug to card_id. Every new memory must belong to a card.
+	var cardID int64
+	if args.CardSlug != "" {
+		card, err := ctx.Store.GetCard(args.CardSlug)
+		if err != nil {
+			return fmt.Sprintf("error looking up card %q: %v", args.CardSlug, err)
+		}
+		if card == nil {
+			return fmt.Sprintf("error: no card found with slug %q. Use list_cards to see available cards, or create_card to make a new one.", args.CardSlug)
+		}
+		cardID = card.ID
 	}
 
 	// Style gate for ALL memories: reject AI writing tics.
@@ -217,7 +231,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			// the original unchanged.
 			if verdict.Type == "SPLIT" && len(verdict.Splits) >= 2 {
 				memoryLog.Info("classifier: SPLIT verdict", "count", len(verdict.Splits), "reason", verdict.Reason)
-				return ExecSplitMemories(verdict.Splits, args.Category, subject, ctx)
+				return ExecSplitMemories(verdict.Splits, args.Category, subject, cardID, ctx)
 			}
 
 			if !verdict.Allowed {
@@ -246,7 +260,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		return "error: no store configured"
 	}
 
-	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context, 0)
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context, cardID)
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
@@ -267,7 +281,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 // verdict) or user-requested (split_memory tool). Each gets its own embedding
 // (using the content text directly, since we don't have per-sub-memory tags)
 // and an autolink pass.
-func ExecSplitMemories(splits []string, category, subject string, ctx *Context) string {
+func ExecSplitMemories(splits []string, category, subject string, cardID int64, ctx *Context) string {
 	label := "user memory"
 	if subject == "self" {
 		label = "self memory"
@@ -291,7 +305,7 @@ func ExecSplitMemories(splits []string, category, subject string, ctx *Context) 
 			}
 		}
 
-		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", 0)
+		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", cardID)
 		if err != nil {
 			memoryLog.Error("split memory: save failed", "err", err)
 			continue
