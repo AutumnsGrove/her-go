@@ -125,11 +125,11 @@ func runDream(ctx context.Context, p DreamerParams) {
 		if dreamerResult.Error != nil {
 			log.Error("dreamer: memory consolidation failed", "err", dreamerResult.Error)
 		} else {
-			log.Infof("dreamer: consolidated %d merges, %d expires, %d promotes",
-				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes)
+			log.Infof("dreamer: %d rewrites, %d merges, %d expires, %d creates",
+				dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates)
 			emitPersonaEvent(p.EventBus, "dream_consolidate",
-				fmt.Sprintf("%d merges, %d expires, %d promotes",
-					dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes))
+				fmt.Sprintf("%d rewrites, %d merges, %d expires, %d creates",
+					dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates))
 		}
 	}
 

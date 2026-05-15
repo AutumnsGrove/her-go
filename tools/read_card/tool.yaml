@@ -1,0 +1,21 @@
+name: read_card
+agent: memory
+hint: "read a memory card's full content"
+description: >-
+  Read the full content of a specific memory card by topic slug.
+  Always read a card before updating it so you know what's already
+  there and can incorporate new information properly.
+hot: false
+parameters:
+  type: object
+  properties:
+    topic_slug:
+      type: string
+      description: >-
+        The topic slug of the card to read, e.g. "financial",
+        "my-identity", "relationships".
+  required:
+    - topic_slug
+trace:
+  emoji: "📖"
+  format: "reading card: {{.topic_slug}}"

@@ -153,7 +153,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// --- Save the consolidated memory ---
 	newID, err := ctx.Store.SaveMemory(
 		args.MergedText, args.Category, subject, 0, 5,
-		vec, vec, args.Tags, "",
+		vec, vec, args.Tags, "", 0,
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving merged memory: %v", err)

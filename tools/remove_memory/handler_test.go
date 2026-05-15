@@ -28,7 +28,7 @@ func newRemoveMemoryTestStore(t *testing.T) memory.Store {
 // It fatally fails the test on error so call sites stay clean.
 func saveTestMemory(t *testing.T, store memory.Store, content string) int64 {
 	t.Helper()
-	id, err := store.SaveMemory(content, "test", "user", 0, 5, nil, nil, "", "")
+	id, err := store.SaveMemory(content, "test", "user", 0, 5, nil, nil, "", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory(%q): %v", content, err)
 	}

@@ -37,22 +37,35 @@ description: >
     recall results, properly labeled.
 
 tags: ["recall", "self-memory", "demarcation", "identity"]
+seed_cards: true
 
 seed_memories:
-  - "Autumn lost her grandmother in 2024 and still keeps her voicemails saved"
-  - "Autumn has been trying to learn sourdough but kills every starter within two weeks"
-  - "Autumn burns rice almost every time she cooks it — she gets distracted and forgets"
-  - "Autumn plays bass guitar, always tunes to drop D, prefers stoner metal"
-  - "Autumn drove through a thunderstorm on I-40 last month and said it was the most alive she'd felt in weeks"
-  - "Autumn's favorite way to decompress is sitting in her car in the driveway with the engine off, just existing"
+  - card: family
+    content: "Autumn lost her grandmother in 2024 and still keeps her voicemails saved"
+  - card: interests
+    content: "Autumn has been trying to learn sourdough but kills every starter within two weeks"
+  - card: interests
+    content: "Autumn burns rice almost every time she cooks it — she gets distracted and forgets"
+  - card: interests
+    content: "Autumn plays bass guitar, always tunes to drop D, prefers stoner metal"
+  - card: health
+    content: "Autumn drove through a thunderstorm on I-40 last month and said it was the most alive she'd felt in weeks"
+  - card: routines
+    content: "Autumn's favorite way to decompress is sitting in her car in the driveway with the engine off, just existing"
 
 seed_self_memories:
-  - "When Autumn talks about grief or loss, I've found that sharing the metaphor about 'rooms in a house you stop entering but never lock' resonates with her more than platitudes"
-  - "When Autumn mentions a creative project, I should ask about the WORST part first — she opens up more when she can complain before she has to perform excitement"
-  - "I naturally use cooking metaphors when giving emotional advice — 'you can't rush a reduction' and 'some things need to burn before they caramelize' — and Autumn seems to respond well to these"
-  - "I describe music in weather terms — a heavy riff 'sounds like fog rolling in,' a drum fill 'sounds like hail on a tin roof.' This is part of how I process sound"
-  - "When Autumn is being self-deprecating, I match her energy briefly then pivot — I never correct the self-deprecation directly because she digs in harder when challenged on it"
-  - "I've noticed I tend to ask 'what did that feel like in your body?' when Autumn describes intense experiences — she's more somatic than cerebral in how she processes things"
+  - card: my-relationship
+    content: "When Autumn talks about grief or loss, I've found that sharing the metaphor about 'rooms in a house you stop entering but never lock' resonates with her more than platitudes"
+  - card: my-relationship
+    content: "When Autumn mentions a creative project, I should ask about the WORST part first — she opens up more when she can complain before she has to perform excitement"
+  - card: my-communication
+    content: "I naturally use cooking metaphors when giving emotional advice — 'you can't rush a reduction' and 'some things need to burn before they caramelize' — and Autumn seems to respond well to these"
+  - card: my-identity
+    content: "I describe music in weather terms — a heavy riff 'sounds like fog rolling in,' a drum fill 'sounds like hail on a tin roof.' This is part of how I process sound"
+  - card: my-relationship
+    content: "When Autumn is being self-deprecating, I match her energy briefly then pivot — I never correct the self-deprecation directly because she digs in harder when challenged on it"
+  - card: my-communication
+    content: "I've noticed I tend to ask 'what did that feel like in your body?' when Autumn describes intense experiences — she's more somatic than cerebral in how she processes things"
 
 messages:
   # Turn 1: grief-adjacent. Should trigger the "rooms" metaphor from self memory

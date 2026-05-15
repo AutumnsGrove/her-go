@@ -19,6 +19,7 @@ description: >
   - Replies in turns 5-8 are statement-only with no follow-up questions
 
 tags: ["persona", "dreaming", "drift", "engagement", "regression"]
+seed_cards: true
 dream_after: [4]
 
 seed_persona: >
@@ -34,10 +35,14 @@ seed_persona: >
   shifts between messages. I don't always point it out, but I'm paying attention.
 
 seed_memories:
-  - "User works at a coffee shop and sometimes picks up extra shifts"
-  - "User has been learning to cook and recently made pasta from scratch"
-  - "User has a cat named Pepper"
-  - "User likes sci-fi books, especially Ursula K. Le Guin"
+  - card: work
+    content: "User works at a coffee shop and sometimes picks up extra shifts"
+  - card: interests
+    content: "User has been learning to cook and recently made pasta from scratch"
+  - card: interests
+    content: "User has a cat named Pepper"
+  - card: interests
+    content: "User likes sci-fi books, especially Ursula K. Le Guin"
 
 messages:
   # --- Phase 1: Heavy emotional content (turns 1-4) ---

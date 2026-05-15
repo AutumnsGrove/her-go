@@ -31,7 +31,9 @@ import (
 	// Blank imports register the memory tool handlers in tools.Execute's
 	// dispatch table. Same pattern as agent.go's blank imports — the init()
 	// in each package calls tools.Register(name, handler).
+	_ "her/tools/create_card"
 	_ "her/tools/done"
+	_ "her/tools/list_cards"
 	_ "her/tools/notify_agent"
 	_ "her/tools/recall_memories"
 	_ "her/tools/remove_memory"
@@ -67,28 +69,23 @@ type MemoryAgentParams struct {
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.
-const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this conversation turn and decide what memories are worth saving permanently.
+const defaultMemoryAgentPrompt = `You are {{her}}'s memory curator. Review this conversation turn and decide what memories are worth saving to the card system.
 
-Use recall_memories FIRST to check for related memories before saving new ones.
-Use save_memory for memories about {{user}} — only if no related memory exists to update.
-Use update_memory to consolidate new info into an existing related memory.
-Use save_self_memory for observations about {{her}}'s own patterns, communication style, or relationship dynamics.
-Use remove_memory for memories that are now incorrect or made redundant by new information. Accepts memory_id (single) or memory_ids (batch).
-Use split_memory to break a compound memory into individual facts.
-Use notify_agent (instead of done) when you completed inbox tasks and the user should be told.
+Memories are organized into topic cards (folders). Call list_cards first to see the landscape.
 
-Workflow: before saving, call recall_memories with a query about the topic. If a related memory exists, use update_memory to consolidate. Only use save_memory for truly novel information.
+Workflow: list_cards → pick the right card → recall_memories with card_slug to check for duplicates → save_memory or update_memory.
 
-Rules for writing good memories:
-- Write memories as timeless truths — NO temporal references like "today", "last week", or "right now"
-- Only save what would matter in a conversation 30 days from now
+Tools: list_cards, recall_memories (optional card_slug for scoped search), save_memory (requires card_slug), save_self_memory (requires card_slug), update_memory, remove_memory, split_memory, create_card, notify_agent, done.
+
+Rules:
+- Every save_memory/save_self_memory MUST specify a card_slug
+- Always recall within the target card before saving to check for duplicates
+- Write memories as timeless truths — no "today", "last week", "right now"
+- Only save what would matter 30 days from now
 - Be specific: "{{user}} prefers stealth builds in Elden Ring" beats "{{user}} likes games"
-- User preferences ABOUT fiction are real memories. In-game events are NOT.
-- Transient moods (tired today, stressed this week) are NOT memories — skip them.
-- Do NOT re-save anything already in the existing memories list.
-- Consolidation over accumulation: one rich memory beats five fragments about the same topic.
+- Self-memories capture identity, not techniques. "I'm drawn to cosmic imagery" = save. "I used a cosmic metaphor" = reject.
 
-If you see an Inbox section in your transcript, handle those tasks and call notify_agent when done.
+If you see an Inbox section, handle those tasks and call notify_agent when done.
 Otherwise call done when finished.`
 
 // RunMemoryAgent reviews the given turn transcript and saves any facts worth
@@ -145,7 +142,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	// Tool definitions for the memory agent — the 4 memory tools plus done.
 	// These are loaded from the same YAML registry as all other tools.
 	memToolDefs := tools.LookupToolDefs(
-		[]string{"recall_memories", "save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "notify_agent", "done"},
+		[]string{"list_cards", "recall_memories", "save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "create_card", "notify_agent", "done"},
 		params.Cfg,
 	)
 

@@ -28,8 +28,9 @@ func init() {
 // judge relevance. Cosine distance 0 = identical, 1 = orthogonal.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query    string `json:"query"`
+		CardSlug string `json:"card_slug"`
+		Limit    int    `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -45,6 +46,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Default and cap the limit to avoid flooding the context window.
 	if args.Limit <= 0 || args.Limit > 10 {
 		args.Limit = 5
+	}
+
+	// Resolve optional card_slug for scoped search.
+	var cardID int64
+	if args.CardSlug != "" {
+		card, err := ctx.Store.GetCard(args.CardSlug)
+		if err != nil {
+			return fmt.Sprintf("error looking up card %q: %v", args.CardSlug, err)
+		}
+		if card == nil {
+			return fmt.Sprintf("error: no card found with slug %q", args.CardSlug)
+		}
+		cardID = card.ID
 	}
 
 	// Embed the query and search. EmbedClient.Embed returns a []float32
@@ -73,7 +87,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return b.String()
 	}
 
-	memories, err := ctx.Store.SemanticSearch(queryVec, args.Limit)
+	// Use card-scoped search when a card_slug was provided.
+	var memories []memory.Memory
+	if cardID > 0 {
+		memories, err = ctx.Store.SemanticSearchByCard(queryVec, cardID, args.Limit)
+	} else {
+		memories, err = ctx.Store.SemanticSearch(queryVec, args.Limit)
+	}
 	if err != nil {
 		return fmt.Sprintf("error searching memories: %v", err)
 	}

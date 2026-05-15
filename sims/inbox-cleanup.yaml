@@ -16,19 +16,26 @@ description: >
   - Memory agent calls notify_agent
   - A follow-up reply appears after the main reply
 tags: ["inbox", "memory", "cleanup", "split"]
+seed_cards: true
 
 seed_memories:
   # Clean, individual memories
-  - "Autumn is learning Go through building a chatbot project"
-  - "Autumn has two cats named Mochi and Bean"
-  - "Autumn is a developer who works primarily in Python and TypeScript"
+  - card: projects
+    content: "Autumn is learning Go through building a chatbot project"
+  - card: interests
+    content: "Autumn has two cats named Mochi and Bean"
+  - card: work
+    content: "Autumn is a developer who works primarily in Python and TypeScript"
 
   # Compound memory — should be split (3 unrelated facts packed together)
-  - "Autumn lives in Portland, has two cats, and is learning Go through a chatbot project"
+  - card: identity
+    content: "Autumn lives in Portland, has two cats, and is learning Go through a chatbot project"
 
   # Duplicates of existing memories (should be deactivated)
-  - "Autumn has two cats"
-  - "Autumn is learning Go"
+  - card: interests
+    content: "Autumn has two cats"
+  - card: projects
+    content: "Autumn is learning Go"
 
 messages:
   - "hey, can you take a look at my memories? i think there might be some duplicates and one that has too many things crammed into it"

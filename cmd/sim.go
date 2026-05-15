@@ -182,14 +182,43 @@ type suite struct {
 	Description        string              `yaml:"description"`
 	Tags               []string            `yaml:"tags"`
 	Messages           []simMessage        `yaml:"messages"`
-	SeedMemories       []string            `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
-	SeedSelfMemories   []string            `yaml:"seed_self_memories"`   // self-knowledge memories (subject="self")
+	SeedCards          bool                `yaml:"seed_cards"`           // seed the 14 default memory cards before messages
+	SeedMemories       []seedMemory        `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
+	SeedSelfMemories   []seedMemory        `yaml:"seed_self_memories"`   // self-knowledge memories (subject="self")
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
 	SeedPersona        string              `yaml:"seed_persona"`         // initial persona.md content (blank = empty slate)
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
 	RunRollup          bool                `yaml:"run_rollup"`           // force the daily mood rollup after all messages complete
+}
+
+// seedMemory supports both plain strings and structured objects in YAML.
+// Plain string: "Autumn likes hiking"
+// Structured:   { card: health, content: "Autumn takes lurasidone" }
+type seedMemory struct {
+	Card    string `yaml:"card"`
+	Content string `yaml:"content"`
+}
+
+// UnmarshalYAML lets seedMemory accept either a bare string or a map.
+// This keeps backward compatibility — existing sims with plain string
+// lists work unchanged, new sims can add card assignments.
+func (m *seedMemory) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try plain string first.
+	var s string
+	if err := unmarshal(&s); err == nil {
+		m.Content = s
+		return nil
+	}
+	// Fall back to structured object.
+	type raw seedMemory
+	var r raw
+	if err := unmarshal(&r); err != nil {
+		return err
+	}
+	*m = seedMemory(r)
+	return nil
 }
 
 // SeedCalendarEvent represents a calendar event to populate in sims.
@@ -313,9 +342,10 @@ type simDreamResult struct {
 	ClassifierVerdicts []simClassifierVerdict // persona gate verdicts (initial + retry if any)
 
 	// Memory dreamer results.
+	ConsolidationRewrites int
 	ConsolidationMerges   int
 	ConsolidationExpires  int
-	ConsolidationPromotes int
+	ConsolidationCreates  int
 	ConsolidationError    string
 	ConsolidationAudits   []memory.DreamAudit // full audit trail for the report
 }
@@ -346,15 +376,16 @@ func runDreamCycle(memoryAgentClient *llm.Client, classifierClient *llm.Client, 
 			Store:  store,
 			Cfg:    cfg,
 		})
+		result.ConsolidationRewrites = dreamerResult.Rewrites
 		result.ConsolidationMerges = dreamerResult.Merges
 		result.ConsolidationExpires = dreamerResult.Expires
-		result.ConsolidationPromotes = dreamerResult.Promotes
+		result.ConsolidationCreates = dreamerResult.Creates
 		if dreamerResult.Error != nil {
 			result.ConsolidationError = dreamerResult.Error.Error()
 			log.Error("[dream] consolidation error", "err", dreamerResult.Error)
 		} else {
-			log.Infof("[dream] consolidated: %d merges, %d expires, %d promotes",
-				dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Promotes)
+			log.Infof("[dream] consolidated: %d rewrites, %d merges, %d expires, %d creates",
+				dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates)
 		}
 		// Capture audit trail for the report.
 		if audits, err := store.RecentDreamAudits(50); err == nil {
@@ -871,23 +902,66 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// ------------------------------------------------------------------
 
 	// --- Seed memories (if configured) ---
+	// --- Seed memory cards (if configured) ---
+	// Creates the default seed cards so memory-to-card assignment works.
+	// The migration creates these on real DBs; sims use a fresh temp DB
+	// so they need explicit seeding.
+	if s.SeedCards {
+		log.Info("  seeding memory cards...")
+		seedCardSQL := `INSERT OR IGNORE INTO memory_cards (topic_slug, name, subject, protected) VALUES (?, ?, ?, ?)`
+		for _, c := range []struct{ slug, name, subject string }{
+			{"identity", "Identity", "user"},
+			{"health", "Health", "user"},
+			{"financial", "Financial", "user"},
+			{"family", "Family", "user"},
+			{"relationships", "Relationships", "user"},
+			{"work", "Work & Career", "user"},
+			{"interests", "Interests", "user"},
+			{"projects", "Projects", "user"},
+			{"routines", "Routines", "user"},
+			{"my-identity", "My Identity", "self"},
+			{"my-emotions", "My Emotions", "self"},
+			{"my-communication", "My Communication", "self"},
+			{"my-relationship", "My Relationship", "self"},
+			{"my-growth", "My Growth", "self"},
+		} {
+			if _, err := store.DB().Exec(seedCardSQL, c.slug, c.name, c.subject, 1); err != nil {
+				log.Warn("seed card failed", "slug", c.slug, "err", err)
+			}
+		}
+		log.Info("  card seeding complete")
+	}
+
+	// --- Helper: resolve card slug to ID for memory seeding ---
+	resolveCardID := func(slug string) int64 {
+		if slug == "" {
+			return 0
+		}
+		card, err := store.GetCard(slug)
+		if err != nil || card == nil {
+			log.Warn("seed memory: card not found", "slug", slug)
+			return 0
+		}
+		return card.ID
+	}
+
 	// Pre-populate the DB with memories before the conversation starts.
 	// Each seed goes through the real embedding pipeline so recall_memories
-	// can find them via semantic search. Useful for testing recall-dependent
-	// features (inbox cleanup, split requests) without needing earlier turns
-	// to establish the memories first.
+	// can find them via semantic search. Supports optional card assignment
+	// via the structured { card: "slug", content: "..." } YAML format.
 	if len(s.SeedMemories) > 0 {
 		log.Infof("  seeding %d memories...", len(s.SeedMemories))
-		for _, content := range s.SeedMemories {
+		for _, m := range s.SeedMemories {
 			var vec []float32
 			if embedClient != nil {
 				var err error
-				vec, err = embedClient.Embed(content)
+				vec, err = embedClient.Embed(m.Content)
 				if err != nil {
-					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
+					log.Warn("seed embed failed, saving without vector", "err", err, "memory", m.Content[:min(len(m.Content), 50)])
 				}
 			}
-			id, err := store.SaveMemory(content, "", "user", 0, 5, vec, vec, "", "")
+			cardID := resolveCardID(m.Card)
+			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID)
 			if err != nil {
 				log.Error("seed memory failed", "err", err)
 				continue
@@ -895,26 +969,30 @@ func runSim(cmd *cobra.Command, args []string) error {
 			if embedClient != nil && len(vec) > 0 {
 				_ = store.AutoLinkMemory(id, vec)
 			}
-			log.Infof("    seeded #%d: %s", id, content[:min(len(content), 60)])
+			cardLabel := ""
+			if m.Card != "" {
+				cardLabel = fmt.Sprintf(" [%s]", m.Card)
+			}
+			log.Infof("    seeded #%d%s: %s", id, cardLabel, m.Content[:min(len(m.Content), 60)])
 		}
 		log.Info("  seeding complete")
 	}
 
 	// --- Seed self memories (if configured) ---
-	// Same pipeline as user memories but with subject="self". These are
-	// the bot's own observations about her behavior, identity, and patterns.
+	// Same pipeline as user memories but with subject="self".
 	if len(s.SeedSelfMemories) > 0 {
 		log.Infof("  seeding %d self memories...", len(s.SeedSelfMemories))
-		for _, content := range s.SeedSelfMemories {
+		for _, m := range s.SeedSelfMemories {
 			var vec []float32
 			if embedClient != nil {
 				var err error
-				vec, err = embedClient.Embed(content)
+				vec, err = embedClient.Embed(m.Content)
 				if err != nil {
-					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
+					log.Warn("seed embed failed, saving without vector", "err", err, "memory", m.Content[:min(len(m.Content), 50)])
 				}
 			}
-			id, err := store.SaveMemory(content, "", "self", 0, 5, vec, vec, "", "")
+			cardID := resolveCardID(m.Card)
+			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID)
 			if err != nil {
 				log.Error("seed self memory failed", "err", err)
 				continue
@@ -922,7 +1000,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 			if embedClient != nil && len(vec) > 0 {
 				_ = store.AutoLinkMemory(id, vec)
 			}
-			log.Infof("    seeded self #%d: %s", id, content[:min(len(content), 60)])
+			cardLabel := ""
+			if m.Card != "" {
+				cardLabel = fmt.Sprintf(" [%s]", m.Card)
+			}
+			log.Infof("    seeded self #%d%s: %s", id, cardLabel, m.Content[:min(len(m.Content), 60)])
 		}
 		log.Info("  self memory seeding complete")
 	}
@@ -2001,16 +2083,17 @@ func writeDreamSection(b *strings.Builder, dreams []simDreamResult) {
 		}
 
 		// Memory consolidation (Step 0).
-		hasConsolidation := dream.ConsolidationMerges+dream.ConsolidationExpires+dream.ConsolidationPromotes > 0 || dream.ConsolidationError != ""
+		hasConsolidation := dream.ConsolidationRewrites+dream.ConsolidationMerges+dream.ConsolidationExpires+dream.ConsolidationCreates > 0 || dream.ConsolidationError != ""
 		if hasConsolidation {
 			b.WriteString("### Memory Consolidation\n\n")
 			if dream.ConsolidationError != "" {
 				fmt.Fprintf(b, "**Error:** %s\n\n", dream.ConsolidationError)
 			}
 			fmt.Fprintf(b, "| Operation | Count |\n|---|---|\n")
+			fmt.Fprintf(b, "| Rewrites | %d |\n", dream.ConsolidationRewrites)
 			fmt.Fprintf(b, "| Merges | %d |\n", dream.ConsolidationMerges)
 			fmt.Fprintf(b, "| Expires | %d |\n", dream.ConsolidationExpires)
-			fmt.Fprintf(b, "| Promotes | %d |\n\n", dream.ConsolidationPromotes)
+			fmt.Fprintf(b, "| Creates | %d |\n\n", dream.ConsolidationCreates)
 		}
 
 		// Reflection (Step 1).

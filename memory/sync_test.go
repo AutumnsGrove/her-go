@@ -200,7 +200,7 @@ func TestPushPullRoundtrip(t *testing.T) {
 		t.Fatalf("SaveMessage: %v", err)
 	}
 
-	memID, err := store1.SaveMemory("user likes cats", "preference", "user", msgID, 7, nil, nil, "cats,pets", "")
+	memID, err := store1.SaveMemory("user likes cats", "preference", "user", msgID, 7, nil, nil, "cats,pets", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory: %v", err)
 	}

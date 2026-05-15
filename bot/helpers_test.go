@@ -57,7 +57,7 @@ func (s stubStore) ConversationCountSince(since time.Time) (int, error) { return
 func (s stubStore) LatestConversationID(prefix string) string { return "" }
 
 func (s stubStore) LastExtractionMessageID() (int64, error) { return 0, nil }
-func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error) {
+func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
 	return 0, nil
 }
 func (s stubStore) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {
@@ -211,7 +211,31 @@ func (s stubStore) SendInbox(sender, recipient, msgType, payload string) (int64,
 }
 func (s stubStore) ConsumeInbox(recipient string) ([]memory.InboxMessage, error) { return nil, nil }
 func (s stubStore) PendingInboxCount(recipient string) (int, error)               { return 0, nil }
-func (s stubStore) GetEmbedDimension() int                                        { return 0 }
+func (s stubStore) GetEmbedDimension() int { return 0 }
+
+// Memory Cards
+func (s stubStore) GetCard(topicSlug string) (*memory.MemoryCard, error)   { return nil, nil }
+func (s stubStore) GetCardByID(id int64) (*memory.MemoryCard, error)       { return nil, nil }
+func (s stubStore) AllCards() ([]memory.MemoryCard, error)                 { return nil, nil }
+func (s stubStore) CardsBySubject(subject string) ([]memory.MemoryCard, error) { return nil, nil }
+func (s stubStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*memory.MemoryCard, error) {
+	return nil, nil
+}
+func (s stubStore) CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*memory.MemoryCard, error) {
+	return nil, nil
+}
+func (s stubStore) ExpireCard(topicSlug, reason string) error { return nil }
+func (s stubStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*memory.MemoryCard, error) {
+	return nil, nil
+}
+func (s stubStore) MemoriesByCard(cardID int64) ([]memory.Memory, error) { return nil, nil }
+func (s stubStore) RecentLogEntries(hours int) ([]memory.MemoryLogEntry, error) { return nil, nil }
+func (s stubStore) CardLogEntries(cardID int64, limit int) ([]memory.MemoryLogEntry, error) {
+	return nil, nil
+}
+func (s stubStore) SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]memory.Memory, error) {
+	return nil, nil
+}
 
 // Ensure stubStore satisfies the full Store interface at compile time.
 // This blank-identifier assignment is a Go idiom: if stubStore is
