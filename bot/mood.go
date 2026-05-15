@@ -71,6 +71,8 @@ func (b *Bot) initMood() error {
 	// mood_agent_prompt.md lives alongside prompt.md in the project root.
 	promptDir := filepath.Dir(b.cfg.Persona.PromptFile)
 
+	updateWin := time.Duration(b.cfg.Mood.UpdateWindowMinutes) * time.Minute
+
 	b.moodRunner = &mood.Runner{
 		Deps: mood.Deps{
 			LLM:        b.moodAgentLLM,
@@ -87,6 +89,7 @@ func (b *Bot) initMood() error {
 			ConfidenceLow:   low,
 			DedupWindow:     dedupWin,
 			DedupSimilarity: dedupSim,
+			UpdateWindow:    updateWin,
 			ProposalExpiry:  proposalExpiry,
 			SessionGap:      time.Duration(b.cfg.Mood.SessionGapMinutes) * time.Minute,
 		},

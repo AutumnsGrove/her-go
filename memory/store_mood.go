@@ -64,6 +64,13 @@ type MoodEntry struct {
 	Distance float64
 
 	CreatedAt time.Time
+
+	// SupersededBy is the ID of the newer entry that replaced this one.
+	// Zero means this entry is still current (not superseded).
+	SupersededBy int64
+	// SupersedeReason explains why this entry was replaced (e.g.
+	// "mood evolved (sim=0.72, valence 2→5)").
+	SupersedeReason string
 }
 
 // SaveMoodEntry inserts a new mood row and mirrors its embedding into
@@ -232,7 +239,8 @@ func (s *SQLiteStore) UpdateMoodEntry(id int64, entry *MoodEntry) error {
 // kind, or nil when none exist. Empty kind means any.
 func (s *SQLiteStore) LatestMoodEntry(kind MoodKind) (*MoodEntry, error) {
 	q := `SELECT id, ts, kind, valence, labels, associations, note, source,
-	             confidence, conversation_id, embedding, created_at
+	             confidence, conversation_id, embedding, created_at,
+	             superseded_by, supersede_reason
 	      FROM mood_entries`
 	args := []any{}
 	if kind != "" {
@@ -264,7 +272,8 @@ func (s *SQLiteStore) RecentMoodEntries(kind MoodKind, limit int) ([]MoodEntry, 
 		limit = 10
 	}
 	q := `SELECT id, ts, kind, valence, labels, associations, note, source,
-	             confidence, conversation_id, embedding, created_at
+	             confidence, conversation_id, embedding, created_at,
+	             superseded_by, supersede_reason
 	      FROM mood_entries`
 	args := []any{}
 	if kind != "" {
@@ -287,9 +296,10 @@ func (s *SQLiteStore) RecentMoodEntries(kind MoodKind, limit int) ([]MoodEntry, 
 // oldest-first, which is what charts want.
 func (s *SQLiteStore) MoodEntriesInRange(kind MoodKind, from, to time.Time) ([]MoodEntry, error) {
 	q := `SELECT id, ts, kind, valence, labels, associations, note, source,
-	             confidence, conversation_id, embedding, created_at
+	             confidence, conversation_id, embedding, created_at,
+	             superseded_by, supersede_reason
 	      FROM mood_entries
-	      WHERE ts >= ? AND ts <= ?`
+	      WHERE ts >= ? AND ts <= ? AND superseded_by IS NULL`
 	args := []any{from.UTC(), to.UTC()}
 	if kind != "" {
 		q += ` AND kind = ?`
@@ -340,12 +350,14 @@ func (s *SQLiteStore) SimilarMoodEntriesWithin(now time.Time, embedding []float3
 	rows, err := s.db.Query(`
 		SELECT m.id, m.ts, m.kind, m.valence, m.labels, m.associations, m.note,
 		       m.source, m.confidence, m.conversation_id, m.embedding, m.created_at,
+		       m.superseded_by, m.supersede_reason,
 		       v.distance
 		FROM vec_moods v
 		JOIN mood_entries m ON m.id = v.rowid
 		WHERE v.embedding MATCH ?
 		  AND k = ?
 		  AND m.ts >= ?
+		  AND m.superseded_by IS NULL
 		ORDER BY v.distance ASC`,
 		queryBytes, limit*4, cutoff,
 	)
@@ -364,11 +376,14 @@ func (s *SQLiteStore) SimilarMoodEntriesWithin(now time.Time, embedding []float3
 			sourceStr    string
 			convNullable sql.NullString
 			embData      []byte
+			supBy        sql.NullInt64
+			supReason    sql.NullString
 			distance     float64
 		)
 		if err := rows.Scan(
 			&e.ID, &e.Timestamp, &kindStr, &e.Valence, &labelsJSON, &assocJSON,
 			&e.Note, &sourceStr, &e.Confidence, &convNullable, &embData, &e.CreatedAt,
+			&supBy, &supReason,
 			&distance,
 		); err != nil {
 			return nil, fmt.Errorf("SimilarMoodEntriesWithin: scan: %w", err)
@@ -377,6 +392,12 @@ func (s *SQLiteStore) SimilarMoodEntriesWithin(now time.Time, embedding []float3
 		e.Source = MoodSource(sourceStr)
 		if convNullable.Valid {
 			e.ConversationID = convNullable.String
+		}
+		if supBy.Valid {
+			e.SupersededBy = supBy.Int64
+		}
+		if supReason.Valid {
+			e.SupersedeReason = supReason.String
 		}
 		e.Labels = unmarshalStringArray(labelsJSON)
 		e.Associations = unmarshalStringArray(assocJSON)
@@ -400,6 +421,25 @@ func (s *SQLiteStore) DeleteMoodEntry(id int64) error {
 	// vec_moods delete is best-effort — if the table doesn't exist,
 	// ignore the error (same pattern as vec_memories inserts).
 	_, _ = s.db.Exec(`DELETE FROM vec_moods WHERE rowid = ?`, id)
+	return nil
+}
+
+// SupersedeMoodEntry marks an old mood entry as replaced by a newer one.
+// The old entry stays in the DB (visible in timeline views) but is
+// excluded from the daily rollup and KNN dedup queries. Its vec_moods
+// row is deleted so future similarity searches won't match it.
+// Same pattern as SupersedeMemory in store_facts.go.
+func (s *SQLiteStore) SupersedeMoodEntry(oldID, newID int64, reason string) error {
+	_, err := s.db.Exec(
+		`UPDATE mood_entries SET superseded_by = ?, supersede_reason = ? WHERE id = ?`,
+		newID, reason, oldID,
+	)
+	if err != nil {
+		return fmt.Errorf("superseding mood %d → %d: %w", oldID, newID, err)
+	}
+	if s.EmbedDimension > 0 {
+		s.db.Exec(`DELETE FROM vec_moods WHERE rowid = ?`, oldID)
+	}
 	return nil
 }
 
@@ -586,8 +626,9 @@ func unmarshalStringArray(s string) []string {
 
 // scanMoodEntries reads rows from a SELECT that matches the order
 // (id, ts, kind, valence, labels, associations, note, source,
-// confidence, conversation_id, embedding, created_at). Distance is
-// not populated — use SimilarMoodEntriesWithin for that.
+// confidence, conversation_id, embedding, created_at, superseded_by,
+// supersede_reason). Distance is not populated — use
+// SimilarMoodEntriesWithin for that.
 func scanMoodEntries(rows *sql.Rows) ([]MoodEntry, error) {
 	var out []MoodEntry
 	for rows.Next() {
@@ -599,10 +640,13 @@ func scanMoodEntries(rows *sql.Rows) ([]MoodEntry, error) {
 			sourceStr    string
 			convNullable sql.NullString
 			embData      []byte
+			supBy        sql.NullInt64
+			supReason    sql.NullString
 		)
 		if err := rows.Scan(
 			&e.ID, &e.Timestamp, &kindStr, &e.Valence, &labelsJSON, &assocJSON,
 			&e.Note, &sourceStr, &e.Confidence, &convNullable, &embData, &e.CreatedAt,
+			&supBy, &supReason,
 		); err != nil {
 			return nil, fmt.Errorf("scanMoodEntries: %w", err)
 		}
@@ -610,6 +654,12 @@ func scanMoodEntries(rows *sql.Rows) ([]MoodEntry, error) {
 		e.Source = MoodSource(sourceStr)
 		if convNullable.Valid {
 			e.ConversationID = convNullable.String
+		}
+		if supBy.Valid {
+			e.SupersededBy = supBy.Int64
+		}
+		if supReason.Valid {
+			e.SupersedeReason = supReason.String
 		}
 		e.Labels = unmarshalStringArray(labelsJSON)
 		e.Associations = unmarshalStringArray(assocJSON)

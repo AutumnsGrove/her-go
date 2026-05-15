@@ -165,12 +165,15 @@ CREATE TABLE IF NOT EXISTS mood_entries (
     source          TEXT NOT NULL,
     confidence      REAL NOT NULL DEFAULT 0,
     conversation_id TEXT,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at       DATETIME,
+    superseded_by    INTEGER REFERENCES mood_entries(id),
+    supersede_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_mood_entries_ts ON mood_entries(ts);
 CREATE INDEX IF NOT EXISTS idx_mood_entries_kind_ts ON mood_entries(kind, ts);
+CREATE INDEX IF NOT EXISTS idx_mood_entries_superseded ON mood_entries(superseded_by);
 
 -- ---------------------------------------------------------------------------
 -- Sync Metadata

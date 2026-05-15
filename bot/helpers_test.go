@@ -143,7 +143,8 @@ func (s stubStore) MoodEntriesInRange(kind memory.MoodKind, from, to time.Time) 
 func (s stubStore) SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]memory.MoodEntry, error) {
 	return nil, nil
 }
-func (s stubStore) DeleteMoodEntry(id int64) error { return nil }
+func (s stubStore) DeleteMoodEntry(id int64) error                              { return nil }
+func (s stubStore) SupersedeMoodEntry(oldID, newID int64, reason string) error  { return nil }
 func (s stubStore) SavePendingMoodProposal(p *memory.PendingMoodProposal) (int64, error) {
 	return 0, nil
 }
