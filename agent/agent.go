@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"her/calendar"
@@ -160,6 +161,7 @@ type RunParams struct {
 	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
 	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
+	IntrospectionWG           *sync.WaitGroup             // nil-safe — signaled when memory goroutine finishes, introspection waits on this
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -168,9 +170,10 @@ type RunParams struct {
 // DB or re-derive data the agent already has in memory.
 type RunResult struct {
 	ReplyText     string
-	TotalCost     float64 // accumulated cost across all LLM calls (agent + chat)
-	ToolCalls     int     // number of tool calls the agent made
-	MemoriesSaved int     // number of memories saved/updated during this turn
+	ThinkTraces   []string // driver agent's think() calls — used by introspection agent
+	TotalCost     float64  // accumulated cost across all LLM calls (agent + chat)
+	ToolCalls     int      // number of tool calls the agent made
+	MemoriesSaved int      // number of memories saved/updated during this turn
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -635,6 +638,7 @@ outer:
 					}
 					if err := json.Unmarshal([]byte(tc.Function.Arguments), &thinkArgs); err == nil && thinkArgs.Thought != "" {
 						thinkTraces = append(thinkTraces, thinkArgs.Thought)
+						tctx.ThinkTraces = thinkTraces
 					}
 				}
 
@@ -769,6 +773,7 @@ outer:
 
 	result := &RunResult{
 		ReplyText:     tctx.ReplyText,
+		ThinkTraces:   thinkTraces,
 		TotalCost:     totalCost + tctx.ReplyCost,
 		ToolCalls:     totalToolCalls,
 		MemoriesSaved: len(tctx.SavedMemories),
@@ -793,12 +798,22 @@ outer:
 		memPhase = params.Tracker.Begin("memory")
 	}
 
+	// Signal introspection WaitGroup before launching the goroutine.
+	// Add(1) here, Done() deferred inside — keeps the pair in one place.
+	if params.IntrospectionWG != nil {
+		params.IntrospectionWG.Add(1)
+	}
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Error("memory agent panic (recovered)", "panic", r)
 			}
 		}()
+		// Signal introspection WaitGroup AFTER all memory work completes.
+		if params.IntrospectionWG != nil {
+			defer params.IntrospectionWG.Done()
+		}
 		if params.MemoryAgentLLM != nil {
 			if memPhase != nil {
 				defer memPhase.Done(turn.PhaseMetrics{})

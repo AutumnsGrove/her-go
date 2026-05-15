@@ -92,6 +92,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		ConversationSummary: ctx.ConversationSummary,
 		ConversationID:      ctx.ConversationID,
 		ScrubbedUserMessage: ctx.ScrubbedUserMessage,
+		ThinkTraces:         ctx.ThinkTraces,
+		ReplyInstruction:    args.Instruction,
 	}
 	systemPrompt, chatLayerResults := layers.BuildAll(layers.StreamChat, chatLayerCtx)
 

@@ -91,6 +91,12 @@ type LayerContext struct {
 	// and passed through reply(memories=[...]). This is the ONLY path memories
 	// reach the chat model — there is no auto-injection fallback.
 	AgentPassedMemories []string
+
+	// ThinkTraces and ReplyInstruction are set by the reply tool handler
+	// so the self-memory chat layer can build a semantic query that matches
+	// how Mira is approaching this turn (not just what the user said).
+	ThinkTraces      []string
+	ReplyInstruction string
 }
 
 // PromptLayer defines a single layer in the prompt assembly pipeline.

@@ -525,9 +525,39 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "dream_agent", Status: "skipped"})
 	}
 
+	// --- Introspection agent client (optional) ---
+	// Self-reflection agent — reviews each turn for identity observations.
+	// Falls back to the memory agent client if introspection_agent.model
+	// isn't configured.
+	var introspectionClient *llm.Client
+	if cfg.IntrospectionAgent.Model != "" {
+		introspectionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.IntrospectionAgent.Model, cfg.IntrospectionAgent.Temperature, cfg.IntrospectionAgent.MaxTokens)
+		timeout := cfg.IntrospectionAgent.Timeout
+		if timeout == 0 {
+			timeout = 60
+		}
+		introspectionClient.WithTimeout(time.Duration(timeout) * time.Second)
+		if cfg.IntrospectionAgent.Provider != nil {
+			introspectionClient.WithProvider(&llm.ProviderRouting{
+				Order: cfg.IntrospectionAgent.Provider.Order,
+				Only:  cfg.IntrospectionAgent.Provider.Only,
+				Sort:  cfg.IntrospectionAgent.Provider.Sort,
+			})
+		}
+		if cfg.IntrospectionAgent.Fallback != nil {
+			introspectionClient.WithFallback(cfg.IntrospectionAgent.Fallback.Model, cfg.IntrospectionAgent.Fallback.Temperature, cfg.IntrospectionAgent.Fallback.MaxTokens)
+		}
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "introspection", Status: "ready", Detail: cfg.IntrospectionAgent.Model})
+	} else if memoryAgentClient != nil {
+		introspectionClient = memoryAgentClient
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "introspection", Status: "ready", Detail: "fallback → " + cfg.MemoryAgent.Model})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "introspection", Status: "skipped"})
+	}
+
 	// --- Telegram bot ---
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 	if err != nil {
 		log.Error("Failed to create Telegram bot", "err", err)
 		bus.Close()

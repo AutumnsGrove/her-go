@@ -1,5 +1,5 @@
 name: recall_memories
-agent: main, memory
+agent: [main, memory, introspection]
 description: >-
   Search stored memories by semantic similarity. The chat model has NO memory
   unless you call this and pass results via reply(memories=[...]). Call on

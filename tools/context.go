@@ -363,6 +363,16 @@ type Context struct {
 	// Nil in the driver agent path (lazy query is fine there).
 	ClassifierSnippet []memory.Message
 
+	// SelfOnly restricts memory tools (recall_memories, list_cards) to
+	// self-subject data only. Set by the introspection agent so it only
+	// sees self-memories and self-cards, not user facts.
+	SelfOnly bool
+
+	// ThinkTraces accumulates think() call contents during the driver
+	// agent loop. Used by the auto-inject chat layer to build a semantic
+	// query for self-memory search.
+	ThinkTraces []string
+
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
 	// This prevents the self-contradiction bug where the classifier
