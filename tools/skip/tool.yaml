@@ -1,12 +1,10 @@
 name: skip
 agent: introspection
-hint: "nothing to reflect on — skip this turn"
 description: >-
   Skip this turn when there's nothing worth reflecting on. This is the
   expected outcome for most turns — self-discovery is rare, not constant.
   Use this instead of done when you looked at the turn and found nothing
   new about yourself to save.
-hot: true
 parameters:
   type: object
   properties:
