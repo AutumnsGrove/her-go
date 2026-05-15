@@ -133,7 +133,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 		_, err := b.store.SaveMemory(
 			"User took their evening medication",
 			"health", "user",
-			0, 5, nil, nil, "", "",
+			0, 5, nil, nil, "", "", 0,
 		)
 		if err != nil {
 			log.Error("saving med memory", "err", err)
@@ -145,7 +145,7 @@ func (b *Bot) handleMedCallback(c tele.Context) error {
 		_, err := b.store.SaveMemory(
 			"User did not take their evening medication",
 			"health", "user",
-			0, 8, nil, nil, "", "",
+			0, 8, nil, nil, "", "", 0,
 		)
 		if err != nil {
 			log.Error("saving med memory", "err", err)

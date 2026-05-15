@@ -34,7 +34,7 @@ func TestSaveMemory_RoundTrip(t *testing.T) {
 
 	id, err := store.SaveMemory(
 		"Autumn likes hiking", "hobbies", "user",
-		0, 7, nil, nil, "hiking,outdoors", "mentioned during weekend chat",
+		0, 7, nil, nil, "hiking,outdoors", "mentioned during weekend chat", 0,
 	)
 	if err != nil {
 		t.Fatalf("SaveMemory: %v", err)
@@ -76,7 +76,7 @@ func TestSaveMemory_RoundTrip(t *testing.T) {
 func TestSaveMemory_SubjectDefaultsToUser(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id, err := store.SaveMemory("test", "cat", "", 0, 5, nil, nil, "", "")
+	id, err := store.SaveMemory("test", "cat", "", 0, 5, nil, nil, "", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSaveMemory_SubjectDefaultsToUser(t *testing.T) {
 func TestSaveMemory_SelfSubject(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id, err := store.SaveMemory("I notice I use more metaphors at night", "meta", "self", 0, 5, nil, nil, "self-awareness", "")
+	id, err := store.SaveMemory("I notice I use more metaphors at night", "meta", "self", 0, 5, nil, nil, "self-awareness", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestGetMemory_NotFound(t *testing.T) {
 func TestUpdateMemory(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id, _ := store.SaveMemory("old content", "old-cat", "user", 0, 3, nil, nil, "old-tags", "")
+	id, _ := store.SaveMemory("old content", "old-cat", "user", 0, 3, nil, nil, "old-tags", "", 0)
 	err := store.UpdateMemory(id, "new content", "new-cat", 8, "new-tags")
 	if err != nil {
 		t.Fatalf("UpdateMemory: %v", err)
@@ -140,7 +140,7 @@ func TestUpdateMemory(t *testing.T) {
 func TestGetMemoryContent(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id, _ := store.SaveMemory("Autumn is a barista", "work", "user", 0, 5, nil, nil, "", "")
+	id, _ := store.SaveMemory("Autumn is a barista", "work", "user", 0, 5, nil, nil, "", "", 0)
 	content, err := store.GetMemoryContent(id)
 	if err != nil {
 		t.Fatalf("GetMemoryContent: %v", err)
@@ -167,7 +167,7 @@ func TestGetMemoryContent_NotFound(t *testing.T) {
 func TestDeactivateMemory(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id, _ := store.SaveMemory("will be deleted", "test", "user", 0, 5, nil, nil, "", "")
+	id, _ := store.SaveMemory("will be deleted", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	err := store.DeactivateMemory(id)
 	if err != nil {
@@ -197,9 +197,9 @@ func TestDeactivateMemory(t *testing.T) {
 func TestRecentMemories_SubjectFilter(t *testing.T) {
 	store := newFactTestStore(t)
 
-	store.SaveMemory("user fact", "test", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("self fact", "test", "self", 0, 5, nil, nil, "", "")
-	store.SaveMemory("another user fact", "test", "user", 0, 5, nil, nil, "", "")
+	store.SaveMemory("user fact", "test", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("self fact", "test", "self", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("another user fact", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	userMems, _ := store.RecentMemories("user", 10)
 	if len(userMems) != 2 {
@@ -215,9 +215,9 @@ func TestRecentMemories_SubjectFilter(t *testing.T) {
 func TestRecentMemories_RespectsLimit(t *testing.T) {
 	store := newFactTestStore(t)
 
-	store.SaveMemory("one", "test", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("two", "test", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("three", "test", "user", 0, 5, nil, nil, "", "")
+	store.SaveMemory("one", "test", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("two", "test", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("three", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	mems, _ := store.RecentMemories("user", 2)
 	if len(mems) != 2 {
@@ -230,9 +230,9 @@ func TestRecentMemories_RespectsLimit(t *testing.T) {
 func TestAllActiveMemories(t *testing.T) {
 	store := newFactTestStore(t)
 
-	store.SaveMemory("active user", "test", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("will deactivate", "test", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("active self", "test", "self", 0, 5, nil, nil, "", "")
+	store.SaveMemory("active user", "test", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("will deactivate", "test", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("active self", "test", "self", 0, 5, nil, nil, "", "", 0)
 	store.DeactivateMemory(id2)
 
 	all, err := store.AllActiveMemories()
@@ -249,9 +249,9 @@ func TestAllActiveMemories(t *testing.T) {
 func TestFindMemoriesByKeyword(t *testing.T) {
 	store := newFactTestStore(t)
 
-	store.SaveMemory("Autumn likes hiking in the mountains", "hobbies", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("Autumn works at a coffee shop", "work", "user", 0, 5, nil, nil, "", "")
-	store.SaveMemory("deactivated hiking memory", "hobbies", "user", 0, 5, nil, nil, "", "")
+	store.SaveMemory("Autumn likes hiking in the mountains", "hobbies", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("Autumn works at a coffee shop", "work", "user", 0, 5, nil, nil, "", "", 0)
+	store.SaveMemory("deactivated hiking memory", "hobbies", "user", 0, 5, nil, nil, "", "", 0)
 	// Deactivate the last one
 	mems, _ := store.RecentMemories("user", 1)
 	store.DeactivateMemory(mems[0].ID)
@@ -271,8 +271,8 @@ func TestFindMemoriesByKeyword(t *testing.T) {
 func TestSupersedeMemory(t *testing.T) {
 	store := newFactTestStore(t)
 
-	oldID, _ := store.SaveMemory("works at Panera", "work", "user", 0, 5, nil, nil, "", "")
-	newID, _ := store.SaveMemory("works at Starbucks", "work", "user", 0, 5, nil, nil, "", "")
+	oldID, _ := store.SaveMemory("works at Panera", "work", "user", 0, 5, nil, nil, "", "", 0)
+	newID, _ := store.SaveMemory("works at Starbucks", "work", "user", 0, 5, nil, nil, "", "", 0)
 
 	err := store.SupersedeMemory(oldID, newID, "job changed")
 	if err != nil {
@@ -299,9 +299,9 @@ func TestSupersedeMemory(t *testing.T) {
 func TestMemoryHistory_Chain(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id1, _ := store.SaveMemory("v1: works at McDonald's", "work", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("v2: works at Panera", "work", "user", 0, 5, nil, nil, "", "")
-	id3, _ := store.SaveMemory("v3: works at Starbucks", "work", "user", 0, 5, nil, nil, "", "")
+	id1, _ := store.SaveMemory("v1: works at McDonald's", "work", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("v2: works at Panera", "work", "user", 0, 5, nil, nil, "", "", 0)
+	id3, _ := store.SaveMemory("v3: works at Starbucks", "work", "user", 0, 5, nil, nil, "", "", 0)
 
 	store.SupersedeMemory(id1, id2, "job changed")
 	store.SupersedeMemory(id2, id3, "job changed again")
@@ -328,8 +328,8 @@ func TestMemoryHistory_Chain(t *testing.T) {
 func TestLinkMemories_RoundTrip(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id1, _ := store.SaveMemory("likes hiking", "hobbies", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("enjoys being outdoors", "hobbies", "user", 0, 5, nil, nil, "", "")
+	id1, _ := store.SaveMemory("likes hiking", "hobbies", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("enjoys being outdoors", "hobbies", "user", 0, 5, nil, nil, "", "", 0)
 
 	err := store.LinkMemories(id1, id2, 0.85)
 	if err != nil {
@@ -355,8 +355,8 @@ func TestLinkMemories_RoundTrip(t *testing.T) {
 func TestLinkMemories_Bidirectional(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id1, _ := store.SaveMemory("fact A", "test", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("fact B", "test", "user", 0, 5, nil, nil, "", "")
+	id1, _ := store.SaveMemory("fact A", "test", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("fact B", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	store.LinkMemories(id1, id2, 0.9)
 
@@ -375,8 +375,8 @@ func TestLinkMemories_Bidirectional(t *testing.T) {
 func TestLinkMemories_DuplicateIsNoop(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id1, _ := store.SaveMemory("A", "test", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("B", "test", "user", 0, 5, nil, nil, "", "")
+	id1, _ := store.SaveMemory("A", "test", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("B", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	store.LinkMemories(id1, id2, 0.85)
 	// Linking again (even reversed) should not error or create a duplicate
@@ -394,8 +394,8 @@ func TestLinkMemories_DuplicateIsNoop(t *testing.T) {
 func TestLinkedMemories_ExcludesInactive(t *testing.T) {
 	store := newFactTestStore(t)
 
-	id1, _ := store.SaveMemory("active", "test", "user", 0, 5, nil, nil, "", "")
-	id2, _ := store.SaveMemory("will deactivate", "test", "user", 0, 5, nil, nil, "", "")
+	id1, _ := store.SaveMemory("active", "test", "user", 0, 5, nil, nil, "", "", 0)
+	id2, _ := store.SaveMemory("will deactivate", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	store.LinkMemories(id1, id2, 0.8)
 	store.DeactivateMemory(id2)
@@ -414,7 +414,7 @@ func TestSaveMemory_WithEmbedding(t *testing.T) {
 	emb := []float32{0.1, 0.2, 0.3, 0.4}
 	embText := []float32{0.5, 0.6, 0.7, 0.8}
 
-	id, err := store.SaveMemory("test fact", "test", "user", 0, 5, emb, embText, "tags", "")
+	id, err := store.SaveMemory("test fact", "test", "user", 0, 5, emb, embText, "tags", "", 0)
 	if err != nil {
 		t.Fatalf("SaveMemory with embedding: %v", err)
 	}
@@ -439,11 +439,11 @@ func TestSemanticSearch_BasicKNN(t *testing.T) {
 
 	// Save a few memories with different embeddings
 	store.SaveMemory("about hiking", "hobbies", "user", 0, 5,
-		[]float32{1.0, 0.0, 0.0, 0.0}, nil, "hiking", "")
+		[]float32{1.0, 0.0, 0.0, 0.0}, nil, "hiking", "", 0)
 	store.SaveMemory("about cooking", "hobbies", "user", 0, 5,
-		[]float32{0.0, 1.0, 0.0, 0.0}, nil, "cooking", "")
+		[]float32{0.0, 1.0, 0.0, 0.0}, nil, "cooking", "", 0)
 	store.SaveMemory("about coding", "work", "user", 0, 5,
-		[]float32{0.0, 0.0, 1.0, 0.0}, nil, "coding", "")
+		[]float32{0.0, 0.0, 1.0, 0.0}, nil, "coding", "", 0)
 
 	// Search with a vector close to "hiking"
 	results, err := store.SemanticSearch([]float32{0.9, 0.1, 0.0, 0.0}, 2)
@@ -466,7 +466,7 @@ func TestSemanticSearch_ExcludesInactive(t *testing.T) {
 	store := newFactTestStoreWithVec(t, 4)
 
 	id, _ := store.SaveMemory("will be deactivated", "test", "user", 0, 5,
-		[]float32{1.0, 0.0, 0.0, 0.0}, nil, "test", "")
+		[]float32{1.0, 0.0, 0.0, 0.0}, nil, "test", "", 0)
 	store.DeactivateMemory(id)
 
 	results, err := store.SemanticSearch([]float32{1.0, 0.0, 0.0, 0.0}, 5)
@@ -482,8 +482,8 @@ func TestMemoriesWithoutEmbeddings(t *testing.T) {
 	store := newFactTestStore(t)
 
 	// One with embedding, one without
-	store.SaveMemory("has embedding", "test", "user", 0, 5, []float32{0.1, 0.2}, nil, "", "")
-	store.SaveMemory("no embedding", "test", "user", 0, 5, nil, nil, "", "")
+	store.SaveMemory("has embedding", "test", "user", 0, 5, []float32{0.1, 0.2}, nil, "", "", 0)
+	store.SaveMemory("no embedding", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	mems, err := store.MemoriesWithoutEmbeddings()
 	if err != nil {
@@ -501,7 +501,7 @@ func TestUpdateMemoryEmbedding(t *testing.T) {
 	store := newFactTestStoreWithVec(t, 4)
 
 	// Save without embedding first
-	id, _ := store.SaveMemory("test", "test", "user", 0, 5, nil, nil, "", "")
+	id, _ := store.SaveMemory("test", "test", "user", 0, 5, nil, nil, "", "", 0)
 
 	emb := []float32{0.1, 0.2, 0.3, 0.4}
 	embText := []float32{0.5, 0.6, 0.7, 0.8}

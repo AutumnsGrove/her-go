@@ -53,7 +53,7 @@ type Store interface {
 	LastExtractionMessageID() (int64, error)
 
 	// Memories
-	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string) (int64, error)
+	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error)
 	UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error
 	RecentMemories(subject string, limit int) ([]Memory, error)
 	GetMemoryContent(memoryID int64) (string, error)

@@ -889,7 +889,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
 				}
 			}
-			id, err := store.SaveMemory(content, "", "user", 0, 5, vec, vec, "", "")
+			id, err := store.SaveMemory(content, "", "user", 0, 5, vec, vec, "", "", 0)
 			if err != nil {
 				log.Error("seed memory failed", "err", err)
 				continue
@@ -916,7 +916,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 					log.Warn("seed embed failed, saving without vector", "err", err, "memory", content[:min(len(content), 50)])
 				}
 			}
-			id, err := store.SaveMemory(content, "", "self", 0, 5, vec, vec, "", "")
+			id, err := store.SaveMemory(content, "", "self", 0, 5, vec, vec, "", "", 0)
 			if err != nil {
 				log.Error("seed self memory failed", "err", err)
 				continue

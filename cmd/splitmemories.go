@@ -142,7 +142,7 @@ func runSplitMemories(cmd *cobra.Command, args []string) error {
 				}
 			}
 
-			id, err := store.SaveMemory(sub, m.Category, m.Subject, 0, m.Importance, vec, vec, "", "")
+			id, err := store.SaveMemory(sub, m.Category, m.Subject, 0, m.Importance, vec, vec, "", "", 0)
 			if err != nil {
 				fmt.Printf("        ⚠ save failed: %v\n", err)
 				continue
