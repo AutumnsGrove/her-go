@@ -423,6 +423,12 @@ func TestRunAgent_ConfigDefaultsApplied(t *testing.T) {
 	if cfg.DedupSimilarity != 0.80 {
 		t.Errorf("DedupSimilarity default = %v, want 0.80", cfg.DedupSimilarity)
 	}
+	if cfg.UpdateSimilarity != 0.70 {
+		t.Errorf("UpdateSimilarity default = %v, want 0.70", cfg.UpdateSimilarity)
+	}
+	if cfg.UpdateWindow != 60*time.Minute {
+		t.Errorf("UpdateWindow default = %v, want 60m", cfg.UpdateWindow)
+	}
 	if cfg.ProposalExpiry != 30*time.Minute {
 		t.Errorf("ProposalExpiry default = %v, want 30m", cfg.ProposalExpiry)
 	}

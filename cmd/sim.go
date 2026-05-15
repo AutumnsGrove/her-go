@@ -823,6 +823,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if dedupSim == 0 {
 			dedupSim = 0.80
 		}
+		updateWin := time.Duration(cfg.Mood.UpdateWindowMinutes) * time.Minute
 		ctxTurns := cfg.Mood.ContextTurns
 		if ctxTurns == 0 {
 			ctxTurns = 5
@@ -856,6 +857,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				ConfidenceLow:   low,
 				DedupWindow:     dedupWin,
 				DedupSimilarity: dedupSim,
+				UpdateWindow:    updateWin,
 			},
 		}
 		log.Info("mood agent enabled for sim (pure-inferring mode)",

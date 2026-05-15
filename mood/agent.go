@@ -37,6 +37,7 @@ const (
 	ActionDroppedNoSignal Action = "dropped_no_signal"
 	ActionDroppedDedup    Action = "dropped_dedup"
 	ActionDroppedVocab    Action = "dropped_no_valid_labels"
+	ActionSuperseded      Action = "superseded"
 	ActionDroppedClassify Action = "dropped_classifier_rejected"
 	ActionErrored         Action = "errored"
 )
@@ -86,6 +87,11 @@ type AgentConfig struct {
 	// instead of creating a duplicate. Default 0.55.
 	UpdateSimilarity float64
 
+	// UpdateWindow is how far back we look for entries to supersede.
+	// Shorter than DedupWindow — mood shifts happen faster than
+	// topic repeats. Default 60 minutes.
+	UpdateWindow time.Duration
+
 	// UpdateMaxValenceDrift is the maximum valence difference that
 	// still counts as "same mood, evolving." Beyond this the emotional
 	// state has shifted enough to warrant a new entry. Default 1.
@@ -131,7 +137,10 @@ func (c AgentConfig) withDefaults() AgentConfig {
 		c.DedupSimilarity = embed.HighSimilarityThreshold
 	}
 	if c.UpdateSimilarity <= 0 {
-		c.UpdateSimilarity = embed.MediumSimilarityThreshold
+		c.UpdateSimilarity = 0.70
+	}
+	if c.UpdateWindow <= 0 {
+		c.UpdateWindow = 60 * time.Minute
 	}
 	if c.UpdateMaxValenceDrift <= 0 {
 		c.UpdateMaxValenceDrift = 1
@@ -420,18 +429,14 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 		}
 	}
 
-	// 7. Dedup + update — only when we have an embedding + vec_moods.
+	// 7. Dedup + supersede — only when we have an embedding + vec_moods.
 	//
 	// Three tiers based on similarity to the nearest recent entry:
-	//   ≥ DedupSimilarity (0.80)  → drop (nearly identical)
-	//   ≥ UpdateSimilarity (0.55) → update existing entry in place
-	//                                (same emotional arc, more detail)
-	//   < UpdateSimilarity        → new entry (different mood)
-	//
-	// The update path also checks valence drift: if the new mood is
-	// more than ±UpdateMaxValenceDrift away from the neighbor, the
-	// emotional state has genuinely shifted and deserves its own row
-	// even if the topic is similar.
+	//   ≥ DedupSimilarity (0.80)     → drop (nearly identical)
+	//   ≥ UpdateSimilarity (0.70)    → supersede: save new entry, mark
+	//     + within UpdateWindow        old as superseded (non-destructive)
+	//     + ≤ valence drift + ≥2 labels
+	//   < UpdateSimilarity           → new entry (different mood)
 	if len(candidate.Embedding) > 0 {
 		neighbors, err := deps.Store.SimilarMoodEntriesWithin(
 			deps.Clock(), candidate.Embedding, cfg.DedupWindow, 3,
@@ -461,30 +466,41 @@ func RunAgent(ctx context.Context, deps Deps, cfg AgentConfig, turns []Turn) Res
 				}
 			}
 
-			// Label overlap: does the new mood share at least one
-			// emotional label with the existing entry? Without overlap,
-			// the feeling has qualitatively shifted even if the topic
-			// is similar (e.g., Frustrated→Relieved about the same event).
+			// Label overlap: does the new mood share enough emotional
+			// labels with the existing entry? Requiring >=2 prevents
+			// superseding when the feeling has qualitatively shifted
+			// even if the topic is similar (e.g., Frustrated→Relieved
+			// about the same event).
 			labelOverlap := countLabelOverlap(candidate.Labels, nearest.Labels)
 
-			if topSim >= cfg.UpdateSimilarity && valenceDrift <= cfg.UpdateMaxValenceDrift && labelOverlap > 0 {
-				// Tier 2: same emotional territory, evolving — update
-				// the existing entry with richer detail.
+			// Only consider supersede for entries within the shorter
+			// update window — mood shifts happen faster than topic repeats.
+			now := deps.Clock()
+			withinUpdateWindow := now.Sub(nearest.Timestamp) <= cfg.UpdateWindow
+
+			if withinUpdateWindow && topSim >= cfg.UpdateSimilarity && valenceDrift <= cfg.UpdateMaxValenceDrift && labelOverlap >= 2 {
+				// Tier 2: same emotional territory, evolving — save a
+				// new entry and supersede the old one (non-destructive).
 				candidate.Source = memory.MoodSourceInferred
-				if err := deps.Store.UpdateMoodEntry(nearest.ID, candidate); err != nil {
-					log.Error("mood update failed; falling through to new entry",
+				newID, err := deps.Store.SaveMoodEntry(candidate)
+				if err != nil {
+					log.Error("mood supersede: save new entry failed; falling through",
 						"existing_id", nearest.ID, "err", err)
 				} else {
-					candidate.ID = nearest.ID
-					tb.line(fmt.Sprintf("♻️ updated #%d (sim=%.2f, valence %d→%d)",
-						nearest.ID, topSim, nearest.Valence, candidate.Valence))
+					candidate.ID = newID
+					reason := fmt.Sprintf("mood evolved (sim=%.2f, valence %d→%d)", topSim, nearest.Valence, candidate.Valence)
+					if err := deps.Store.SupersedeMoodEntry(nearest.ID, newID, reason); err != nil {
+						log.Warn("mood supersede: marking old entry failed", "old_id", nearest.ID, "err", err)
+					}
+					tb.line(fmt.Sprintf("♻️ superseded #%d → #%d (sim=%.2f, valence %d→%d)",
+						nearest.ID, newID, topSim, nearest.Valence, candidate.Valence))
 					tb.flush(deps.Trace)
-					log.Info("mood updated existing entry",
-						"id", nearest.ID, "valence", candidate.Valence,
-						"labels", candidate.Labels, "sim", topSim)
+					log.Info("mood superseded existing entry",
+						"old_id", nearest.ID, "new_id", newID,
+						"valence", candidate.Valence, "labels", candidate.Labels, "sim", topSim)
 					return Result{
-						Action:     ActionUpdated,
-						Reason:     fmt.Sprintf("refined entry #%d (sim=%.2f)", nearest.ID, topSim),
+						Action:     ActionSuperseded,
+						Reason:     fmt.Sprintf("superseded entry #%d (sim=%.2f)", nearest.ID, topSim),
 						Confidence: confidence,
 						Inference:  inference,
 						Entry:      candidate,
