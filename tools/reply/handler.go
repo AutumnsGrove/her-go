@@ -68,14 +68,25 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		Instruction string   `json:"instruction"`
 		Context     string   `json:"context"`
-		Memories    []string `json:"memories"` // memories retrieved via recall_memories to inject into chat context
+		MemoryIDs   []int64  `json:"memory_ids"`
+		Memories    []string `json:"memories"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// If the agent passed memories, store them on ctx so the chat layer can use them.
-	// These override the auto-searched RelevantMemories for this reply.
+	// Resolve memory IDs to full text from the store. This is the preferred
+	// path — avoids the driver agent paraphrasing or truncating memory content.
+	if len(args.MemoryIDs) > 0 && ctx.Store != nil {
+		for _, id := range args.MemoryIDs {
+			if mem, err := ctx.Store.GetMemory(id); err == nil && mem != nil {
+				args.Memories = append(args.Memories, mem.Content)
+			}
+		}
+	}
+
+	// If the agent passed memories (by ID or text), store them on ctx so the
+	// chat layer can use them. These override the auto-searched RelevantMemories.
 	if len(args.Memories) > 0 {
 		ctx.AgentPassedMemories = args.Memories
 	}
@@ -323,6 +334,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// caught something saves the LLM call.
 	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
+		if styleVerdict.Model != "" && ctx.Store != nil {
+			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+		}
 		if styleVerdict.Allowed {
 			styleGateNote = "[style: PASS]"
 			emitGate(ctx, "style→gate", "PASS", "no issues detected")
@@ -383,6 +397,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			ContentScrubbed: ctx.ScrubbedUserMessage,
 		}}
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
+		if safetyVerdict.Model != "" && ctx.Store != nil {
+			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+		}
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
 			emitGate(ctx, "safety→gate", "SAFE", "no issues detected")
@@ -422,6 +439,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// The LLM might have used placeholders like [PHONE_1] in its response —
 	// we swap those back to the real values before the user sees it.
 	replyText := scrub.Deanonymize(resp.Content, ctx.ScrubVault)
+
+	// Reduce em dash overuse — LLMs lean heavily on " — " in prose.
+	// Heuristic: sentence-boundary dashes become periods, mid-sentence become commas.
+	replyText = reduceEmDashes(replyText)
 
 	// Append place cards if nearby_search populated them. These are
 	// pre-formatted with addresses, distances, and Maps links — the
@@ -519,7 +540,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback)
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
 	}
 
 	// TTS fires only for delivered messages — no point synthesizing audio
@@ -618,4 +639,45 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// reduceEmDashes replaces overused em dashes with contextually appropriate
+// punctuation. Heuristic: if the text after the dash starts with a capital
+// letter or the dash follows sentence-ending patterns, use a period. Otherwise
+// use a comma. Preserves dashes at line starts (markdown lists) and inside words.
+// Only activates when text has 3+ em dashes (1-2 intentional uses are fine).
+func reduceEmDashes(text string) string {
+	// Only target spaced em dashes (" — ") which are the overused pattern.
+	// Unspaced em dashes ("word—word") are left alone as they're stylistic.
+	const emDash = " — "
+	if strings.Count(text, emDash) < 3 {
+		return text
+	}
+
+	var b strings.Builder
+	b.Grow(len(text))
+
+	for {
+		idx := strings.Index(text, emDash)
+		if idx < 0 {
+			b.WriteString(text)
+			break
+		}
+
+		b.WriteString(text[:idx])
+		after := text[idx+len(emDash):]
+
+		// Determine replacement based on what follows the dash.
+		// Capital letter after dash → sentence boundary → period.
+		// Otherwise → mid-sentence aside → comma.
+		if len(after) > 0 && after[0] >= 'A' && after[0] <= 'Z' {
+			b.WriteString(". ")
+		} else {
+			b.WriteString(", ")
+		}
+
+		text = after
+	}
+
+	return b.String()
 }

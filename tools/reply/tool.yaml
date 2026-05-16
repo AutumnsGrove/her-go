@@ -25,15 +25,21 @@ parameters:
       description: >-
         Optional additional context (search results, URL content) to include
         in the prompt.
+    memory_ids:
+      type: array
+      items:
+        type: integer
+      description: >-
+        Memory IDs from recall_memories results. Preferred over memories — the
+        full text is looked up automatically, avoiding truncation or paraphrasing.
+        Pass the numeric ID from each recall result.
     memories:
       type: array
       items:
         type: string
       description: >-
-        Memories retrieved via recall_memories that are relevant to this reply.
-        The conversational model will have these injected directly into its
-        context. Pass the memory text verbatim from recall_memories results.
-        Empty list if no memories are relevant.
+        Fallback: raw memory text strings. Use memory_ids instead when possible.
+        Only use this for ad-hoc context that doesn't come from recall_memories.
   required:
     - instruction
 trace:
