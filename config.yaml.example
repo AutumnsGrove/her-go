@@ -49,23 +49,19 @@ classifier:
   max_tokens: 64                                  # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "moonshotai/kimi-k2-0905"     # 1T instruct model — best fact extraction, no thinking/vision overhead
+  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — reliable tool-calling, nearly free on OpenRouter
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
   timeout: 120                        # 120s — memory agent processes long transcripts
-  # provider:                         # optional: pin to a specific OpenRouter provider for speed
-  #   order: ["Groq"]                 # try Groq first (fastest for Kimi K2)
 
 persona_agent:
-  model: "moonshotai/kimi-k2-0905"     # persona evolution model — nightly reflections + rewrites. Falls back to memory_agent if empty.
+  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — persona evolution. Falls back to memory_agent if empty.
   temperature: 0.5                     # moderate creativity for persona prose
   max_tokens: 2048                     # persona output is short — 2K is plenty
   timeout: 120                         # reflections process long context
-  provider:
-    order: ["Groq"]                    # pin to Groq for speed and consistency
 
 dream_agent:
-  model: "moonshotai/kimi-k2-0905"     # memory dreamer model — autonomous consolidation. Falls back to memory_agent if empty.
+  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — memory dreamer consolidation. Falls back to memory_agent if empty.
   temperature: 0.3                     # low temp for analytical merge/expire decisions
   max_tokens: 4096                     # needs room for tool call sequences
   timeout: 120                         # processes all active memories
@@ -95,21 +91,17 @@ foursquare:
   api_key: "${FOURSQUARE_API_KEY}"  # Foursquare Places API (Service API Key). Free tier: 10k calls/month. Generate at https://foursquare.com/developers → Settings → Service API Keys
 
 mood_agent:
-  # Kimi K2 via OpenRouter → Groq. Structured-output model —
-  # returns JSON per the mood schema. Empty model disables the
-  # post-turn mood agent entirely.
-  model: "moonshotai/kimi-k2-0905"
+  # Qwen3 235B — structured JSON output for mood schema.
+  # Empty model disables the post-turn mood agent entirely.
+  model: "qwen/qwen3-235b-a22b-2507"
   temperature: 0.2
   max_tokens: 512
   timeout: 60
-  # provider:
-  #   order: ["Groq"]
 
 introspection_agent:
-  # Self-reflection agent — runs after memory + mood, reviews the turn's
-  # think traces and reply for self-observations. Most turns it just skips.
+  # Qwen3 235B — self-reflection agent, runs after memory + mood.
   # Empty model falls back to memory_agent model.
-  model: ""
+  model: "qwen/qwen3-235b-a22b-2507"
   temperature: 0.3
   max_tokens: 2048
   timeout: 60
