@@ -87,6 +87,14 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 		return
 	}
 
+	// Pre-filter: skip introspection on turns that are purely informational
+	// (searches, recalls, factual queries). One cheap classifier call saves
+	// the full introspection loop (~5 LLM calls on Kimi K2).
+	if params.ClassifierLLM != nil && !shouldIntrospect(input, params.ClassifierLLM) {
+		log.Info("─── introspection agent: skipped (pre-filter) ───")
+		return
+	}
+
 	log.Info("─── introspection agent ───")
 
 	// Snapshot the conversation context for classifier use (same pattern
@@ -317,4 +325,52 @@ func buildIntrospectionTranscript(input IntrospectionAgentInput) string {
 	}
 
 	return b.String()
+}
+
+// introspectionGatePrompt is the system prompt for the pre-filter classifier.
+// Intentionally terse — this runs on Gemini Flash Lite and should be fast.
+const introspectionGatePrompt = `You decide whether a conversation turn is worth self-reflecting on.
+
+Answer YES if the turn involves:
+- The bot expressing opinions, values, or preferences
+- Emotional support or vulnerability from the user
+- The bot making a creative or stylistic choice worth examining
+- The user asking about the bot's identity or perspective
+- A relationship-building moment
+
+Answer NO if the turn is purely:
+- Factual lookup (search, weather, time)
+- Tool use with no emotional content (nearby search, calendar)
+- Information delivery or recall
+- Simple greetings or acknowledgements
+
+Respond with exactly one word: YES or NO.`
+
+// shouldIntrospect uses the classifier LLM to decide if this turn warrants
+// the full introspection agent. Costs ~$0.0002 per call on Gemini Flash Lite.
+// Fail-open: returns true if the classifier errors or is ambiguous.
+func shouldIntrospect(input IntrospectionAgentInput, classifierLLM *llm.Client) bool {
+	turnSummary := fmt.Sprintf("User: %s\n\nBot reply: %s",
+		truncateForGate(input.UserMessage, 200),
+		truncateForGate(input.ReplyText, 200))
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: introspectionGatePrompt},
+		{Role: "user", Content: turnSummary},
+	}
+
+	resp, err := classifierLLM.ChatCompletion(messages)
+	if err != nil {
+		return true // fail-open
+	}
+
+	answer := strings.TrimSpace(strings.ToUpper(resp.Content))
+	return answer != "NO"
+}
+
+func truncateForGate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
