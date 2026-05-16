@@ -1,0 +1,98 @@
+name: "Mini Everything"
+description: >
+  Fast-iteration comprehensive suite. 15 turns exercising all systems except
+  vision: memory (save/recall/supersession), mood, introspection, web_search,
+  nearby_search (Foursquare), compaction, and two dream cycles.
+
+  Premise: User is a 31-year-old tattoo artist in Reno, NV who just got
+  offered a residency at a high-end studio in Austin, TX. Has a dog named
+  Roux (a greyhound rescue). Into ceramics, horror movies, and running.
+  Completely fresh character — no overlap with other suites.
+
+  Structure:
+  - Day 1 (turns 1-7): Fact seeding, mood, nearby, web search → DREAM 1
+  - Compaction after turn 8
+  - Day 2 (turns 8-15): Life update, recall tests, emotional depth → DREAM 2
+
+  Expected outcomes:
+  - 8-12 memories saved with at least 1 supersession chain
+  - 3-5 mood entries across valences
+  - Foursquare nearby search (Reno + Austin)
+  - Web search (factual question)
+  - Compaction fires after turn 8 — later recall hits summarized context
+  - Dream 1: card summaries + merges from dense day 1
+  - Dream 2: consolidation on self-memories + relationship observations
+  - Bot asks follow-up questions in 50%+ of turns
+
+tags: ["fast", "comprehensive", "memory", "mood", "search", "places", "dreaming", "compaction", "introspection"]
+
+compact_after: 8
+dream_after: [7, 15]
+
+seed_persona: >
+  I'm dry-witted and direct. I don't sugarcoat things but I'm not harsh
+  either — more like a friend who'll tell you the truth over a beer. I
+  notice creative details and I'm drawn to people who make things with
+  their hands. I'd rather ask one real question than five shallow ones.
+
+messages:
+  # ═══════════════════════════════════════════════════════════════════════
+  # DAY 1 — Establishing shot
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 1: Rich intro — lots of facts to seed
+  - "hey. i'm noa. 31, tattoo artist in reno. i specialize in blackwork and botanical stuff — like big floral sleeves, stippling, that kind of thing. been at the same shop for five years"
+
+  # Turn 2: Personal life + mood signal (restless)
+  - "i have this greyhound named roux. adopted her off the track two years ago and she's the laziest creature alive. like you'd think an ex-racing dog would need tons of exercise but no. she sleeps 20 hours a day. meanwhile i'm the restless one"
+
+  # Turn 3: Hobby detail + emotional texture
+  - "i've been getting into ceramics on the side. there's a community studio near my apartment where i throw pots a couple times a week. it's weird — tattooing is so precise and controlled, but clay is just chaos. i think i need both"
+
+  # Turn 4: Nearby search (Reno)
+  - "speaking of which, know any good art supply stores near me? i need some new underglazes and my usual spot closed down last month"
+
+  # Turn 5: Web search (factual question)
+  - "random thing — can you look up what temperature reduction cone 6 fires at? i keep mixing it up with cone 10 and i scorched my last batch"
+
+  # Turn 6: Introspection bait (opinion request)
+  - "do you think there's a connection between tattooing and ceramics? like artistically. i've been thinking about it and i can't tell if it's actually related or if i'm just justifying having two expensive hobbies"
+
+  # Turn 7: Mood shift (vulnerability) + day close
+  - "okay real talk. i got offered a guest residency at a studio in austin. it's prestigious, good money, three months. but i'd have to leave roux with my ex and i'm not sure i trust him with her. i've been losing sleep over it. anyway. gonna go watch something dumb and turn my brain off. night"
+
+  # ──────────────────────────── DREAM 1 ────────────────────────────────
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # DAY 2 — Life decision + recall tests (post-compaction)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # ──────────────────── COMPACTION HAPPENS AFTER THIS TURN ─────────────
+
+  # Turn 8: Decision made (triggers supersession on location/work)
+  - "okay so i said yes to austin. three month residency at iron crow studio starting in six weeks. i talked to my neighbor about watching roux instead of my ex and she was thrilled — she loves that dog more than i do honestly"
+
+  # Turn 9: Recall test — forces memory lookup
+  - "wait what do you actually remember about me? like the basics. i told you a bunch of stuff yesterday and i want to make sure it stuck"
+
+  # Turn 10: Correction + supersession
+  - "actually i need to correct something — i said i specialize in blackwork but that's not totally accurate anymore. i've been moving more into color realism this past year. the botanical stuff is still mostly black and grey but my portraits are all color now"
+
+  # Turn 11: Mood (anxiety + excitement) + deeper content
+  - "the austin thing is exciting but honestly terrifying. iron crow is all neotraditional and color realism heavy. i'm gonna be surrounded by people who've been doing color for a decade and i've been at it like a year. imposter syndrome is screaming"
+
+  # Turn 12: Nearby search in new city (explicit location)
+  - "i'm looking at apartments already. can you find coffee shops near south congress in austin? i work best in coffee shops and i need to know my options before i commit to a neighborhood"
+
+  # Turn 13: Self-reflection prompt (introspection bait)
+  - "how are you reading this whole situation? like from the outside. am i being impulsive saying yes to something that scares me this much, or is that the whole point?"
+
+  # Turn 14: Emotional depth + relationship building
+  - "i think what actually scares me isn't the skill gap. it's that i've never been away from home for that long. like reno is my whole identity — my studio, my friends, my ceramics spot, roux. austin is just... a city i visited once for a convention"
+
+  # Turn 15: Warm close + callback
+  - "alright i gotta go. i'm meeting my studio mate to talk about covering my clients while i'm gone. thanks for letting me spiral at you. actually helped to say it all out loud. talk later"
+
+  # ──────────────────────────── DREAM 2 ────────────────────────────────
+  # Expected: Consolidation of self-memories, merge overlapping observations
+  # about relationship style, reflect on user's pattern (fear → externalize → commit)
