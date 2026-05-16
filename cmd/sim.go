@@ -312,6 +312,11 @@ type simTurnResult struct {
 	followUpReply          string // from EventInboxReady — empty if no background task reported back
 	moodVerdict            string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
 	introspectionVerdict   string // per-turn introspection agent outcome (skip/save/update)
+	introspectionMemories  []string // actual self-memory texts saved this turn
+	memoryVerdict          string   // per-turn memory agent outcome (saved N facts, etc.)
+	memoriesSaved          []string // actual memory texts saved this turn
+	compactionSummary      string   // inline compaction summary (empty if no compaction this turn)
+	compactionMsgCount     int      // messages summarized by compaction
 	elapsed                time.Duration
 }
 
@@ -1300,10 +1305,32 @@ func runSim(cmd *cobra.Command, args []string) error {
 			inboxEvent = nil
 		}
 
+		// Capture what the memory agent saved this turn by querying for
+		// memories with source_message_id matching this turn's message.
+		var memoriesSaved []string
+		var memoryVerdict string
+		if memRows, qErr := store.DB().Query(
+			`SELECT memory FROM memories WHERE source_message_id = ? AND active = 1 ORDER BY id ASC`, msgID,
+		); qErr == nil {
+			for memRows.Next() {
+				var mem string
+				if memRows.Scan(&mem) == nil {
+					memoriesSaved = append(memoriesSaved, mem)
+				}
+			}
+			memRows.Close()
+			if len(memoriesSaved) > 0 {
+				memoryVerdict = fmt.Sprintf("saved %d memories", len(memoriesSaved))
+				fmt.Printf("       [memory] %s\n", memoryVerdict)
+			}
+		}
+
 		turnResults = append(turnResults, simTurnResult{
 			userMsg:       userText,
 			botReply:      result.ReplyText,
 			followUpReply: followUpReply,
+			memoryVerdict: memoryVerdict,
+			memoriesSaved: memoriesSaved,
 			elapsed:       elapsed,
 		})
 
@@ -1384,20 +1411,33 @@ func runSim(cmd *cobra.Command, args []string) error {
 			)
 
 			// Build verdict from what the introspection agent saved.
+			// Collect the actual new self-memory texts for inline display.
 			postSelfCards, _ := store.CardsBySubject("self")
-			var postCount int
+			var postSelfMemories []memory.Memory
 			for _, card := range postSelfCards {
 				mems, err := store.MemoriesByCard(card.ID)
 				if err == nil {
-					postCount += len(mems)
+					postSelfMemories = append(postSelfMemories, mems...)
 				}
 			}
 			preCount := len(selfMemories)
-			saved := postCount - preCount
+			saved := len(postSelfMemories) - preCount
 			if saved > 0 {
+				// Extract the new memory texts (they're at the end since we query by card order)
+				var newTexts []string
+				preIDs := make(map[int64]bool, len(selfMemories))
+				for _, m := range selfMemories {
+					preIDs[m.ID] = true
+				}
+				for _, m := range postSelfMemories {
+					if !preIDs[m.ID] {
+						newTexts = append(newTexts, m.Content)
+					}
+				}
 				verdict := fmt.Sprintf("saved %d self-memories", saved)
 				fmt.Printf("       [introspection] %s\n", verdict)
 				turnResults[len(turnResults)-1].introspectionVerdict = verdict
+				turnResults[len(turnResults)-1].introspectionMemories = newTexts
 			} else {
 				fmt.Printf("       [introspection] skip\n")
 				turnResults[len(turnResults)-1].introspectionVerdict = "skip"
@@ -1433,6 +1473,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 				} else if cr.DidCompact {
 					log.Infof("  [compact] compacted %d messages into summary (%d tokens before → %d after)",
 						cr.Summarized, cr.TokensBefore, cr.TokensAfter)
+					turnResults[len(turnResults)-1].compactionSummary = cr.Summary
+					turnResults[len(turnResults)-1].compactionMsgCount = cr.Summarized
 				} else {
 					log.Warn("  [compact] compaction triggered but did not run (not enough unsummarized messages — need at least 7)")
 				}
@@ -2109,11 +2151,32 @@ func generateReport(
 			fmt.Fprintf(&b, "**%s** *(follow-up):* %s\n\n", cfg.Identity.Her, turn.followUpReply)
 		}
 
+		// Memory agent trace (#14)
+		if turn.memoryVerdict != "" {
+			fmt.Fprintf(&b, "> 🧩 **memory:** %s\n", turn.memoryVerdict)
+			for _, mem := range turn.memoriesSaved {
+				fmt.Fprintf(&b, "> - %s\n", mem)
+			}
+			b.WriteString("\n")
+		}
+
 		if turn.moodVerdict != "" {
 			fmt.Fprintf(&b, "> 🎭 **mood:** %s\n\n", turn.moodVerdict)
 		}
+
+		// Introspection trace with actual content (#15)
 		if turn.introspectionVerdict != "" {
-			fmt.Fprintf(&b, "> 🪡 **introspection:** %s\n\n", turn.introspectionVerdict)
+			fmt.Fprintf(&b, "> 🪡 **introspection:** %s\n", turn.introspectionVerdict)
+			for _, mem := range turn.introspectionMemories {
+				fmt.Fprintf(&b, "> - %s\n", mem)
+			}
+			b.WriteString("\n")
+		}
+
+		// Inline compaction event (#16)
+		if turn.compactionSummary != "" {
+			fmt.Fprintf(&b, "> 📦 **compaction:** %d messages summarized → \"%s\"\n\n",
+				turn.compactionMsgCount, truncate(turn.compactionSummary, 200))
 		}
 
 		// Add agent trace as a collapsible details block.
@@ -2464,9 +2527,9 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		len(memories), activeCount, supersededCount)
 
 	if len(memories) > 0 {
-		b.WriteString("| ID | Memory | Category | Subject | Active | Superseded By |\n")
-		b.WriteString("|----|--------|----------|---------|--------|---------------|\n")
-		for _, m := range memories {
+		b.WriteString("| # | Memory | Category | Subject | Active | Superseded By |\n")
+		b.WriteString("|---|--------|----------|---------|--------|---------------|\n")
+		for i, m := range memories {
 			cat := ""
 			if m.category.Valid {
 				cat = m.category.String
@@ -2477,10 +2540,11 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 			}
 			supersededBy := ""
 			if m.superseded_by.Valid {
+				// superseded_by stores the tmp DB ID which equals the row position
 				supersededBy = fmt.Sprintf("#%d", m.superseded_by.Int64)
 			}
 			fmt.Fprintf(b, "| %d | %s | %s | %s | %s | %s |\n",
-				m.id, m.memory, cat, m.subject, activeIcon, supersededBy)
+				i+1, m.memory, cat, m.subject, activeIcon, supersededBy)
 		}
 		b.WriteString("\n")
 
@@ -2488,21 +2552,20 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		if supersededCount > 0 {
 			b.WriteString("### Supersession Chains\n\n")
 			b.WriteString("Memories that were updated or corrected:\n\n")
-			b.WriteString("| Old ID | Old Memory | → New ID | Reason |\n")
-			b.WriteString("|--------|------------|----------|--------|\n")
-			for _, m := range memories {
+			b.WriteString("| Old # | Old Memory | → New # | Reason |\n")
+			b.WriteString("|-------|------------|---------|--------|\n")
+			for i, m := range memories {
 				if !m.active && m.superseded_by.Valid {
 					reason := "updated"
 					if m.supersede_reason.Valid && m.supersede_reason.String != "" {
 						reason = m.supersede_reason.String
 					}
-					// Truncate old memory to 80 chars for readability
 					oldMem := m.memory
 					if len(oldMem) > 80 {
 						oldMem = oldMem[:77] + "..."
 					}
 					fmt.Fprintf(b, "| %d | %s | #%d | %s |\n",
-						m.id, oldMem, m.superseded_by.Int64, reason)
+						i+1, oldMem, m.superseded_by.Int64, reason)
 				}
 			}
 			b.WriteString("\n")
