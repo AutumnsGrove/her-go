@@ -33,6 +33,13 @@ type Verdict struct {
 	Reason  string   // explanation from the classifier (may be empty)
 	Rewrite string   // suggested rewrite for soft verdicts (may be empty)
 	Splits  []string // sub-memory texts for SPLIT verdict (may be nil)
+
+	// Cost fields — populated from the LLM response so callers can log metrics.
+	Model            string
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CostUSD          float64
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +228,13 @@ func Check(
 		return Verdict{Allowed: true, Type: "SAVE"}
 	}
 
-	return parseResponse(resp.Content)
+	v := parseResponse(resp.Content)
+	v.Model = resp.Model
+	v.PromptTokens = resp.PromptTokens
+	v.CompletionTokens = resp.CompletionTokens
+	v.TotalTokens = resp.TotalTokens
+	v.CostUSD = resp.CostUSD
+	return v
 }
 
 // RejectionMessage builds the agent-facing string when a write is rejected.

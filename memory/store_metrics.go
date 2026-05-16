@@ -22,15 +22,17 @@ type Metric struct {
 // If messageID is 0, it's stored as NULL (e.g., for agent calls).
 // isFallback is true when the primary model failed and the fallback
 // model handled the request (the "Haiku tax" — see issue #68).
-func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error {
+// agentRole identifies which agent made the call (driver, memory, mood,
+// introspection, chat, dream, compaction, vision, classifier).
+func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error {
 	var msgID interface{} = messageID
 	if messageID == 0 {
 		msgID = nil
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID, isFallback,
+		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback, agent_role)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID, isFallback, agentRole,
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)

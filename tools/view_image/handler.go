@@ -72,6 +72,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			0, // latency — not tracked at this level
 			ctx.TriggerMsgID,
 			result.UsedFallback,
+			"vision",
 		); err != nil {
 			log.Error("saving vision metric", "err", err)
 		}

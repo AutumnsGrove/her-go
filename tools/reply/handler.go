@@ -68,14 +68,25 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		Instruction string   `json:"instruction"`
 		Context     string   `json:"context"`
-		Memories    []string `json:"memories"` // memories retrieved via recall_memories to inject into chat context
+		MemoryIDs   []int64  `json:"memory_ids"`
+		Memories    []string `json:"memories"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// If the agent passed memories, store them on ctx so the chat layer can use them.
-	// These override the auto-searched RelevantMemories for this reply.
+	// Resolve memory IDs to full text from the store. This is the preferred
+	// path — avoids the driver agent paraphrasing or truncating memory content.
+	if len(args.MemoryIDs) > 0 && ctx.Store != nil {
+		for _, id := range args.MemoryIDs {
+			if mem, err := ctx.Store.GetMemory(id); err == nil && mem != nil {
+				args.Memories = append(args.Memories, mem.Content)
+			}
+		}
+	}
+
+	// If the agent passed memories (by ID or text), store them on ctx so the
+	// chat layer can use them. These override the auto-searched RelevantMemories.
 	if len(args.Memories) > 0 {
 		ctx.AgentPassedMemories = args.Memories
 	}
@@ -323,6 +334,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// caught something saves the LLM call.
 	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
+		if styleVerdict.CostUSD > 0 && ctx.Store != nil {
+			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+		}
 		if styleVerdict.Allowed {
 			styleGateNote = "[style: PASS]"
 			emitGate(ctx, "style→gate", "PASS", "no issues detected")
@@ -383,6 +397,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			ContentScrubbed: ctx.ScrubbedUserMessage,
 		}}
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
+		if safetyVerdict.CostUSD > 0 && ctx.Store != nil {
+			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+		}
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
 			emitGate(ctx, "safety→gate", "SAFE", "no issues detected")
@@ -523,7 +540,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback)
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, "chat")
 	}
 
 	// TTS fires only for delivered messages — no point synthesizing audio

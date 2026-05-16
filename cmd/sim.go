@@ -317,6 +317,7 @@ type simTurnResult struct {
 	memoriesSaved          []string // actual memory texts saved this turn
 	compactionSummary      string   // inline compaction summary (empty if no compaction this turn)
 	compactionMsgCount     int      // messages summarized by compaction
+	turnCost               float64  // total cost for this turn (all agents combined)
 	elapsed                time.Duration
 }
 
@@ -1444,6 +1445,17 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// --- Per-turn cost ---
+		// Sum all metric costs for this turn's message_id. Captures driver +
+		// memory + mood + introspection cost for the turn.
+		var turnCost float64
+		if costRow := store.DB().QueryRow(
+			`SELECT COALESCE(SUM(cost_usd), 0) FROM metrics WHERE message_id = ?`, msgID,
+		); costRow != nil {
+			costRow.Scan(&turnCost)
+		}
+		turnResults[len(turnResults)-1].turnCost = turnCost
+
 		// --- Forced compaction ---
 		// When compact_after is set in the suite YAML, force compaction
 		// after that turn by calling MaybeCompact with maxHistoryTokens=1.
@@ -1980,7 +1992,7 @@ func copyCalendarEvents(tmpDB, simDB *sql.DB, runID int64) error {
 // the total cost across all LLM calls in this run.
 func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, COALESCE(is_fallback, 0)
+		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, COALESCE(is_fallback, 0), COALESCE(agent_role, '')
 		 FROM metrics ORDER BY id ASC`,
 	)
 	if err != nil {
@@ -1990,18 +2002,18 @@ func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 
 	var totalCost float64
 	for rows.Next() {
-		var ts, model string
+		var ts, model, agentRole string
 		var promptTok, completionTok, totalTok, latencyMs int
 		var costUSD float64
 		var isFallback bool
-		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs, &isFallback); err != nil {
+		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs, &isFallback, &agentRole); err != nil {
 			return totalCost, fmt.Errorf("scanning metric: %w", err)
 		}
 		totalCost += costUSD
 		_, err := simDB.Exec(
-			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, is_fallback)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs, isFallback,
+			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, is_fallback, agent_role)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs, isFallback, agentRole,
 		)
 		if err != nil {
 			return totalCost, fmt.Errorf("inserting sim_metric: %w", err)
@@ -2143,7 +2155,11 @@ func generateReport(
 	// Conversation section
 	b.WriteString("## Conversation\n\n")
 	for i, turn := range turns {
-		fmt.Fprintf(&b, "### Turn %d\n", i+1)
+		if turn.turnCost > 0 {
+			fmt.Fprintf(&b, "### Turn %d *(%.1fs, $%.4f)*\n", i+1, turn.elapsed.Seconds(), turn.turnCost)
+		} else {
+			fmt.Fprintf(&b, "### Turn %d *(%.1fs)*\n", i+1, turn.elapsed.Seconds())
+		}
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, turn.userMsg)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, turn.botReply)
 
@@ -2912,9 +2928,51 @@ func writeFallbackSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	b.WriteString("\n")
 }
 
-// writeCostSection writes the cost summary table grouped by model,
-// with primary vs fallback breakdown.
+// writeCostSection writes cost summary tables: first by agent role (the
+// useful breakdown when multiple agents share a model), then by model
+// (for raw provider cost verification).
 func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	b.WriteString("## Cost Summary\n\n")
+
+	// --- Cost by agent role ---
+	roleRows, err := simDB.Query(
+		`SELECT CASE WHEN agent_role = '' THEN '(unknown)' ELSE agent_role END,
+		        COUNT(*) as calls,
+		        SUM(prompt_tokens) as prompt,
+		        SUM(completion_tokens) as completion,
+		        SUM(cost_usd) as cost
+		 FROM sim_metrics WHERE run_id = ?
+		 GROUP BY agent_role ORDER BY cost DESC`, runID,
+	)
+	if err == nil {
+		defer roleRows.Close()
+		type roleRow struct {
+			role       string
+			calls      int
+			prompt     int
+			completion int
+			cost       float64
+		}
+		var roles []roleRow
+		for roleRows.Next() {
+			var r roleRow
+			if roleRows.Scan(&r.role, &r.calls, &r.prompt, &r.completion, &r.cost) == nil {
+				roles = append(roles, r)
+			}
+		}
+		if len(roles) > 0 {
+			b.WriteString("### By Agent Role\n\n")
+			b.WriteString("| Role | Calls | Prompt | Completion | Cost |\n")
+			b.WriteString("|------|-------|--------|------------|------|\n")
+			for _, r := range roles {
+				fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f |\n",
+					r.role, r.calls, r.prompt, r.completion, r.cost)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	// --- Cost by model (existing breakdown for provider verification) ---
 	rows, err := simDB.Query(
 		`SELECT model,
 		        COUNT(*) as calls,
@@ -2949,8 +3007,8 @@ func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		costs = append(costs, c)
 	}
 
-	b.WriteString("## Cost Summary\n\n")
 	if len(costs) > 0 {
+		b.WriteString("### By Model\n\n")
 		b.WriteString("| Model | Calls | Fallback | Prompt | Completion | Total | Cost |\n")
 		b.WriteString("|-------|-------|----------|--------|------------|-------|------|\n")
 		for _, c := range costs {
