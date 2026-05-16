@@ -17,6 +17,7 @@ import (
 
 	"her/classifier"
 	"her/logger"
+	"her/memory"
 	"her/tools"
 )
 
@@ -116,6 +117,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			writeType = "self_memory"
 		}
 		verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.MergedText, nil)
+		if verdict.Model != "" && ctx.Store != nil {
+			ctx.Store.SaveMetric(verdict.Model, verdict.PromptTokens, verdict.CompletionTokens, verdict.TotalTokens, verdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+		}
 		if !verdict.Allowed {
 			// Re-activate sources since we're rejecting the merge.
 			// Note: DeactivateMemory is a soft-delete, but there's no
@@ -129,6 +133,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		// Self-memory safety gate (catches sycophancy loops in merged self-observations).
 		if subject == "self" {
 			safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.MergedText, nil)
+			if safetyVerdict.Model != "" && ctx.Store != nil {
+				ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+			}
 			if !safetyVerdict.Allowed {
 				log.Warn("merge_memories: self-memory safety rejected", "verdict", safetyVerdict.Type)
 				return fmt.Sprintf("rejected: %s. Do not merge self-memories that encode agreement as effective strategy.", safetyVerdict.Reason)

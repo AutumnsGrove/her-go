@@ -312,6 +312,12 @@ type simTurnResult struct {
 	followUpReply          string // from EventInboxReady — empty if no background task reported back
 	moodVerdict            string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
 	introspectionVerdict   string // per-turn introspection agent outcome (skip/save/update)
+	introspectionMemories  []string // actual self-memory texts saved this turn
+	memoryVerdict          string   // per-turn memory agent outcome (saved N facts, etc.)
+	memoriesSaved          []string // actual memory texts saved this turn
+	compactionSummary      string   // inline compaction summary (empty if no compaction this turn)
+	compactionMsgCount     int      // messages summarized by compaction
+	turnCost               float64  // total cost for this turn (all agents combined)
 	elapsed                time.Duration
 }
 
@@ -1300,10 +1306,35 @@ func runSim(cmd *cobra.Command, args []string) error {
 			inboxEvent = nil
 		}
 
+		// Capture what the memory agent saved this turn by querying for
+		// memories with source_message_id matching this turn's message.
+		var memoriesSaved []string
+		var memoryVerdict string
+		if memRows, qErr := store.DB().Query(
+			`SELECT memory FROM memories WHERE source_message_id = ? AND active = 1 ORDER BY id ASC`, msgID,
+		); qErr == nil {
+			for memRows.Next() {
+				var mem string
+				if memRows.Scan(&mem) == nil {
+					memoriesSaved = append(memoriesSaved, mem)
+				}
+			}
+			if err := memRows.Err(); err != nil {
+				log.Error("failed to iterate memory rows", "err", err)
+			}
+			memRows.Close()
+			if len(memoriesSaved) > 0 {
+				memoryVerdict = fmt.Sprintf("saved %d memories", len(memoriesSaved))
+				fmt.Printf("       [memory] %s\n", memoryVerdict)
+			}
+		}
+
 		turnResults = append(turnResults, simTurnResult{
 			userMsg:       userText,
 			botReply:      result.ReplyText,
 			followUpReply: followUpReply,
+			memoryVerdict: memoryVerdict,
+			memoriesSaved: memoriesSaved,
 			elapsed:       elapsed,
 		})
 
@@ -1384,25 +1415,49 @@ func runSim(cmd *cobra.Command, args []string) error {
 			)
 
 			// Build verdict from what the introspection agent saved.
+			// Collect the actual new self-memory texts for inline display.
 			postSelfCards, _ := store.CardsBySubject("self")
-			var postCount int
+			var postSelfMemories []memory.Memory
 			for _, card := range postSelfCards {
 				mems, err := store.MemoriesByCard(card.ID)
 				if err == nil {
-					postCount += len(mems)
+					postSelfMemories = append(postSelfMemories, mems...)
 				}
 			}
 			preCount := len(selfMemories)
-			saved := postCount - preCount
+			saved := len(postSelfMemories) - preCount
 			if saved > 0 {
+				// Extract the new memory texts (they're at the end since we query by card order)
+				var newTexts []string
+				preIDs := make(map[int64]bool, len(selfMemories))
+				for _, m := range selfMemories {
+					preIDs[m.ID] = true
+				}
+				for _, m := range postSelfMemories {
+					if !preIDs[m.ID] {
+						newTexts = append(newTexts, m.Content)
+					}
+				}
 				verdict := fmt.Sprintf("saved %d self-memories", saved)
 				fmt.Printf("       [introspection] %s\n", verdict)
 				turnResults[len(turnResults)-1].introspectionVerdict = verdict
+				turnResults[len(turnResults)-1].introspectionMemories = newTexts
 			} else {
 				fmt.Printf("       [introspection] skip\n")
 				turnResults[len(turnResults)-1].introspectionVerdict = "skip"
 			}
 		}
+
+		// --- Per-turn cost ---
+		// Sum all metric costs for this turn's message_id. Captures driver +
+		// memory + mood + introspection cost for the turn.
+		var turnCost float64
+		if costRow := store.DB().QueryRow(
+			`SELECT COALESCE(SUM(cost_usd), 0) FROM metrics WHERE message_id = ?`, msgID,
+		); costRow != nil {
+			costRow.Scan(&turnCost)
+		}
+		turnResults[len(turnResults)-1].turnCost = turnCost
 
 		// --- Forced compaction ---
 		// When compact_after is set in the suite YAML, force compaction
@@ -1433,6 +1488,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 				} else if cr.DidCompact {
 					log.Infof("  [compact] compacted %d messages into summary (%d tokens before → %d after)",
 						cr.Summarized, cr.TokensBefore, cr.TokensAfter)
+					turnResults[len(turnResults)-1].compactionSummary = cr.Summary
+					turnResults[len(turnResults)-1].compactionMsgCount = cr.Summarized
 				} else {
 					log.Warn("  [compact] compaction triggered but did not run (not enough unsummarized messages — need at least 7)")
 				}
@@ -1938,7 +1995,7 @@ func copyCalendarEvents(tmpDB, simDB *sql.DB, runID int64) error {
 // the total cost across all LLM calls in this run.
 func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 	rows, err := tmpDB.Query(
-		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, COALESCE(is_fallback, 0)
+		`SELECT timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, COALESCE(is_fallback, 0), COALESCE(agent_role, '')
 		 FROM metrics ORDER BY id ASC`,
 	)
 	if err != nil {
@@ -1948,18 +2005,18 @@ func copyMetrics(tmpDB, simDB *sql.DB, runID int64) (float64, error) {
 
 	var totalCost float64
 	for rows.Next() {
-		var ts, model string
+		var ts, model, agentRole string
 		var promptTok, completionTok, totalTok, latencyMs int
 		var costUSD float64
 		var isFallback bool
-		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs, &isFallback); err != nil {
+		if err := rows.Scan(&ts, &model, &promptTok, &completionTok, &totalTok, &costUSD, &latencyMs, &isFallback, &agentRole); err != nil {
 			return totalCost, fmt.Errorf("scanning metric: %w", err)
 		}
 		totalCost += costUSD
 		_, err := simDB.Exec(
-			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, is_fallback)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs, isFallback,
+			`INSERT INTO sim_metrics (run_id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, is_fallback, agent_role)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runID, ts, model, promptTok, completionTok, totalTok, costUSD, latencyMs, isFallback, agentRole,
 		)
 		if err != nil {
 			return totalCost, fmt.Errorf("inserting sim_metric: %w", err)
@@ -2101,7 +2158,11 @@ func generateReport(
 	// Conversation section
 	b.WriteString("## Conversation\n\n")
 	for i, turn := range turns {
-		fmt.Fprintf(&b, "### Turn %d\n", i+1)
+		if turn.turnCost > 0 {
+			fmt.Fprintf(&b, "### Turn %d *(%.1fs, $%.4f)*\n", i+1, turn.elapsed.Seconds(), turn.turnCost)
+		} else {
+			fmt.Fprintf(&b, "### Turn %d *(%.1fs)*\n", i+1, turn.elapsed.Seconds())
+		}
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, turn.userMsg)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, turn.botReply)
 
@@ -2109,11 +2170,32 @@ func generateReport(
 			fmt.Fprintf(&b, "**%s** *(follow-up):* %s\n\n", cfg.Identity.Her, turn.followUpReply)
 		}
 
+		// Memory agent trace (#14)
+		if turn.memoryVerdict != "" {
+			fmt.Fprintf(&b, "> 🧩 **memory:** %s\n", turn.memoryVerdict)
+			for _, mem := range turn.memoriesSaved {
+				fmt.Fprintf(&b, "> - %s\n", mem)
+			}
+			b.WriteString("\n")
+		}
+
 		if turn.moodVerdict != "" {
 			fmt.Fprintf(&b, "> 🎭 **mood:** %s\n\n", turn.moodVerdict)
 		}
+
+		// Introspection trace with actual content (#15)
 		if turn.introspectionVerdict != "" {
-			fmt.Fprintf(&b, "> 🪡 **introspection:** %s\n\n", turn.introspectionVerdict)
+			fmt.Fprintf(&b, "> 🪡 **introspection:** %s\n", turn.introspectionVerdict)
+			for _, mem := range turn.introspectionMemories {
+				fmt.Fprintf(&b, "> - %s\n", mem)
+			}
+			b.WriteString("\n")
+		}
+
+		// Inline compaction event (#16)
+		if turn.compactionSummary != "" {
+			fmt.Fprintf(&b, "> 📦 **compaction:** %d messages summarized → \"%s\"\n\n",
+				turn.compactionMsgCount, truncate(turn.compactionSummary, 200))
 		}
 
 		// Add agent trace as a collapsible details block.
@@ -2464,9 +2546,9 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		len(memories), activeCount, supersededCount)
 
 	if len(memories) > 0 {
-		b.WriteString("| ID | Memory | Category | Subject | Active | Superseded By |\n")
-		b.WriteString("|----|--------|----------|---------|--------|---------------|\n")
-		for _, m := range memories {
+		b.WriteString("| # | Memory | Category | Subject | Active | Superseded By |\n")
+		b.WriteString("|---|--------|----------|---------|--------|---------------|\n")
+		for i, m := range memories {
 			cat := ""
 			if m.category.Valid {
 				cat = m.category.String
@@ -2477,10 +2559,11 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 			}
 			supersededBy := ""
 			if m.superseded_by.Valid {
+				// superseded_by stores the tmp DB ID which equals the row position
 				supersededBy = fmt.Sprintf("#%d", m.superseded_by.Int64)
 			}
 			fmt.Fprintf(b, "| %d | %s | %s | %s | %s | %s |\n",
-				m.id, m.memory, cat, m.subject, activeIcon, supersededBy)
+				i+1, m.memory, cat, m.subject, activeIcon, supersededBy)
 		}
 		b.WriteString("\n")
 
@@ -2488,21 +2571,20 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		if supersededCount > 0 {
 			b.WriteString("### Supersession Chains\n\n")
 			b.WriteString("Memories that were updated or corrected:\n\n")
-			b.WriteString("| Old ID | Old Memory | → New ID | Reason |\n")
-			b.WriteString("|--------|------------|----------|--------|\n")
-			for _, m := range memories {
+			b.WriteString("| Old # | Old Memory | → New # | Reason |\n")
+			b.WriteString("|-------|------------|---------|--------|\n")
+			for i, m := range memories {
 				if !m.active && m.superseded_by.Valid {
 					reason := "updated"
 					if m.supersede_reason.Valid && m.supersede_reason.String != "" {
 						reason = m.supersede_reason.String
 					}
-					// Truncate old memory to 80 chars for readability
 					oldMem := m.memory
 					if len(oldMem) > 80 {
 						oldMem = oldMem[:77] + "..."
 					}
 					fmt.Fprintf(b, "| %d | %s | #%d | %s |\n",
-						m.id, oldMem, m.superseded_by.Int64, reason)
+						i+1, oldMem, m.superseded_by.Int64, reason)
 				}
 			}
 			b.WriteString("\n")
@@ -2849,9 +2931,51 @@ func writeFallbackSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	b.WriteString("\n")
 }
 
-// writeCostSection writes the cost summary table grouped by model,
-// with primary vs fallback breakdown.
+// writeCostSection writes cost summary tables: first by agent role (the
+// useful breakdown when multiple agents share a model), then by model
+// (for raw provider cost verification).
 func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
+	b.WriteString("## Cost Summary\n\n")
+
+	// --- Cost by agent role ---
+	roleRows, err := simDB.Query(
+		`SELECT CASE WHEN agent_role = '' THEN '(unknown)' ELSE agent_role END,
+		        COUNT(*) as calls,
+		        SUM(prompt_tokens) as prompt,
+		        SUM(completion_tokens) as completion,
+		        SUM(cost_usd) as cost
+		 FROM sim_metrics WHERE run_id = ?
+		 GROUP BY agent_role ORDER BY cost DESC`, runID,
+	)
+	if err == nil {
+		defer roleRows.Close()
+		type roleRow struct {
+			role       string
+			calls      int
+			prompt     int
+			completion int
+			cost       float64
+		}
+		var roles []roleRow
+		for roleRows.Next() {
+			var r roleRow
+			if roleRows.Scan(&r.role, &r.calls, &r.prompt, &r.completion, &r.cost) == nil {
+				roles = append(roles, r)
+			}
+		}
+		if len(roles) > 0 {
+			b.WriteString("### By Agent Role\n\n")
+			b.WriteString("| Role | Calls | Prompt | Completion | Cost |\n")
+			b.WriteString("|------|-------|--------|------------|------|\n")
+			for _, r := range roles {
+				fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f |\n",
+					r.role, r.calls, r.prompt, r.completion, r.cost)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	// --- Cost by model (existing breakdown for provider verification) ---
 	rows, err := simDB.Query(
 		`SELECT model,
 		        COUNT(*) as calls,
@@ -2886,8 +3010,8 @@ func writeCostSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 		costs = append(costs, c)
 	}
 
-	b.WriteString("## Cost Summary\n\n")
 	if len(costs) > 0 {
+		b.WriteString("### By Model\n\n")
 		b.WriteString("| Model | Calls | Fallback | Prompt | Completion | Total | Cost |\n")
 		b.WriteString("|-------|-------|----------|--------|------------|-------|------|\n")
 		for _, c := range costs {

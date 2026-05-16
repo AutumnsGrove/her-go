@@ -134,7 +134,7 @@ type Store interface {
 	UpdatePendingMoodProposalStatus(id int64, status MoodProposalStatus) error
 
 	// Metrics
-	SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error
+	SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error
 	GetStats() (*Stats, error)
 	GetUsageReport() (*UsageReport, error)
 

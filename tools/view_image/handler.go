@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"her/logger"
+	"her/memory"
 	"her/tools"
 	"her/vision"
 )
@@ -72,6 +73,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			0, // latency — not tracked at this level
 			ctx.TriggerMsgID,
 			result.UsedFallback,
+			memory.RoleVision,
 		); err != nil {
 			log.Error("saving vision metric", "err", err)
 		}

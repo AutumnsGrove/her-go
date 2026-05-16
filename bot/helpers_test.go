@@ -157,7 +157,7 @@ func (s stubStore) DuePendingMoodProposals(now time.Time) ([]memory.PendingMoodP
 func (s stubStore) UpdatePendingMoodProposalStatus(id int64, status memory.MoodProposalStatus) error {
 	return nil
 }
-func (s stubStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool) error {
+func (s stubStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error {
 	return nil
 }
 func (s stubStore) GetStats() (*memory.Stats, error)             { return nil, nil }

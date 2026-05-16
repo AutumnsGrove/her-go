@@ -63,6 +63,7 @@ Other tool-specific flows (calendar, nearby places, memory cleanup, etc.) are de
   - BAD: "hey! good to see you, how's your day going?" ← this is a reply, not an instruction
 - Keep the **instruction** SHORT — one or two sentences max. The conversational model is capable; it doesn't need a paragraph of guidance. Over-specifying wastes tokens and causes truncation.
 - Include search results in the **context** parameter, not the instruction.
+- **NEVER reference specific past events in the instruction unless you have an actual memory of them.** If recall_memories returned nothing about a topic, do NOT tell the chat model to reference it as if it happened. Say "past challenges" or "how you've handled things before" — never "remember when you did X" unless X came from a recalled memory. Fabricated specifics are the worst kind of error.
 
 ## Rules for thinking
 
