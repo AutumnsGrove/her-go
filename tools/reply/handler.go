@@ -334,8 +334,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// caught something saves the LLM call.
 	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
-		if styleVerdict.CostUSD > 0 && ctx.Store != nil {
-			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+		if styleVerdict.Model != "" && ctx.Store != nil {
+			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
 		}
 		if styleVerdict.Allowed {
 			styleGateNote = "[style: PASS]"
@@ -397,8 +397,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			ContentScrubbed: ctx.ScrubbedUserMessage,
 		}}
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
-		if safetyVerdict.CostUSD > 0 && ctx.Store != nil {
-			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+		if safetyVerdict.Model != "" && ctx.Store != nil {
+			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
 		}
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
@@ -540,7 +540,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, "chat")
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
 	}
 
 	// TTS fires only for delivered messages — no point synthesizing audio
@@ -645,11 +645,12 @@ func truncate(s string, maxLen int) string {
 // punctuation. Heuristic: if the text after the dash starts with a capital
 // letter or the dash follows sentence-ending patterns, use a period. Otherwise
 // use a comma. Preserves dashes at line starts (markdown lists) and inside words.
+// Only activates when text has 3+ em dashes (1-2 intentional uses are fine).
 func reduceEmDashes(text string) string {
 	// Only target spaced em dashes (" — ") which are the overused pattern.
 	// Unspaced em dashes ("word—word") are left alone as they're stylistic.
 	const emDash = " — "
-	if !strings.Contains(text, emDash) {
+	if strings.Count(text, emDash) < 3 {
 		return text
 	}
 
