@@ -101,6 +101,7 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 	// Build tools.Context with SelfOnly=true — recall_memories and list_cards
 	// will only return self-subject data.
 	tctx := &tools.Context{
+		AgentName:           "introspection",
 		Store:               params.Store,
 		EmbedClient:         params.EmbedClient,
 		SimilarityThreshold: params.Cfg.Embed.SimilarityThreshold,
@@ -115,11 +116,8 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 		Phase:               params.Phase,
 	}
 
-	// Tool set for the introspection agent — self-reflection tools only.
-	introToolDefs := tools.LookupToolDefs(
-		[]string{"think", "list_cards", "recall_memories", "save_self_memory", "update_memory", "skip", "done"},
-		params.Cfg,
-	)
+	// Tool set for the introspection agent — driven by tool.yaml agent fields.
+	introToolDefs := tools.ToolDefsForAgent("introspection", params.Cfg)
 
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: promptContent},

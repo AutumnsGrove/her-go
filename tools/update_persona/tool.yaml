@@ -1,5 +1,5 @@
 name: update_persona
-agent: main
+agent: [dream]
 description: >-
   Rewrite {{her}}'s persona description. Use RARELY — only when accumulated
   self-memories suggest a meaningful evolution in how {{her}} sees herself. The

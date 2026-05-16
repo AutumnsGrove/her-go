@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"her/llm"
 	"her/logger"
 	"her/tools"
 )
@@ -52,7 +53,16 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "no matching categories found. Available categories: " + tools.CategoryDescription()
 	}
 
-	newTools := tools.LookupToolDefs(catNames, ctx.Cfg)
+	// Expand categories into tool defs, scoped to this agent's tool set.
+	var newTools []llm.ToolDef
+	for _, cat := range catNames {
+		members := tools.CategoryMembersForAgent(cat, ctx.AgentName)
+		for _, name := range members {
+			if def, ok := tools.LookupDef(name); ok {
+				newTools = append(newTools, tools.ExpandToolIdentity(def, ctx.Cfg))
+			}
+		}
+	}
 	if len(newTools) == 0 {
 		return "no matching tools found. Available categories: " + tools.CategoryDescription()
 	}

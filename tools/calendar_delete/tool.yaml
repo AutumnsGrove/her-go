@@ -1,5 +1,5 @@
 name: calendar_delete
-agent: main
+agent: [main]
 description: >-
   Delete a calendar event by ID. Get the event ID from calendar_list.
   This is a soft delete — the row is preserved in the DB (active=0) for

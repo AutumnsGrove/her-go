@@ -1,5 +1,5 @@
 name: read_card
-agent: memory
+agent: [memory, introspection, dream]
 hint: "read a memory card's full content"
 description: >-
   Read the full content of a specific memory card by topic slug.

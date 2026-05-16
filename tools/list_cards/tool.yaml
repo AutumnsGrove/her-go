@@ -1,5 +1,5 @@
 name: list_cards
-agent: [memory, introspection]
+agent: [memory, introspection, dream]
 hint: "list all memory topic cards"
 description: >-
   List all memory topic cards with their slugs, names, subjects, and a

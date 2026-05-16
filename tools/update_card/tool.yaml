@@ -1,5 +1,5 @@
 name: update_card
-agent: dream
+agent: [dream]
 hint: "rewrite a memory card's dreamer-maintained summary"
 description: >-
   Rewrite a memory card's summary based on its current child memories.

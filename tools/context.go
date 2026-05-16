@@ -180,6 +180,11 @@ func FormatPlaceCards(cards []PlaceCard) string {
 // tool call. Mutable fields (ReplyCalled, DoneCalled, etc.) track
 // execution state across the agent loop.
 type Context struct {
+	// AgentName identifies which agent is running ("main", "memory",
+	// "introspection", "dream"). Used by tools like use_tools to scope
+	// deferred loading to the agent's declared tool set.
+	AgentName string
+
 	// Ctx is the parent context for this turn. Tools that spawn retries
 	// or background work should derive from this so they respect shutdown
 	// and turn cancellation. Defaults to context.Background() if unset.

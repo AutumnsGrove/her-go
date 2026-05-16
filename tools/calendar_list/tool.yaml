@@ -1,5 +1,5 @@
 name: calendar_list
-agent: main
+agent: [main]
 description: >-
   Read events from all configured calendars in a date range. Returns a unified
   timeline with each event tagged with its source calendar. For shift events,

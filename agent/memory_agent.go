@@ -127,6 +127,7 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 	// fact_helpers doesn't re-query the DB (which may have newer messages
 	// from subsequent turns by the time classification runs).
 	tctx := &tools.Context{
+		AgentName:           "memory",
 		Store:               params.Store,
 		EmbedClient:         params.EmbedClient,
 		SimilarityThreshold: params.Cfg.Embed.SimilarityThreshold,
@@ -139,12 +140,8 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
 		AgentEventCB:        params.AgentEventCB,
 	}
 
-	// Tool definitions for the memory agent — the 4 memory tools plus done.
-	// These are loaded from the same YAML registry as all other tools.
-	memToolDefs := tools.LookupToolDefs(
-		[]string{"list_cards", "recall_memories", "save_memory", "save_self_memory", "update_memory", "remove_memory", "split_memory", "create_card", "notify_agent", "done"},
-		params.Cfg,
-	)
+	// Tool definitions for the memory agent — driven by tool.yaml agent fields.
+	memToolDefs := tools.ToolDefsForAgent("memory", params.Cfg)
 
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: promptContent},

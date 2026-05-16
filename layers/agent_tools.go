@@ -27,7 +27,7 @@ func init() {
 }
 
 func buildAgentTools(ctx *LayerContext) LayerResult {
-	hotDefs := tools.HotToolDefs(ctx.Cfg)
+	hotDefs := tools.HotToolDefs("main", ctx.Cfg)
 
 	// Marshal the tool definitions to JSON to get a realistic token
 	// estimate. The API sends these as JSON, so this reflects what

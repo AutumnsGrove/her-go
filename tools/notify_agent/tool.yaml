@@ -1,5 +1,5 @@
 name: notify_agent
-agent: memory
+agent: [memory]
 description: >-
   Send results back to the driver agent and trigger a follow-up message to the
   user. Call this instead of done when you completed inbox tasks and the user

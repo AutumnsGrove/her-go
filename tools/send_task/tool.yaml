@@ -1,5 +1,5 @@
 name: send_task
-agent: main
+agent: [main]
 description: >-
   Delegate a memory task to the background memory agent. Do your research first
   (recall_memories to find duplicates or compound memories), then send a task
