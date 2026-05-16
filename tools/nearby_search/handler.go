@@ -10,6 +10,7 @@ package nearby_search
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"her/integrate"
 	"her/logger"
@@ -119,6 +120,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			log.Error("foursquare search failed, falling back to web search", "err", err)
 			// Fall through to Tavily fallback below.
 		} else {
+			// Filter out irrelevant results — Foursquare sometimes returns
+			// places that match on name/address but not category. A "coffee shop"
+			// query shouldn't return a barber shop that happens to be nearby.
+			places = filterByRelevance(places, args.Query)
+
 			// Record the search location in history.
 			if ctx.Store != nil {
 				if err := ctx.Store.InsertLocation(lat, lon, args.Query+" near "+locationLabel, "search", ctx.ConversationID); err != nil {
@@ -193,4 +199,49 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "Cannot search: no location available. Share your location or tell me where to search."
 	}
 	return "Cannot search: neither Foursquare nor Tavily is configured. Add foursquare.api_key or search.tavily_api_key to config.yaml."
+}
+
+// filterByRelevance removes Foursquare results whose categories have no
+// overlap with the query terms. Foursquare's text search matches on name
+// and address, not just category, so a "coffee shop" query can return a
+// barber shop if its address mentions "Coffee Street". We keep results
+// where at least one category word matches a query word, OR where the
+// place name itself contains a query word (handles unlabeled places).
+func filterByRelevance(places []integrate.Place, query string) []integrate.Place {
+	queryWords := strings.Fields(strings.ToLower(query))
+	if len(queryWords) == 0 {
+		return places
+	}
+
+	filtered := make([]integrate.Place, 0, len(places))
+	for _, p := range places {
+		if placeMatchesQuery(p, queryWords) {
+			filtered = append(filtered, p)
+		}
+	}
+
+	// If filtering removed everything, return the original results —
+	// a weak match is better than no results.
+	if len(filtered) == 0 {
+		return places
+	}
+	return filtered
+}
+
+func placeMatchesQuery(p integrate.Place, queryWords []string) bool {
+	nameLower := strings.ToLower(p.Name)
+	for _, qw := range queryWords {
+		if strings.Contains(nameLower, qw) {
+			return true
+		}
+	}
+	for _, cat := range p.Categories {
+		catLower := strings.ToLower(cat.Name)
+		for _, qw := range queryWords {
+			if strings.Contains(catLower, qw) {
+				return true
+			}
+		}
+	}
+	return false
 }

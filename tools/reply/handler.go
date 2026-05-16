@@ -423,6 +423,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// we swap those back to the real values before the user sees it.
 	replyText := scrub.Deanonymize(resp.Content, ctx.ScrubVault)
 
+	// Reduce em dash overuse — LLMs lean heavily on " — " in prose.
+	// Heuristic: sentence-boundary dashes become periods, mid-sentence become commas.
+	replyText = reduceEmDashes(replyText)
+
 	// Append place cards if nearby_search populated them. These are
 	// pre-formatted with addresses, distances, and Maps links — the
 	// chat model wrote the prose, and this block adds the reliable
@@ -618,4 +622,44 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// reduceEmDashes replaces overused em dashes with contextually appropriate
+// punctuation. Heuristic: if the text after the dash starts with a capital
+// letter or the dash follows sentence-ending patterns, use a period. Otherwise
+// use a comma. Preserves dashes at line starts (markdown lists) and inside words.
+func reduceEmDashes(text string) string {
+	// Only target spaced em dashes (" — ") which are the overused pattern.
+	// Unspaced em dashes ("word—word") are left alone as they're stylistic.
+	const emDash = " — "
+	if !strings.Contains(text, emDash) {
+		return text
+	}
+
+	var b strings.Builder
+	b.Grow(len(text))
+
+	for {
+		idx := strings.Index(text, emDash)
+		if idx < 0 {
+			b.WriteString(text)
+			break
+		}
+
+		b.WriteString(text[:idx])
+		after := text[idx+len(emDash):]
+
+		// Determine replacement based on what follows the dash.
+		// Capital letter after dash → sentence boundary → period.
+		// Otherwise → mid-sentence aside → comma.
+		if len(after) > 0 && after[0] >= 'A' && after[0] <= 'Z' {
+			b.WriteString(". ")
+		} else {
+			b.WriteString(", ")
+		}
+
+		text = after
+	}
+
+	return b.String()
 }
