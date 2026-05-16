@@ -217,6 +217,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
 			}
 			verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.Memory, snippet)
+			if verdict.CostUSD > 0 {
+				ctx.Store.SaveMetric(verdict.Model, verdict.PromptTokens, verdict.CompletionTokens, verdict.TotalTokens, verdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+			}
 			_ = ctx.Store.SaveClassifierLog(
 				ctx.ConversationID, writeType, verdict.Type, args.Memory, verdict.Reason, verdict.Rewrite,
 			)
@@ -244,6 +247,9 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 			// LLM call with its own prompt.
 			if subject == "self" {
 				safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.Memory, snippet)
+				if safetyVerdict.CostUSD > 0 {
+					ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, "classifier")
+				}
 				_ = ctx.Store.SaveClassifierLog(
 					ctx.ConversationID, "self_memory_safety", safetyVerdict.Type, args.Memory, safetyVerdict.Reason, "",
 				)

@@ -191,6 +191,7 @@ outer:
 				latencyMs,
 				input.TriggerMsgID,
 				resp.UsedFallback,
+				"introspection",
 			)
 
 			// No tool calls = model finished without calling done/skip.

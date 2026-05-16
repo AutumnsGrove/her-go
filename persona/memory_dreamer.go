@@ -165,7 +165,7 @@ outer:
 				break outer
 			}
 
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback)
+			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, "dream")
 			result.Cost += resp.CostUSD
 			log.Infof("  [dreamer] tokens: %d prompt + %d completion | $%.6f | finish=%s",
 				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
