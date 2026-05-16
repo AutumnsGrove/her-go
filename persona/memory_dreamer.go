@@ -111,17 +111,15 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 	// Build tools.Context.
 	dryRun := params.Cfg.Dream.DryRun
 	tctx := &tools.Context{
+		AgentName:           "dream",
 		Store:               params.Store,
 		EmbedClient:         params.EmbedClient,
 		SimilarityThreshold: params.Cfg.Embed.SimilarityThreshold,
 		Cfg:                 params.Cfg,
 	}
 
-	// Load tool definitions — card-based tools for the dreamer.
-	dreamerToolDefs := tools.LookupToolDefs(
-		[]string{"think", "list_cards", "read_card", "update_card", "create_card", "remove_memory", "merge_memories", "done"},
-		params.Cfg,
-	)
+	// Tool definitions for the dream agent — driven by tool.yaml agent fields.
+	dreamerToolDefs := tools.ToolDefsForAgent("dream", params.Cfg)
 
 	messages := []llm.ChatMessage{
 		{Role: "system", Content: promptContent},

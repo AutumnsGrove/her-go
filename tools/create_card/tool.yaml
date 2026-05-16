@@ -1,5 +1,5 @@
 name: create_card
-agent: memory
+agent: [memory, dream]
 hint: "create a new memory topic card"
 description: >-
   Create a new topic card when information doesn't fit any existing

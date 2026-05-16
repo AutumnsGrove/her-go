@@ -102,7 +102,7 @@ func loadAgentPrompt(path string, cfg *config.Config) string {
 // Markers look like <!-- BEGIN HOT_TOOLS --> ... <!-- END HOT_TOOLS -->.
 // If markers are missing, the content is returned unchanged.
 func expandToolSections(content string) string {
-	content = replaceBetweenMarkers(content, "HOT_TOOLS", tools.RenderHotToolsList())
+	content = replaceBetweenMarkers(content, "HOT_TOOLS", tools.RenderHotToolsList("main"))
 	content = replaceBetweenMarkers(content, "CATEGORY_TABLE", tools.RenderCategoryTable())
 	return content
 }
@@ -357,10 +357,11 @@ func Run(params RunParams) (*RunResult, error) {
 	// Start with only the hot tools (7 instead of 26). The agent can
 	// load deferred tools on demand via use_tools(["search"]) etc.
 	// This reduces context pressure on the agent model significantly.
-	toolDefs := tools.HotToolDefs(params.Cfg)
+	toolDefs := tools.HotToolDefs("main", params.Cfg)
 
 	// Build the tool context with everything the tools need.
 	tctx := &tools.Context{
+		AgentName:                 "main",
 		Store:                     params.Store,
 		EmbedClient:               params.EmbedClient,
 		SimilarityThreshold:       params.SimilarityThreshold,

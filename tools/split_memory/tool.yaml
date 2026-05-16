@@ -1,5 +1,5 @@
 name: split_memory
-agent: memory
+agent: [memory]
 description: >-
   Split a compound memory into multiple individual memories. Deactivates the
   original and creates new memories from the provided facts. Use this when a

@@ -1,5 +1,5 @@
 name: skip
-agent: introspection
+agent: [introspection]
 description: >-
   Skip this turn when there's nothing worth reflecting on. This is the
   expected outcome for most turns — self-discovery is rare, not constant.

@@ -1,5 +1,5 @@
 name: remove_memory
-agent: memory
+agent: [memory, dream]
 description: >-
   Remove one or more memories that are no longer true, incorrect, or redundant.
   Memories are soft-deleted (kept for audit but excluded from retrieval).
