@@ -1,5 +1,5 @@
 name: nearby_search
-agent: main
+agent: [main]
 description: >-
   Search for nearby places — restaurants, coffee shops, pharmacies, parks, etc.
   Uses Foursquare Places API for structured results with distance and categories.

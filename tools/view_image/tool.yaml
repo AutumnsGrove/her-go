@@ -1,5 +1,5 @@
 name: view_image
-agent: main
+agent: [main]
 description: >-
   Analyze an image the user sent. Returns a detailed description of what's
   in it. Call this BEFORE reply when the user sends a photo.

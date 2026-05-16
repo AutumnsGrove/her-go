@@ -27,9 +27,27 @@ import (
 // YAML schema types — these map directly to the tool.yaml format
 // ---------------------------------------------------------------------------
 
+// agentList is a custom type for the YAML "agent" field. It always
+// expects a YAML sequence (e.g., [main, memory]) — bare strings are
+// rejected at parse time so every tool.yaml uses a consistent format.
+type agentList []string
+
+func (a *agentList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.SequenceNode {
+		return fmt.Errorf("agent field must be a YAML array (e.g., [main, memory]), got %v", node.Tag)
+	}
+	var list []string
+	if err := node.Decode(&list); err != nil {
+		return fmt.Errorf("decoding agent list: %w", err)
+	}
+	*a = list
+	return nil
+}
+
 // toolManifest is the top-level structure of a tool.yaml file.
 type toolManifest struct {
 	Name        string         `yaml:"name"`
+	Agent       agentList      `yaml:"agent"`
 	Description string         `yaml:"description"`
 	Hint        string         `yaml:"hint,omitempty"`
 	Hot         bool           `yaml:"hot"`
@@ -72,8 +90,13 @@ type propertyDef struct {
 // This is the source of truth for all tool schemas.
 var toolDefs = map[string]llm.ToolDef{}
 
-// hotTools lists tool names where hot: true in the YAML.
-var hotTools []string
+// agentTools maps agent name → tool names belonging to that agent.
+// Built from the "agent" field in each tool's YAML. This is the
+// inverted index: YAML stores tool→agents, this gives us agent→tools.
+var agentTools = map[string][]string{}
+
+// agentHotTools maps agent name → hot tool names for that agent.
+var agentHotTools = map[string][]string{}
 
 // categories maps category name → list of tool names.
 // Built from the "category" field in each tool's YAML.
@@ -164,11 +187,16 @@ func init() {
 
 		toolDefs[manifest.Name] = def
 
-		if manifest.Hot {
-			hotTools = append(hotTools, manifest.Name)
-			if manifest.Hint != "" {
-				hotToolHints[manifest.Name] = manifest.Hint
+		// Build the agent→tools inverted index.
+		for _, agentName := range manifest.Agent {
+			agentTools[agentName] = append(agentTools[agentName], manifest.Name)
+			if manifest.Hot {
+				agentHotTools[agentName] = append(agentHotTools[agentName], manifest.Name)
 			}
+		}
+
+		if manifest.Hot && manifest.Hint != "" {
+			hotToolHints[manifest.Name] = manifest.Hint
 		}
 
 		if manifest.Category != "" {
@@ -187,9 +215,14 @@ func init() {
 	}
 
 	// Sort for deterministic output (map iteration order is random in Go).
-	sort.Strings(hotTools)
 	for cat := range categories {
 		sort.Strings(categories[cat])
+	}
+	for agent := range agentTools {
+		sort.Strings(agentTools[agent])
+	}
+	for agent := range agentHotTools {
+		sort.Strings(agentHotTools[agent])
 	}
 
 	// Parse category hints from categories.yaml.
@@ -208,8 +241,8 @@ func init() {
 		Format: "{{.Result | truncate 100 | escape}}",
 	})
 
-	log.Infof("loaded %d tool definitions from YAML (%d hot, %d categories)",
-		len(toolDefs), len(hotTools), len(categories))
+	log.Infof("loaded %d tool definitions from YAML (%d agents, %d categories)",
+		len(toolDefs), len(agentTools), len(categories))
 }
 
 // convertParameters turns the YAML parametersDef into the
@@ -287,11 +320,6 @@ func LookupDef(name string) (llm.ToolDef, bool) {
 	return def, ok
 }
 
-// HotToolNames returns the names of all tools marked hot: true in YAML.
-func HotToolNames() []string {
-	return hotTools
-}
-
 // Categories returns the category → tool names map built from YAML.
 func Categories() map[string][]string {
 	return categories
@@ -322,19 +350,14 @@ func CategoryDescription() string {
 // ---------------------------------------------------------------------------
 
 // RenderHotToolsList returns a markdown bullet list of hot tools for the
-// agent prompt. Each bullet has the tool name bolded and its hint.
+// named agent's prompt. Each bullet has the tool name bolded and its hint.
 // Output is deterministic (sorted by tool name).
-//
-// Example output:
-//
-//	- **done** — signal you're finished (REQUIRED, call last)
-//	- **reply** — generate and send a response (REQUIRED every turn)
-func RenderHotToolsList() string {
+func RenderHotToolsList(agentName string) string {
+	names := agentHotTools[agentName]
 	var lines []string
-	for _, name := range hotTools {
+	for _, name := range names {
 		hint := hotToolHints[name]
 		if hint == "" {
-			// Fallback: use first sentence of the tool's description.
 			if def, ok := toolDefs[name]; ok {
 				hint = firstSentence(def.Function.Description)
 			}
@@ -387,36 +410,6 @@ func firstSentence(s string) string {
 		return s[:i]
 	}
 	return s
-}
-
-// RegisterDef adds a Go-defined tool to the registry. Used by agent/
-// for tools still defined in Go code (reply, etc.) so there's one
-// unified registry. Also adds to hotTools/categories if applicable.
-func RegisterDef(def llm.ToolDef, hot bool, category string) {
-	name := def.Function.Name
-	toolDefs[name] = def
-
-	if hot {
-		// Avoid duplicates.
-		for _, h := range hotTools {
-			if h == name {
-				goto skipHot
-			}
-		}
-		hotTools = append(hotTools, name)
-	skipHot:
-	}
-
-	if category != "" {
-		members := categories[category]
-		for _, m := range members {
-			if m == name {
-				goto skipCat
-			}
-		}
-		categories[category] = append(categories[category], name)
-	skipCat:
-	}
 }
 
 // ExpandToolIdentity replaces {{her}} and {{user}} placeholders in a tool's
@@ -483,46 +476,47 @@ func ExpandToolIdentity(t llm.ToolDef, cfg *config.Config) llm.ToolDef {
 	return t
 }
 
-// HotToolDefs returns the always-loaded tools plus the use_tools meta-tool.
-// This is what gets passed to ChatCompletionWithTools on the first iteration.
-// The cfg parameter is used to expand {{her}}/{{user}} placeholders.
-func HotToolDefs(cfg *config.Config) []llm.ToolDef {
-	result := make([]llm.ToolDef, 0, len(hotTools)+1)
-	for _, name := range hotTools {
+// ToolDefsForAgent returns all tool definitions for the named agent.
+// The agent field in each tool.yaml drives the mapping.
+func ToolDefsForAgent(agentName string, cfg *config.Config) []llm.ToolDef {
+	names := agentTools[agentName]
+	result := make([]llm.ToolDef, 0, len(names))
+	for _, name := range names {
 		if t, ok := toolDefs[name]; ok {
 			result = append(result, ExpandToolIdentity(t, cfg))
 		}
 	}
-	// Add the use_tools meta-tool for loading deferred tools.
-	result = append(result, UseToolsDef())
 	return result
 }
 
-// LookupToolDefs resolves a mix of tool names and category names into
-// full tool definitions. Unknown names are silently skipped.
-func LookupToolDefs(names []string, cfg *config.Config) []llm.ToolDef {
-	seen := make(map[string]bool)
-	var result []llm.ToolDef
-
+// HotToolDefs returns the hot (always-loaded) tools for the named agent.
+// For the driver agent ("main"), also appends the use_tools meta-tool.
+func HotToolDefs(agentName string, cfg *config.Config) []llm.ToolDef {
+	names := agentHotTools[agentName]
+	result := make([]llm.ToolDef, 0, len(names)+1)
 	for _, name := range names {
-		// Check if it's a category first.
-		if members, ok := categories[name]; ok {
-			for _, member := range members {
-				if !seen[member] {
-					if t, ok := toolDefs[member]; ok {
-						result = append(result, ExpandToolIdentity(t, cfg))
-						seen[member] = true
-					}
-				}
-			}
-			continue
+		if t, ok := toolDefs[name]; ok {
+			result = append(result, ExpandToolIdentity(t, cfg))
 		}
-		// Otherwise treat it as a tool name.
-		if !seen[name] {
-			if t, ok := toolDefs[name]; ok {
-				result = append(result, ExpandToolIdentity(t, cfg))
-				seen[name] = true
-			}
+	}
+	if agentName == "main" {
+		result = append(result, UseToolsDef())
+	}
+	return result
+}
+
+// CategoryMembersForAgent returns tool names in a category that also
+// belong to the named agent. Used by use_tools to scope deferred
+// tool loading to the requesting agent's tool set.
+func CategoryMembersForAgent(category, agentName string) []string {
+	agentSet := make(map[string]bool, len(agentTools[agentName]))
+	for _, name := range agentTools[agentName] {
+		agentSet[name] = true
+	}
+	var result []string
+	for _, name := range categories[category] {
+		if agentSet[name] {
+			result = append(result, name)
 		}
 	}
 	return result

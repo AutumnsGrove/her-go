@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"sort"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestYAMLLoader(t *testing.T) {
@@ -35,26 +38,26 @@ func TestYAMLLoader(t *testing.T) {
 		t.Logf("  loaded: %s (desc=%d chars)", name, len(def.Function.Description))
 	}
 
-	// Check hot tools.
-	hots := HotToolNames()
-	t.Logf("  hot tools: %v", hots)
+	// Check hot tools via agent-scoped index.
+	mainHot := agentHotTools["main"]
+	t.Logf("  main hot tools: %v", mainHot)
 
 	hotSet := map[string]bool{}
-	for _, h := range hots {
+	for _, h := range mainHot {
 		hotSet[h] = true
 	}
 	if !hotSet["think"] {
-		t.Error("think should be hot")
+		t.Error("think should be hot for main")
 	}
 	if !hotSet["done"] {
-		t.Error("done should be hot")
+		t.Error("done should be hot for main")
 	}
 	// Deferred tools (loaded on demand) must NOT be hot.
 	if hotSet["web_search"] {
 		t.Error("web_search should NOT be hot (it's a deferred search tool)")
 	}
 	if !hotSet["recall_memories"] {
-		t.Error("recall_memories should be hot")
+		t.Error("recall_memories should be hot for main")
 	}
 
 	// Check categories.
@@ -103,5 +106,160 @@ func TestYAMLLoader(t *testing.T) {
 	}
 	if len(required) != 1 || required[0] != "thought" {
 		t.Errorf("think required = %v, want [thought]", required)
+	}
+}
+
+func TestAgentToolsIndex(t *testing.T) {
+	// The agentTools index should contain entries for all 4 agents.
+	for _, agent := range []string{"main", "memory", "introspection", "dream"} {
+		tools := agentTools[agent]
+		if len(tools) == 0 {
+			t.Errorf("agent %q has no tools in agentTools index", agent)
+		}
+		t.Logf("  %s: %d tools %v", agent, len(tools), tools)
+
+		// Should be sorted (deterministic output).
+		if !sort.StringsAreSorted(tools) {
+			t.Errorf("agent %q tools not sorted", agent)
+		}
+	}
+}
+
+func TestAgentToolsMapping(t *testing.T) {
+	// Spot-check key tool→agent assignments from the mapping table.
+	tests := []struct {
+		tool   string
+		agents []string
+	}{
+		{"think", []string{"main", "introspection"}},
+		{"done", []string{"main", "memory", "introspection", "dream"}},
+		{"reply", []string{"main"}},
+		{"skip", []string{"introspection"}},
+		{"save_memory", []string{"memory"}},
+		{"merge_memories", []string{"dream"}},
+		{"update_persona", []string{"dream"}},
+		{"read_card", []string{"memory", "introspection", "dream"}},
+		{"recall_memories", []string{"main", "memory", "introspection"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			for _, agent := range tt.agents {
+				found := false
+				for _, name := range agentTools[agent] {
+					if name == tt.tool {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("tool %q should belong to agent %q but doesn't", tt.tool, agent)
+				}
+			}
+		})
+	}
+}
+
+func TestToolDefsForAgent_UnknownAgent(t *testing.T) {
+	// Unknown agent should return empty slice, not panic.
+	defs := ToolDefsForAgent("nonexistent", nil)
+	if len(defs) != 0 {
+		t.Errorf("expected 0 defs for unknown agent, got %d", len(defs))
+	}
+}
+
+func TestHotToolDefsPerAgent(t *testing.T) {
+	// Main agent should have hot tools.
+	mainHot := agentHotTools["main"]
+	if len(mainHot) == 0 {
+		t.Fatal("main agent has no hot tools")
+	}
+
+	// think should be hot for main.
+	hasThink := false
+	for _, name := range mainHot {
+		if name == "think" {
+			hasThink = true
+		}
+	}
+	if !hasThink {
+		t.Error("think should be hot for main agent")
+	}
+
+	// skip should NOT be hot for any agent (hot: false in YAML).
+	for agent, hots := range agentHotTools {
+		for _, name := range hots {
+			if name == "skip" {
+				t.Errorf("skip should not be hot for agent %q", agent)
+			}
+		}
+	}
+
+	// Memory agent should have no hot tools that don't belong to it.
+	for _, name := range agentHotTools["memory"] {
+		found := false
+		for _, memTool := range agentTools["memory"] {
+			if memTool == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("memory hot tool %q is not in memory's tool set", name)
+		}
+	}
+}
+
+func TestAgentListUnmarshal(t *testing.T) {
+	// Array syntax should work.
+	t.Run("array", func(t *testing.T) {
+		var a agentList
+		node := &yaml.Node{}
+		if err := yaml.Unmarshal([]byte("[main, memory]"), node); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.UnmarshalYAML(node.Content[0]); err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+		if len(a) != 2 || a[0] != "main" || a[1] != "memory" {
+			t.Errorf("expected [main memory], got %v", a)
+		}
+	})
+
+	// Bare string should error.
+	t.Run("bare_string", func(t *testing.T) {
+		var a agentList
+		node := &yaml.Node{}
+		if err := yaml.Unmarshal([]byte("main"), node); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.UnmarshalYAML(node.Content[0]); err == nil {
+			t.Error("expected error for bare string, got nil")
+		}
+	})
+}
+
+func TestCategoryMembersForAgent(t *testing.T) {
+	// Search category tools should all belong to main.
+	members := CategoryMembersForAgent("search", "main")
+	if len(members) == 0 {
+		t.Fatal("expected search tools for main agent")
+	}
+	for _, name := range members {
+		if _, ok := toolDefs[name]; !ok {
+			t.Errorf("CategoryMembersForAgent returned unknown tool %q", name)
+		}
+	}
+
+	// Memory agent should get zero search tools (no search tools have agent: memory).
+	memMembers := CategoryMembersForAgent("search", "memory")
+	if len(memMembers) != 0 {
+		t.Errorf("memory agent should not have search tools, got %v", memMembers)
+	}
+
+	// Unknown category returns empty.
+	empty := CategoryMembersForAgent("nonexistent", "main")
+	if len(empty) != 0 {
+		t.Errorf("expected empty for unknown category, got %v", empty)
 	}
 }

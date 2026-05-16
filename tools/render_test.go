@@ -10,23 +10,23 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestRenderHotToolsList(t *testing.T) {
-	result := RenderHotToolsList()
+	result := RenderHotToolsList("main")
 
-	// Every hot tool should appear as a bolded markdown bullet.
-	for _, name := range hotTools {
+	// Every main-agent hot tool should appear as a bolded markdown bullet.
+	for _, name := range agentHotTools["main"] {
 		target := "- **" + name + "** — "
 		if !strings.Contains(result, target) {
 			t.Errorf("hot tool %q missing from rendered list", name)
 		}
 	}
 
-	// Output should have the same number of lines as hot tools.
+	// Output should have the same number of lines as main's hot tools.
 	lines := strings.Split(result, "\n")
-	if len(lines) != len(hotTools) {
-		t.Errorf("expected %d lines, got %d", len(hotTools), len(lines))
+	if len(lines) != len(agentHotTools["main"]) {
+		t.Errorf("expected %d lines, got %d", len(agentHotTools["main"]), len(lines))
 	}
 
-	// Lines should be sorted (hotTools is sorted at init).
+	// Lines should be sorted.
 	for i := 1; i < len(lines); i++ {
 		if lines[i] < lines[i-1] {
 			t.Errorf("lines not sorted: %q comes after %q", lines[i], lines[i-1])
@@ -77,7 +77,13 @@ func TestHotToolHintsComplete(t *testing.T) {
 	// Every hot tool should have a hint (from YAML or fallback).
 	// This catches the case where someone adds a new hot tool YAML
 	// but forgets the hint field.
-	for _, name := range hotTools {
+	seen := map[string]bool{}
+	for _, names := range agentHotTools {
+		for _, n := range names {
+			seen[n] = true
+		}
+	}
+	for name := range seen {
 		hint := hotToolHints[name]
 		if hint == "" {
 			// Check if there's a description to fall back on.

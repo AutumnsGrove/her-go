@@ -1,5 +1,5 @@
 name: get_time
-agent: main
+agent: [main]
 hint: "check the current date and time"
 description: >-
   Return the current date and time in the configured timezone. Use this
