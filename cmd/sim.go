@@ -1319,6 +1319,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 					memoriesSaved = append(memoriesSaved, mem)
 				}
 			}
+			if err := memRows.Err(); err != nil {
+				log.Error("failed to iterate memory rows", "err", err)
+			}
 			memRows.Close()
 			if len(memoriesSaved) > 0 {
 				memoryVerdict = fmt.Sprintf("saved %d memories", len(memoriesSaved))

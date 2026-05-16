@@ -5,6 +5,20 @@ import (
 	"time"
 )
 
+// Agent role constants for the SaveMetric agentRole parameter.
+// Defined once here so all callers reference these instead of bare strings.
+const (
+	RoleDriver        = "driver"
+	RoleMemory        = "memory"
+	RoleMood          = "mood"
+	RoleIntrospection = "introspection"
+	RoleChat          = "chat"
+	RoleDream         = "dream"
+	RoleCompaction    = "compaction"
+	RoleVision        = "vision"
+	RoleClassifier    = "classifier"
+)
+
 // Metric represents token usage and cost data for a single LLM call.
 type Metric struct {
 	ID               int64
