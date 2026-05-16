@@ -1,5 +1,5 @@
 name: shift_hours
-agent: main
+agent: [main]
 description: >-
   Compute total hours worked over a time period. Parses time chit values
   from shift events and returns per-job and overall totals. Use when the

@@ -1,5 +1,5 @@
 name: merge_memories
-agent: dream
+agent: [dream]
 description: >-
   Merge multiple redundant memories into one consolidated memory. Provide
   the IDs of memories to merge and the new combined text. All source memories

@@ -1,5 +1,5 @@
 name: calendar_create
-agent: main
+agent: [main]
 description: >-
   Create one or more calendar events. Also handles work shifts — pass a "job"
   param per event to auto-fill location and position from config, store the

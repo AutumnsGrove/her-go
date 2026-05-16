@@ -18,6 +18,6 @@ package agent
 // The agent calls use_tools(["memory", "scheduling"]) to load deferred tools
 // on demand. Loaded tools persist for the rest of the agent loop.
 //
-// All tool management functions (HotToolDefs, LookupToolDefs, ExpandToolIdentity,
+// All tool management functions (HotToolDefs, ToolDefsForAgent, ExpandToolIdentity,
 // UseToolsDef) live in the tools package (tools/loader.go). The agent package
 // just calls them.

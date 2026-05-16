@@ -1,5 +1,5 @@
 name: done
-agent: [main, memory, introspection]
+agent: [main, memory, introspection, dream]
 hint: "signal you're finished (REQUIRED, call last)"
 description: >-
   Signal that you are completely finished with this turn. Call this
