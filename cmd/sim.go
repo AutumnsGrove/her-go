@@ -129,6 +129,10 @@ var fallbackVisionModelFlag string
 // Example: --introspection-model "moonshotai/kimi-k2-0905"
 var introspectionModelFlag string
 
+// moodModelFlag overrides the mood agent model for this run.
+// Example: --mood-model "qwen/qwen3-235b-a22b-2507"
+var moodModelFlag string
+
 // disableReasoningFlag disables reasoning mode for hybrid models that support
 // both reasoning and non-reasoning modes (e.g., Qwen3.6, DeepSeek V3.2).
 // Pure reasoning models (DeepSeek R1, V4) will ignore this flag — they always reason.
@@ -168,6 +172,7 @@ func init() {
 	simCmd.Flags().StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated (e.g., \"Groq\" or \"Groq,Together\")")
 	simCmd.Flags().StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model for this run (e.g., google/gemini-2.5-flash-lite)")
 	simCmd.Flags().StringVar(&introspectionModelFlag, "introspection-model", "", "override introspection agent model for this run (e.g., moonshotai/kimi-k2-0905)")
+	simCmd.Flags().StringVar(&moodModelFlag, "mood-model", "", "override mood agent model for this run (e.g., qwen/qwen3-235b-a22b-2507)")
 	simCmd.Flags().StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for chat/agent/memory/mood (e.g., google/gemini-2.5-flash-lite)")
 	simCmd.Flags().StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision only (must support multi-modal)")
 	simCmd.Flags().BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models (Qwen3.6, DeepSeek V3.2)")
@@ -805,6 +810,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// collapsed to ConfidenceLow so every passing inference auto-logs
 	// as source=inferred. There's no human to tap proposals during a
 	// sim, and dropping mediums would lose data we want to evaluate.
+	if moodModelFlag != "" {
+		log.Info("Mood agent model overridden via --mood-model", "model", moodModelFlag)
+		cfg.MoodAgent.Model = moodModelFlag
+	}
+
 	var moodAgentClient *llm.Client
 	var moodRunner *mood.Runner
 	if cfg.MoodAgent.Model != "" {
