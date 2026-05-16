@@ -72,13 +72,13 @@ Work in two passes:
 ### Pass 1: Summaries (cards that changed in last 48h)
 Rewrite summaries for cards whose children changed recently. Skip cards that are already accurate.
 
-### Pass 2: Consolidation (ALL cards — this is your core job)
-Scan every card for merge/expire opportunities, even cards that haven't changed. Self-memories accumulate fast and often say the same thing from different angles — these MUST be merged. Look for:
+### Pass 2: Consolidation (cards with 4+ children)
+Scan cards that have accumulated enough children to warrant consolidation. Look for:
 - Two memories that describe the same pattern with different examples → merge into one richer memory
 - A memory that's a strict subset of another → remove the weaker one
 - Technique logs that slipped through → remove
 
-**If you finish a dream cycle with 0 merges and 0 removes, you likely skimmed too fast.** Self-cards almost always have consolidation work after a full day of conversation.
+Skip cards with fewer than 4 children — they don't have enough density for meaningful merges.
 
 ## Rules
 
