@@ -13,7 +13,6 @@ Think of each card as a folder. One well-organized folder per topic beats scatte
 
 ## Your tools
 
-- **list_cards** — show all card slugs, names, and summaries. Call this first to see the landscape.
 - **recall_memories** — semantic search for memories. Use `card_slug` to search within a specific card for duplicates before saving. Omit `card_slug` for global search.
 - **save_memory** — save a new memory about {{user}} under a card. Requires `card_slug`.
 - **save_self_memory** — save a new self-observation about {{her}} under a card. Requires `card_slug`.
@@ -21,23 +20,23 @@ Think of each card as a folder. One well-organized folder per topic beats scatte
 - **remove_memory** — deactivate a stale or incorrect memory by ID.
 - **split_memory** — break a compound memory into individual facts.
 - **create_card** — create a new card when information doesn't fit any existing topic. Use sparingly.
+- **list_cards** — show all card slugs and summaries. Only call if the card landscape shown in your transcript looks stale or you need fresh data.
 - **notify_agent** — use instead of done when you completed inbox tasks and the user should be told.
 - **done** — signal you're finished (always call this last)
 
 ## Workflow
 
-1. Read the conversation turn transcript
+1. Read the conversation turn transcript (the card landscape is shown below)
 2. Decide what's worth remembering (apply the quality rules below)
-3. Call **list_cards** to see what cards exist and their summaries
-4. For each piece of information worth keeping:
-   a. Pick the best matching card by topic
+3. For each piece of information worth keeping:
+   a. Pick the best matching card from the landscape shown in your transcript
    b. Call **recall_memories** with `card_slug` to check for duplicates within that card
    c. If a similar memory exists → call **update_memory** to refine it
    d. If it's genuinely new → call **save_memory** (or **save_self_memory**) with `card_slug`
-5. If no card fits → call **create_card** first, then save the memory into it
-6. Call **done** when finished
+4. If no card fits → call **create_card** first, then save the memory into it
+5. Call **done** when finished
 
-**Always check before saving.** The biggest waste is creating duplicates that the dream cycle has to clean up later.
+**Always recall before saving.** The biggest waste is creating duplicates that the dream cycle has to clean up later.
 
 ## What makes a good memory
 

@@ -354,38 +354,19 @@ func buildMemoryTranscript(input MemoryAgentInput, store memory.Store) string {
 		}
 	}
 
-	// Show existing memories for dedup context — the model should not re-save
-	// anything already here. Cap at 30 to avoid flooding the context.
-	memories, err := store.AllActiveMemories()
-	if err == nil && len(memories) > 0 {
-		b.WriteString("## Existing memories (do NOT re-save these)\n")
-		limit := 30
-		if len(memories) < limit {
-			limit = len(memories)
-		}
-		for _, m := range memories[:limit] {
-			fmt.Fprintf(&b, "- [ID=%d] %s\n", m.ID, m.Content)
-		}
-	}
-
-	// Self-knowledge section — gives the memory agent awareness of existing
-	// self-memories so it can avoid duplicating them and understands the
-	// landscape when it encounters self-relevant information.
-	selfCards, scErr := store.CardsBySubject("self")
-	if scErr == nil && len(selfCards) > 0 {
-		var selfMems []memory.Memory
-		for _, card := range selfCards {
-			mems, err := store.MemoriesByCard(card.ID)
-			if err == nil {
-				selfMems = append(selfMems, mems...)
+	// Inject the card landscape so the agent knows where to file memories
+	// without needing to call list_cards (saves a full LLM round-trip per turn).
+	allCards, cardErr := store.AllCards()
+	if cardErr == nil && len(allCards) > 0 {
+		b.WriteString("## Card landscape\n")
+		for _, c := range allCards {
+			summary := c.Summary
+			if summary == "" {
+				summary = "(no summary yet)"
 			}
+			fmt.Fprintf(&b, "- **%s** [%s] %s\n", c.TopicSlug, c.Subject, summary)
 		}
-		if len(selfMems) > 0 {
-			b.WriteString("\n## Self-knowledge (existing self-observations)\n")
-			for _, m := range selfMems {
-				fmt.Fprintf(&b, "- [ID=%d] %s\n", m.ID, m.Content)
-			}
-		}
+		b.WriteString("\nUse recall_memories with card_slug to check for duplicates before saving.\n")
 	}
 
 	return b.String()
