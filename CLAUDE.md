@@ -10,11 +10,10 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** driver_agent_prompt.md (driver agent orchestration rules, hot-reloadable)
-- **Agent model:** Qwen3 235B (qwen/qwen3-235b-a22b-2507) via OpenRouter
-- **Memory model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter → Groq
-- **Chat model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter
-- **Vision model:** Gemini 3 Flash via OpenRouter
+- **Chat model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter → Groq
+- **Agent models:** Qwen3 235B (qwen/qwen3-235b-a22b-2507) via OpenRouter — used for driver, memory, mood, introspection, persona, and dream agents
 - **Classifier model:** Gemini 3.1 Flash Lite via OpenRouter (memory + reply safety gates)
+- **Vision model:** Gemini 3 Flash via OpenRouter
 - **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
 
 ## Running
@@ -38,10 +37,10 @@ go build -o her && ./her run
 
 ```bash
 # Create next numbered file
-touch migrations/000009_add_feature.up.sql
+touch migrations/000016_add_feature.up.sql
 
 # Write SQL changes
-echo "ALTER TABLE messages ADD COLUMN new_field TEXT;" > migrations/000009_add_feature.up.sql
+echo "ALTER TABLE messages ADD COLUMN new_field TEXT;" > migrations/000016_add_feature.up.sql
 
 # Runs automatically on next startup
 go run main.go run
@@ -95,11 +94,19 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 | PII scrubbing | `scrub` | `scrub.Scrub(text)` | Run regex matching inline |
 | App config | `config` | `cfg.Models.Agent` | Parse YAML or read env vars for app settings |
 | Tool definitions | `tools/<name>/tool.yaml` + handler | Registry dispatch via `tools.Dispatch()` | Hardcode tool schemas in Go |
+| Classification | `classifier` | `classifier.Check(...)` | Build classifier prompts inline |
 | Search | `search` | `search.TavilyClient.Search(...)` | Call Tavily API directly |
 | Vision | `vision` | `vision.Describe(client, ...)` | Construct multi-modal messages |
 | Retry | `retry` | `retry.Do(ctx, cfg, fn)` | Write ad-hoc retry loops with `time.Sleep` |
 | Voice | `voice` | `voice.TTSClient` / `voice.Client` | Call Piper/Parakeet HTTP directly |
 | Weather | `weather` | `weather.Fetch(lat, lon, ...)` | Call Open-Meteo API directly |
+| Mood | `mood` | `mood.Agent` methods | Build mood prompts or parse vocab inline |
+| Prompt layers | `layers` | Layer registry functions | Assemble prompt sections manually |
+| Traces | `trace` | `trace.Register(...)` / `trace.Stream` | Format trace output inline |
+| Turn lifecycle | `turn` | `turn.Tracker` methods | Track phase timing or costs manually |
+| D1 sync | `d1` | `d1.Client` methods | Call Cloudflare D1 HTTP API directly |
+| Calendar | `calendar` | `calendar.Bridge` methods | Shell out to the Swift binary directly |
+| Geocoding/Places | `integrate` | `integrate.Geocode(...)` / `integrate.NearbySearch(...)` | Call Nominatim or Foursquare APIs directly |
 
 **Config vs. domain manifests:** The `config` package owns *app configuration* (`config.yaml` — API keys, model names, thresholds, feature flags). Domain-specific manifests (`tool.yaml`, `classifiers.yaml`, `vocab.yaml`, `help.yaml`) are parsed by their owning package — `tools/` parses tool manifests, `classifier/` parses classifier definitions, etc. This is correct: the owning package knows the schema and is the single consumer. The rule is: only `config/` parses *app config*; domain manifests are parsed by their owning package.
 
@@ -113,10 +120,12 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 ## Key Design Decisions
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
-- **Agent architecture:** Three-model system. Qwen3 (agent) orchestrates the turn via tool calls (think, reply, done, search). Deepseek V3.2 (chat) generates the actual user-facing response. Kimi K2.5 (memory) extracts facts in a background goroutine after the reply is sent. The user only sees the chat model's output.
-- **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Live-updates as the agent works.
-- **Persona evolution:** Bot rewrites its own persona.md every ~3 reflections. Reflections triggered by memory-dense conversations. Changes are gradual (damped).
-- **Memory quality:** Multi-layer quality system. Style gates reject AI writing tics. A classifier LLM (Haiku-class) validates every memory write before it hits the DB — catches fictional content (game events saved as real facts), low-value facts, inferred-not-stated information, and transient moods incorrectly stored as permanent facts. Fail-open design: if the classifier is down, writes proceed.
+- **Agent architecture:** Multi-agent pipeline. The **driver agent** (Qwen3) orchestrates each turn via tool calls (think, reply, done, search, use_tools). **Kimi K2** (chat model) generates user-facing replies. After the reply is sent, three background agents run in sequence: the **memory agent** extracts facts, the **mood agent** logs emotional valence, and the **introspection agent** generates self-memories (the bot's own reflections about the relationship and its behavior). A nightly **dream cycle** runs the **dream agent** (memory consolidation — merge, expire, promote) and the **persona agent** (persona.md rewrite from accumulated reflections). Tools are YAML-driven with per-tool `agent:` fields controlling which agent can call them.
+- **Memory cards:** Hierarchical folder-like containers for memories. The dream agent maintains card summaries and links memories into thematic clusters. Cards enable structured recall and give the agent a "table of contents" for its knowledge.
+- **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Per-phase traces (think, use_tools, reply, memory) with TUI and Telegram rendering.
+- **Persona evolution:** Bot rewrites its own persona.md during the nightly dream cycle. Requires minimum accumulated reflections and a cooldown period. Changes are gradual (damped via max_trait_shift).
+- **Memory quality:** Multi-layer quality system. Style gates reject AI writing tics. A classifier LLM (Gemini Flash Lite) validates every memory write before it hits the DB — catches fictional content, low-value facts, inferred-not-stated information, transient moods, and external facts. Fail-open design: if the classifier is down, writes proceed.
+- **Mood tracking:** Post-turn mood agent infers emotional valence, labels, and confidence from recent conversation. Confidence-based dedup prevents redundant entries. Daily rollups summarize emotional patterns.
 - **Everything in SQLite:** Messages, facts, metrics, persona versions, traits, PII vault. One file, fully portable.
 - **Model agnostic:** OpenRouter API (OpenAI-compatible). Swap models by changing config.
 
@@ -125,22 +134,35 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 See SPEC.md § Project Structure for full layout.
 
 Core packages:
-- `agent/` — Tool-calling orchestrator, thinking traces, reply generation
+- `agent/` — Multi-agent orchestrator: driver, memory, mood, introspection, persona, dream agents
 - `bot/` — Telegram handler
-- `cmd/` — Cobra CLI commands (run, setup, start, stop, status, logs)
+- `calendar/` — Apple EventKit bridge (Swift CLI) for calendar read/write
+- `classifier/` — Multi-verdict safety gate for memory and reply validation
+- `cmd/` — Cobra CLI commands (run, dev, setup, start, stop, status, logs, sim, sync, etc.)
 - `compact/` — Conversation history compaction (summary + sliding window)
 - `config/` — YAML + env var loading
+- `d1/` — Cloudflare D1 sync layer (outbox pattern, cross-machine shared state)
 - `embed/` — Local embedding model client for semantic similarity
+- `integrate/` — Integration test framework
+- `layers/` — Modular prompt layer composition (facts, persona, time, weather, tools, images)
 - `llm/` — OpenRouter client
 - `logger/` — Shared structured logger (charmbracelet/log)
-- `memory/` — SQLite store, fact extraction, context building
+- `memory/` — SQLite store, fact extraction, context building, memory cards
+- `mood/` — Mood tracking agent, vocab system, daily rollups
 - `persona/` — Evolution system, trait tracking
+- `retry/` — Generic retry with backoff
 - `scheduler/` — Reminder delivery
 - `scrub/` — Tiered PII detection + deanonymization
 - `search/` — Tavily web search, Open Library book search
+- `sims/` — Simulation infrastructure (multi-turn test suites, YAML-defined scenarios)
+- `tools/` — YAML-driven tool registry with per-tool directories and agent field routing
+- `trace/` — Per-phase observability (think, use_tools, reply, memory) for TUI and Telegram
+- `turn/` — Turn lifecycle tracker, phase registry, per-turn cost/metrics accumulation
+- `tui/` — Event bus and terminal UI (typed events: TurnStart, ToolCall, TurnEnd)
 - `vision/` — Image understanding via Gemini Flash VLM
 - `voice/` — Piper TTS + Parakeet STT
 - `weather/` — Open-Meteo weather integration
+- `worker/` — Cloudflare Worker for webhook/KV routing
 
 ---
 
