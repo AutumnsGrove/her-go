@@ -57,11 +57,20 @@ User sends message
   │   PII tokens are deanonymized before sending to Telegram.
   │
   ▼
-  7. Post-Turn ──────────── (background goroutines, parallel)
-     Memory agent reviews turn → save/update/remove facts.
-     Mood agent infers valence + labels → auto-log/propose/drop.
-     Each write gated by classifier (Gemini Flash Lite).
+  7. Post-Turn ──────────── (background goroutine chain, sequential)
+     Memory agent (Qwen3 235B) reviews turn → save/update/remove facts + card ops.
+     ↓
+     Mood agent (Qwen3 235B) infers valence + labels → auto-log/propose/drop.
+     ↓
+     Introspection agent (Qwen3 235B) generates self-memories (bot reflections).
+     Each memory/mood write gated by classifier (Gemini Flash Lite).
      User never waits — reply already sent.
+  
+  8. Dream Cycle ──────────── (nightly at 04:00 local)
+     Dream agent (Qwen3 235B) consolidates memories: merge dupes, expire stale,
+     maintain card summaries.
+     ↓
+     Persona agent (Qwen3 235B) rewrites persona.md from accumulated reflections.
 ```
 
 ---
@@ -70,7 +79,7 @@ User sends message
 
 Both the agent and chat model prompts are assembled from **layers** — small,
 self-contained files that each produce one section of the system prompt. Layers
-register themselves via `init()` in `agent/layers/` and are sorted by Order.
+register themselves via `init()` in `layers/` and are sorted by Order.
 
 The same registry is used by runtime (`layers.BuildAll`) and the CLI
 (`her shape`) — impossible for them to drift out of sync.
@@ -87,8 +96,10 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 | 300 | Current Message | `agent_message.go` | The scrubbed user message |
 | 350 | Image Context | `agent_image.go` | OCR text + image description (if image sent) |
 | 400 | User Memories | `agent_user_facts.go` | Semantically relevant user facts (KNN-filtered) |
-| 500 | Self Memories | `agent_self_facts.go` | Semantically relevant self facts (KNN-filtered) |
 | 900 | Footer | `agent_footer.go` | Instruction footer |
+
+> **Note:** `agent_self_facts.go` exists but is intentionally unregistered — self facts are
+> retrieved on demand via `recall_memories`, not auto-injected into the driver context.
 
 ### Chat Layers (StreamChat)
 
@@ -96,9 +107,9 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 |-------|-------|------|-------------|
 | 100 | Base Identity | `chat_prompt.go` | `prompt.md` — static personality template |
 | 200 | Persona | `chat_persona.go` | `persona.md` — evolving self-image (bot-authored) |
+| 250 | Self Memory | `chat_self_memory.go` | Bot's self-memories (introspection reflections, auto-injected) |
 | 300 | Time | `chat_time.go` | Current date/time in human format |
 | 400 | Memory | `chat_memory.go` | Semantic facts (KNN-filtered, redundancy-filtered) |
-| 450 | Weather | `chat_weather.go` | Current conditions (if configured) |
 | 500 | Mood | `chat_mood.go` | Recent mood entries + trend |
 | 600 | Summary | `chat_summary.go` | Chat compaction summary of older conversation |
 
@@ -131,11 +142,12 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 | User Memories | Semantic search results | KNN-filtered user facts + recall_memories hint |
 | Self Memories | Semantic search results | KNN-filtered self facts + recall_memories hint |
 
-**Tools:** Starts with 8 hot tools, agent can load more via `use_tools`.
-- Hot tools: done, reply, think, recall_memories, get_time, send_task, list_calendars, view_image
-- Deferred categories: search (web_search, web_read, search_books), context (get_weather, set_location, nearby_search), calendar (calendar_create, calendar_list, etc.)
+**Tools:** YAML-driven via `tool.yaml` `agent:` and `hot:` fields. Hot tools are always loaded; deferred tools load on demand via `use_tools`.
+- Hot tools for main agent: determined by `hot: true` + `agent: main` in each tool's YAML
+- Deferred categories: search, context, calendar (loaded via `use_tools` call)
+- Each agent gets only the tools matching its name in the YAML `agent:` field
 - Defined in: `tools/<name>/tool.yaml` (YAML manifests)
-- Loaded by: `tools/loader.go`
+- Loaded by: `tools/loader.go` → `ToolDefsForAgent()` / `HotToolDefs()`
 
 **Token storage:** Metrics only (`SaveMetric`). Does NOT update message `token_count`.
 
@@ -153,12 +165,10 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 |-------|-------|--------|-------------|
 | Base identity | 100 | `prompt.md` (~4.8KB) | Static personality template |
 | Persona | 200 | `persona.md` | Evolving self-image (bot-authored) |
-| Traits | 250 | DB trait scores | Personality trait scores from last rewrite |
+| Self Memory | 250 | DB self-memories | Bot's introspection reflections (auto-injected) |
 | Time | 300 | `time.Now()` | Current date/time in human format |
 | Memory | 400 | Semantic search | KNN-filtered facts, redundancy-filtered against recent messages |
-| Weather | 450 | Weather client | Current conditions (if configured) |
 | Mood | 500 | DB mood entries | Recent mood trend |
-| Expenses | 550 | Receipt context | Receipt data (if just scanned) |
 | Summary | 600 | Compaction summary | Summary of older conversation (stream="chat") |
 
 Layers are joined with `\n\n---\n\n` separators.
@@ -167,7 +177,7 @@ Layers are joined with `\n\n---\n\n` separators.
 
 | Order | Role | Content |
 |-------|------|---------|
-| 1 | history | Last 10 messages from DB (with day boundary markers) |
+| 1 | history | Last N messages from DB (with day boundary markers) |
 | 2 | system | Search context + agent instruction (if any) |
 | 3 | user | The scrubbed user message |
 
@@ -269,18 +279,17 @@ Mira: message text
 
 [Actions since then:]
 
-→ save_fact({"fact": "User works as a software engineer"})
-  Result: Saved as fact #42
+→ save_memory({"content": "User works as a software engineer"})
+  Result: Saved as memory #42
 
 → web_search({"query": "Go testing patterns"})
   Result: Found 5 results... (truncated)
 ...
 ```
 
-**Smart filtering:** Verbose tools (web_search, book_search, find_skill,
-recall_memories, search_history, query_expenses) have their results truncated
-to ~200 chars. Action tools (save_fact, update_fact, reply, create_reminder)
-keep full results.
+**Smart filtering:** Verbose tools (web_search, search_books,
+recall_memories) have their results truncated to ~200 chars. Action tools
+(save_memory, update_memory, reply) keep full results.
 
 **Summary storage:** `summaries` table with `stream='agent'`
 
@@ -288,41 +297,92 @@ keep full results.
 
 ---
 
-### 7. Reflection Model — Kimi K2 (same client as chat)
+### 7. Memory Agent — Qwen3 235B
 
-**Purpose:** After memory-dense conversations, generate a private journal-like
-reflection about what was learned.
+**Purpose:** Extract and manage long-term facts from conversation. Runs as a background
+goroutine after the reply is sent.
 
-**Called from:** `persona/evolution.go:110` — `llmClient.ChatCompletion()`
-Triggered from `agent/agent.go` after the agent loop when >= `reflection_memory_threshold`
-facts were saved in one turn.
+**Model:** `cfg.MemoryAgent.Model` (default: `qwen/qwen3-235b-a22b-2507`)
 
-**System prompt:** `reflectionPromptTmpl` (persona/evolution.go:34)
-- botName + recent exchange + facts just learned
-- Instructs 2-4 sentence first-person reflection
+**Tools:** save_memory, update_memory, remove_memory, create_card, read_card,
+update_card, list_cards, merge_memories, split_memory, done
 
-**Token storage:** Metrics only.
+**Write gate:** Every save/update is validated by the classifier (Gemini Flash Lite)
+before hitting the DB. Verdicts: SAVE, FICTIONAL, LOW_VALUE, MOOD_NOT_FACT, INFERRED, EXTERNAL.
 
-**Frequency:** Infrequent — only after conversations where many facts were saved.
+**Token storage:** Metrics only. Per-turn cost tracked by agent role.
 
 ---
 
-### 8. Persona Rewrite Model — Kimi K2 (same client as chat)
+### 8. Mood Agent — Qwen3 235B
 
-**Purpose:** Every N reflections, rewrite `persona.md` — the bot's evolving self-image.
+**Purpose:** Infer emotional state from recent conversation. Runs after the memory agent.
 
-**Called from:** `persona/evolution.go:192` — `llmClient.ChatCompletion()`
-Triggered by `MaybeRewrite()` after every `rewrite_every_n_reflections` reflections.
+**Model:** `cfg.MoodAgent.Model` (default: `qwen/qwen3-235b-a22b-2507`)
 
-**Input:** Current persona.md + recent reflections + up to 20 self-facts.
+**Behavior:** Infers valence (1–7), labels, and associations. High confidence → auto-log.
+Medium → Telegram proposal with inline buttons. Low → drop silently.
+Embedding-based KNN dedup over a sliding window prevents redundant entries.
 
-**Token storage:** Metrics only.
-
-**Frequency:** Very rare — every ~3 reflections, which themselves are rare.
+**Token storage:** Metrics only. Per-turn cost tracked by agent role.
 
 ---
 
-### 9. Embedding Model — Nomic Embed Text (local)
+### 9. Introspection Agent — Qwen3 235B
+
+**Purpose:** Generate self-memories — the bot's reflections about the conversation,
+the relationship, and its own behavior. Runs after mood.
+
+**Model:** `cfg.IntrospectionAgent.Model` (falls back to memory_agent model if empty)
+
+**Tools:** save_self_memory, done
+
+**Pre-filter:** Skips purely informational turns to save cost. Only runs when the
+conversation has emotional or relational substance worth reflecting on.
+
+**Output:** Self-memories auto-injected into chat context via `chat_self_memory.go` layer,
+giving the bot compounding self-awareness.
+
+**Token storage:** Metrics only. Per-turn cost tracked by agent role.
+
+---
+
+### 10. Dream Agent — Qwen3 235B
+
+**Purpose:** Overnight memory consolidation. Merges near-duplicates, expires stale
+facts, promotes important memories to cards, maintains card summaries.
+
+**Model:** `cfg.DreamAgent.Model` (falls back to memory_agent model if empty)
+
+**Tools:** merge_memories, expire_memory, update_card, update_memory, read_card, list_cards, done
+
+**Schedule:** Runs nightly at `dream_hour` (default 04:00 local).
+
+**Safety cap:** `max_operations` (default 20) limits tool calls per cycle.
+
+**Token storage:** Metrics only.
+
+---
+
+### 11. Persona Agent — Qwen3 235B
+
+**Purpose:** Rewrite `persona.md` — the bot's evolving self-image. Runs during
+the dream cycle after the dream agent finishes.
+
+**Model:** `cfg.PersonaAgent.Model` (falls back to memory_agent model if empty)
+
+**Input:** Current persona.md + accumulated reflections + self-facts.
+
+**Guardrails:** Requires min_reflections unconsumed reflections and min_rewrite_days
+cooldown. Changes are damped via max_trait_shift.
+
+**Token storage:** Metrics only.
+
+**Frequency:** Rare — only when enough reflections have accumulated since the last rewrite.
+
+---
+
+### 12. Embedding Model — Nomic Embed Text (local)
 
 **Purpose:** Convert text to vectors for semantic search and dedup.
 
@@ -375,18 +435,17 @@ budget, trigger, summary prompt, and DB storage.
 The chat summary captures *what was discussed*: "They talked about her new job,
 she seemed excited, they agreed to revisit the topic tomorrow."
 
-The agent summary captures *what was done*: "Saved fact #42 about her job.
-Searched web for salary data. Set a reminder for tomorrow. Updated fact #15
-to correct her timezone."
+The agent summary captures *what was done*: "Saved memory #42 about her job.
+Searched web for salary data. Updated memory #15 to correct her timezone."
 
 Without the agent summary, the agent has no memory of its own actions once they
-scroll out of the 10-message window. This means it can't:
-- See facts it previously saved and correct them
+scroll out of the recent action window. This means it can't:
+- See memories it previously saved and correct them
 - Avoid re-doing work it already did
 - Build on past decisions
 
-This is the **defense in depth** complement to semantic fact search — the agent
-can see "I saved fact #42 about X" in its action history AND find fact #42 via
+This is the **defense in depth** complement to semantic search — the agent
+can see "I saved memory #42 about X" in its action history AND find memory #42 via
 recall_memories. Either path leads to the same information.
 
 ---
@@ -433,12 +492,14 @@ classifier:
 
 | | Driver (Qwen3 235B) | Chat (Kimi K2) |
 |--|---|---|
-| **Facts** | Semantically relevant only (KNN-filtered) + recall_memories tool hint | Semantically relevant only (KNN-filtered, redundancy-filtered) |
+| **User facts** | Semantically relevant only (KNN-filtered) + recall_memories tool hint | Semantically relevant only (KNN-filtered, redundancy-filtered) |
+| **Self memories** | On demand via recall_memories (not auto-injected) | Auto-injected via `chat_self_memory.go` layer |
 | **Compaction summary** | Agent action summary (what it DID) | Chat conversation summary (what was DISCUSSED) |
 | **Action history** | Full tool call log from previous turns | Not included |
 | **History** | Last 6 messages (with day boundary markers) | Last 6 messages (with day boundary markers) |
-| **Tools** | Yes (8 hot + deferred via use_tools) | No tools |
+| **Tools** | Yes (hot + deferred via use_tools) | No tools |
 | **Persona** | Not included (personality rules in driver_agent_prompt.md) | prompt.md + persona.md |
+| **Mood** | Not included | Recent mood entries + trend |
 | **Prompt assembly** | `layers.BuildAll(StreamAgent, ctx)` | `layers.BuildAll(StreamChat, ctx)` |
 
 ---
@@ -492,17 +553,28 @@ bot/telegram.go → PII scrub → agent.Run(RunParams)
         └─ done ───────── exit loop
             │
             ▼
-        Post-turn (background goroutines, parallel):
+        Post-turn (background goroutine chain, sequential):
             │
-            ├─ Memory Agent (Kimi K2):
+            ├─ Memory Agent (Qwen3 235B):
             │  ├─ save_memory → classifier (Gemini Flash Lite) → embed → save
-            │  ├─ update_memory, remove_memory
+            │  ├─ update_memory, remove_memory, create_card, merge_memories
             │  └─ done
             │
-            └─ Mood Agent (Kimi K2):
-               ├─ infer valence (1-7) + labels + associations
-               ├─ classifier check + KNN dedup
-               └─ auto-log / propose / drop based on confidence
+            ├─ Mood Agent (Qwen3 235B):
+            │  ├─ infer valence (1-7) + labels + associations
+            │  ├─ classifier check + KNN dedup
+            │  └─ auto-log / propose / drop based on confidence
+            │
+            ├─ Introspection Agent (Qwen3 235B):
+            │  ├─ pre-filter: skip if turn is purely informational
+            │  ├─ save_self_memory (bot's reflections on conversation/relationship)
+            │  └─ done
+            │
+            └─ Nightly Dream Cycle (04:00 local):
+               ├─ Dream Agent (Qwen3 235B):
+               │  merge dupes, expire stale, maintain card summaries
+               └─ Persona Agent (Qwen3 235B):
+                  rewrite persona.md from accumulated reflections
 ```
 
 ---
@@ -513,7 +585,7 @@ bot/telegram.go → PII scrub → agent.Run(RunParams)
 
 | Package | Description |
 |---------|-------------|
-| `agent/` | Driver agent + memory agent, reply generation, thinking traces |
+| `agent/` | Multi-agent orchestrator: driver, memory, mood, introspection, persona, dream |
 | `bot/` | Telegram handler, commands, mood wizard |
 | `calendar/` | Apple Calendar EventKit bridge |
 | `classifier/` | Memory + mood write classifiers (Gemini Flash Lite) |
@@ -535,7 +607,8 @@ bot/telegram.go → PII scrub → agent.Run(RunParams)
 | `search/` | Tavily web search, Open Library book search |
 | `tools/` | Tool YAML manifests + handlers (per-tool directories) |
 | `trace/` | Trace inbox (Stream registry + Board) |
-| `turn/` | Turn phase tracking (driver → memory → mood) |
+| `tui/` | Terminal UI event bus and rendering |
+| `turn/` | Turn phase tracking (driver → memory → mood → introspection) |
 | `vision/` | Image understanding via Gemini Flash |
 | `voice/` | Parakeet STT + Piper TTS clients |
 | `weather/` | Open-Meteo weather integration |
