@@ -45,7 +45,7 @@ type Bot struct {
 	introspectionLLM    *llm.Client     // self-reflection agent — nil falls back to memoryAgentLLM
 	embedClient    *embed.Client        // local embedding model for similarity
 	tavilyClient   *search.TavilyClient // web search and URL extraction
-	voiceClient    *voice.Client        // local STT via parakeet-server — nil if voice disabled
+	voiceClient    *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
 	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store          memory.Store
 	cfg            *config.Config

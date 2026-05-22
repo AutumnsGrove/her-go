@@ -33,19 +33,24 @@ var log = logger.WithPrefix("voice")
 // Client is the STT client. It talks to either a local parakeet-server or a
 // remote Whisper-compatible API endpoint depending on the configured engine.
 type Client struct {
+	engine     string // config.STTEngineParakeet or STTEngineWhisper — determines sidecar and health check behavior
 	baseURL    string
 	model      string
-	apiKey     string // empty for local engines; "Bearer ..." for remote
+	apiKey     string // auth token for remote engines; empty for local (parakeet)
 	httpClient *http.Client
 }
 
 // NewClient creates an STT client from config. Returns nil if voice is
 // disabled or the base URL is empty — callers should nil-check before use.
 //
+// fallbackAPIKey is used when cfg.STT.APIKey is empty and the engine is
+// remote (whisper). Pass cfg.OpenRouter.APIKey so the caller doesn't need
+// to mutate the config struct.
+//
 // In Go, returning nil from a constructor is a common pattern to signal
 // "this feature is disabled". It's explicit and forces the caller to check,
 // unlike Python where you might return a no-op object.
-func NewClient(cfg *config.VoiceConfig) *Client {
+func NewClient(cfg *config.VoiceConfig, fallbackAPIKey string) *Client {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -56,6 +61,11 @@ func NewClient(cfg *config.VoiceConfig) *Client {
 		return nil
 	}
 
+	apiKey := cfg.STT.APIKey
+	if apiKey == "" && cfg.STT.Engine == config.STTEngineWhisper {
+		apiKey = fallbackAPIKey
+	}
+
 	log.Info("STT client initialized",
 		"engine", cfg.STT.Engine,
 		"base_url", baseURL,
@@ -63,9 +73,10 @@ func NewClient(cfg *config.VoiceConfig) *Client {
 	)
 
 	return &Client{
+		engine:  cfg.STT.Engine,
 		baseURL: baseURL,
 		model:   cfg.STT.Model,
-		apiKey:  cfg.STT.APIKey,
+		apiKey:  apiKey,
 		httpClient: &http.Client{
 			// 30 s is generous for normal voice memos. Remote Whisper APIs
 			// typically respond in 2-5 s for under-a-minute clips.
@@ -166,13 +177,13 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 
 // IsAvailable checks whether the STT backend is reachable.
 //
-// For local engines (parakeet), this hits the /healthz endpoint that the
-// sidecar exposes. For remote engines (whisper), we always return true —
-// the remote API is presumed available, and any failure will surface on
-// the first Transcribe call with a clear error.
+// For "parakeet" (local sidecar), hits the /healthz endpoint the sidecar
+// exposes. For "whisper" and other remote engines, returns true immediately —
+// the remote API is presumed up, and any failure surfaces on the first
+// Transcribe call with a clear error.
 func (c *Client) IsAvailable() bool {
-	if c.apiKey != "" {
-		// Remote engine — skip local health check.
+	if c.engine != config.STTEngineParakeet {
+		// Remote engine — no local process to health-check.
 		return true
 	}
 	resp, err := c.httpClient.Get(c.baseURL + "/healthz")

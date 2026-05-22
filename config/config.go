@@ -532,20 +532,27 @@ type VoiceConfig struct {
 	TTS     TTSConfig `yaml:"tts"`
 }
 
+// STT engine identifiers — use these constants instead of bare string literals
+// so adding a third engine only requires changes in one place.
+const (
+	STTEngineParakeet = "parakeet" // local sidecar (Apple Silicon / MLX); bot spawns it automatically
+	STTEngineWhisper  = "whisper"  // remote OpenAI-compatible endpoint (OpenRouter, OpenAI, etc.)
+)
+
 // STTConfig controls speech-to-text.
 //
-// "parakeet" (default) expects a local HTTP server (parakeet-mlx-fastapi)
-// on BaseURL — no API key needed, the bot spawns the sidecar automatically.
+// STTEngineParakeet expects a local HTTP server (parakeet-mlx-fastapi) on
+// BaseURL — no API key needed, the bot spawns the sidecar automatically.
 //
-// "whisper" sends audio to any OpenAI-compatible remote endpoint (OpenRouter,
-// OpenAI, etc.) using the Whisper API. Set BaseURL + Model + APIKey.
-// Example OpenRouter: base_url = "https://openrouter.ai/api/v1",
+// STTEngineWhisper sends audio to any OpenAI-compatible remote endpoint using
+// the Whisper API. Set BaseURL + Model; APIKey defaults to openrouter.api_key.
+// Example: base_url = "https://openrouter.ai/api/v1",
 // model = "openai/whisper-large-v3-turbo".
 type STTConfig struct {
-	Engine  string `yaml:"engine"`   // "parakeet" (local) or "whisper" (remote)
+	Engine  string `yaml:"engine"`   // STTEngineParakeet or STTEngineWhisper
 	BaseURL string `yaml:"base_url"` // local server URL or remote API base
 	Model   string `yaml:"model"`    // HuggingFace model ID, local path, or remote model name
-	APIKey  string `yaml:"api_key"`  // required for remote engines (whisper)
+	APIKey  string `yaml:"api_key"`  // auth token for remote engines; empty = use openrouter.api_key
 }
 
 // TTSConfig controls text-to-speech. The "piper" engine expects a local
