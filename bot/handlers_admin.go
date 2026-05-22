@@ -121,7 +121,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 			"  Web search: %s\n"+
 			"  Vision: %s\n\n"+
 			"<b>Voice:</b>\n"+
-			"  STT (Parakeet): %s [%s]\n"+
+			"  STT (%s): %s [%s]\n"+
 			"  TTS (Piper): %s [%s]\n\n"+
 			"<b>Session:</b>\n"+
 			"  Messages: %d\n"+
@@ -131,7 +131,7 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		uptime, managedBy, runtime.Version(), convID,
 		b.cfg.Chat.Model, b.cfg.Driver.Model, b.cfg.Vision.Model,
 		embedStatus, tavilyStatus, visionStatus,
-		sttStatus, b.cfg.Voice.STT.Model,
+		b.cfg.Voice.STT.Engine, sttStatus, b.cfg.Voice.STT.Model,
 		ttsStatus, b.cfg.Voice.TTS.VoiceID,
 		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
 		c.Message().Chat.ID,

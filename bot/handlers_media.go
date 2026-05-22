@@ -132,13 +132,13 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 //  1. Check that the voice client is available
 //  2. Download the .ogg file from Telegram
 //  3. Save audio to a local file for the record
-//  4. Send to parakeet-server for transcription
+//  4. Transcribe via the configured STT engine (parakeet local or whisper remote)
 //  5. Feed transcribed text into the normal agent pipeline
 //  6. Store voice_memo_path and file_id in the database
 //
-// Telegram sends voice memos as Ogg/Opus files. The parakeet-server
-// handles format conversion internally (via ffmpeg), so we just forward
-// the raw bytes.
+// Telegram sends voice memos as Ogg/Opus files. The STT engine handles
+// format conversion internally (via ffmpeg for local, API-side for remote),
+// so we just forward the raw bytes.
 func (b *Bot) handleVoice(c tele.Context) error {
 	msg := c.Message()
 	v := msg.Voice
@@ -208,7 +208,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		}
 	}()
 
-	// Step 4: Transcribe via parakeet-server.
+	// Step 4: Transcribe via the configured STT engine.
 	transcript, err := b.voiceClient.Transcribe(audioBytes, "voice.ogg")
 	if err != nil {
 		close(stopTyping)
@@ -217,7 +217,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 			return c.Send("I couldn't make out what you said. Could you try again?")
 		}
 		log.Error("transcription failed", "err", err)
-		return c.Send("I couldn't transcribe that voice memo. Is the speech server running? (parakeet-server)")
+		return c.Send("I couldn't transcribe that voice memo. The speech service may be unavailable.")
 	}
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))

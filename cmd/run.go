@@ -468,12 +468,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// --- Sidecars (STT/TTS) with pipe capture ---
 
 	var sttProcess *exec.Cmd
-	// Remote STT engines (whisper) use the OpenRouter key by default so the
-	// user doesn't need to duplicate it in the voice section.
-	if cfg.Voice.STT.Engine == "whisper" && cfg.Voice.STT.APIKey == "" {
-		cfg.Voice.STT.APIKey = cfg.OpenRouter.APIKey
-	}
-	voiceClient := voice.NewClient(&cfg.Voice)
+	// Pass the OpenRouter key as a fallback so whisper STT works without
+	// duplicating the key in the voice section of config.yaml.
+	voiceClient := voice.NewClient(&cfg.Voice, cfg.OpenRouter.APIKey)
 	if voiceClient != nil {
 		sttProcess = startSTTSidecar(cfg, bus, voiceClient)
 	} else {
@@ -884,7 +881,7 @@ func stopLaunchdServiceIfRunning(cfg *config.Config) {
 // external API and don't need a local process.
 // Output goes to sidecarOut (log file in TUI mode, stderr in plain mode).
 func startSTTSidecar(cfg *config.Config, bus *tui.Bus, voiceClient *voice.Client) *exec.Cmd {
-	if cfg.Voice.STT.Engine != "parakeet" {
+	if cfg.Voice.STT.Engine != config.STTEngineParakeet {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "stt", Status: "ready", Detail: cfg.Voice.STT.Engine + " (remote)"})
 		return nil
 	}
