@@ -26,7 +26,7 @@ type Config struct {
 	Debug       bool              `yaml:"debug"` // when true, logs full API request/response bodies
 	Identity    IdentityConfig    `yaml:"identity"`
 	Telegram    TelegramConfig    `yaml:"telegram"`
-	LLM         LLMConfig         `yaml:"llm"`
+	OpenRouter  LLMConfig         `yaml:"openrouter"`
 	Chat        ChatConfig        `yaml:"chat"`
 	Driver      DriverConfig      `yaml:"driver"`
 	Vision      VisionConfig      `yaml:"vision"`
@@ -215,9 +215,10 @@ type ReasoningConfig struct {
 	Enabled *bool `yaml:"enabled,omitempty"` // nil = API default, false = disable, true = enable
 }
 
-// LLMConfig holds shared OpenRouter / OpenAI-compatible API credentials.
-// Model settings live in the per-model sections (chat:, agent:, etc.)
-// so each model can be tuned independently without touching the API config.
+// LLMConfig holds the OpenRouter connection credentials — base URL and API key.
+// All models (chat, driver, vision, classifier, all agents) inherit these.
+// Individual model sections (chat:, driver:, etc.) only configure model-specific
+// settings: model name, temperature, token limits, timeouts.
 type LLMConfig struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
@@ -607,7 +608,7 @@ func Load(path string) (*Config, error) {
 		// Clear out the token/key fields — the example file has "${...}"
 		// placeholders that we don't want as actual defaults.
 		cfg.Telegram.Token = ""
-		cfg.LLM.APIKey = ""
+		cfg.OpenRouter.APIKey = ""
 	}
 
 	// Step 2: Load the user's config on top.
@@ -879,7 +880,7 @@ func (c *Config) ExportEnv() {
 	exports := map[string]string{
 		"TAVILY_API_KEY":     c.Search.TavilyAPIKey,
 		"FOURSQUARE_API_KEY": c.Foursquare.APIKey,
-		"OPENROUTER_API_KEY": c.LLM.APIKey,
+		"OPENROUTER_API_KEY": c.OpenRouter.APIKey,
 		"TELEGRAM_BOT_TOKEN": c.Telegram.Token,
 	}
 

@@ -13,7 +13,7 @@ telegram:
   webhook_secret: ""  # shared secret validated via X-Telegram-Bot-Api-Secret-Token header
   owner_chat: 0       # your Telegram chat ID — needed for scheduled reminders. Send /status to the bot to find it.
 
-llm:
+openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
 
@@ -175,7 +175,7 @@ voice:
     # engine: "whisper"
     # base_url: "https://openrouter.ai/api/v1"
     # model: "openai/whisper-large-v3-turbo"
-    # api_key: "${OPENROUTER_API_KEY}"                            # reuse your existing OpenRouter key
+    # api_key: ""                                                 # leave empty to auto-use openrouter.api_key
   tts:
     enabled: false                                                # set true to reply with voice
     engine: "piper"                                               # "piper" (local, privacy-first) — future cloud options may be added
