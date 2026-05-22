@@ -531,13 +531,20 @@ type VoiceConfig struct {
 	TTS     TTSConfig `yaml:"tts"`
 }
 
-// STTConfig controls speech-to-text. The "parakeet" engine expects a local
-// HTTP server (parakeet-mlx-fastapi) running on BaseURL. The Go side just
-// POSTs audio files to it — no Python bindings needed.
+// STTConfig controls speech-to-text.
+//
+// "parakeet" (default) expects a local HTTP server (parakeet-mlx-fastapi)
+// on BaseURL — no API key needed, the bot spawns the sidecar automatically.
+//
+// "whisper" sends audio to any OpenAI-compatible remote endpoint (OpenRouter,
+// OpenAI, etc.) using the Whisper API. Set BaseURL + Model + APIKey.
+// Example OpenRouter: base_url = "https://openrouter.ai/api/v1",
+// model = "openai/whisper-large-v3-turbo".
 type STTConfig struct {
-	Engine  string `yaml:"engine"`   // "parakeet" or "cf-workers-ai"
-	BaseURL string `yaml:"base_url"` // e.g. "http://localhost:8765"
-	Model   string `yaml:"model"`    // HuggingFace model ID or local path
+	Engine  string `yaml:"engine"`   // "parakeet" (local) or "whisper" (remote)
+	BaseURL string `yaml:"base_url"` // local server URL or remote API base
+	Model   string `yaml:"model"`    // HuggingFace model ID, local path, or remote model name
+	APIKey  string `yaml:"api_key"`  // required for remote engines (whisper)
 }
 
 // TTSConfig controls text-to-speech. The "piper" engine expects a local

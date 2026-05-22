@@ -874,9 +874,16 @@ func stopLaunchdServiceIfRunning(cfg *config.Config) {
 	time.Sleep(500 * time.Millisecond)
 }
 
-// startSTTSidecar launches the parakeet-server process.
+// startSTTSidecar launches the parakeet-server sidecar for local STT.
+// Skipped entirely for remote engines (e.g. "whisper") — those talk to an
+// external API and don't need a local process.
 // Output goes to sidecarOut (log file in TUI mode, stderr in plain mode).
 func startSTTSidecar(cfg *config.Config, bus *tui.Bus, voiceClient *voice.Client) *exec.Cmd {
+	if cfg.Voice.STT.Engine != "parakeet" {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "stt", Status: "ready", Detail: cfg.Voice.STT.Engine + " (remote)"})
+		return nil
+	}
+
 	sttPath, err := exec.LookPath("parakeet-server")
 	if err != nil {
 		log.Warn("parakeet-server not found in PATH — voice memos will fail. Run: her setup")
