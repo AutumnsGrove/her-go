@@ -1,13 +1,17 @@
 // Package voice handles speech-to-text (v0.3) and text-to-speech (v0.5).
 //
-// STT architecture: a Python sidecar (parakeet-mlx-fastapi) runs locally
-// and exposes an OpenAI-compatible /v1/audio/transcriptions endpoint.
-// This package is the Go HTTP client that talks to it. No Python bindings
-// needed — just multipart/form-data over HTTP.
+// STT supports two engines:
 //
-// The sidecar approach is necessary because Parakeet runs on MLX (Apple's
-// ML framework), which only has Python/Swift bindings. The HTTP boundary
-// keeps our Go code clean and the ML stuff in its natural habitat.
+//   - "parakeet": a Python sidecar (parakeet-mlx-fastapi) running locally.
+//     The bot spawns it automatically. Apple Silicon only (MLX framework).
+//
+//   - "whisper": any OpenAI-compatible remote endpoint (OpenRouter, OpenAI,
+//     etc.) using the standard /v1/audio/transcriptions multipart API.
+//     Works on any platform — good choice for VPS deployment.
+//
+// Both engines speak the same OpenAI-compatible multipart/form-data protocol,
+// so the wire format is identical. The only difference is the base URL and
+// whether an Authorization header is needed.
 package voice
 
 import (
@@ -26,24 +30,21 @@ import (
 
 var log = logger.WithPrefix("voice")
 
-// Client is the STT client that talks to the local parakeet-server.
-// It holds the base URL and model name from config, and a reusable
-// HTTP client with a generous timeout (transcription can take a few
-// seconds for longer voice memos).
+// Client is the STT client. It talks to either a local parakeet-server or a
+// remote Whisper-compatible API endpoint depending on the configured engine.
 type Client struct {
 	baseURL    string
 	model      string
+	apiKey     string // empty for local engines; "Bearer ..." for remote
 	httpClient *http.Client
 }
 
-// NewClient creates a new STT client from config. If voice is disabled
-// or the base URL is empty, returns nil — callers should check for nil
-// before using.
+// NewClient creates an STT client from config. Returns nil if voice is
+// disabled or the base URL is empty — callers should nil-check before use.
 //
-// This is a common Go pattern: "constructor" functions that return a
-// pointer (or nil if not needed). Similar to Python's __init__ returning
-// None to signal "don't use this", except in Go you return nil explicitly
-// and the caller is expected to check.
+// In Go, returning nil from a constructor is a common pattern to signal
+// "this feature is disabled". It's explicit and forces the caller to check,
+// unlike Python where you might return a no-op object.
 func NewClient(cfg *config.VoiceConfig) *Client {
 	if !cfg.Enabled {
 		return nil
@@ -64,46 +65,36 @@ func NewClient(cfg *config.VoiceConfig) *Client {
 	return &Client{
 		baseURL: baseURL,
 		model:   cfg.STT.Model,
+		apiKey:  cfg.STT.APIKey,
 		httpClient: &http.Client{
-			// 30 seconds is generous for normal voice memos (under 1 min
-			// of audio transcribes near-instantly on M3). A hung sidecar
-			// shouldn't block the bot for minutes.
+			// 30 s is generous for normal voice memos. Remote Whisper APIs
+			// typically respond in 2-5 s for under-a-minute clips.
 			Timeout: 30 * time.Second,
 		},
 	}
 }
 
-// transcriptionResponse matches the OpenAI-compatible JSON response
-// from parakeet-server: {"text": "the transcribed text"}.
+// transcriptionResponse matches the OpenAI Whisper API JSON response.
 type transcriptionResponse struct {
 	Text string `json:"text"`
 }
 
-// Transcribe sends audio bytes to the parakeet-server and returns the
-// transcribed text. The filename parameter helps the server determine
-// the audio format (e.g., "voice.ogg", "memo.wav").
+// Transcribe sends audio bytes to the configured STT endpoint and returns the
+// transcribed text. The filename parameter signals the audio format to the
+// server (e.g. "voice.ogg", "memo.wav").
 //
-// Under the hood, this builds a multipart/form-data request — the same
-// format your browser uses when you submit a file upload form. The
-// parakeet-server expects this because it mimics the OpenAI Whisper API.
+// The wire format is identical for both engines: multipart/form-data with a
+// "file" part and an optional "model" field — same as the OpenAI Whisper API.
+// The only engine-specific difference is the Authorization header.
 //
-// In Python you'd do:
+// Python equivalent:
 //
-//	requests.post(url, files={"file": ("voice.ogg", audio_bytes)})
-//
-// In Go, we build the multipart body manually with multipart.Writer.
-// It's more verbose but does the exact same thing.
+//	requests.post(url, files={"file": ("voice.ogg", audio_bytes)},
+//	              headers={"Authorization": f"Bearer {api_key}"})
 func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) {
-	// Build the multipart form body.
-	// multipart.Writer handles the boundary markers and content-type
-	// headers for each "part" of the form. Think of it as building
-	// a POST body that has both a file upload and regular form fields.
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	// Add the audio file as the "file" field.
-	// CreateFormFile adds a part with Content-Type: application/octet-stream
-	// and Content-Disposition: form-data; name="file"; filename="voice.ogg"
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
 		return "", fmt.Errorf("creating form file: %w", err)
@@ -112,30 +103,30 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 		return "", fmt.Errorf("writing audio bytes: %w", err)
 	}
 
-	// Add the model field if configured.
 	if c.model != "" {
 		if err := writer.WriteField("model", c.model); err != nil {
 			return "", fmt.Errorf("writing model field: %w", err)
 		}
 	}
 
-	// Close the writer to finalize the multipart body.
-	// This writes the final boundary marker. Forgetting this is a
-	// common bug — the server will reject the request as malformed.
+	// Close must be called before reading from body — it writes the final
+	// boundary marker. Missing this produces a malformed request.
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("closing multipart writer: %w", err)
 	}
 
-	// Build and send the HTTP request.
 	url := c.baseURL + "/audio/transcriptions"
 	req, err := http.NewRequest("POST", url, &body)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
-	// Content-Type must include the boundary string so the server knows
-	// where each part starts and ends. writer.FormDataContentType() returns
-	// something like "multipart/form-data; boundary=abc123".
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Remote engines (whisper) require Bearer auth. Local engines (parakeet)
+	// run on localhost with no auth — apiKey will be empty.
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
@@ -162,11 +153,6 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 
 	trimmed := strings.TrimSpace(result.Text)
 	if trimmed == "" {
-		// An empty response isn't a transport error — the server replied
-		// successfully but produced no text. This usually means the audio
-		// was silent, too short, or below the model's confidence threshold.
-		// Return a descriptive error instead of silently giving the caller
-		// an empty string, which would produce a confusing blank reply.
 		return "", fmt.Errorf("transcription returned empty text (audio may be silent or too short)")
 	}
 
@@ -178,12 +164,17 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 	return trimmed, nil
 }
 
-// IsAvailable checks if the parakeet-server is reachable by hitting
-// its health endpoint. Returns false if the server is down — the bot
-// can use this to decide whether to attempt transcription or tell the
-// user that voice memos aren't available right now.
+// IsAvailable checks whether the STT backend is reachable.
+//
+// For local engines (parakeet), this hits the /healthz endpoint that the
+// sidecar exposes. For remote engines (whisper), we always return true —
+// the remote API is presumed available, and any failure will surface on
+// the first Transcribe call with a clear error.
 func (c *Client) IsAvailable() bool {
-	// Hit the health endpoint to check if the server is up and ready.
+	if c.apiKey != "" {
+		// Remote engine — skip local health check.
+		return true
+	}
 	resp, err := c.httpClient.Get(c.baseURL + "/healthz")
 	if err != nil {
 		return false
