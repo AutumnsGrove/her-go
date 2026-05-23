@@ -134,11 +134,11 @@ func runWizard(cfgPath string) error {
 		huh.NewGroup(
 			huh.NewInput().
 				Title("OpenRouter API key").
-				Description("Powers all models via OpenRouter — required. Get one at openrouter.ai."+sensitiveHint(cfg.LLM.APIKey)).
+				Description("Powers all models via OpenRouter — required. Get one at openrouter.ai."+sensitiveHint(cfg.OpenRouter.APIKey)).
 				EchoMode(huh.EchoModePassword).
 				Value(&newOpenRouterKey).
 				Validate(func(s string) error {
-					if s == "" && cfg.LLM.APIKey == "" {
+					if s == "" && cfg.OpenRouter.APIKey == "" {
 						return fmt.Errorf("OpenRouter API key is required")
 					}
 					return nil
@@ -301,7 +301,7 @@ func runWizard(cfgPath string) error {
 	// Empty means the user pressed Enter without typing — original is kept.
 	applySensitive(&cfg.Telegram.Token, newTelegramToken)
 	applySensitive(&cfg.Telegram.WebhookSecret, newWebhookSecret)
-	applySensitive(&cfg.LLM.APIKey, newOpenRouterKey)
+	applySensitive(&cfg.OpenRouter.APIKey, newOpenRouterKey)
 	applySensitive(&cfg.Search.TavilyAPIKey, newTavilyKey)
 	applySensitive(&cfg.Foursquare.APIKey, newFoursquareKey)
 	applySensitive(&cfg.Cloudflare.APIToken, newCloudflareToken)
@@ -386,7 +386,7 @@ func wizardLoadConfig(cfgPath string) (*config.Config, error) {
 			cfg = &config.Config{}
 		}
 		cfg.Telegram.Token = ""
-		cfg.LLM.APIKey = ""
+		cfg.OpenRouter.APIKey = ""
 		cfg.Search.TavilyAPIKey = ""
 		cfg.Foursquare.APIKey = ""
 	}

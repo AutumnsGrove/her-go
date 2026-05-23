@@ -13,7 +13,7 @@ telegram:
   webhook_secret: ""  # shared secret validated via X-Telegram-Bot-Api-Secret-Token header
   owner_chat: 0       # your Telegram chat ID — needed for scheduled reminders. Send /status to the bot to find it.
 
-llm:
+openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
 
@@ -167,9 +167,15 @@ location:
 voice:
   enabled: false                                                  # set true to accept voice memos
   stt:
-    engine: "parakeet"                                            # "parakeet" or "cf-workers-ai"
-    base_url: "http://localhost:8765"                              # parakeet-mlx-fastapi server
-    model: "mlx-community/parakeet-tdt-0.6b-v2"                   # HuggingFace model ID or local path
+    # Local engine (Apple Silicon / macOS only — uses MLX):
+    engine: "parakeet"                                            # spawns parakeet-mlx-fastapi sidecar automatically
+    base_url: "http://localhost:8765"
+    model: "mlx-community/parakeet-tdt-0.6b-v2"
+    # Remote engine (any platform — good for VPS):
+    # engine: "whisper"
+    # base_url: "https://openrouter.ai/api/v1"
+    # model: "openai/whisper-large-v3-turbo"
+    # api_key: ""                                                 # leave empty to auto-use openrouter.api_key
   tts:
     enabled: false                                                # set true to reply with voice
     engine: "piper"                                               # "piper" (local, privacy-first) — future cloud options may be added

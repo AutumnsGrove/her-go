@@ -79,18 +79,26 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Println("Sidecars:")
 		httpClient := &http.Client{Timeout: 2 * time.Second}
 
-		// Parakeet STT
+		// STT (engine-agnostic: parakeet pings healthz, remote engines are presumed up)
+		sttEngine := cfg.Voice.STT.Engine
+		if sttEngine == "" {
+			sttEngine = "parakeet"
+		}
 		sttStatus := "disabled"
 		if cfg.Voice.Enabled && cfg.Voice.STT.BaseURL != "" {
-			sttURL := strings.TrimRight(cfg.Voice.STT.BaseURL, "/") + "/healthz"
-			if resp, err := httpClient.Get(sttURL); err == nil {
-				resp.Body.Close()
-				sttStatus = fmt.Sprintf("running (%s)", cfg.Voice.STT.BaseURL)
+			if cfg.Voice.STT.Engine == config.STTEngineParakeet || cfg.Voice.STT.Engine == "" {
+				sttURL := strings.TrimRight(cfg.Voice.STT.BaseURL, "/") + "/healthz"
+				if resp, err := httpClient.Get(sttURL); err == nil {
+					resp.Body.Close()
+					sttStatus = fmt.Sprintf("running (%s)", cfg.Voice.STT.BaseURL)
+				} else {
+					sttStatus = "not responding"
+				}
 			} else {
-				sttStatus = "not responding"
+				sttStatus = fmt.Sprintf("remote (%s)", cfg.Voice.STT.BaseURL)
 			}
 		}
-		fmt.Printf("  Parakeet STT:  %s  [model: %s]\n", sttStatus, cfg.Voice.STT.Model)
+		fmt.Printf("  STT (%s):  %s  [model: %s]\n", sttEngine, sttStatus, cfg.Voice.STT.Model)
 
 		// Piper TTS
 		ttsStatus := "disabled"

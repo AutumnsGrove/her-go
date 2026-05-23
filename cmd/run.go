@@ -103,7 +103,7 @@ func runBot(cmd *cobra.Command, args []string) error {
 	if cfg.Telegram.Token == "" {
 		log.Fatal("Telegram token is required — set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}
-	if cfg.LLM.APIKey == "" {
+	if cfg.OpenRouter.APIKey == "" {
 		log.Fatal("LLM API key is required — set OPENROUTER_API_KEY env var or fill in config.yaml")
 	}
 
@@ -292,7 +292,7 @@ var sidecarOut io.Writer = os.Stderr
 func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
 	// --- Create LLM clients ---
 
-	llmClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
+	llmClient := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
 	if cfg.Chat.Timeout > 0 {
 		llmClient.WithTimeout(time.Duration(cfg.Chat.Timeout) * time.Second)
 	}
@@ -309,7 +309,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		llmClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Chat.Reasoning.Enabled})
 	}
 
-	driverClient := llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
+	driverClient := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
 	if cfg.Driver.Timeout > 0 {
 		driverClient.WithTimeout(time.Duration(cfg.Driver.Timeout) * time.Second)
 	}
@@ -325,7 +325,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 
 	var visionClient *llm.Client
 	if cfg.Vision.Model != "" {
-		visionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
+		visionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
 		if cfg.Vision.Fallback != nil {
 			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
 		}
@@ -340,7 +340,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// mistakes for real user facts.
 	var classifierClient *llm.Client
 	if cfg.Classifier.Model != "" {
-		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, cfg.Classifier.MaxTokens)
+		classifierClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, cfg.Classifier.MaxTokens)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "ready", Detail: cfg.Classifier.Model})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "classifier", Status: "skipped"})
@@ -351,7 +351,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// facts. Runs in a goroutine after the reply is sent — never blocks the user.
 	var memoryAgentClient *llm.Client
 	if cfg.MemoryAgent.Model != "" {
-		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, cfg.MemoryAgent.Temperature, cfg.MemoryAgent.MaxTokens)
+		memoryAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MemoryAgent.Model, cfg.MemoryAgent.Temperature, cfg.MemoryAgent.MaxTokens)
 		if cfg.MemoryAgent.Timeout > 0 {
 			memoryAgentClient.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
 		}
@@ -389,7 +389,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		if mTemp == 0 {
 			mTemp = 0.2
 		}
-		moodAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+		moodAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
 		if cfg.MoodAgent.Timeout > 0 {
 			moodAgentClient.WithTimeout(time.Duration(cfg.MoodAgent.Timeout) * time.Second)
 		}
@@ -468,7 +468,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// --- Sidecars (STT/TTS) with pipe capture ---
 
 	var sttProcess *exec.Cmd
-	voiceClient := voice.NewClient(&cfg.Voice)
+	// Pass the OpenRouter key as a fallback so whisper STT works without
+	// duplicating the key in the voice section of config.yaml.
+	voiceClient := voice.NewClient(&cfg.Voice, cfg.OpenRouter.APIKey)
 	if voiceClient != nil {
 		sttProcess = startSTTSidecar(cfg, bus, voiceClient)
 	} else {
@@ -501,7 +503,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// agent client if dream_agent.model isn't configured.
 	var dreamAgentClient *llm.Client
 	if cfg.DreamAgent.Model != "" {
-		dreamAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.DreamAgent.Model, cfg.DreamAgent.Temperature, cfg.DreamAgent.MaxTokens)
+		dreamAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.DreamAgent.Model, cfg.DreamAgent.Temperature, cfg.DreamAgent.MaxTokens)
 		timeout := cfg.DreamAgent.Timeout
 		if timeout == 0 {
 			timeout = 120
@@ -531,7 +533,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// isn't configured.
 	var introspectionClient *llm.Client
 	if cfg.IntrospectionAgent.Model != "" {
-		introspectionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.IntrospectionAgent.Model, cfg.IntrospectionAgent.Temperature, cfg.IntrospectionAgent.MaxTokens)
+		introspectionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.IntrospectionAgent.Model, cfg.IntrospectionAgent.Temperature, cfg.IntrospectionAgent.MaxTokens)
 		timeout := cfg.IntrospectionAgent.Timeout
 		if timeout == 0 {
 			timeout = 60
@@ -604,7 +606,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// same model, decoupled so they can diverge later.
 	var personaAgentClient *llm.Client
 	if cfg.PersonaAgent.Model != "" {
-		personaAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.PersonaAgent.Model, cfg.PersonaAgent.Temperature, cfg.PersonaAgent.MaxTokens)
+		personaAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.PersonaAgent.Model, cfg.PersonaAgent.Temperature, cfg.PersonaAgent.MaxTokens)
 		if cfg.PersonaAgent.Timeout > 0 {
 			personaAgentClient.WithTimeout(time.Duration(cfg.PersonaAgent.Timeout) * time.Second)
 		}
@@ -874,9 +876,16 @@ func stopLaunchdServiceIfRunning(cfg *config.Config) {
 	time.Sleep(500 * time.Millisecond)
 }
 
-// startSTTSidecar launches the parakeet-server process.
+// startSTTSidecar launches the parakeet-server sidecar for local STT.
+// Skipped entirely for remote engines (e.g. "whisper") — those talk to an
+// external API and don't need a local process.
 // Output goes to sidecarOut (log file in TUI mode, stderr in plain mode).
 func startSTTSidecar(cfg *config.Config, bus *tui.Bus, voiceClient *voice.Client) *exec.Cmd {
+	if cfg.Voice.STT.Engine != config.STTEngineParakeet {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "stt", Status: "ready", Detail: cfg.Voice.STT.Engine + " (remote)"})
+		return nil
+	}
+
 	sttPath, err := exec.LookPath("parakeet-server")
 	if err != nil {
 		log.Warn("parakeet-server not found in PATH — voice memos will fail. Run: her setup")
