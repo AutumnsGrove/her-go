@@ -24,6 +24,7 @@ import (
 	"her/logger"
 	"her/memory"
 	"her/persona"
+	"her/procmgr"
 	"her/retry"
 	"her/scheduler"
 	"her/search"
@@ -107,10 +108,10 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Fatal("LLM API key is required — set OPENROUTER_API_KEY env var or fill in config.yaml")
 	}
 
-	// If the launchd service is running (`her start`), stop it before
+	// If the managed service is running (`her start`), stop it before
 	// we start a foreground run. Two instances racing for the same
 	// Telegram token causes dropped messages and PID file conflicts.
-	stopLaunchdServiceIfRunning(cfg)
+	stopManagedServiceIfRunning(cfg)
 
 	// Kill any stale her process from a previous run before we start.
 	// This prevents two instances racing for the same Telegram token.
@@ -851,26 +852,28 @@ func killStaleSelf(pidFile string) {
 	_ = os.Remove(pidFile)
 }
 
-// stopLaunchdServiceIfRunning checks if the launchd service (`her start`)
+// stopManagedServiceIfRunning checks if a supervised service (`her start`)
 // is active and stops it before a foreground `her run`. Without this, two
 // instances race for the same Telegram token and PID file, causing one to
 // SIGTERM the other mid-startup.
-func stopLaunchdServiceIfRunning(cfg *config.Config) {
+func stopManagedServiceIfRunning(cfg *config.Config) {
 	botName := cfg.Identity.Her
 	if botName == "" {
 		return
 	}
-	label := serviceLabel(botName)
-	target := serviceTarget(label)
-
-	// launchctl print exits 0 if the service is loaded, non-zero otherwise.
-	if err := exec.Command("launchctl", "print", target).Run(); err != nil {
-		return // not loaded — nothing to do
+	label := procmgr.EffectiveLabel(cfg.Update.ServiceLabel, botName)
+	mgr, err := procmgr.New(label)
+	if err != nil {
+		return
 	}
 
-	log.Info("stopping launchd service before foreground run", "label", label)
-	if err := launchdBootout(label); err != nil {
-		log.Warn("could not stop launchd service", "err", err)
+	if !mgr.IsManaged() {
+		return // not running under a supervisor — nothing to do
+	}
+
+	log.Info("stopping managed service before foreground run", "supervisor", mgr.Name(), "label", label)
+	if err := mgr.Stop(); err != nil {
+		log.Warn("could not stop managed service", "err", err)
 	}
 	// Give the old process a moment to release the Telegram token.
 	time.Sleep(500 * time.Millisecond)

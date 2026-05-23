@@ -7,87 +7,18 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
-	"text/template"
 
 	"github.com/spf13/cobra"
 	"her/config"
+	"her/procmgr"
 )
-
-// serviceLabel builds the launchd service identifier from the bot's
-// configured name. e.g. "Mira" → "com.mira.her-go", "Luna" → "com.luna.her-go".
-func serviceLabel(botName string) string {
-	return "com." + strings.ToLower(botName) + ".her-go"
-}
-
-// domainTarget returns the launchd domain for the current user, e.g.
-// "gui/501". Used with the modern launchctl subcommands (bootstrap,
-// bootout, kickstart, print) which replaced the deprecated load/unload.
-func domainTarget() string {
-	return fmt.Sprintf("gui/%d", os.Getuid())
-}
-
-// serviceTarget returns the fully-qualified launchd service target for
-// the current user, e.g. "gui/501/com.mira.her-go". Used with bootout,
-// kickstart, and print.
-func serviceTarget(label string) string {
-	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
-}
-
-// launchdBootstrap loads a service plist into the user's launchd domain
-// using the modern bootstrap command. If the service is already loaded,
-// it bootouts first and retries — handling the common "re-setup" case
-// where the user runs setup again on a running service.
-func launchdBootstrap(plistPath, label string) error {
-	domain := domainTarget()
-	out, err := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
-	if err == nil {
-		return nil
-	}
-
-	outStr := strings.TrimSpace(string(out))
-
-	// When a service is already loaded, bootstrap fails with either:
-	//   - Exit 5 + "Bootstrap failed: 5: Input/output error" (macOS 13+)
-	//   - Exit 37 + text containing "already loaded" (older macOS)
-	// In both cases, bootout first then retry.
-	if strings.Contains(outStr, "Bootstrap failed: 5:") || strings.Contains(outStr, "37:") ||
-		strings.Contains(outStr, "already loaded") {
-		log.Info("service already loaded, reloading")
-		_ = exec.Command("launchctl", "bootout", serviceTarget(label)).Run()
-		out2, err2 := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
-		if err2 != nil {
-			return fmt.Errorf("launchctl bootstrap (retry): %s", strings.TrimSpace(string(out2)))
-		}
-		return nil
-	}
-
-	return fmt.Errorf("launchctl bootstrap: %s", outStr)
-}
-
-// launchdBootout unloads a service from the user's launchd domain using
-// the modern bootout command.
-func launchdBootout(label string) error {
-	out, err := exec.Command("launchctl", "bootout", serviceTarget(label)).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl bootout: %s", strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// plistPath returns the full path to the plist in ~/Library/LaunchAgents.
-func plistPath(botName string) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("could not determine home directory: %w", err)
-	}
-	return filepath.Join(home, "Library", "LaunchAgents", serviceLabel(botName)+".plist"), nil
-}
 
 // loadBotName loads config and returns just the bot's name.
 // Used by service management commands (start, stop) that need the
-// name for the launchd service label but don't need full config.
+// name for the service label but don't need full config.
 func loadBotName() (string, error) {
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
@@ -96,70 +27,25 @@ func loadBotName() (string, error) {
 	return cfg.Identity.Her, nil
 }
 
-// plistData holds the values injected into the plist template.
-type plistData struct {
-	Label      string
-	BinaryPath string
-	WorkDir    string
-	StdoutPath string
-	StderrPath string
-	UserName   string
-	Path       string // PATH inherited from the user's shell at setup time
+// loadServiceLabel loads config and returns the effective service label.
+func loadServiceLabel() (string, error) {
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return "", fmt.Errorf("loading config: %w", err)
+	}
+	return procmgr.EffectiveLabel(cfg.Update.ServiceLabel, cfg.Identity.Her), nil
 }
-
-// plistTemplate is the launchd property list, generated dynamically
-// so it always matches the current machine's paths and user.
-const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>{{.Label}}</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>{{.BinaryPath}}</string>
-        <string>run</string>
-    </array>
-
-    <key>WorkingDirectory</key>
-    <string>{{.WorkDir}}</string>
-
-    <key>KeepAlive</key>
-    <true/>
-
-    <key>ThrottleInterval</key>
-    <integer>3</integer>
-
-    <key>StandardOutPath</key>
-    <string>{{.StdoutPath}}</string>
-
-    <key>StandardErrorPath</key>
-    <string>{{.StderrPath}}</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>{{.Path}}</string>
-    </dict>
-
-    <key>UserName</key>
-    <string>{{.UserName}}</string>
-</dict>
-</plist>
-`
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
-	Short: "Build the binary, install dependencies, and configure the launchd service",
-	Long: `Does everything needed to install her-go as a launchd service:
+	Short: "Build the binary, install dependencies, and configure the system service",
+	Long: `Does everything needed to install her-go as a system service:
 
   1. Build the binary (go build)
-  2. Install ML dependencies in background (parakeet-mlx, piper voice models, ffmpeg check)
-  3. Generate a plist file for the current machine
+  2. Install ML dependencies in background (piper voice models, ffmpeg check)
+  3. Generate a service definition for the current platform (launchd on macOS, systemd on Linux)
   4. Create the logs directory
-  5. Install the plist to ~/Library/LaunchAgents
-  6. Load the service with launchctl`,
+  5. Install and enable the service`,
 	RunE: runSetup,
 }
 
@@ -210,49 +96,60 @@ func installDeps() <-chan depResult {
 		results <- depResult{"ffmpeg", true, path}
 	}()
 
-	// Install parakeet-mlx (STT inference library + CLI).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if _, err := exec.LookPath("uv"); err != nil {
-			results <- depResult{"parakeet-mlx", false, "skipped (uv not available)"}
-			return
-		}
-		out, err := exec.Command("uv", "tool", "install", "parakeet-mlx").CombinedOutput()
-		msg := strings.TrimSpace(string(out))
-		if err != nil {
-			// "already installed" is not an error — uv returns non-zero
-			// but the tool is there. Check the output message.
-			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
-				results <- depResult{"parakeet-mlx", true, "already installed"}
+	// Parakeet (Apple MLX STT) — macOS only. On Linux, STT goes through
+	// a remote Whisper endpoint instead, so there's nothing to install.
+	if runtime.GOOS == "darwin" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := exec.LookPath("uv"); err != nil {
+				results <- depResult{"parakeet-mlx", false, "skipped (uv not available)"}
 				return
 			}
-			results <- depResult{"parakeet-mlx", false, msg}
-			return
-		}
-		results <- depResult{"parakeet-mlx", true, "installed"}
-	}()
+			out, err := exec.Command("uv", "tool", "install", "parakeet-mlx").CombinedOutput()
+			msg := strings.TrimSpace(string(out))
+			if err != nil {
+				if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
+					results <- depResult{"parakeet-mlx", true, "already installed"}
+					return
+				}
+				results <- depResult{"parakeet-mlx", false, msg}
+				return
+			}
+			results <- depResult{"parakeet-mlx", true, "installed"}
+		}()
 
-	// Install parakeet-mlx-fastapi (HTTP server for STT).
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := exec.LookPath("uv"); err != nil {
+				results <- depResult{"parakeet-server", false, "skipped (uv not available)"}
+				return
+			}
+			out, err := exec.Command("uv", "tool", "install",
+				"git+https://github.com/yashhere/parakeet-mlx-fastapi.git").CombinedOutput()
+			msg := strings.TrimSpace(string(out))
+			if err != nil {
+				if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
+					results <- depResult{"parakeet-server", true, "already installed"}
+					return
+				}
+				results <- depResult{"parakeet-server", false, msg}
+				return
+			}
+			results <- depResult{"parakeet-server", true, "installed"}
+		}()
+	}
+
+	// Ollama (embedding server) — check it's available on any platform.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if _, err := exec.LookPath("uv"); err != nil {
-			results <- depResult{"parakeet-server", false, "skipped (uv not available)"}
+		if _, err := exec.LookPath("ollama"); err != nil {
+			results <- depResult{"ollama", false, "not found — install from https://ollama.com"}
 			return
 		}
-		out, err := exec.Command("uv", "tool", "install",
-			"git+https://github.com/yashhere/parakeet-mlx-fastapi.git").CombinedOutput()
-		msg := strings.TrimSpace(string(out))
-		if err != nil {
-			if strings.Contains(msg, "already installed") || strings.Contains(msg, "is already available") {
-				results <- depResult{"parakeet-server", true, "already installed"}
-				return
-			}
-			results <- depResult{"parakeet-server", false, msg}
-			return
-		}
-		results <- depResult{"parakeet-server", true, "installed"}
+		results <- depResult{"ollama", true, "found"}
 	}()
 
 	// Download Piper TTS voice model files.
@@ -385,7 +282,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	depResults := installDeps()
 
 	// Step 1: Build the binary.
-	log.Info("[1/6] building binary")
+	log.Info("[1/4] building binary")
 	binaryPath := filepath.Join(workDir, "her-go")
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	buildCmd.Dir = workDir
@@ -396,77 +293,44 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	}
 	log.Infof("built: %s", binaryPath)
 
-	// Step 2: Generate the plist.
-	log.Info("[2/6] generating plist")
+	// Step 2: Install the service via the platform's process manager.
+	// On macOS this writes a plist to ~/Library/LaunchAgents and loads
+	// it with launchctl. On Linux it writes a systemd unit file to
+	// /etc/systemd/system and enables it.
+	log.Infof("[2/4] installing %s service", runtime.GOOS)
 	logsDir := filepath.Join(workDir, "logs")
-	// Capture the user's current PATH so the launchd service can find
-	// tools like uv, parakeet-server, ffmpeg, etc. Without this, launchd
-	// uses a bare-minimum PATH (/usr/bin:/bin) and sidecars fail to start.
-	// We snapshot it at setup time — if the user installs new tools later,
-	// they just re-run `her setup` to pick up the new paths.
+
+	// Capture the user's current PATH so the service can find tools
+	// like uv, piper, ffmpeg, ollama, etc. Without this, the supervisor
+	// uses a bare-minimum PATH (/usr/bin:/bin) and sidecars fail.
 	shellPath := os.Getenv("PATH")
 	if shellPath == "" {
 		shellPath = "/usr/local/bin:/usr/bin:/bin"
 	}
 
-	data := plistData{
-		Label:      serviceLabel(cfg.Identity.Her),
+	label := procmgr.EffectiveLabel(cfg.Update.ServiceLabel, cfg.Identity.Her)
+	mgr, err := procmgr.New(label)
+	if err != nil {
+		return fmt.Errorf("creating process manager: %w", err)
+	}
+
+	svcCfg := procmgr.ServiceConfig{
+		Label:      label,
 		BinaryPath: binaryPath,
 		WorkDir:    workDir,
-		StdoutPath: filepath.Join(logsDir, "stdout.log"),
-		StderrPath: filepath.Join(logsDir, "stderr.log"),
-		UserName:   currentUser.Username,
+		LogDir:     logsDir,
+		User:       currentUser.Username,
 		Path:       shellPath,
 	}
 
-	tmpl, err := template.New("plist").Parse(plistTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to parse plist template: %w", err)
-	}
-
-	dest, err := plistPath(cfg.Identity.Her)
-	if err != nil {
-		return err
-	}
-
-	plistFile, err := os.Create(dest)
-	if err != nil {
-		return fmt.Errorf("failed to create plist file %s: %w", dest, err)
-	}
-	if err := tmpl.Execute(plistFile, data); err != nil {
-		plistFile.Close()
-		return fmt.Errorf("failed to write plist: %w", err)
-	}
-	plistFile.Close()
-	log.Infof("wrote: %s", dest)
-
-	// Step 3: Create logs directory.
-	log.Info("[3/6] creating logs directory")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create logs directory: %w", err)
-	}
-	log.Infof("dir: %s", logsDir)
-
-	// Step 4: (plist already written to ~/Library/LaunchAgents in step 2)
-	log.Info("[4/6] plist installed to ~/Library/LaunchAgents")
-
-	// Step 5: Load the service using the modern launchctl bootstrap command.
-	// The old "launchctl load" is deprecated and can silently fail (printing
-	// errors to stderr while returning exit 0). bootstrap has proper error
-	// codes and handles the "already loaded" case via automatic bootout+retry.
-	log.Info("[5/6] loading service")
-	label := serviceLabel(cfg.Identity.Her)
-	if err := launchdBootstrap(dest, label); err != nil {
-		log.Warn("failed to load service", "err", err)
+	if err := mgr.Install(svcCfg); err != nil {
+		log.Warn("failed to install service", "err", err)
 	} else {
-		log.Info("service loaded")
+		log.Infof("service installed via %s", mgr.Name())
 	}
 
-	// Step 6: Wait for background dependency installs to finish.
-	// The channel was created in installDeps() — ranging over it gives
-	// us each result as it arrives, and stops when the channel closes
-	// (which happens after all goroutines call wg.Done()).
-	log.Info("[6/6] ML dependencies")
+	// Step 3: Wait for background dependency installs to finish.
+	log.Info("[3/4] ML dependencies")
 	var warnings []string
 	for r := range depResults {
 		if r.OK {
@@ -477,12 +341,12 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Summary.
-	log.Info("setup complete",
+	// Step 4: Summary.
+	log.Info("[4/4] setup complete",
 		"binary", binaryPath,
-		"plist", dest,
+		"supervisor", mgr.Name(),
 		"logs", logsDir,
-		"service", serviceLabel(cfg.Identity.Her),
+		"service", label,
 	)
 
 	for _, w := range warnings {

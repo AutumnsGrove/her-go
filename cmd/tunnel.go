@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"her/config"
+	"her/procmgr"
 )
 
 // tunnelCmd is the parent command for tunnel management.
@@ -257,10 +258,14 @@ func runTunnelSetup(cmd *cobra.Command, args []string) error {
 	plistFile.Close()
 	log.Info("wrote tunnel plist", "path", dest)
 
-	// Step 3: Load the service using the modern launchctl bootstrap command.
+	// Step 3: Load the service. The tunnel is macOS-only (cloudflared via
+	// launchd), so we create a procmgr instance for its own service label.
 	log.Info("[3/3] loading tunnel service")
 	tunnelLabel := tunnelServiceLabel(cfg.Identity.Her)
-	if err := launchdBootstrap(dest, tunnelLabel); err != nil {
+	tunnelMgr, mgrErr := procmgr.New(tunnelLabel)
+	if mgrErr != nil {
+		log.Warn("could not create process manager for tunnel", "err", mgrErr)
+	} else if err := tunnelMgr.Start(); err != nil {
 		log.Warn("failed to load tunnel service", "err", err)
 	} else {
 		log.Info("tunnel service loaded")
