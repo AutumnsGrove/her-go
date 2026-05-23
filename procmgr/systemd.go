@@ -112,7 +112,7 @@ func (m *SystemdManager) unitPath() string {
 func (m *SystemdManager) systemctl(args ...string) error {
 	out, err := exec.Command("systemctl", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("systemctl %s: %s", strings.Join(args, " "), strings.TrimSpace(string(out)))
+		return fmt.Errorf("systemctl %s (%s): %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
