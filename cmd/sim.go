@@ -514,7 +514,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 	// Warn but don't fatal on missing API key — the user might just be
 	// testing the sim harness itself.
-	if cfg.LLM.APIKey == "" {
+	if cfg.OpenRouter.APIKey == "" {
 		log.Warn("LLM API key not set — agent calls will fail")
 	}
 
@@ -553,7 +553,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	} else if embedBaseURLFlag != "" && cfg.Embed.APIKey == "" {
 		// If switching to a remote URL but no embed API key is set,
 		// fall back to the LLM API key — on OpenRouter, it's the same key.
-		cfg.Embed.APIKey = cfg.LLM.APIKey
+		cfg.Embed.APIKey = cfg.OpenRouter.APIKey
 		log.Info("Embed API key defaulting to LLM API key for remote embeddings")
 	}
 	if embedDimensionFlag > 0 {
@@ -693,8 +693,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// ------------------------------------------------------------------
 
 	chatClient := llm.NewClient(
-		cfg.LLM.BaseURL,
-		cfg.LLM.APIKey,
+		cfg.OpenRouter.BaseURL,
+		cfg.OpenRouter.APIKey,
 		cfg.Chat.Model,
 		cfg.Chat.Temperature,
 		cfg.Chat.MaxTokens,
@@ -730,8 +730,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 		agentMaxTokens = 512
 	}
 	driverClient := llm.NewClient(
-		cfg.LLM.BaseURL,
-		cfg.LLM.APIKey,
+		cfg.OpenRouter.BaseURL,
+		cfg.OpenRouter.APIKey,
 		agentModel,
 		agentTemp,
 		agentMaxTokens,
@@ -757,7 +757,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if classifierMaxTokens == 0 {
 			classifierMaxTokens = 64
 		}
-		classifierClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
+		classifierClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, classifierMaxTokens)
 		log.Info("classifier enabled for sim", "model", cfg.Classifier.Model)
 	}
 
@@ -767,7 +767,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// view_image → Gemini Flash pipeline. Nil when vision isn't configured.
 	var visionClient *llm.Client
 	if cfg.Vision.Model != "" {
-		visionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
+		visionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
 		if cfg.Vision.Fallback != nil {
 			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
 		}
@@ -797,7 +797,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if maTokens == 0 {
 			maTokens = 4096
 		}
-		memoryAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
+		memoryAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MemoryAgent.Model, maTemp, maTokens)
 		if disableReasoningFlag {
 			disabled := false
 			memoryAgentClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
@@ -826,7 +826,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if mTokens == 0 {
 			mTokens = 512
 		}
-		moodAgentClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+		moodAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
 
 		vocab := mood.Default()
 		if cfg.Mood.VocabPath != "" {
@@ -908,7 +908,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		if iTokens == 0 {
 			iTokens = 2048
 		}
-		introspectionClient = llm.NewClient(cfg.LLM.BaseURL, cfg.LLM.APIKey, introModel, iTemp, iTokens)
+		introspectionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, introModel, iTemp, iTokens)
 		iTimeout := cfg.IntrospectionAgent.Timeout
 		if iTimeout == 0 {
 			iTimeout = 60

@@ -65,7 +65,7 @@ func runRetag(cmd *cobra.Command, args []string) error {
 
 	// Create LLM client for tag generation.
 	llmClient := llm.NewClient(
-		cfg.LLM.BaseURL, cfg.LLM.APIKey,
+		cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 		cfg.Chat.Model, 0.3, 256, // low temp, short output
 	)
 	if cfg.Chat.Fallback != nil {

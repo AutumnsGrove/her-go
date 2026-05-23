@@ -59,7 +59,7 @@ func runSplitMemories(cmd *cobra.Command, args []string) error {
 		maxTokens = 256
 	}
 	classifierClient := llm.NewClient(
-		cfg.LLM.BaseURL, cfg.LLM.APIKey,
+		cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 		cfg.Classifier.Model, cfg.Classifier.Temperature, maxTokens,
 	)
 
