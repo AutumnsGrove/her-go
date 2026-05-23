@@ -47,10 +47,6 @@ import (
 // log is the package-level logger for the cmd package.
 var log = logger.WithPrefix("cmd")
 
-// kvClientTimeout is the HTTP timeout for Cloudflare KV API calls.
-// Used by both dev mode (KV routing keys) and prod (sync poller).
-const kvClientTimeout = 10 * time.Second
-
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Start the bot process (foreground)",
