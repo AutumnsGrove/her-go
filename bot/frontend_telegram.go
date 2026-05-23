@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	tele "gopkg.in/telebot.v4"
@@ -96,7 +97,8 @@ func (f *TelegramFrontend) DeletePlaceholder() error {
 
 // StartTyping launches the Telegram typing indicator, refreshed every
 // 4 seconds (Telegram's indicator expires after ~5s). Returns a
-// function that stops it — safe to call multiple times via sync.Once.
+// function that stops it — safe to call multiple times (wrapped in
+// sync.Once so closing the channel can't panic).
 func (f *TelegramFrontend) StartTyping() func() {
 	stopTyping := make(chan struct{})
 	go func() {
@@ -112,7 +114,8 @@ func (f *TelegramFrontend) StartTyping() func() {
 			}
 		}
 	}()
-	return func() { close(stopTyping) }
+	var once sync.Once
+	return func() { once.Do(func() { close(stopTyping) }) }
 }
 
 func (f *TelegramFrontend) SupportsStreaming() bool { return f.b.cfg.Chat.Streaming }

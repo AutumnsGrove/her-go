@@ -418,7 +418,9 @@ func (b *Bot) Stop() {
 	}
 	b.agentEventsStopped.Store(true) // prevent sends before channel close
 	close(b.shutdownCh)              // unblocks wizard expiry + other goroutines
-	b.tb.Stop()                      // stop accepting new Telegram updates
+	if b.tb != nil {
+		b.tb.Stop() // stop accepting new Telegram updates
+	}
 	close(b.agentEvents)             // signals consumeAgentEvents goroutine to exit
 }
 

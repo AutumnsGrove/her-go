@@ -283,10 +283,10 @@ func runDev(cmd *cobra.Command, args []string) error {
 	// --- HTTP handlers ---
 	mux := http.NewServeMux()
 
-	// CORS middleware — Gradio runs on :7860, our API on :7777.
+	// CORS middleware — restrict to Gradio's default origin (localhost:7860).
 	cors := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:7860")
 			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			if r.Method == "OPTIONS" {
@@ -304,6 +304,7 @@ func runDev(cmd *cobra.Command, args []string) error {
 		}
 
 		var req chatRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
 			return

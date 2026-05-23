@@ -94,7 +94,7 @@ func (m *LaunchdManager) Start() error {
 func (m *LaunchdManager) Stop() error {
 	out, err := exec.Command("launchctl", "bootout", m.serviceTarget()).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl bootout: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("launchctl bootout (%s): %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -105,7 +105,7 @@ func (m *LaunchdManager) Stop() error {
 func (m *LaunchdManager) Restart() error {
 	cmd := exec.Command("launchctl", "kickstart", "-k", m.serviceTarget())
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("launchctl kickstart: %s", strings.TrimSpace(string(out)))
+		return fmt.Errorf("launchctl kickstart (%s): %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -158,12 +158,12 @@ func (m *LaunchdManager) bootstrap(plistPath string) error {
 		_ = exec.Command("launchctl", "bootout", m.serviceTarget()).Run()
 		out2, err2 := exec.Command("launchctl", "bootstrap", domain, plistPath).CombinedOutput()
 		if err2 != nil {
-			return fmt.Errorf("launchctl bootstrap (retry): %s", strings.TrimSpace(string(out2)))
+			return fmt.Errorf("launchctl bootstrap retry (%s): %w", strings.TrimSpace(string(out2)), err2)
 		}
 		return nil
 	}
 
-	return fmt.Errorf("launchctl bootstrap: %s", outStr)
+	return fmt.Errorf("launchctl bootstrap (%s): %w", outStr, err)
 }
 
 // plistData holds the values injected into the plist template.
