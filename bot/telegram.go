@@ -291,6 +291,81 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	return bot, nil
 }
 
+// NewDev creates a Bot configured for local dev mode — no Telegram
+// connection, no bot token required. The Bot's agent pipeline, store,
+// LLM clients, and event bus all work normally. Use ProcessMessage()
+// to run turns from the HTTP dev server.
+//
+// This is the same Bot struct with the same agent pipeline — just no
+// Telegram transport. Like creating a Python class with all methods
+// working but the network socket set to None.
+func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
+	promptBytes, err := os.ReadFile(cfg.Persona.PromptFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading system prompt from %s: %w", cfg.Persona.PromptFile, err)
+	}
+
+	b := &Bot{
+		// tb is nil — no Telegram connection in dev mode
+		llm:              llmClient,
+		driverLLM:        driverLLM,
+		memoryAgentLLM:   memoryAgentLLM,
+		moodAgentLLM:     moodAgentLLM,
+		visionLLM:        visionLLM,
+		classifierLLM:    classifierLLM,
+		dreamAgentLLM:    dreamAgentLLM,
+		introspectionLLM: introspectionLLM,
+		embedClient:      embedClient,
+		tavilyClient:     tavilyClient,
+		store:            store,
+		cfg:              cfg,
+		configPath:       configPath,
+		systemPrompt:     string(promptBytes),
+		startTime:        time.Now(),
+		eventBus:         eventBus,
+		agentEvents:      make(chan agent.AgentEvent, 16),
+		shutdownCh:       make(chan struct{}),
+	}
+
+	return b, nil
+}
+
+// ProcessMessage runs a user message through the full agent pipeline
+// using the given Frontend for I/O. This is the transport-agnostic
+// entry point — the HTTP dev server and any future frontends call this
+// instead of going through Telegram's handleMessage.
+func (b *Bot) ProcessMessage(fe Frontend, userText, conversationID string) (string, error) {
+	log.Info("─── incoming message ───")
+	log.Infof("  user: %s", truncate(userText, 100))
+
+	// Save the raw message.
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	if err != nil {
+		log.Error("saving message", "err", err)
+	}
+
+	// PII scrub.
+	scrubResult := b.scrubText(userText)
+	if msgID > 0 {
+		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
+		b.savePIIVaultEntries(msgID, scrubResult.Vault)
+	}
+
+	// Run the agent pipeline.
+	err = b.runAgent(fe, AgentInput{
+		UserMessage:    userText,
+		ScrubbedText:   scrubResult.Text,
+		ScrubVault:     scrubResult.Vault,
+		ConversationID: conversationID,
+		TriggerMsgID:   msgID,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return fe.ReplyText(), nil
+}
+
 // Start begins receiving Telegram updates (via polling or webhook).
 // This blocks forever (or until the bot is stopped), so it's typically
 // the last thing called in main.go.
@@ -550,7 +625,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Step 3: Run the agent pipeline — typing, placeholder, callbacks,
 	// TUI events, and error handling are all handled by runAgent.
-	return b.runAgent(c, AgentInput{
+	return b.runAgent(NewTelegramFrontend(c, b), AgentInput{
 		UserMessage:    userText,
 		ScrubbedText:   scrubResult.Text,
 		ScrubVault:     scrubResult.Vault,

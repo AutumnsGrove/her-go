@@ -87,7 +87,7 @@ func (b *Bot) runLocationAgent(c tele.Context, syntheticText, conversationID str
 		log.Error("saving location message", "err", err)
 	}
 
-	return b.runAgent(c, AgentInput{
+	return b.runAgent(NewTelegramFrontend(c, b), AgentInput{
 		UserMessage:    syntheticText,
 		ConversationID: conversationID,
 		TriggerMsgID:   msgID,
