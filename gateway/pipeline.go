@@ -53,6 +53,10 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 // ProcessMessage with its own Frontend implementation).
 func (p *Pipeline) Engine() *bot.Bot { return p.bot }
 
+// Store returns the pipeline's memory store for command logging
+// and other adapter-level operations.
+func (p *Pipeline) Store() memory.Store { return p.store }
+
 // Process runs an inbound message through the agent pipeline and
 // returns the result. The adapter is used to provide Frontend
 // capabilities (typing, status updates) during processing.
