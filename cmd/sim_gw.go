@@ -12,6 +12,7 @@ import (
 	"her/embed"
 	"her/gateway"
 	"her/llm"
+	"her/memory"
 	"her/search"
 	"her/tui"
 
@@ -96,14 +97,26 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	tmpDBPath := filepath.Join(tmpDir, "sim.db")
 
-	// Inject a single sim adapter into the gateway config. We set this
-	// programmatically rather than reading from config.yaml so sim runs
-	// never accidentally share memory with the production database.
 	cfg.Gateway.Adapters = []config.AdapterConfig{{
 		Name: "sim",
 		Type: "sim",
 		DB:   tmpDBPath,
 	}}
+
+	// --- Pre-seed the database ---
+	// Open the store, seed memories/cards/persona, then register it with
+	// the gateway so it reuses the pre-seeded store instead of opening a
+	// new one.
+	store, err := memory.NewStore(tmpDBPath, cfg.Embed.Dimension)
+	if err != nil {
+		return fmt.Errorf("opening temp store: %w", err)
+	}
+
+	embedClient := embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
+
+	if err := seedSimDB(store, embedClient, cfg, s); err != nil {
+		return fmt.Errorf("seeding sim database: %w", err)
+	}
 
 	// --- LLM clients ---
 	// Same pattern as run.go: each role gets its own client so they can have
@@ -194,8 +207,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		introspectionLLM.WithTimeout(time.Duration(timeout) * time.Second)
 	}
 
-	// --- Embed + search clients ---
-	embedClient := embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
+	// --- Search client ---
 	tavilyClient := search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
 
 	// --- Assemble deps ---
@@ -232,6 +244,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	// which is intentional — keep output clean and results-focused.
 	bus := tui.NewBus()
 	gw := gateway.New(cfg, deps, bus)
+	gw.RegisterStore(tmpDBPath, store)
 	gw.SimMessages = gwMessages
 
 	// context.WithCancel lets us stop the gateway once the sim adapter
@@ -343,4 +356,123 @@ func truncSimText(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// seedSimDB pre-populates the sim database with cards, memories, self
+// memories, and persona before the gateway starts. This ensures the
+// agent has context to work with from the first message.
+func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config, s suite) error {
+	// --- Seed memory cards ---
+	if s.SeedCards {
+		log.Infof("sim: seeding memory cards...")
+		// Type-assert to access DB() — the documented escape hatch for
+		// infrastructure code that needs raw SQL.
+		sqlStore, ok := store.(*memory.SQLiteStore)
+		if !ok {
+			return fmt.Errorf("card seeding requires SQLiteStore")
+		}
+		seedCardSQL := `INSERT OR IGNORE INTO memory_cards (topic_slug, name, subject, protected) VALUES (?, ?, ?, ?)`
+		cards := []struct{ slug, name, subject string }{
+			{"identity", "Identity", "user"},
+			{"health", "Health", "user"},
+			{"financial", "Financial", "user"},
+			{"family", "Family", "user"},
+			{"relationships", "Relationships", "user"},
+			{"work", "Work & Career", "user"},
+			{"interests", "Interests", "user"},
+			{"projects", "Projects", "user"},
+			{"routines", "Routines", "user"},
+			{"my-identity", "My Identity", "self"},
+			{"my-emotions", "My Emotions", "self"},
+			{"my-communication", "My Communication", "self"},
+			{"my-relationship", "My Relationship", "self"},
+			{"my-growth", "My Growth", "self"},
+		}
+		for _, c := range cards {
+			if _, err := sqlStore.DB().Exec(seedCardSQL, c.slug, c.name, c.subject, 1); err != nil {
+				log.Warnf("sim: seed card %q failed: %v", c.slug, err)
+			}
+		}
+	}
+
+	// --- Resolve card slug → ID ---
+	resolveCardID := func(slug string) int64 {
+		if slug == "" {
+			return 0
+		}
+		card, err := store.GetCard(slug)
+		if err != nil || card == nil {
+			return 0
+		}
+		return card.ID
+	}
+
+	// --- Seed user memories ---
+	if len(s.SeedMemories) > 0 {
+		log.Infof("sim: seeding %d memories...", len(s.SeedMemories))
+		for _, m := range s.SeedMemories {
+			var vec []float32
+			if embedClient != nil {
+				v, err := embedClient.Embed(m.Content)
+				if err != nil {
+					log.Warnf("sim: seed embed failed: %v", err)
+				} else {
+					vec = v
+				}
+			}
+			cardID := resolveCardID(m.Card)
+			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID)
+			if err != nil {
+				log.Errorf("sim: seed memory failed: %v", err)
+				continue
+			}
+			if len(vec) > 0 {
+				_ = store.AutoLinkMemory(id, vec)
+			}
+			log.Infof("sim:   seeded #%d: %s", id, truncSimText(m.Content, 60))
+		}
+	}
+
+	// --- Seed self memories ---
+	if len(s.SeedSelfMemories) > 0 {
+		log.Infof("sim: seeding %d self memories...", len(s.SeedSelfMemories))
+		for _, m := range s.SeedSelfMemories {
+			var vec []float32
+			if embedClient != nil {
+				v, err := embedClient.Embed(m.Content)
+				if err != nil {
+					log.Warnf("sim: seed embed failed: %v", err)
+				} else {
+					vec = v
+				}
+			}
+			cardID := resolveCardID(m.Card)
+			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID)
+			if err != nil {
+				log.Errorf("sim: seed self memory failed: %v", err)
+				continue
+			}
+			if len(vec) > 0 {
+				_ = store.AutoLinkMemory(id, vec)
+			}
+			log.Infof("sim:   seeded self #%d: %s", id, truncSimText(m.Content, 60))
+		}
+	}
+
+	// --- Seed persona ---
+	if s.SeedPersona != "" {
+		tmpPersona, err := os.CreateTemp("", "her-sim-persona-*.md")
+		if err != nil {
+			return fmt.Errorf("creating temp persona file: %w", err)
+		}
+		if _, err := tmpPersona.WriteString(s.SeedPersona); err != nil {
+			tmpPersona.Close()
+			return fmt.Errorf("writing seed persona: %w", err)
+		}
+		tmpPersona.Close()
+		cfg.Persona.PersonaFile = tmpPersona.Name()
+		log.Infof("sim: seeded persona (%d bytes)", len(s.SeedPersona))
+	}
+
+	return nil
 }
