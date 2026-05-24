@@ -224,6 +224,31 @@ var syncedTableSpecs = map[string]tableSpec{
 		d1Cols:       "id, ts, kind, valence, labels, associations, note, source, confidence, conversation_id, created_at, updated_at, superseded_by, supersede_reason",
 		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
 	},
+	"pii_vault": {
+		selectCols:   "id, message_id, token, original_value, entity_type, created_at",
+		d1Cols:       "id, message_id, token, original_value, entity_type, created_at",
+		placeholders: "?, ?, ?, ?, ?, ?",
+	},
+	"metrics": {
+		selectCols:   "id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback, agent_role",
+		d1Cols:       "id, timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback, agent_role",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+	},
+	"agent_turns": {
+		selectCols:   "id, timestamp, message_id, turn_index, role, tool_name, tool_args, content",
+		d1Cols:       "id, timestamp, message_id, turn_index, role, tool_name, tool_args, content",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?",
+	},
+	"dream_audit": {
+		selectCols:   "id, timestamp, operation, source_ids, result_id, before_text, after_text, reason, dry_run",
+		d1Cols:       "id, timestamp, operation, source_ids, result_id, before_text, after_text, reason, dry_run",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?",
+	},
+	"scheduler_tasks": {
+		selectCols:   "id, kind, cron_expr, next_fire, payload_json, retry_max_attempts, retry_backoff, retry_initial_wait, last_run_at, last_error, attempt_count, created_at",
+		d1Cols:       "id, kind, cron_expr, next_fire, payload_json, retry_max_attempts, retry_backoff, retry_initial_wait, last_run_at, last_error, attempt_count, created_at",
+		placeholders: "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+	},
 }
 
 // ---------------------------------------------------------------------------
@@ -878,6 +903,139 @@ func (s *SyncedStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason s
 		s.pushRecentCardLog(sourceID)
 	}
 	return card, nil
+}
+
+// ---------------------------------------------------------------------------
+// PII Vault
+// ---------------------------------------------------------------------------
+
+// SavePIIVaultEntry stores a PII token mapping locally and records in outbox.
+// The vault is critical for cross-machine sync — without it, scrubbed messages
+// can't be deanonymized on the other machine.
+func (s *SyncedStore) SavePIIVaultEntry(messageID int64, token, originalValue, entityType string) error {
+	if err := s.SQLiteStore.SavePIIVaultEntry(messageID, token, originalValue, entityType); err != nil {
+		return err
+	}
+	// Query back the ID — SavePIIVaultEntry doesn't return it.
+	var id int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM pii_vault WHERE message_id = ? AND token = ? ORDER BY id DESC LIMIT 1`,
+		messageID, token,
+	).Scan(&id)
+	if err == nil {
+		s.writeOutbox("pii_vault", id, "upsert")
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+// SaveMetric logs token usage locally and records in outbox.
+// Queries back by timestamp DESC to avoid last_insert_rowid() races
+// with concurrent background agents.
+func (s *SyncedStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error {
+	if err := s.SQLiteStore.SaveMetric(model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, messageID, isFallback, agentRole); err != nil {
+		return err
+	}
+	var id int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM metrics WHERE model = ? AND agent_role = ? ORDER BY id DESC LIMIT 1`,
+		model, agentRole,
+	).Scan(&id)
+	if err == nil && id > 0 {
+		s.writeOutbox("metrics", id, "upsert")
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Agent Turns
+// ---------------------------------------------------------------------------
+
+// SaveAgentTurn logs an agent reasoning step locally and records in outbox.
+func (s *SyncedStore) SaveAgentTurn(messageID int64, turnIndex int, role, toolName, toolArgs, content string) error {
+	if err := s.SQLiteStore.SaveAgentTurn(messageID, turnIndex, role, toolName, toolArgs, content); err != nil {
+		return err
+	}
+	var id int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM agent_turns WHERE message_id = ? AND turn_index = ? AND role = ? ORDER BY id DESC LIMIT 1`,
+		messageID, turnIndex, role,
+	).Scan(&id)
+	if err == nil && id > 0 {
+		s.writeOutbox("agent_turns", id, "upsert")
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Dream Audit
+// ---------------------------------------------------------------------------
+
+// SaveDreamAudit logs a dreamer operation locally and records in outbox.
+func (s *SyncedStore) SaveDreamAudit(op string, sourceIDs []int64, resultID int64, before, after, reason string, dryRun bool) error {
+	if err := s.SQLiteStore.SaveDreamAudit(op, sourceIDs, resultID, before, after, reason, dryRun); err != nil {
+		return err
+	}
+	var id int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM dream_audit WHERE operation = ? AND result_id = ? ORDER BY id DESC LIMIT 1`,
+		op, resultID,
+	).Scan(&id)
+	if err == nil && id > 0 {
+		s.writeOutbox("dream_audit", id, "upsert")
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler Tasks
+// ---------------------------------------------------------------------------
+
+// UpsertSchedulerTask inserts or updates a scheduler task locally and records
+// in outbox. Uses kind to query back the ID since ON CONFLICT changes the
+// semantics of last_insert_rowid().
+func (s *SyncedStore) UpsertSchedulerTask(t *SchedulerTask) error {
+	if err := s.SQLiteStore.UpsertSchedulerTask(t); err != nil {
+		return err
+	}
+	var id int64
+	err := s.SQLiteStore.db.QueryRow(
+		`SELECT id FROM scheduler_tasks WHERE kind = ?`, t.Kind,
+	).Scan(&id)
+	if err == nil && id > 0 {
+		s.writeOutbox("scheduler_tasks", id, "upsert")
+	}
+	return nil
+}
+
+// MarkSchedulerSuccess records a successful run locally and records in outbox.
+func (s *SyncedStore) MarkSchedulerSuccess(id int64, nextFire time.Time) error {
+	if err := s.SQLiteStore.MarkSchedulerSuccess(id, nextFire); err != nil {
+		return err
+	}
+	s.writeOutbox("scheduler_tasks", id, "upsert")
+	return nil
+}
+
+// MarkSchedulerFailure records a failed run locally and records in outbox.
+func (s *SyncedStore) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error {
+	if err := s.SQLiteStore.MarkSchedulerFailure(id, nextFire, errMsg, attempts); err != nil {
+		return err
+	}
+	s.writeOutbox("scheduler_tasks", id, "upsert")
+	return nil
+}
+
+// DeleteSchedulerTask removes a task locally and records a delete in outbox.
+func (s *SyncedStore) DeleteSchedulerTask(id int64) error {
+	if err := s.SQLiteStore.DeleteSchedulerTask(id); err != nil {
+		return err
+	}
+	s.writeOutbox("scheduler_tasks", id, "delete")
+	return nil
 }
 
 // Compile-time check: SyncedStore must satisfy the Store interface.

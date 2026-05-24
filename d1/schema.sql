@@ -176,6 +176,87 @@ CREATE INDEX IF NOT EXISTS idx_mood_entries_kind_ts ON mood_entries(kind, ts);
 CREATE INDEX IF NOT EXISTS idx_mood_entries_superseded ON mood_entries(superseded_by);
 
 -- ---------------------------------------------------------------------------
+-- PII Vault (token↔original mappings for deanonymization)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pii_vault (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id     INTEGER,
+    token          TEXT NOT NULL,
+    original_value TEXT NOT NULL,
+    entity_type    TEXT NOT NULL,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (message_id) REFERENCES messages(id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Metrics (LLM token usage and cost tracking)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS metrics (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp         DATETIME DEFAULT CURRENT_TIMESTAMP,
+    model             TEXT NOT NULL,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    total_tokens      INTEGER,
+    cost_usd          REAL,
+    latency_ms        INTEGER,
+    message_id        INTEGER,
+    is_fallback       BOOLEAN DEFAULT 0,
+    agent_role        TEXT DEFAULT '',
+    FOREIGN KEY (message_id) REFERENCES messages(id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Agent Turns (tool call audit trail)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agent_turns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    message_id  INTEGER,
+    turn_index  INTEGER,
+    role        TEXT NOT NULL,
+    tool_name   TEXT,
+    tool_args   TEXT,
+    content     TEXT,
+    FOREIGN KEY (message_id) REFERENCES messages(id)
+);
+
+-- ---------------------------------------------------------------------------
+-- Dream Audit (memory dreamer operation log)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dream_audit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    operation   TEXT NOT NULL,
+    source_ids  TEXT NOT NULL,
+    result_id   INTEGER,
+    before_text TEXT,
+    after_text  TEXT,
+    reason      TEXT,
+    dry_run     BOOLEAN DEFAULT 0
+);
+
+-- ---------------------------------------------------------------------------
+-- Scheduler Tasks (reminders and recurring jobs)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scheduler_tasks (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind               TEXT NOT NULL,
+    cron_expr          TEXT,
+    next_fire          DATETIME NOT NULL,
+    payload_json       TEXT NOT NULL DEFAULT '{}',
+    retry_max_attempts INTEGER NOT NULL DEFAULT 0,
+    retry_backoff      TEXT NOT NULL DEFAULT 'none',
+    retry_initial_wait INTEGER NOT NULL DEFAULT 0,
+    last_run_at        DATETIME,
+    last_error         TEXT,
+    attempt_count      INTEGER NOT NULL DEFAULT 0,
+    created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_tasks_kind ON scheduler_tasks(kind);
+
+-- ---------------------------------------------------------------------------
 -- Sync Metadata
 --
 -- Tracks the last synced row ID per table. Each machine maintains its own

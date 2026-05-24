@@ -1,42 +1,44 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
+	"os/signal"
+	"sync"
 	"syscall"
-	"text/template"
 	"time"
 
+	"her/bot"
 	"her/config"
+	"her/d1"
+	"her/embed"
+	"her/llm"
+	"her/logger"
+	"her/memory"
+	"her/retry"
+	"her/search"
+	"her/tui"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+var devLog = logger.WithPrefix("dev")
 
 var devCmd = &cobra.Command{
 	Use:   "dev",
-	Short: "Start a dev session with ephemeral tunnel and KV routing",
-	Long: `Starts a development session on the MacBook:
+	Short: "Start the dev server with HTTP API (no Telegram)",
+	Long: `Starts the full agent pipeline with a local HTTP API on :7777.
+Use with the Gradio dev chat frontend (scripts/dev_chat.py).
+No Telegram token required — the VPS owns Telegram, your Mac owns dev mode.
 
-  1. Launches an ephemeral Cloudflare Tunnel (*.trycloudflare.com)
-  2. Sets KV routing keys so the CF Worker sends traffic here
-  3. Starts a heartbeat goroutine to keep the dev session alive
-  4. Runs the bot in webhook mode with a separate dev database
-  5. On Ctrl+C: clears KV keys so prod resumes immediately
-
-The Mac Mini prod instance keeps running but receives no traffic while
-dev mode is active. When you stop, the CF Worker routes back to prod
-within seconds.
-
-Requires cloudflare section in config.yaml (account_id, api_token, kv_namespace_id).`,
+  Terminal 1:  her dev
+  Terminal 2:  uv run scripts/dev_chat.py
+  Browser:     http://localhost:7860`,
 	RunE: runDev,
 }
 
@@ -44,343 +46,349 @@ func init() {
 	rootCmd.AddCommand(devCmd)
 }
 
-// trycloudflarePattern matches the assigned tunnel URL from cloudflared output.
-// cloudflared prints: "... https://random-words.trycloudflare.com ..."
-var trycloudflarePattern = regexp.MustCompile(`https://[a-zA-Z0-9-]+\.trycloudflare\.com`)
+// chatRequest is the JSON body for POST /api/chat.
+type chatRequest struct {
+	Message        string `json:"message"`
+	ConversationID string `json:"conversation_id"`
+}
 
-// runDev orchestrates the dev session lifecycle.
+// chatResponse is the JSON response from POST /api/chat.
+type chatResponse struct {
+	Reply          string `json:"reply"`
+	ConversationID string `json:"conversation_id"`
+}
+
 func runDev(cmd *cobra.Command, args []string) error {
-	// Load config to get Cloudflare credentials.
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		devLog.Fatal("failed to load config", "err", err)
+	}
+	cfg.ExportEnv()
+
+	if cfg.OpenRouter.APIKey == "" {
+		devLog.Fatal("LLM API key is required — set OPENROUTER_API_KEY or fill config.yaml")
 	}
 
-	// Validate Cloudflare API credentials.
-	if cfg.Cloudflare.AccountID == "" || cfg.Cloudflare.APIToken == "" || cfg.Cloudflare.KVNamespaceID == "" {
-		return fmt.Errorf("cloudflare section in config.yaml is incomplete — need account_id, api_token, and kv_namespace_id for dev mode KV routing")
-	}
-
-	// Generate worker/wrangler.toml from config.yaml so IDs stay out
-	// of version control. Non-fatal — wrangler.toml is only needed for
-	// `npx wrangler deploy`, not for the bot itself.
-	if err := generateWranglerConfig(cfg); err != nil {
-		log.Warn("could not generate wrangler.toml", "err", err)
-	}
-
-	// Check cloudflared is installed.
-	cloudflaredBin, err := exec.LookPath("cloudflared")
+	// --- Store ---
+	store, err := memory.NewStore(cfg.Memory.DBPath, cfg.Embed.Dimension)
 	if err != nil {
-		return fmt.Errorf("cloudflared not found — install with: brew install cloudflare/cloudflare/cloudflared")
+		devLog.Fatal("failed to initialize database", "err", err)
+	}
+	store.AutoLinkCount = cfg.Memory.AutoLinkCount
+	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
+
+	var botStore memory.Store = store
+	if cfg.Cloudflare.D1DatabaseID != "" {
+		d1Client := d1.NewClient(cfg.Cloudflare.AccountID, cfg.Cloudflare.D1DatabaseID, cfg.Cloudflare.APIToken)
+		if d1Client != nil {
+			synced, err := memory.NewSyncedStore(store, d1Client)
+			if err != nil {
+				devLog.Fatal("failed to initialize D1 sync", "err", err)
+			}
+			if cfg.Cloudflare.Sync.BatchSize > 0 {
+				synced.BatchSize = cfg.Cloudflare.Sync.BatchSize
+			}
+			if cfg.Cloudflare.Sync.PullPageSize > 0 {
+				synced.PullPageSize = cfg.Cloudflare.Sync.PullPageSize
+			}
+
+			pullCtx, pullCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			err = retry.Do(pullCtx, retry.Config{
+				MaxAttempts: 3,
+				Backoff:     retry.Exponential,
+				InitialWait: 2 * time.Second,
+			}, func() error {
+				return synced.Pull(pullCtx)
+			})
+			if err != nil {
+				devLog.Error("d1 pull failed — continuing with local data", "err", err)
+			}
+			pullCancel()
+
+			botStore = synced
+			devLog.Info("d1 sync enabled")
+		}
+	}
+	defer botStore.Close()
+
+	// --- Event bus + logging ---
+	bus := tui.NewBus()
+
+	logFile := &lumberjack.Logger{
+		Filename:   "logs/dev.log",
+		MaxSize:    10,
+		MaxBackups: 0,
+		MaxAge:     0,
+		LocalTime:  true,
+	}
+	_ = logFile.Rotate()
+	logger.Init(bus, nil)
+	tui.StartFileLogger(bus, logFile)
+
+	devLog.Info("SESSION_START",
+		"mode", "dev",
+		"driver_model", cfg.Driver.Model,
+		"chat_model", cfg.Chat.Model,
+	)
+
+	// --- LLM clients ---
+	// Same initialization as cmd/run.go — each agent gets its own client
+	// with model, temperature, timeout, fallback, and provider routing
+	// from config.yaml.
+
+	llmClient := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
+	if cfg.Chat.Timeout > 0 {
+		llmClient.WithTimeout(time.Duration(cfg.Chat.Timeout) * time.Second)
+	}
+	if cfg.Chat.Provider != nil {
+		llmClient.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
+	}
+	if cfg.Chat.Fallback != nil {
+		llmClient.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
+	}
+	if cfg.Chat.Reasoning != nil && cfg.Chat.Reasoning.Enabled != nil {
+		llmClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Chat.Reasoning.Enabled})
 	}
 
-	// Determine webhook port.
-	webhookPort := cfg.Telegram.WebhookPort
-	if webhookPort == 0 {
-		webhookPort = 8443
+	driverClient := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
+	if cfg.Driver.Timeout > 0 {
+		driverClient.WithTimeout(time.Duration(cfg.Driver.Timeout) * time.Second)
+	}
+	if cfg.Driver.Fallback != nil {
+		driverClient.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
+	}
+	if cfg.Driver.Reasoning != nil && cfg.Driver.Reasoning.Enabled != nil {
+		driverClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.Driver.Reasoning.Enabled})
 	}
 
-	// Step 1: Start ephemeral tunnel.
-	log.Info("starting ephemeral tunnel...")
-	tunnelURL, tunnelProcess, err := startEphemeralTunnel(cloudflaredBin, webhookPort)
+	var visionClient *llm.Client
+	if cfg.Vision.Model != "" {
+		visionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
+		if cfg.Vision.Fallback != nil {
+			visionClient.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
+		}
+	}
+
+	var classifierClient *llm.Client
+	if cfg.Classifier.Model != "" {
+		classifierClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Classifier.Model, cfg.Classifier.Temperature, cfg.Classifier.MaxTokens)
+	}
+
+	var memoryAgentClient *llm.Client
+	if cfg.MemoryAgent.Model != "" {
+		memoryAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MemoryAgent.Model, cfg.MemoryAgent.Temperature, cfg.MemoryAgent.MaxTokens)
+		if cfg.MemoryAgent.Timeout > 0 {
+			memoryAgentClient.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
+		}
+		if cfg.MemoryAgent.Provider != nil {
+			memoryAgentClient.WithProvider(&llm.ProviderRouting{Order: cfg.MemoryAgent.Provider.Order, Only: cfg.MemoryAgent.Provider.Only, Sort: cfg.MemoryAgent.Provider.Sort})
+		}
+		if cfg.MemoryAgent.Fallback != nil {
+			memoryAgentClient.WithFallback(cfg.MemoryAgent.Fallback.Model, cfg.MemoryAgent.Fallback.Temperature, cfg.MemoryAgent.Fallback.MaxTokens)
+		}
+		if cfg.MemoryAgent.Reasoning != nil && cfg.MemoryAgent.Reasoning.Enabled != nil {
+			memoryAgentClient.WithReasoning(&llm.ReasoningControl{Enabled: cfg.MemoryAgent.Reasoning.Enabled})
+		}
+	}
+
+	var moodAgentClient *llm.Client
+	if cfg.MoodAgent.Model != "" {
+		mTemp := cfg.MoodAgent.Temperature
+		if mTemp == 0 {
+			mTemp = 0.2
+		}
+		mTokens := cfg.MoodAgent.MaxTokens
+		if mTokens == 0 {
+			mTokens = 512
+		}
+		moodAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.MoodAgent.Model, mTemp, mTokens)
+		if cfg.MoodAgent.Timeout > 0 {
+			moodAgentClient.WithTimeout(time.Duration(cfg.MoodAgent.Timeout) * time.Second)
+		}
+		if cfg.MoodAgent.Provider != nil {
+			moodAgentClient.WithProvider(&llm.ProviderRouting{Order: cfg.MoodAgent.Provider.Order, Only: cfg.MoodAgent.Provider.Only, Sort: cfg.MoodAgent.Provider.Sort})
+		}
+		if cfg.MoodAgent.Fallback != nil {
+			moodAgentClient.WithFallback(cfg.MoodAgent.Fallback.Model, cfg.MoodAgent.Fallback.Temperature, cfg.MoodAgent.Fallback.MaxTokens)
+		}
+	}
+
+	var embedClient *embed.Client
+	if cfg.Embed.BaseURL != "" && cfg.Embed.Model != "" {
+		embedClient = embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
+	}
+
+	var embedProcess *exec.Cmd
+	if embedClient != nil {
+		if embedClient.IsAvailable() {
+			devLog.Info("embed server ready", "model", cfg.Embed.Model)
+		} else if cfg.Embed.StartCommand != "" {
+			embedProcess = startEmbedSidecar(cfg, bus, embedClient)
+		} else {
+			devLog.Warn("embed server not responding — semantic recall degraded")
+		}
+	}
+
+	var tavilyClient *search.TavilyClient
+	if cfg.Search.TavilyAPIKey != "" {
+		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
+	}
+
+	// Dream + introspection agents — fall back to memory agent if not configured.
+	var dreamAgentClient *llm.Client
+	if cfg.DreamAgent.Model != "" {
+		dreamAgentClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.DreamAgent.Model, cfg.DreamAgent.Temperature, cfg.DreamAgent.MaxTokens)
+		timeout := cfg.DreamAgent.Timeout
+		if timeout == 0 {
+			timeout = 120
+		}
+		dreamAgentClient.WithTimeout(time.Duration(timeout) * time.Second)
+	} else if memoryAgentClient != nil {
+		dreamAgentClient = memoryAgentClient
+	}
+
+	var introspectionClient *llm.Client
+	if cfg.IntrospectionAgent.Model != "" {
+		introspectionClient = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.IntrospectionAgent.Model, cfg.IntrospectionAgent.Temperature, cfg.IntrospectionAgent.MaxTokens)
+		timeout := cfg.IntrospectionAgent.Timeout
+		if timeout == 0 {
+			timeout = 60
+		}
+		introspectionClient.WithTimeout(time.Duration(timeout) * time.Second)
+	} else if memoryAgentClient != nil {
+		introspectionClient = memoryAgentClient
+	}
+
+	// --- Create bot (no Telegram) ---
+	devBot, err := bot.NewDev(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, botStore, bus)
 	if err != nil {
-		return fmt.Errorf("starting ephemeral tunnel: %w", err)
-	}
-	log.Info("tunnel ready", "url", tunnelURL)
-
-	// Build the KV client from config.
-	kv := &kvClient{
-		accountID:   cfg.Cloudflare.AccountID,
-		apiToken:    cfg.Cloudflare.APIToken,
-		namespaceID: cfg.Cloudflare.KVNamespaceID,
-		http:        &http.Client{Timeout: kvClientTimeout},
+		devLog.Fatal("failed to create dev bot", "err", err)
 	}
 
-	// Step 2: Set KV routing keys.
-	log.Info("setting KV routing keys...")
-	if err := kv.put("dev_mode_active", "true"); err != nil {
-		killTunnel(tunnelProcess)
-		return fmt.Errorf("setting dev_mode_active: %w", err)
-	}
-	if err := kv.put("dev_instance_url", tunnelURL); err != nil {
-		killTunnel(tunnelProcess)
-		return fmt.Errorf("setting dev_instance_url: %w", err)
-	}
-	if err := kv.put("dev_session_heartbeat", nowMillis()); err != nil {
-		killTunnel(tunnelProcess)
-		return fmt.Errorf("setting dev_session_heartbeat: %w", err)
-	}
-	log.Info("KV routing active — traffic redirected to dev")
+	// --- Conversation state ---
+	var (
+		currentConvID string
+		convMu        sync.Mutex
+	)
 
-	// Step 3: Start heartbeat goroutine (refreshes every 2 minutes).
-	// The CF Worker considers the dev session stale after 5 minutes
-	// without a heartbeat — this keeps it alive.
-	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
-	go func() {
-		ticker := time.NewTicker(2 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := kv.put("dev_session_heartbeat", nowMillis()); err != nil {
-					log.Warn("heartbeat failed", "err", err)
-				}
-			case <-heartbeatCtx.Done():
+	getConvID := func() string {
+		convMu.Lock()
+		defer convMu.Unlock()
+		if currentConvID == "" {
+			currentConvID = fmt.Sprintf("dev-%d", time.Now().UnixNano())
+		}
+		return currentConvID
+	}
+
+	// --- HTTP handlers ---
+	mux := http.NewServeMux()
+
+	// CORS middleware — restrict to Gradio's default origin (localhost:7860).
+	cors := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:7860")
+			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusNoContent)
 				return
 			}
+			h(w, r)
 		}
-	}()
-
-	// Step 4: Set config transform so runBot uses webhook mode.
-	// No separate dev DB — both machines use their own local her.db,
-	// kept in sync via D1. The Pull on startup hydrates this machine's
-	// her.db with any data the other machine created.
-	configTransform = func(c *config.Config) {
-		c.Telegram.Mode = "webhook"
-		log.Info("dev overrides applied", "mode", "webhook")
 	}
 
-	// Step 5: Set cleanup hook — clears KV keys on shutdown so traffic
-	// routes back to prod immediately.
-	devCleanup = func() {
-		log.Info("clearing KV routing keys...")
-		heartbeatCancel()
-
-		// Signal the prod instance that dev ended — it polls for this
-		// key and triggers a D1 Pull to sync any data we created.
-		if err := kv.put("dev_session_ended", nowMillis()); err != nil {
-			log.Warn("failed to write dev_session_ended", "err", err)
+	mux.HandleFunc("/api/chat", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
 		}
 
-		// Best-effort cleanup — if these fail, the 5-minute heartbeat
-		// timeout in the CF Worker handles it automatically.
-		_ = kv.delete("dev_mode_active")
-		_ = kv.delete("dev_instance_url")
-		_ = kv.delete("dev_session_heartbeat")
-		log.Info("KV cleared — traffic routed back to prod")
+		var req chatRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB limit
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+			return
+		}
+		if req.Message == "" {
+			http.Error(w, `{"error": "message is required"}`, http.StatusBadRequest)
+			return
+		}
 
-		// Kill the ephemeral tunnel process.
-		killTunnel(tunnelProcess)
-		log.Info("tunnel stopped")
+		convID := req.ConversationID
+		if convID == "" {
+			convID = getConvID()
+		}
+
+		fe := bot.NewDevFrontend()
+		reply, err := devBot.ProcessMessage(fe, req.Message, convID)
+		if err != nil {
+			devLog.Error("agent error", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatResponse{
+			Reply:          reply,
+			ConversationID: convID,
+		})
+	}))
+
+	mux.HandleFunc("/api/clear", cors(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		convMu.Lock()
+		currentConvID = fmt.Sprintf("dev-%d", time.Now().UnixNano())
+		newID := currentConvID
+		convMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"conversation_id": newID})
+	}))
+
+	mux.HandleFunc("/api/status", cors(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":       "ok",
+			"mode":         "dev",
+			"chat_model":   cfg.Chat.Model,
+			"driver_model": cfg.Driver.Model,
+		})
+	}))
+
+	// --- Start HTTP server ---
+	srv := &http.Server{
+		Addr:    ":7777",
+		Handler: mux,
 	}
 
-	// Step 6: Run the bot. This calls into the same runBot that `her run`
-	// uses — the configTransform hook makes it use webhook mode + dev DB,
-	// and devCleanup fires on shutdown.
-	return runBot(cmd, args)
-}
-
-// startEphemeralTunnel launches `cloudflared tunnel --url` and captures the
-// assigned *.trycloudflare.com URL from its output. This is a "quick tunnel"
-// — no tunnel create/login needed, Cloudflare assigns a random URL.
-//
-// The function blocks until the URL is captured (up to 30 seconds).
-func startEphemeralTunnel(cloudflaredBin string, port int) (string, *exec.Cmd, error) {
-	proc := exec.Command(cloudflaredBin, "tunnel", "--url", fmt.Sprintf("http://localhost:%d", port))
-	proc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	// cloudflared prints the tunnel URL to stderr (not stdout).
-	stderr, err := proc.StderrPipe()
-	if err != nil {
-		return "", nil, fmt.Errorf("creating stderr pipe: %w", err)
-	}
-	// Discard stdout — cloudflared writes nothing useful there.
-	proc.Stdout = io.Discard
-
-	if err := proc.Start(); err != nil {
-		return "", nil, fmt.Errorf("starting cloudflared: %w", err)
-	}
-
-	// Scan stderr line by line for the trycloudflare.com URL.
-	// cloudflared prints a decorative box around it:
-	//   INF +---...---+
-	//   INF |  Your quick Tunnel has been created! Visit it at: ...  |
-	//   INF |  https://random-words.trycloudflare.com                |
-	//   INF +---...---+
-	urlCh := make(chan string, 1)
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if match := trycloudflarePattern.FindString(line); match != "" {
-				urlCh <- match
-				break
-			}
+		devLog.Info("dev server listening", "addr", "http://localhost:7777")
+		devLog.Info("start Gradio with: uv run scripts/dev_chat.py")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			devLog.Fatal("http server error", "err", err)
 		}
-		// Keep draining stderr so cloudflared doesn't block on a full pipe.
-		io.Copy(io.Discard, stderr)
 	}()
 
-	// Wait up to 30 seconds for the URL.
-	select {
-	case url := <-urlCh:
-		return url, proc, nil
-	case <-time.After(30 * time.Second):
-		killTunnel(proc)
-		return "", nil, fmt.Errorf("timed out waiting for tunnel URL (30s)")
-	}
-}
+	// --- Wait for signal ---
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
 
-// killTunnel sends SIGKILL to the cloudflared process group.
-func killTunnel(proc *exec.Cmd) {
-	if proc != nil && proc.Process != nil {
-		_ = syscall.Kill(-proc.Process.Pid, syscall.SIGKILL)
-		_, _ = proc.Process.Wait()
-	}
-}
+	devLog.Info("shutting down...")
 
-// --- Cloudflare Workers KV client ---
-// Minimal HTTP client for the KV REST API. Only supports put and delete —
-// that's all dev mode needs. Reading is done by the CF Worker at the edge.
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	_ = srv.Shutdown(shutCtx)
 
-type kvClient struct {
-	accountID   string
-	apiToken    string
-	namespaceID string
-	http        *http.Client
-}
-
-// kvBaseURL returns the API base for KV operations.
-func (c *kvClient) kvBaseURL() string {
-	return fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/storage/kv/namespaces/%s", c.accountID, c.namespaceID)
-}
-
-// get reads a value from KV. Returns "" if the key doesn't exist.
-// Used by the sync poller to check for the dev_session_ended signal.
-func (c *kvClient) get(key string) (string, error) {
-	url := c.kvBaseURL() + "/values/" + key
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiToken)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("kv get %s: %w", key, err)
-	}
-	defer resp.Body.Close()
-
-	// 404 means the key doesn't exist — not an error, just empty.
-	if resp.StatusCode == http.StatusNotFound {
-		return "", nil
-	}
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("kv get %s: HTTP %d: %s", key, resp.StatusCode, string(body))
+	if embedProcess != nil && embedProcess.Process != nil {
+		_ = syscall.Kill(-embedProcess.Process.Pid, syscall.SIGTERM)
+		embedProcess.Process.Wait()
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("kv get %s: reading body: %w", key, err)
-	}
-	return string(body), nil
-}
-
-// put writes a key-value pair to KV.
-func (c *kvClient) put(key, value string) error {
-	url := c.kvBaseURL() + "/values/" + key
-	req, err := http.NewRequest("PUT", url, strings.NewReader(value))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	req.Header.Set("Content-Type", "text/plain")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("kv put %s: %w", key, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("kv put %s: HTTP %d: %s", key, resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-// delete removes a key from KV.
-func (c *kvClient) delete(key string) error {
-	url := c.kvBaseURL() + "/values/" + key
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.apiToken)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("kv delete %s: %w", key, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("kv delete %s: HTTP %d: %s", key, resp.StatusCode, string(body))
-	}
-	return nil
-}
-
-// nowMillis returns the current time as a Unix millisecond string.
-// The CF Worker parses this with parseInt() to check heartbeat freshness.
-func nowMillis() string {
-	return strconv.FormatInt(time.Now().UnixMilli(), 10)
-}
-
-// ---------------------------------------------------------------------------
-// Wrangler config generator
-// ---------------------------------------------------------------------------
-
-// wranglerData holds the values injected into wrangler.toml.tmpl.
-// All fields come from config.yaml — one source of truth.
-type wranglerData struct {
-	KVNamespaceID string
-	D1DatabaseID  string
-	ProdURL       string
-}
-
-// generateWranglerConfig reads worker/wrangler.toml.tmpl, fills in values
-// from config.yaml, and writes worker/wrangler.toml. This keeps IDs out of
-// version control — anyone can clone the repo, fill in config.yaml, and
-// the wrangler config is derived automatically.
-func generateWranglerConfig(cfg *config.Config) error {
-	tmplPath := filepath.Join("worker", "wrangler.toml.tmpl")
-	outPath := filepath.Join("worker", "wrangler.toml")
-
-	tmplBytes, err := os.ReadFile(tmplPath)
-	if err != nil {
-		return fmt.Errorf("reading wrangler template: %w", err)
-	}
-
-	tmpl, err := template.New("wrangler").Parse(string(tmplBytes))
-	if err != nil {
-		return fmt.Errorf("parsing wrangler template: %w", err)
-	}
-
-	// Derive PROD_URL from tunnel domain. If no tunnel is configured,
-	// leave it empty — the user hasn't set up production routing yet.
-	prodURL := ""
-	if cfg.Tunnel.Domain != "" {
-		prodURL = "https://" + cfg.Tunnel.Domain
-	}
-
-	data := wranglerData{
-		KVNamespaceID: cfg.Cloudflare.KVNamespaceID,
-		D1DatabaseID:  cfg.Cloudflare.D1DatabaseID,
-		ProdURL:       prodURL,
-	}
-
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("creating wrangler.toml: %w", err)
-	}
-	defer f.Close()
-
-	if err := tmpl.Execute(f, data); err != nil {
-		return fmt.Errorf("writing wrangler.toml: %w", err)
-	}
-
-	log.Info("generated worker/wrangler.toml from config.yaml")
+	bus.Close()
 	return nil
 }

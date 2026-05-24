@@ -115,7 +115,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	}
 
 	// Run the agent with image data attached.
-	return b.runAgent(c, AgentInput{
+	return b.runAgent(NewTelegramFrontend(c, b), AgentInput{
 		UserMessage:    userText,
 		ScrubbedText:   scrubResult.Text,
 		ScrubVault:     scrubResult.Vault,
@@ -264,7 +264,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Run the agent pipeline. The voice handler customizes two things:
 	//  - PlaceholderText: shows the transcript while thinking
 	//  - ForceTTS: always reply with voice (they sent a voice memo)
-	return b.runAgent(c, AgentInput{
+	return b.runAgent(NewTelegramFrontend(c, b), AgentInput{
 		UserMessage:     "\U0001F3A4 " + userText,
 		ScrubbedText:    scrubResult.Text,
 		ScrubVault:      scrubResult.Vault,
