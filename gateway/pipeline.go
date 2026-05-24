@@ -85,6 +85,13 @@ func (f *gatewayFrontend) SendPlaceholder(text string, html bool) error {
 }
 
 func (f *gatewayFrontend) EditStatus(text string) error {
+	// For non-Telegram frontends, EditStatus is how the final reply
+	// gets delivered (the reply tool edits the placeholder with the
+	// response text). We accumulate it so ReplyText() returns the
+	// reply to the caller, while also forwarding to the adapter.
+	f.mu.Lock()
+	f.reply = text
+	f.mu.Unlock()
 	return f.adapter.SendStatus(text)
 }
 
