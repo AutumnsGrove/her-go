@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"her/bot"
 	"her/config"
@@ -135,4 +136,29 @@ func (f *gatewayFrontend) ReplyText() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reply
+}
+
+// --- TraceProvider implementation ---
+// Routes agent trace output to the adapter's OnTraceEvent method,
+// which fans out to SSE subscribers (Gradio trace panel), etc.
+//
+// The bot.TraceProvider interface is optional — the bot checks for it
+// with a type assertion. By implementing it here, the gateway frontend
+// automatically gets trace support without any Telegram coupling.
+
+func (f *gatewayFrontend) TraceCallback(slot string) func(string) error {
+	return func(text string) error {
+		f.adapter.OnTraceEvent(TraceEvent{
+			Phase:   slot,
+			Agent:   slot,
+			Content: text,
+			Time:    time.Now(),
+		})
+		return nil
+	}
+}
+
+func (f *gatewayFrontend) TraceFinalize() {
+	// No cleanup needed for gateway traces — each event was already
+	// pushed to the adapter's SSE stream as it arrived.
 }

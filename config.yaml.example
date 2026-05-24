@@ -286,5 +286,5 @@ gateway:
       enabled: false               # enable when you want local dev chat
       db: her-dev.db               # separate DB so dev chat doesn't pollute production
       memory: false                # disable memory for quick testing
-      port: 7860
+      port: 7777                   # Go API port — Gradio Python UI runs separately on :7860
       traces: true                 # show agent traces in side panel

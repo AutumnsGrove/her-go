@@ -1,12 +1,12 @@
 """
-Gradio chat frontend for her-go dev mode.
+Gradio chat frontend for her-go gateway mode.
 
-Connects to the Go backend's HTTP API (her dev) and provides a
-browser-based chat interface with message bubbles.
+Connects to the Go backend's HTTP API (gateway gradio adapter) and
+provides a browser-based chat interface with a live agent trace panel.
 
 Usage:
-    # Terminal 1: start the Go backend
-    her dev
+    # Terminal 1: start the Go backend with gradio adapter enabled
+    her run
 
     # Terminal 2: start the Gradio frontend
     uv run scripts/dev_chat.py
@@ -14,7 +14,7 @@ Usage:
     # Browser: open http://localhost:7860
 
 Requirements (installed automatically by uv):
-    pip install gradio requests
+    pip install gradio requests sseclient-py
 """
 
 # /// script
@@ -22,10 +22,15 @@ Requirements (installed automatically by uv):
 # dependencies = [
 #     "gradio>=5.0",
 #     "requests>=2.31",
+#     "sseclient-py>=1.8",
 # ]
 # ///
 
+import json
+import threading
+
 import requests
+import sseclient
 import gradio as gr
 
 API_BASE = "http://localhost:7777"
@@ -58,7 +63,7 @@ def chat(message: str, history: list) -> str:
         )
         resp.raise_for_status()
     except requests.ConnectionError:
-        return "Backend not running. Start it with: `her dev`"
+        return "Backend not running. Start it with: `her run`"
     except requests.Timeout:
         return "Request timed out — the agent may be processing a complex query."
     except requests.HTTPError as e:
@@ -81,6 +86,57 @@ def clear_conversation():
     return None
 
 
+# --- Trace SSE listener ---
+# Connects to the backend's /api/traces SSE stream and accumulates
+# trace events into a list. The trace panel polls this list on a timer.
+
+trace_log: list[str] = []
+trace_lock = threading.Lock()
+
+
+def start_trace_listener():
+    """Background thread that listens for SSE trace events."""
+    while True:
+        try:
+            resp = requests.get(
+                f"{API_BASE}/api/traces", stream=True, timeout=None
+            )
+            client = sseclient.SSEClient(resp)
+            for event in client.events():
+                try:
+                    data = json.loads(event.data)
+                    agent = data.get("Agent", "")
+                    phase = data.get("Phase", "")
+                    content = data.get("Content", "")
+                    # Strip HTML tags for plain text display
+                    import re
+                    content = re.sub(r"<[^>]+>", "", content)
+                    line = f"[{agent}/{phase}] {content}"
+                    with trace_lock:
+                        trace_log.append(line)
+                        # Keep last 200 lines
+                        if len(trace_log) > 200:
+                            del trace_log[:50]
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            import time
+            time.sleep(2)  # reconnect after brief pause
+
+
+def get_traces() -> str:
+    """Return accumulated trace log as text for the panel."""
+    with trace_lock:
+        if not trace_log:
+            return "Waiting for agent activity..."
+        return "\n".join(trace_log[-100:])
+
+
+# Start SSE listener in background
+listener_thread = threading.Thread(target=start_trace_listener, daemon=True)
+listener_thread.start()
+
+
 # --- Build the Gradio UI ---
 
 with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
@@ -88,14 +144,33 @@ with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
 
     if not check_backend():
         gr.Markdown(
-            "> **Backend not running.** Start it with `her dev` in another terminal."
+            "> **Backend not running.** Start it with `her run` "
+            "(with gradio adapter enabled in config.yaml)."
         )
 
-    chatbot = gr.ChatInterface(
-        fn=chat,
-        type="messages",
-        examples=["hey, how are you?", "what do you remember about me?"],
-    )
+    with gr.Row():
+        # Left: chat panel (2/3 width)
+        with gr.Column(scale=2):
+            chatbot = gr.ChatInterface(
+                fn=chat,
+                type="messages",
+                examples=[
+                    "hey, how are you?",
+                    "what do you remember about me?",
+                ],
+            )
+
+        # Right: trace panel (1/3 width)
+        with gr.Column(scale=1):
+            gr.Markdown("### Agent Traces")
+            trace_box = gr.Textbox(
+                value=get_traces,
+                label="Live Traces",
+                lines=30,
+                max_lines=30,
+                interactive=False,
+                every=1,  # poll every 1 second
+            )
 
 if __name__ == "__main__":
     demo.launch()

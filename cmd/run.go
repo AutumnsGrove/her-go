@@ -48,14 +48,19 @@ import (
 // log is the package-level logger for the cmd package.
 var log = logger.WithPrefix("cmd")
 
+// adapterFilter is set by the --adapter flag. When non-empty, only the
+// named adapter type is started (e.g., "gradio"). All others are skipped.
+var adapterFilter string
+
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Start the bot process (foreground)",
-	Long:  "Loads config, initializes the database and API clients, and runs the Telegram bot.\nThis blocks until the process receives SIGINT or SIGTERM.",
+	Long:  "Loads config, initializes the database and API clients, and runs the bot.\nThis blocks until the process receives SIGINT or SIGTERM.\n\nUse --adapter to start only a specific adapter (e.g., --adapter=gradio).",
 	RunE:  runBot,
 }
 
 func init() {
+	runCmd.Flags().StringVar(&adapterFilter, "adapter", "", "start only this adapter type (e.g., gradio)")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -98,7 +103,10 @@ func runBot(cmd *cobra.Command, args []string) error {
 		log.Info("debug mode enabled — full API context will be logged")
 	}
 
-	if cfg.Telegram.Token == "" {
+	// Telegram token only required when we're actually starting Telegram.
+	// With --adapter=gradio (or other non-telegram), skip the check.
+	skipTelegram := adapterFilter != "" && adapterFilter != "telegram"
+	if cfg.Telegram.Token == "" && !skipTelegram {
 		log.Fatal("Telegram token is required — set TELEGRAM_BOT_TOKEN env var or fill in config.yaml")
 	}
 	if cfg.OpenRouter.APIKey == "" {
@@ -288,6 +296,8 @@ var sidecarOut io.Writer = os.Stderr
 // runBotBackground handles all init and bot lifecycle in a goroutine while
 // the TUI runs on the main goroutine.
 func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
+	skipTelegram := adapterFilter != "" && adapterFilter != "telegram"
+
 	// --- Create LLM clients ---
 
 	llmClient := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
@@ -578,6 +588,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			ConfigPath:       cfgFile,
 		}
 		gw = gateway.New(cfg, gwDeps, bus)
+		gw.AdapterFilter = adapterFilter
 		go func() {
 			defer close(gwDone)
 			if err := gw.Run(gwCtx); err != nil && gwCtx.Err() == nil {
@@ -590,15 +601,22 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	}
 
 	// --- Telegram bot ---
+	// Skipped when --adapter filters to a non-Telegram adapter.
 
-	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
-	if err != nil {
-		log.Error("Failed to create Telegram bot", "err", err)
-		bus.Close()
-		return
+	var tgBot *bot.Bot
+	if !skipTelegram {
+		var botErr error
+		tgBot, botErr = bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+		if botErr != nil {
+			log.Error("Failed to create Telegram bot", "err", botErr)
+			bus.Close()
+			return
+		}
+		tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
+	} else {
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "skipped"})
 	}
-	tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
-	bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 
 	// --- Scheduler ---
 	// Powers the extension-based task system (mood daily rollup, future
@@ -612,9 +630,13 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		log.Error("scheduler: getting cwd", "err", err)
 		rootDir = "."
 	}
+	var sendFunc func(int64, string) (int, error)
+	if tgBot != nil {
+		sendFunc = tgBot.SendWithID
+	}
 	schedDeps := &scheduler.Deps{
 		Store:   store,
-		Send:    tgBot.SendWithID,
+		Send:    sendFunc,
 		ChatID:  cfg.Telegram.OwnerChat,
 	}
 	sched, err := scheduler.New(store, schedDeps, rootDir)
@@ -739,10 +761,14 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 
 	// Start the bot in yet another goroutine — tgBot.Start() blocks.
 	botDone := make(chan struct{})
-	go func() {
-		tgBot.Start()
+	if tgBot != nil {
+		go func() {
+			tgBot.Start()
+			close(botDone)
+		}()
+	} else {
 		close(botDone)
-	}()
+	}
 
 	// Wait for either: signal received OR TUI quit (user pressed q)
 	select {
@@ -799,7 +825,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			}
 		}
 	}
-	tgBot.Stop()
+	if tgBot != nil {
+		tgBot.Stop()
+	}
 	<-botDone // wait for tgBot.Start() to return
 
 	bus.Close() // closes event channels → TUI exits

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,7 +49,7 @@ type gradioAdapter struct {
 func newGradioAdapter(acfg config.AdapterConfig) (Adapter, error) {
 	port := acfg.Port
 	if port == 0 {
-		port = 7860
+		port = 7777 // Go API port — Gradio Python UI runs separately on :7860
 	}
 
 	return &gradioAdapter{
@@ -306,7 +307,10 @@ func (a *gradioAdapter) getOrCreateConvID() string {
 // server, so cross-origin requests need to be allowed.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:7860")
+		origin := r.Header.Get("Origin")
+		if strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 

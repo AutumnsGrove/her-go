@@ -72,3 +72,21 @@ type Frontend interface {
 	// (replies are sent inline).
 	ReplyText() string
 }
+
+// TraceProvider is an optional interface that a Frontend can implement
+// to receive agent trace callbacks. When runAgent detects a Frontend
+// that satisfies TraceProvider, it wires the trace callbacks through
+// it — no Telegram type assertion needed.
+//
+// This is how the gateway bridges traces to adapters: the
+// gatewayFrontend implements TraceProvider and routes trace text
+// to the adapter's OnTraceEvent method.
+type TraceProvider interface {
+	// TraceCallback returns a trace callback for the named slot
+	// ("main", "memory", "mood", "persona", "introspection").
+	TraceCallback(slot string) func(text string) error
+
+	// TraceFinalize is called after the turn completes to do any
+	// cleanup (e.g., store the final snapshot).
+	TraceFinalize()
+}
