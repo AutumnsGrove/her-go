@@ -52,6 +52,7 @@ func init() {
 	f.StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL")
 	f.StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs")
 	f.IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension")
+	f.StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated")
 	f.StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for all roles")
 	f.StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision")
 	f.BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models")
@@ -150,6 +151,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.Chat.Fallback != nil {
 		chatLLM.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
+	}
+	if cfg.Chat.Provider != nil {
+		chatLLM.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
+	}
+	if chatProviderFlag != "" {
+		providers := strings.Split(chatProviderFlag, ",")
+		chatLLM.WithProvider(&llm.ProviderRouting{Order: providers})
+		log.Infof("sim: chat provider → %v", providers)
 	}
 	if disableReasoningFlag {
 		disabled := false
@@ -580,22 +589,62 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 			if m.Subject != "" {
 				subject = m.Subject
 			}
-			fmt.Fprintf(&b, "- **#%d** [%s] %s\n", m.ID, subject, m.Content)
+			superseded := ""
+			if m.SupersededBy > 0 {
+				superseded = fmt.Sprintf(" *(superseded by #%d)*", m.SupersededBy)
+			}
+			fmt.Fprintf(&b, "- **#%d** [%s] %s%s\n", m.ID, subject, m.Content, superseded)
 		}
 		b.WriteString("\n")
 	}
 
 	// --- Mood Entries ---
-	b.WriteString("## Mood Entries (post-run)\n\n")
+	b.WriteString("## Mood Entries\n\n")
 	moods, err := store.RecentMoodEntries(memory.MoodKindMomentary, 50)
 	if err != nil {
 		fmt.Fprintf(&b, "*Error loading mood entries: %v*\n\n", err)
 	} else if len(moods) == 0 {
 		b.WriteString("*No mood entries.*\n\n")
 	} else {
-		fmt.Fprintf(&b, "| # | Valence | Labels | Source |\n|---|---------|--------|--------|\n")
+		fmt.Fprintf(&b, "| # | Valence | Labels | Confidence | Source |\n|---|---------|--------|------------|--------|\n")
 		for i, m := range moods {
-			fmt.Fprintf(&b, "| %d | %d | %s | %s |\n", i+1, m.Valence, m.Labels, m.Source)
+			fmt.Fprintf(&b, "| %d | %d | %s | %.2f | %s |\n",
+				i+1, m.Valence, m.Labels, m.Confidence, m.Source)
+		}
+		b.WriteString("\n")
+	}
+
+	// --- DB-backed sections (via SQLiteStore escape hatch) ---
+	sqlStore, hasSQLStore := store.(*memory.SQLiteStore)
+	if hasSQLStore {
+		writeGWClassifierSection(&b, sqlStore)
+		writeGWInboxSection(&b, sqlStore)
+		writeGWCostBreakdownSection(&b, sqlStore)
+		writeGWFallbackSection(&b, sqlStore)
+	}
+
+	// --- Dream Audit ---
+	b.WriteString("## Dream Audit\n\n")
+	audits, err := store.RecentDreamAudits(50)
+	if err != nil {
+		fmt.Fprintf(&b, "*Error loading dream audits: %v*\n\n", err)
+	} else if len(audits) == 0 {
+		b.WriteString("*No dream operations.*\n\n")
+	} else {
+		opIcons := map[string]string{"merge": "🔀", "expire": "🗑", "promote": "⬆️", "split": "✂️", "create": "✨"}
+		for _, a := range audits {
+			icon := opIcons[a.Operation]
+			if icon == "" {
+				icon = "🔧"
+			}
+			fmt.Fprintf(&b, "- %s **%s** #%v → #%d: %s\n",
+				icon, a.Operation, a.SourceIDs, a.ResultID, a.Reason)
+			if a.BeforeText != "" {
+				fmt.Fprintf(&b, "  - before: %s\n", truncSimText(a.BeforeText, 100))
+			}
+			if a.AfterText != "" {
+				fmt.Fprintf(&b, "  - after: %s\n", truncSimText(a.AfterText, 100))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -624,6 +673,158 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 	}
 
 	return filename, nil
+}
+
+// --- Report section writers (query store via SQLiteStore.DB() escape hatch) ---
+
+func writeGWClassifierSection(b *strings.Builder, s *memory.SQLiteStore) {
+	b.WriteString("## Classifier Verdicts\n\n")
+
+	rows, err := s.DB().Query(
+		`SELECT write_type, verdict, content, reason, rewrite
+		 FROM classifier_log ORDER BY id`)
+	if err != nil {
+		fmt.Fprintf(b, "*Error loading classifier log: %v*\n\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var writeType, verdict, content, reason, rewrite string
+		if err := rows.Scan(&writeType, &verdict, &content, &reason, &rewrite); err != nil {
+			continue
+		}
+		if count == 0 {
+			fmt.Fprintf(b, "| Type | Verdict | Content | Reason |\n|------|---------|---------|--------|\n")
+		}
+		content = truncSimText(content, 50)
+		reason = truncSimText(reason, 50)
+		fmt.Fprintf(b, "| %s | %s | %s | %s |\n", writeType, verdict, content, reason)
+		count++
+	}
+	if count == 0 {
+		b.WriteString("*No classifier verdicts.*\n")
+	}
+	b.WriteString("\n")
+}
+
+func writeGWInboxSection(b *strings.Builder, s *memory.SQLiteStore) {
+	b.WriteString("## Inter-Agent Messages\n\n")
+
+	rows, err := s.DB().Query(
+		`SELECT sender, recipient, msg_type, payload, processed
+		 FROM inbox ORDER BY id`)
+	if err != nil {
+		fmt.Fprintf(b, "*Error loading inbox: %v*\n\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var sender, recipient, msgType, payload string
+		var processed int
+		if err := rows.Scan(&sender, &recipient, &msgType, &payload, &processed); err != nil {
+			continue
+		}
+		if count == 0 {
+			fmt.Fprintf(b, "| Sender | Recipient | Type | Processed | Payload |\n|--------|-----------|------|-----------|---------|\n")
+		}
+		status := "pending"
+		if processed == 1 {
+			status = "done"
+		}
+		payload = truncSimText(payload, 60)
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", sender, recipient, msgType, status, payload)
+		count++
+	}
+	if count == 0 {
+		b.WriteString("*No inter-agent messages.*\n")
+	}
+	b.WriteString("\n")
+}
+
+func writeGWCostBreakdownSection(b *strings.Builder, s *memory.SQLiteStore) {
+	b.WriteString("## Cost Breakdown by Role\n\n")
+
+	rows, err := s.DB().Query(
+		`SELECT agent_role,
+		        COUNT(*) as calls,
+		        SUM(prompt_tokens) as prompt,
+		        SUM(completion_tokens) as completion,
+		        SUM(cost_usd) as cost,
+		        SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END) as fallbacks
+		 FROM metrics
+		 GROUP BY agent_role
+		 ORDER BY cost DESC`)
+	if err != nil {
+		fmt.Fprintf(b, "*Error loading metrics: %v*\n\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var role string
+		var calls, prompt, completion, fallbacks int
+		var cost float64
+		if err := rows.Scan(&role, &calls, &prompt, &completion, &cost, &fallbacks); err != nil {
+			continue
+		}
+		if count == 0 {
+			fmt.Fprintf(b, "| Role | Calls | Prompt | Completion | Cost | Fallbacks |\n|------|-------|--------|------------|------|-----------|\n")
+		}
+		fb := ""
+		if fallbacks > 0 {
+			fb = fmt.Sprintf("%d", fallbacks)
+		}
+		fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f | %s |\n", role, calls, prompt, completion, cost, fb)
+		count++
+	}
+	if count == 0 {
+		b.WriteString("*No metrics recorded.*\n")
+	}
+	b.WriteString("\n")
+}
+
+func writeGWFallbackSection(b *strings.Builder, s *memory.SQLiteStore) {
+	var totalCalls, fallbackCalls int
+	var fallbackCost float64
+
+	row := s.DB().QueryRow(
+		`SELECT COUNT(*), SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END),
+		        COALESCE(SUM(CASE WHEN is_fallback = 1 THEN cost_usd ELSE 0 END), 0)
+		 FROM metrics`)
+	if err := row.Scan(&totalCalls, &fallbackCalls, &fallbackCost); err != nil || fallbackCalls == 0 {
+		return
+	}
+
+	pct := float64(fallbackCalls) / float64(totalCalls) * 100
+	b.WriteString("## Fallback Events\n\n")
+	fmt.Fprintf(b, "**%d of %d calls (%.0f%%) used fallback models** — $%.4f in fallback costs\n\n",
+		fallbackCalls, totalCalls, pct, fallbackCost)
+
+	rows, err := s.DB().Query(
+		`SELECT model, COUNT(*), SUM(cost_usd)
+		 FROM metrics WHERE is_fallback = 1
+		 GROUP BY model ORDER BY COUNT(*) DESC`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	fmt.Fprintf(b, "| Fallback Model | Calls | Cost |\n|----------------|-------|------|\n")
+	for rows.Next() {
+		var model string
+		var calls int
+		var cost float64
+		if err := rows.Scan(&model, &calls, &cost); err != nil {
+			continue
+		}
+		fmt.Fprintf(b, "| %s | %d | $%.4f |\n", model, calls, cost)
+	}
+	b.WriteString("\n")
 }
 
 // seedSimDB pre-populates the sim database with cards, memories, self
