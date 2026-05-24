@@ -40,11 +40,6 @@ type Adapter interface {
 	// stops it. No-op (returns func(){}) if Typing capability is false.
 	StartTyping() func()
 
-	// OnTraceEvent is called for each trace event during a turn.
-	// Each adapter renders traces however it wants — Telegram sends
-	// a message, Gradio pushes to an SSE stream, TUI prints to a pane.
-	OnTraceEvent(evt TraceEvent)
-
 	// RegisterCommands tells the adapter about gateway-level commands.
 	// The adapter translates its native command format into Command
 	// structs and routes them to the handlers.

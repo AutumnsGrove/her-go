@@ -312,7 +312,7 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 	case "telegram":
 		return newTelegramAdapter(acfg, g.cfg, g.deps, store, g.bus)
 	case "gradio":
-		return newGradioAdapter(acfg)
+		return newGradioAdapter(acfg, g.bus)
 	case "sim":
 		return newSimAdapter(acfg, g.SimMessages)
 	default:
