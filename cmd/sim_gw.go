@@ -114,7 +114,10 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir) // runs after runSimGW returns, cleans up DB
+	// Cleanup deferred — if the run completes, we move the DB to
+	// sims/results/ instead. The defer only fires as a safety net
+	// for early-return error paths.
+	defer os.RemoveAll(tmpDir)
 
 	tmpDBPath := filepath.Join(tmpDir, "sim.db")
 
@@ -344,6 +347,20 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		log.Errorf("sim: report generation failed: %v", err)
 	} else {
 		fmt.Printf("Report: %s\n", reportPath)
+	}
+
+	// Preserve the sim database alongside the report for post-mortem
+	// analysis. Close the store first so SQLite flushes WAL, then copy
+	// the DB file to sims/results/. The defer os.RemoveAll still cleans
+	// up the temp dir (including WAL/SHM files).
+	store.Close()
+	if reportPath != "" {
+		dbDest := strings.TrimSuffix(reportPath, ".md") + ".db"
+		if src, err := os.ReadFile(tmpDBPath); err == nil {
+			if err := os.WriteFile(dbDest, src, 0o644); err == nil {
+				fmt.Printf("Database: %s\n", dbDest)
+			}
+		}
 	}
 
 	return nil
