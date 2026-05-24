@@ -1,19 +1,27 @@
 package gateway
 
-import "context"
+import (
+	"context"
+
+	"her/bot"
+)
 
 // buildCommands creates the gateway-level CommandDefs from a Pipeline.
-// Each command wraps a transport-neutral Exec* method on bot.Bot,
-// making it available to every adapter (Gradio, future Discord, etc.).
+func buildCommands(p *Pipeline) []CommandDef {
+	return buildCommandsFromBot(p.Engine())
+}
+
+// buildCommandsFromBot creates CommandDefs from a bot.Bot instance.
+// Each command wraps a transport-neutral Exec* method, making it
+// available to every adapter (Telegram, Gradio, future Discord, etc.).
 //
 // Commands that are adapter-specific (like /clear, which resets
 // adapter-local conversation state) are NOT included here — each
 // adapter handles those directly.
 //
 // Commands that are Telegram-specific (/update, /restart, /mood wizard)
-// stay in bot/ for now and will migrate in Phase 2c.
-func buildCommands(p *Pipeline) []CommandDef {
-	bot := p.Engine()
+// stay registered with telebot directly.
+func buildCommandsFromBot(bot *bot.Bot) []CommandDef {
 
 	return []CommandDef{
 		{

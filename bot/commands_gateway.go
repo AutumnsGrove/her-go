@@ -3,13 +3,15 @@
 // Each Exec* method contains the business logic for a slash command,
 // returning a plain-text result instead of sending via tele.Context.
 // The gateway builds CommandDefs that call these methods, making every
-// command available on all adapters (Gradio, future Discord, etc.).
+// command available on all adapters (Gradio, Telegram, future Discord, etc.).
 //
-// The existing Telegram handlers (handlers_commands.go, etc.) still
-// work — they'll gradually migrate to calling these methods too.
+// Telegram's handleMessage intercepts /commands and routes them here
+// too — the old per-command telebot registrations are gone for migrated
+// commands. One command system for everything.
 package bot
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -20,7 +22,89 @@ import (
 	"her/persona"
 
 	"gopkg.in/yaml.v3"
+	tele "gopkg.in/telebot.v4"
 )
+
+// GatewayCommand pairs a name with its handler for the in-process
+// command router. Populated by RegisterGatewayCommands.
+type GatewayCommand struct {
+	Name    string
+	Handler func(ctx context.Context, args string) (string, error)
+}
+
+// RegisterGatewayCommands stores command handlers that handleMessage
+// will check before falling through to the agent pipeline. Called by
+// the Telegram adapter after gateway command registration.
+func (b *Bot) RegisterGatewayCommands(cmds []GatewayCommand) {
+	b.gatewayCmds = cmds
+}
+
+// tryGatewayCommand checks if a message is a registered gateway command
+// and handles it. Returns true if the command was handled.
+func (b *Bot) tryGatewayCommand(c tele.Context) bool {
+	text := c.Message().Text
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+
+	parts := strings.SplitN(text, " ", 2)
+	cmdName := strings.TrimPrefix(parts[0], "/")
+	args := ""
+	if len(parts) > 1 {
+		args = parts[1]
+	}
+
+	// Check /clear — adapter-specific because it needs chat ID.
+	if cmdName == "clear" {
+		chatID := c.Message().Chat.ID
+		convID := b.getConversationID(chatID)
+		b.store.LogCommand("/clear", chatID, convID, args)
+		result := b.ExecClear(chatID)
+		_ = c.Send(result)
+		return true
+	}
+
+	// Check /compact — needs conversation ID from the chat.
+	if cmdName == "compact" {
+		chatID := c.Message().Chat.ID
+		convID := b.getConversationID(chatID)
+		b.store.LogCommand("/compact", chatID, convID, args)
+		result, err := b.ExecCompact(convID)
+		if err != nil {
+			_ = c.Send(fmt.Sprintf("Error: %v", err))
+		} else {
+			_ = c.Send(result)
+		}
+		return true
+	}
+
+	for _, cmd := range b.gatewayCmds {
+		if cmd.Name == cmdName {
+			chatID := c.Message().Chat.ID
+			convID := b.getConversationID(chatID)
+			b.store.LogCommand("/"+cmdName, chatID, convID, args)
+
+			result, err := cmd.Handler(context.Background(), args)
+			if err != nil {
+				_ = c.Send(fmt.Sprintf("Error: %v", err))
+			} else {
+				_ = c.Send(result)
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+// ExecClear resets the conversation context for a given chat ID.
+func (b *Bot) ExecClear(chatID int64) string {
+	key := fmt.Sprintf("%d", chatID)
+	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
+	b.conversationIDs.Store(key, newID)
+	log.Info("exec clear: conversation reset", "chat", chatID, "new_id", newID)
+	return "Context cleared. Fresh start!"
+}
 
 // ExecHelp renders the help text as plain text (no HTML tags).
 func (b *Bot) ExecHelp() string {

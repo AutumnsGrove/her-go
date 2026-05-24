@@ -114,6 +114,12 @@ type Bot struct {
 	lastTraceMu       sync.Mutex
 	lastTraceSnapshot string
 
+	// gatewayCmds holds gateway-level command handlers registered by
+	// the Telegram adapter. handleMessage checks these before falling
+	// through to the agent pipeline. This replaces the individual
+	// tb.Handle("/cmd", ...) registrations for migrated commands.
+	gatewayCmds []GatewayCommand
+
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
 	ownerChat int64
@@ -244,24 +250,18 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		}
 	}
 
-	// Register command handlers — each wrapped with cmd() for logging.
-	tb.Handle("/help", cmd("/help", bot.handleHelp))
-	tb.Handle("/clear", cmd("/clear", bot.handleClear))
-	tb.Handle("/stats", cmd("/stats", bot.handleStats))
-	tb.Handle("/forget", cmd("/forget", bot.handleForget))
-	tb.Handle("/facts", cmd("/facts", bot.handleFacts))
-	tb.Handle("/reflect", cmd("/reflect", bot.handleReflect))
-	tb.Handle("/persona", cmd("/persona", bot.handlePersona))
-	tb.Handle("/compact", cmd("/compact", bot.handleCompact))
-	tb.Handle("/status", cmd("/status", bot.handleStatus))
-	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
-	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
-	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
+	// Register Telegram-specific command handlers. These commands use
+	// Telegram UI features (inline buttons, multi-step progress, process
+	// management) that can't be expressed as simple (string, error) returns.
+	//
+	// All other commands (/help, /stats, /facts, /forget, /traces,
+	// /status, /reflect, /reflections, /persona, /dream, /dreamlog,
+	// /lasttrace, /clear, /compact) are handled by the gateway command
+	// system — they're intercepted in handleMessage before hitting the
+	// agent pipeline. See tryGatewayCommand().
 	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
-	tb.Handle("/dream", cmd("/dream", bot.handleDream))
-	tb.Handle("/dreamlog", cmd("/dreamlog", bot.handleDreamLog))
 	tb.Handle("/update", cmd("/update", bot.handleUpdate))
-	tb.Handle("/lasttrace", cmd("/lasttrace", bot.handleLastTrace))
+	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -600,6 +600,13 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// via edit; we return early so the message doesn't flow through
 	// the agent pipeline.
 	if b.HandleMoodWizardNote(c) {
+		return nil
+	}
+
+	// Check for gateway commands (/help, /stats, /facts, etc.).
+	// These are handled by the unified command system — same Exec*
+	// methods that Gradio and other adapters use.
+	if b.tryGatewayCommand(c) {
 		return nil
 	}
 
