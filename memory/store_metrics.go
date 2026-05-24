@@ -113,7 +113,7 @@ func (s *SQLiteStore) GetStats() (*Stats, error) {
 	scanInt(`SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0) FROM metrics WHERE latency_ms = 0`, &st.AgentTokens, &st.AgentCostUSD)
 
 	// Average chat latency (exclude agent calls which have 0 latency).
-	scanInt(`SELECT COALESCE(AVG(latency_ms), 0) FROM metrics WHERE latency_ms > 0`, &st.AvgLatencyMs)
+	scanInt(`SELECT CAST(COALESCE(AVG(latency_ms), 0) AS INTEGER) FROM metrics WHERE latency_ms > 0`, &st.AvgLatencyMs)
 
 	// Distinct days with messages (gives a sense of how many days active).
 	scanInt(`SELECT COUNT(DISTINCT DATE(timestamp)) FROM messages`, &st.ConversationDays)

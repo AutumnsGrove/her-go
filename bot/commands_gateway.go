@@ -12,6 +12,7 @@ package bot
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"runtime"
@@ -24,6 +25,24 @@ import (
 	"gopkg.in/yaml.v3"
 	tele "gopkg.in/telebot.v4"
 )
+
+// helpYAML is loaded from help.yaml — the single source of truth for
+// /help output. Uses {{her}} placeholders expanded at render time.
+//
+//go:embed help.yaml
+var helpYAML string
+
+// helpSpec mirrors the YAML structure in help.yaml.
+type helpSpec struct {
+	Sections []struct {
+		Title    string `yaml:"title"`
+		Commands []struct {
+			Cmd  string `yaml:"cmd"`
+			Desc string `yaml:"desc"`
+		} `yaml:"commands"`
+	} `yaml:"sections"`
+	Footer string `yaml:"footer"`
+}
 
 // GatewayCommand pairs a name with its handler for the in-process
 // command router. Populated by RegisterGatewayCommands.

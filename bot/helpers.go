@@ -179,21 +179,6 @@ func (b *Bot) makeTraceCallbacks(c tele.Context) traceResult {
 	return traceResult{getCallback: getCallback, finalize: finalize}
 }
 
-// handleTraces toggles agent thinking traces on/off.
-// When enabled, Mira sends a separate message before each reply showing
-// the agent's tool calls, thinking, and decision-making process.
-func (b *Bot) handleTraces(c tele.Context) error {
-	newState := !b.cfg.Driver.Trace
-	if err := b.cfg.SetTrace(b.configPath, newState); err != nil {
-		log.Error("/traces: failed to update config", "err", err)
-		return c.Send(fmt.Sprintf("Failed to update config: %v", err))
-	}
-	if newState {
-		return c.Send("🧠 Agent traces <b>enabled</b> — you'll see thinking traces before each reply.", &tele.SendOptions{ParseMode: tele.ModeHTML})
-	}
-	return c.Send("🧠 Agent traces <b>disabled</b>.", &tele.SendOptions{ParseMode: tele.ModeHTML})
-}
-
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
 // fresh from disk (hot-reloadable), then layering in persona.md and
 // memory context (extracted facts).
