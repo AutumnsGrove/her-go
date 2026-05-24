@@ -787,7 +787,7 @@ func writeGWInboxSection(b *strings.Builder, s *memory.SQLiteStore) {
 	b.WriteString("## Inter-Agent Messages\n\n")
 
 	rows, err := s.DB().Query(
-		`SELECT sender, recipient, msg_type, payload, processed
+		`SELECT sender, recipient, msg_type, payload, status
 		 FROM inbox ORDER BY id`)
 	if err != nil {
 		fmt.Fprintf(b, "*Error loading inbox: %v*\n\n", err)
@@ -797,17 +797,12 @@ func writeGWInboxSection(b *strings.Builder, s *memory.SQLiteStore) {
 
 	var count int
 	for rows.Next() {
-		var sender, recipient, msgType, payload string
-		var processed int
-		if err := rows.Scan(&sender, &recipient, &msgType, &payload, &processed); err != nil {
+		var sender, recipient, msgType, payload, status string
+		if err := rows.Scan(&sender, &recipient, &msgType, &payload, &status); err != nil {
 			continue
 		}
 		if count == 0 {
-			fmt.Fprintf(b, "| Sender | Recipient | Type | Processed | Payload |\n|--------|-----------|------|-----------|---------|\n")
-		}
-		status := "pending"
-		if processed == 1 {
-			status = "done"
+			fmt.Fprintf(b, "| Sender | Recipient | Type | Status | Payload |\n|--------|-----------|------|--------|---------|\n")
 		}
 		payload = truncSimText(payload, 60)
 		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", sender, recipient, msgType, status, payload)
