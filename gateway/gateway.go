@@ -65,7 +65,8 @@ type Gateway struct {
 
 	// SimMessages, when set, provides the message sequence for a sim
 	// adapter. Set by the sim command before calling Run().
-	SimMessages []SimMessage
+	SimMessages  []SimMessage
+	SimTriggers  SimTriggers
 }
 
 // adapterEntry pairs an adapter with its pipeline for message routing.
@@ -154,14 +155,19 @@ func (g *Gateway) Run(ctx context.Context) error {
 			cmds = append(cmds, buildCommands(pipeline)...)
 
 			// Wire adapter-specific handlers that need pipeline access.
+			b := pipeline.Engine()
 			if ga, ok := adapter.(*gradioAdapter); ok {
-				b := pipeline.Engine()
 				ga.compactHandler = func(ctx context.Context, convID string) (string, error) {
 					return b.ExecCompact(convID)
 				}
 				pipelineStore := pipeline.Store()
 				ga.logCommand = func(command, conversationID, args string) {
 					pipelineStore.LogCommand(command, 0, conversationID, args)
+				}
+			}
+			if sa, ok := adapter.(*simAdapter); ok {
+				sa.compactHandler = func(ctx context.Context, convID string) (string, error) {
+					return b.ExecCompact(convID)
 				}
 			}
 		}
@@ -321,7 +327,7 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 	case "gradio":
 		return newGradioAdapter(acfg, g.bus)
 	case "sim":
-		return newSimAdapter(acfg, g.SimMessages, g.bus)
+		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.bus)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}
