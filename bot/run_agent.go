@@ -127,9 +127,10 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	var introspectionTraceCallback tools.TraceCallback
 	var traceFinalize func()
 
-	// Traces require a tele.Context for Telegram rendering. For
-	// non-Telegram frontends, traces still flow through the event bus
-	// (visible in the TUI) but don't get a Telegram message.
+	// Traces can flow through two paths:
+	// 1. Telegram: renders into an editable Telegram message (type assertion)
+	// 2. TraceProvider: any frontend that implements the optional interface
+	//    (e.g., gateway adapters route traces to SSE streams, panels, etc.)
 	if b.cfg.Driver.Trace {
 		if tfe, ok := fe.(*TelegramFrontend); ok {
 			tr := b.makeTraceCallbacks(tfe.Context())
@@ -139,6 +140,13 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 			personaTraceCallback = tr.getCallback("persona")
 			introspectionTraceCallback = tr.getCallback("introspection")
 			traceFinalize = tr.finalize
+		} else if tp, ok := fe.(TraceProvider); ok {
+			traceCallback = tp.TraceCallback("main")
+			memoryTraceCallback = tp.TraceCallback("memory")
+			moodTraceCallback = tp.TraceCallback("mood")
+			personaTraceCallback = tp.TraceCallback("persona")
+			introspectionTraceCallback = tp.TraceCallback("introspection")
+			traceFinalize = tp.TraceFinalize
 		}
 	}
 	_ = personaTraceCallback

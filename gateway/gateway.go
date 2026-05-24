@@ -42,6 +42,10 @@ type Gateway struct {
 	bus      *tui.Bus
 	commands []CommandDef
 
+	// AdapterFilter, when non-empty, restricts which adapter types
+	// are started. Set by the --adapter CLI flag.
+	AdapterFilter string
+
 	// stores is keyed by absolute DB path. Two adapters pointing to the
 	// same her.db get the same Store pointer — shared memory falls out
 	// of pointer equality, no special logic needed.
@@ -88,6 +92,11 @@ func (g *Gateway) Run(ctx context.Context) error {
 	for _, acfg := range enabledAdapters {
 		if !acfg.IsEnabled() {
 			log.Infof("gateway: adapter %q disabled, skipping", acfg.Name)
+			continue
+		}
+
+		if g.AdapterFilter != "" && acfg.Type != g.AdapterFilter {
+			log.Infof("gateway: adapter %q filtered out (--adapter=%s)", acfg.Name, g.AdapterFilter)
 			continue
 		}
 
