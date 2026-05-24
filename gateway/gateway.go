@@ -92,6 +92,13 @@ func (g *Gateway) RegisterCommand(def CommandDef) {
 	g.commands = append(g.commands, def)
 }
 
+// RegisterStore pre-registers a store for a given DB path. The gateway
+// will reuse this store instead of opening a new one. Used by the sim
+// command to inject a pre-seeded database.
+func (g *Gateway) RegisterStore(dbPath string, store memory.Store) {
+	g.stores[dbPath] = store
+}
+
 // Run starts all enabled adapters and blocks until ctx is cancelled.
 // Each adapter gets its own goroutine for receiving messages and routing
 // them through the pipeline.
