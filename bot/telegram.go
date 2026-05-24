@@ -606,8 +606,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Check for gateway commands (/help, /stats, /facts, etc.).
 	// These are handled by the unified command system — same Exec*
 	// methods that Gradio and other adapters use.
-	if b.tryGatewayCommand(c) {
-		return nil
+	if result, handled := b.tryGatewayCommand(c.Message().Text, c.Message().Chat.ID); handled {
+		return c.Send(result)
 	}
 
 	msg := c.Message()

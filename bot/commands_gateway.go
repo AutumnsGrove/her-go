@@ -23,7 +23,6 @@ import (
 	"her/persona"
 
 	"gopkg.in/yaml.v3"
-	tele "gopkg.in/telebot.v4"
 )
 
 // helpYAML is loaded from help.yaml — the single source of truth for
@@ -59,11 +58,12 @@ func (b *Bot) RegisterGatewayCommands(cmds []GatewayCommand) {
 }
 
 // tryGatewayCommand checks if a message is a registered gateway command
-// and handles it. Returns true if the command was handled.
-func (b *Bot) tryGatewayCommand(c tele.Context) bool {
-	text := c.Message().Text
+// and handles it. Returns the response text and true if handled, or
+// ("", false) if the message should fall through to the pipeline.
+// Transport-agnostic — the caller handles sending the result.
+func (b *Bot) tryGatewayCommand(text string, chatID int64) (string, bool) {
 	if !strings.HasPrefix(text, "/") {
-		return false
+		return "", false
 	}
 
 	parts := strings.SplitN(text, " ", 2)
@@ -73,47 +73,36 @@ func (b *Bot) tryGatewayCommand(c tele.Context) bool {
 		args = parts[1]
 	}
 
-	// Check /clear — adapter-specific because it needs chat ID.
+	convID := b.getConversationID(chatID)
+
+	// /clear is adapter-specific — it resets the conversation ID.
 	if cmdName == "clear" {
-		chatID := c.Message().Chat.ID
-		convID := b.getConversationID(chatID)
 		b.store.LogCommand("/clear", chatID, convID, args)
-		result := b.ExecClear(chatID)
-		_ = c.Send(result)
-		return true
+		return b.ExecClear(chatID), true
 	}
 
-	// Check /compact — needs conversation ID from the chat.
+	// /compact needs the conversation ID from the chat.
 	if cmdName == "compact" {
-		chatID := c.Message().Chat.ID
-		convID := b.getConversationID(chatID)
 		b.store.LogCommand("/compact", chatID, convID, args)
 		result, err := b.ExecCompact(convID)
 		if err != nil {
-			_ = c.Send(fmt.Sprintf("Error: %v", err))
-		} else {
-			_ = c.Send(result)
+			return fmt.Sprintf("Error: %v", err), true
 		}
-		return true
+		return result, true
 	}
 
 	for _, cmd := range b.gatewayCmds {
 		if cmd.Name == cmdName {
-			chatID := c.Message().Chat.ID
-			convID := b.getConversationID(chatID)
 			b.store.LogCommand("/"+cmdName, chatID, convID, args)
-
 			result, err := cmd.Handler(context.Background(), args)
 			if err != nil {
-				_ = c.Send(fmt.Sprintf("Error: %v", err))
-			} else {
-				_ = c.Send(result)
+				return fmt.Sprintf("Error: %v", err), true
 			}
-			return true
+			return result, true
 		}
 	}
 
-	return false
+	return "", false
 }
 
 // ExecClear resets the conversation context for a given chat ID.
