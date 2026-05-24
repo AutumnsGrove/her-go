@@ -51,6 +51,7 @@ type SimResult struct {
 	MoodValence        int
 	MemoriesSaved      []string // memory tool call results (save_memory, update_memory)
 	IntrospectionSaved []string // introspection tool call results (save_self_memory)
+	FollowUpReply      string   // direct_message from notify_agent (memory → driver follow-up)
 	ToolLog            []string // condensed log of all tool calls for the report
 }
 
@@ -102,6 +103,7 @@ type turnCapture struct {
 
 	memoriesSaved      []string
 	introspectionSaved []string
+	followUpReply      string
 }
 
 func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus) (Adapter, error) {
@@ -225,17 +227,22 @@ func (a *simAdapter) Start(ctx context.Context) error {
 // enrichFromCapture waits for the bus capture goroutine to finalize
 // the turn data and merges it into the SimResult.
 func (a *simAdapter) enrichFromCapture(result SimResult) SimResult {
+	applyCapture := func(tc *turnCapture) {
+		result.Cost = tc.cost
+		result.ToolCalls = tc.toolCalls
+		result.ToolLog = tc.toolLog
+		result.MoodVerdict = tc.moodVerdict
+		result.MoodLabels = tc.moodLabels
+		result.MoodValence = tc.moodValence
+		result.MemoriesSaved = tc.memoriesSaved
+		result.IntrospectionSaved = tc.introspectionSaved
+		result.FollowUpReply = tc.followUpReply
+	}
+
 	select {
 	case tc := <-a.finishedTurn:
 		if tc != nil {
-			result.Cost = tc.cost
-			result.ToolCalls = tc.toolCalls
-			result.ToolLog = tc.toolLog
-			result.MoodVerdict = tc.moodVerdict
-			result.MoodLabels = tc.moodLabels
-			result.MoodValence = tc.moodValence
-			result.MemoriesSaved = tc.memoriesSaved
-			result.IntrospectionSaved = tc.introspectionSaved
+			applyCapture(tc)
 		}
 	case <-time.After(30 * time.Second):
 		// Background agents (mood, introspection) may still be running.
@@ -245,14 +252,7 @@ func (a *simAdapter) enrichFromCapture(result SimResult) SimResult {
 		a.activeTurn = nil
 		a.captureMu.Unlock()
 		if tc != nil {
-			result.Cost = tc.cost
-			result.ToolCalls = tc.toolCalls
-			result.ToolLog = tc.toolLog
-			result.MoodVerdict = tc.moodVerdict
-			result.MoodLabels = tc.moodLabels
-			result.MoodValence = tc.moodValence
-			result.MemoriesSaved = tc.memoriesSaved
-			result.IntrospectionSaved = tc.introspectionSaved
+			applyCapture(tc)
 		}
 	}
 	return result
@@ -315,6 +315,8 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 				tc.introspectionSaved = append(tc.introspectionSaved, e.Result)
 			case e.Source == "memory" && (e.ToolName == "save_memory" || e.ToolName == "update_memory"):
 				tc.memoriesSaved = append(tc.memoriesSaved, e.Result)
+			case e.ToolName == "notify_agent":
+				tc.followUpReply = extractDirectMessage(e.Args)
 			}
 		}
 		a.captureMu.Unlock()
@@ -483,4 +485,15 @@ func extractThought(args string) string {
 		}
 	}
 	return args
+}
+
+func extractDirectMessage(args string) string {
+	// Args look like: {"summary":"...", "direct_message":"Hey, just a heads up..."}
+	if idx := strings.Index(args, `"direct_message":"`); idx >= 0 {
+		start := idx + len(`"direct_message":"`)
+		if end := strings.LastIndex(args[start:], `"`); end >= 0 {
+			return args[start : start+end]
+		}
+	}
+	return ""
 }

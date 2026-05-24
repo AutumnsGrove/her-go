@@ -459,6 +459,11 @@ func printSimResults(suiteName string, results []gateway.SimResult) {
 			fmt.Printf("         💾 %s\n", truncSimText(m, 70))
 		}
 
+		// Follow-up reply
+		if r.FollowUpReply != "" {
+			fmt.Printf("         📨 follow-up: %s\n", truncSimText(r.FollowUpReply, 70))
+		}
+
 		// Introspection memories
 		for _, m := range r.IntrospectionSaved {
 			fmt.Printf("         🪡 %s\n", truncSimText(m, 70))
@@ -596,6 +601,10 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 			i+1, r.Duration.Seconds(), r.Cost, r.ToolCalls)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, r.Reply)
+
+		if r.FollowUpReply != "" {
+			fmt.Fprintf(&b, "**%s** *(follow-up):* %s\n\n", cfg.Identity.Her, r.FollowUpReply)
+		}
 
 		// Memory saves
 		if len(r.MemoriesSaved) > 0 {

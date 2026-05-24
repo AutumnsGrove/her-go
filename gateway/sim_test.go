@@ -267,6 +267,23 @@ func TestSimAdapter_ExtractThought(t *testing.T) {
 	}
 }
 
+func TestSimAdapter_ExtractDirectMessage(t *testing.T) {
+	args := `{"summary":"split memory #12","direct_message":"Hey, I reorganized some of my notes about you."}`
+	got := extractDirectMessage(args)
+	want := "Hey, I reorganized some of my notes about you."
+	if got != want {
+		t.Errorf("extractDirectMessage: got %q, want %q", got, want)
+	}
+}
+
+func TestSimAdapter_ExtractDirectMessageEmpty(t *testing.T) {
+	args := `{"summary":"housekeeping complete"}`
+	got := extractDirectMessage(args)
+	if got != "" {
+		t.Errorf("extractDirectMessage with no direct_message: got %q, want empty", got)
+	}
+}
+
 func TestSimAdapter_ToolIcon(t *testing.T) {
 	if toolIcon("think") != "🧠" {
 		t.Error("expected brain emoji for think")
