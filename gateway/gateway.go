@@ -144,11 +144,19 @@ func (g *Gateway) Run(ctx context.Context) error {
 
 			// Wire adapter-specific handlers that need pipeline access.
 			if ga, ok := adapter.(*gradioAdapter); ok {
-				bot := pipeline.Engine()
+				b := pipeline.Engine()
 				ga.compactHandler = func(ctx context.Context, convID string) (string, error) {
-					return bot.ExecCompact(convID)
+					return b.ExecCompact(convID)
 				}
 			}
+		}
+
+		// For the Telegram adapter, build commands from its own bot.Bot.
+		// Telegram is a push adapter (no pipeline), but its bot has the
+		// same Exec* methods — we just need to wire them up so
+		// handleMessage can route commands through the gateway system.
+		if ta, ok := adapter.(*telegramAdapter); ok {
+			cmds = append(cmds, buildCommandsFromBot(ta.Engine())...)
 		}
 		adapter.RegisterCommands(cmds)
 
