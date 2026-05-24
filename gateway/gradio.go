@@ -161,6 +161,8 @@ func (a *gradioAdapter) RegisterCommands(cmds []CommandDef) {
 type chatRequest struct {
 	Message        string `json:"message"`
 	ConversationID string `json:"conversation_id,omitempty"`
+	ImageBase64    string `json:"image_base64,omitempty"`
+	ImageMIME      string `json:"image_mime,omitempty"`
 }
 
 type chatResponse struct {
@@ -216,6 +218,8 @@ func (a *gradioAdapter) handleChat(w http.ResponseWriter, r *http.Request) {
 		ConversationID: convID,
 		AdapterName:    a.Name(),
 		Timestamp:      time.Now(),
+		ImageBase64:    req.ImageBase64,
+		ImageMIME:      req.ImageMIME,
 	}
 
 	// Block until the pipeline responds (or timeout).

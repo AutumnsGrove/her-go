@@ -334,30 +334,45 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 // using the given Frontend for I/O. This is the transport-agnostic
 // entry point — the HTTP dev server and any future frontends call this
 // instead of going through Telegram's handleMessage.
-func (b *Bot) ProcessMessage(fe Frontend, userText, conversationID string) (string, error) {
-	log.Info("─── incoming message ───")
-	log.Infof("  user: %s", truncate(userText, 100))
+// MessageInput holds the fields for ProcessMessage. Text and
+// ConversationID are required; image fields are optional.
+type MessageInput struct {
+	Text           string
+	ConversationID string
+	ImageBase64    string
+	ImageMIME      string
+}
 
-	// Save the raw message.
-	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+func (b *Bot) ProcessMessage(fe Frontend, userText, conversationID string) (string, error) {
+	return b.ProcessMessageInput(fe, MessageInput{
+		Text:           userText,
+		ConversationID: conversationID,
+	})
+}
+
+func (b *Bot) ProcessMessageInput(fe Frontend, input MessageInput) (string, error) {
+	log.Info("─── incoming message ───")
+	log.Infof("  user: %s", truncate(input.Text, 100))
+
+	msgID, err := b.store.SaveMessage("user", input.Text, "", input.ConversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
 	}
 
-	// PII scrub.
-	scrubResult := b.scrubText(userText)
+	scrubResult := b.scrubText(input.Text)
 	if msgID > 0 {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
 		b.savePIIVaultEntries(msgID, scrubResult.Vault)
 	}
 
-	// Run the agent pipeline.
 	err = b.runAgent(fe, AgentInput{
-		UserMessage:    userText,
+		UserMessage:    input.Text,
 		ScrubbedText:   scrubResult.Text,
 		ScrubVault:     scrubResult.Vault,
-		ConversationID: conversationID,
+		ConversationID: input.ConversationID,
 		TriggerMsgID:   msgID,
+		ImageBase64:    input.ImageBase64,
+		ImageMIME:      input.ImageMIME,
 	})
 	if err != nil {
 		return "", err
