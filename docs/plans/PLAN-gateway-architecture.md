@@ -1,5 +1,35 @@
 # Gateway Architecture Plan
 
+## Progress (updated 2026-05-24)
+
+| Phase | Status | Branch | Commits |
+|-------|--------|--------|---------|
+| **Phase 1**: Gateway foundation + Gradio adapter | **Done** | `feat/gateway` | `98f632b`, `f15fa55` |
+| **Phase 2a**: Telegram adapter (wrapper) | **Done** | `feat/gateway` | `c11faf7` |
+| **Phase 2b**: Transport-neutral commands | **Done** | `feat/gateway` | `b354bd4`, `cb26710` |
+| **Phase 2c-i**: Decouple pipeline from tele | **Done** | `feat/gateway` | `35f8f05`, `da0ee92`, `bebf47c` |
+| **Phase 2c-ii**: File reorganization (tg_ prefix) | **Done** | `feat/gateway` | `4074d07` |
+| **Phase 2c-iii**: Image support (all adapters) | **Done** | `feat/gateway` | `610e3c6` |
+| **Sim adapter**: Integration test via gateway | **Done** | `feat/gateway` | `a87b8ba` |
+| **Phase 3**: TUI observer enhancements | Not started | — | — |
+| **Phase 4**: VPS deployment | Not started | — | — |
+
+### What shipped
+- 3 adapter types: **Telegram** (push), **Gradio** (pull + image upload), **Sim** (sequential test)
+- **Unified command system**: 13 commands (`/help`, `/stats`, `/facts`, `/forget`, `/traces`, `/status`, `/reflect`, `/reflections`, `/persona`, `/dream`, `/dreamlog`, `/lasttrace`, `/compact`) work on all adapters via `Exec*` methods
+- **Transport-agnostic pipeline**: `run_agent.go`, `commands_gateway.go`, `helpers.go` have zero `tele` imports. Optional interfaces (`TraceProvider`, `TTSProvider`, `StreamProvider`) replace type assertions
+- **Sim adapter found and fixed a real bug**: `gatewayFrontend.EditStatus` wasn't accumulating reply text — replies were silently dropped on non-Telegram adapters
+- **~600 lines dead code removed** from bot/, latency scan bug fixed
+- **File reorganization**: Telegram-specific files prefixed with `tg_` for clear visual separation
+- Legacy `her sim` renamed to `her sim-legacy`; new `her sim` runs through the full gateway pipeline
+
+### What remains
+- **Phase 3**: Add adapter status lines to TUI header (which adapters are running, message counts)
+- **Phase 4**: VPS deployment via `her run` with only Telegram adapter enabled
+- **Future**: Migrate mood wizard, /update, /restart to gateway commands; move Telegram-specific code to separate package when Bot struct is refactored
+
+---
+
 ## Context
 
 The `bot/` package is currently a 5,200-line monolith that owns transport (Telegram), agent orchestration, command handling, mood pipelines, voice, traces, and state management. A `Frontend` interface (14 methods) already abstracts transport, and `ProcessMessage()` is transport-neutral — but everything lives in `bot/`, making it impossible to cleanly add new interfaces (Gradio, Discord, etc.) without touching Telegram code.
@@ -38,7 +68,7 @@ This plan introduces a `gateway/` package that sits **above** `bot/`, owns all t
 
 ---
 
-## Phase 1: Gateway Foundation + Gradio Adapter
+## Phase 1: Gateway Foundation + Gradio Adapter ✅
 
 This is the first PR. Get local Gradio chat working through the gateway, with traces in a side panel. Telegram untouched — still works the old way via `bot/`.
 
@@ -303,9 +333,11 @@ The `her dev` command is **removed** — replaced by `her run --adapter=gradio` 
 
 ---
 
-## Phase 2: Telegram Adapter Migration
+## Phase 2: Telegram Adapter Migration ✅
 
 Move Telegram handling out of `bot/` into `gateway/telegram/`. This is the big refactor.
+
+> **Actual approach:** Rather than moving files to `gateway/telegram/` (Go's type system prevents methods on `bot.Bot` from living in another package), we: (a) wrapped `bot.Bot` in a `telegramAdapter` in `gateway/telegram.go`, (b) unified command routing so Telegram uses the same `Exec*` methods as Gradio, (c) extracted trace/stream/TTS into optional interfaces so `run_agent.go` has zero tele imports, (d) prefixed Telegram-specific files with `tg_` for visual separation.
 
 ### 2.1 Telegram Adapter
 
