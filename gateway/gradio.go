@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"her/config"
+	"her/tui"
 )
 
 // gradioAdapter implements the Adapter interface for a local Gradio
@@ -41,10 +42,9 @@ type gradioAdapter struct {
 	// Telegram. Set by the gateway after pipeline creation.
 	logCommand func(command string, conversationID, args string)
 
-	// SSE trace subscribers — each connected /api/traces client gets a channel.
-	tracesMu    sync.Mutex
-	traceSubs   []chan TraceEvent
-	maxSSEConns int
+	// Event bus — structured events from the agent pipeline. Each SSE
+	// client subscribes independently via bus.Subscribe().
+	bus *tui.Bus
 
 	// Pending replies — HTTP handler blocks until pipeline produces a result.
 	pendingMu sync.Mutex
@@ -55,7 +55,7 @@ type gradioAdapter struct {
 	convIDMu sync.Mutex
 }
 
-func newGradioAdapter(acfg config.AdapterConfig) (Adapter, error) {
+func newGradioAdapter(acfg config.AdapterConfig, bus *tui.Bus) (Adapter, error) {
 	port := acfg.Port
 	if port == 0 {
 		port = 7777 // Go API port — Gradio Python UI runs separately on :7860
@@ -67,6 +67,7 @@ func newGradioAdapter(acfg config.AdapterConfig) (Adapter, error) {
 		traces:  acfg.Traces,
 		msgCh:   make(chan InboundMsg, 16),
 		pending: make(map[string]chan OutboundMsg),
+		bus:     bus,
 	}, nil
 }
 
@@ -144,18 +145,6 @@ func (a *gradioAdapter) SendStatus(text string) error {
 
 func (a *gradioAdapter) StartTyping() func() {
 	return func() {}
-}
-
-func (a *gradioAdapter) OnTraceEvent(evt TraceEvent) {
-	a.tracesMu.Lock()
-	defer a.tracesMu.Unlock()
-	for _, ch := range a.traceSubs {
-		select {
-		case ch <- evt:
-		default:
-			// subscriber too slow, drop event
-		}
-	}
 }
 
 func (a *gradioAdapter) RegisterCommands(cmds []CommandDef) {
@@ -320,9 +309,14 @@ func (a *gradioAdapter) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleTraceSSE streams trace events to connected clients via
-// Server-Sent Events. Each client gets its own channel and receives
-// events as they happen.
+// handleTraceSSE streams structured agent events to the browser via
+// Server-Sent Events. Each SSE event has a named type (turn_start,
+// tool_call, reply, turn_end, mood, persona) so the client can render
+// rich turn cards instead of raw text.
+//
+// The adapter subscribes to the shared tui.Bus — the same event stream
+// that powers the TUI. Every adapter sees the same data; each renders
+// it differently.
 func (a *gradioAdapter) handleTraceSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -330,49 +324,121 @@ func (a *gradioAdapter) handleTraceSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Limit concurrent SSE connections to prevent file descriptor exhaustion.
-	maxConns := a.maxSSEConns
-	if maxConns == 0 {
-		maxConns = 10
-	}
-	a.tracesMu.Lock()
-	if len(a.traceSubs) >= maxConns {
-		a.tracesMu.Unlock()
-		http.Error(w, "too many trace connections", http.StatusServiceUnavailable)
+	if a.bus == nil {
+		http.Error(w, "event bus not available", http.StatusServiceUnavailable)
 		return
 	}
-	a.tracesMu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	flusher.Flush() // send headers immediately so clients unblock
+	flusher.Flush()
 
-	ch := make(chan TraceEvent, 64)
-	a.tracesMu.Lock()
-	a.traceSubs = append(a.traceSubs, ch)
-	a.tracesMu.Unlock()
-
-	defer func() {
-		a.tracesMu.Lock()
-		for i, sub := range a.traceSubs {
-			if sub == ch {
-				a.traceSubs = append(a.traceSubs[:i], a.traceSubs[i+1:]...)
-				break
-			}
-		}
-		a.tracesMu.Unlock()
-	}()
+	// Subscribe to the shared bus. Each SSE client gets its own channel.
+	eventCh := a.bus.Subscribe(128)
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case evt := <-ch:
-			data, _ := json.Marshal(evt)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+		case evt, ok := <-eventCh:
+			if !ok {
+				return
+			}
+			eventType, data := marshalBusEvent(evt)
+			if eventType == "" {
+				continue
+			}
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
 			flusher.Flush()
 		}
+	}
+}
+
+// marshalBusEvent converts a tui.Event into a named SSE event type and
+// JSON payload. Returns ("", nil) for events the web UI doesn't need.
+func marshalBusEvent(evt tui.Event) (string, []byte) {
+	switch e := evt.(type) {
+	case tui.TurnStartEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":         e.TurnID,
+			"user_message":    e.UserMessage,
+			"conversation_id": e.ConversationID,
+			"time":            e.Time,
+		})
+		return "turn_start", data
+
+	case tui.AgentIterEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":           e.TurnID,
+			"iteration":        e.Iteration,
+			"prompt_tokens":    e.PromptTokens,
+			"completion_tokens": e.CompletionTokens,
+			"cost_usd":         e.CostUSD,
+			"finish_reason":    e.FinishReason,
+		})
+		return "agent_iter", data
+
+	case tui.ToolCallEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":   e.TurnID,
+			"source":    e.Source,
+			"tool_name": e.ToolName,
+			"args":      e.Args,
+			"result":    e.Result,
+			"is_error":  e.IsError,
+		})
+		return "tool_call", data
+
+	case tui.ReplyEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":           e.TurnID,
+			"text":              e.Text,
+			"prompt_tokens":     e.PromptTokens,
+			"completion_tokens": e.CompletionTokens,
+			"total_tokens":      e.TotalTokens,
+			"cost_usd":          e.CostUSD,
+			"latency_ms":        e.LatencyMs,
+		})
+		return "reply", data
+
+	case tui.TurnEndEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":        e.TurnID,
+			"total_cost":     e.TotalCost,
+			"elapsed_ms":     e.ElapsedMs,
+			"tool_calls":     e.ToolCalls,
+			"memories_saved": e.MemoriesSaved,
+		})
+		return "turn_end", data
+
+	case tui.MoodEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id":    e.TurnID,
+			"action":     e.Action,
+			"valence":    e.Valence,
+			"labels":     e.Labels,
+			"confidence": e.Confidence,
+			"reason":     e.Reason,
+		})
+		return "mood", data
+
+	case tui.PersonaEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id": e.TurnID,
+			"action":  e.Action,
+			"detail":  e.Detail,
+		})
+		return "persona", data
+
+	case tui.ContextEvent:
+		data, _ := json.Marshal(map[string]any{
+			"turn_id": e.TurnID,
+		})
+		return "context", data
+
+	default:
+		return "", nil
 	}
 }
 

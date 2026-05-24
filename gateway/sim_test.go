@@ -126,12 +126,6 @@ func TestSimAdapter_StartTypingReturnsNoopFunc(t *testing.T) {
 	cancel()
 }
 
-func TestSimAdapter_OnTraceEventNoops(t *testing.T) {
-	a := newTestSimAdapter(t, nil)
-	// Should not panic.
-	a.OnTraceEvent(TraceEvent{Phase: "think", Agent: "driver", Content: "hello"})
-}
-
 func TestSimAdapter_RegisterCommandsStored(t *testing.T) {
 	a := newTestSimAdapter(t, nil)
 	defs := []CommandDef{

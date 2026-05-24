@@ -124,7 +124,6 @@ func (a *telegramAdapter) Receive() <-chan InboundMsg {
 func (a *telegramAdapter) Send(msg OutboundMsg) error  { return nil }
 func (a *telegramAdapter) SendStatus(text string) error { return nil }
 func (a *telegramAdapter) StartTyping() func()          { return func() {} }
-func (a *telegramAdapter) OnTraceEvent(evt TraceEvent)  {}
 func (a *telegramAdapter) RegisterCommands(cmds []CommandDef) {
 	a.bot.RegisterGatewayCommands(toGatewayCmds(cmds))
 }

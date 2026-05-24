@@ -154,7 +154,6 @@ func (a *simAdapter) Send(msg OutboundMsg) error {
 
 func (a *simAdapter) SendStatus(text string) error  { return nil }
 func (a *simAdapter) StartTyping() func()            { return func() {} }
-func (a *simAdapter) OnTraceEvent(evt TraceEvent)     {}
 func (a *simAdapter) RegisterCommands(cmds []CommandDef) { a.commands = cmds }
 
 // Results returns the collected sim results after Done is closed.

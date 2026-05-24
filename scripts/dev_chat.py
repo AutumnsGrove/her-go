@@ -113,8 +113,45 @@ trace_log: list[str] = []
 trace_lock = threading.Lock()
 
 
+def format_trace_event(event_type: str, data: dict) -> str:
+    """Format a structured bus event as a plain text trace line."""
+    if event_type == "turn_start":
+        msg = data.get("user_message", "")
+        return f"─── turn start: {msg[:60]} ───"
+    elif event_type == "agent_iter":
+        return f"  tokens: {data.get('prompt_tokens', 0)}+{data.get('completion_tokens', 0)} | ${data.get('cost_usd', 0):.6f} | {data.get('finish_reason', '')}"
+    elif event_type == "tool_call":
+        src = data.get("source", "main")
+        name = data.get("tool_name", "?")
+        result = data.get("result", "")[:80]
+        prefix = f"[{src}] " if src != "main" else ""
+        if data.get("is_error"):
+            return f"  {prefix}❌ {name} → {result}"
+        if name == "think":
+            args = data.get("args", "")
+            try:
+                args = json.loads(args).get("thought", args)
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            return f"  {prefix}🧠 {args[:100]}"
+        return f"  {prefix}{name} → {result}"
+    elif event_type == "reply":
+        text = data.get("text", "")[:80]
+        return f"  💬 {data.get('total_tokens', 0)} tokens | ${data.get('cost_usd', 0):.6f} | {text}"
+    elif event_type == "turn_end":
+        return f"─── done: ${data.get('total_cost', 0):.4f} | {data.get('elapsed_ms', 0)}ms | {data.get('tool_calls', 0)} tools ───"
+    elif event_type == "mood":
+        labels = ", ".join(data.get("labels", []))
+        return f"  🎭 {data.get('action', '')} v={data.get('valence', 0)} [{labels}]"
+    elif event_type == "persona":
+        return f"  🪞 {data.get('action', '')} {data.get('detail', '')}"
+    elif event_type == "context":
+        return "  📋 context ready"
+    return f"  [{event_type}] {json.dumps(data)[:80]}"
+
+
 def start_trace_listener():
-    """Background thread that listens for SSE trace events."""
+    """Background thread that listens for structured SSE bus events."""
     while True:
         try:
             resp = requests.get(
@@ -124,23 +161,16 @@ def start_trace_listener():
             for event in client.events():
                 try:
                     data = json.loads(event.data)
-                    agent = data.get("Agent", "")
-                    phase = data.get("Phase", "")
-                    content = data.get("Content", "")
-                    # Strip HTML tags for plain text display
-                    import re
-                    content = re.sub(r"<[^>]+>", "", content)
-                    line = f"[{agent}/{phase}] {content}"
+                    line = format_trace_event(event.event, data)
                     with trace_lock:
                         trace_log.append(line)
-                        # Keep last 200 lines
                         if len(trace_log) > 200:
                             del trace_log[:50]
                 except (json.JSONDecodeError, KeyError):
                     pass
         except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError):
             import time
-            time.sleep(2)  # reconnect after brief pause
+            time.sleep(2)
 
 
 def get_traces() -> str:

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"her/config"
+	"her/tui"
 )
 
 // newTestGradioAdapter creates a gradioAdapter wired for testing.
@@ -31,7 +32,7 @@ func newTestGradioAdapter(t *testing.T) *gradioAdapter {
 		Type: "gradio",
 		Port: 0,
 	}
-	a, err := newGradioAdapter(cfg)
+	a, err := newGradioAdapter(cfg, nil)
 	if err != nil {
 		t.Fatalf("newGradioAdapter: %v", err)
 	}
@@ -424,64 +425,84 @@ func TestValidImageMIME(t *testing.T) {
 	}
 }
 
-// ---- SSE connection limit tests ---------------------------------------------
+// ---- SSE bus event streaming tests ------------------------------------------
 
-func TestGradioSSE_ConnectionLimitEnforced(t *testing.T) {
+func TestGradioSSE_NoBusReturns503(t *testing.T) {
+	a := newTestGradioAdapter(t) // bus is nil
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/traces", a.handleTraceSSE)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/traces")
+	if err != nil {
+		t.Fatalf("SSE request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when bus is nil, got %d", resp.StatusCode)
+	}
+}
+
+func TestGradioSSE_BusEventsStreamToClient(t *testing.T) {
+	bus := tui.NewBus()
+	defer bus.Close()
+
 	cfg := config.AdapterConfig{
 		Name:   "test-gradio-sse",
 		Type:   "gradio",
 		Traces: true,
 	}
-	a, err := newGradioAdapter(cfg)
+	a, err := newGradioAdapter(cfg, bus)
 	if err != nil {
 		t.Fatalf("newGradioAdapter: %v", err)
 	}
 	ga := a.(*gradioAdapter)
-	ga.maxSSEConns = 2 // low cap so the test completes quickly
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/traces", ga.handleTraceSSE)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Each SSE connection blocks reading from a long-lived response body.
-	// We open ga.maxSSEConns connections and keep them alive, then verify
-	// the (maxSSEConns+1)-th gets 503.
-	openSSE := func() *http.Response {
-		// Zero Timeout means the client won't time out while the SSE stream
-		// is open — we need the connection to stay alive.
-		client := &http.Client{Timeout: 0}
-		resp, err := client.Get(srv.URL + "/api/traces")
-		if err != nil {
-			return nil
-		}
-		return resp
-	}
-
-	var openResps []*http.Response
-	for i := 0; i < ga.maxSSEConns; i++ {
-		resp := openSSE()
-		if resp != nil {
-			openResps = append(openResps, resp)
-		}
-		// Give the server goroutine time to append this subscriber to traceSubs.
-		time.Sleep(30 * time.Millisecond)
-	}
-	defer func() {
-		for _, r := range openResps {
-			r.Body.Close()
-		}
-	}()
-
-	// One more connection should be rejected.
-	resp, err := http.Get(srv.URL + "/api/traces")
+	// Connect an SSE client.
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(srv.URL + "/api/traces")
 	if err != nil {
-		t.Fatalf("SSE connection request: %v", err)
+		t.Fatalf("SSE connect: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 when SSE limit exceeded, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Give the SSE handler time to subscribe to the bus.
+	time.Sleep(50 * time.Millisecond)
+
+	// Emit a tool call event on the bus.
+	bus.Emit(tui.ToolCallEvent{
+		Time:     time.Now(),
+		TurnID:   42,
+		Source:   "main",
+		ToolName: "think",
+		Args:     `{"thought":"test"}`,
+		Result:   "ok",
+	})
+
+	// Read the SSE output — should contain the event.
+	buf := make([]byte, 4096)
+	n, err := resp.Body.Read(buf)
+	if err != nil {
+		t.Fatalf("reading SSE: %v", err)
+	}
+	body := string(buf[:n])
+
+	if !strings.Contains(body, "event: tool_call") {
+		t.Errorf("expected 'event: tool_call' in SSE output, got: %s", body)
+	}
+	if !strings.Contains(body, `"tool_name":"think"`) {
+		t.Errorf("expected tool_name in SSE data, got: %s", body)
 	}
 }
 

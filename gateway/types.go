@@ -23,17 +23,6 @@ type OutboundMsg struct {
 	IsError bool
 }
 
-// TraceEvent is published when any agent produces observability output.
-// Adapters subscribe and render however they want (Telegram message,
-// Gradio panel, TUI pane, etc.).
-type TraceEvent struct {
-	Phase   string // "think", "tool", "reply", "memory", "mood"
-	Agent   string // "driver", "memory", "mood", "introspection", "dream"
-	Content string
-	TurnID  int64
-	Time    time.Time
-}
-
 // Command is a platform-agnostic command invocation. Each adapter
 // translates its native format (Telegram /cmd, Gradio button, etc.)
 // into this struct.
