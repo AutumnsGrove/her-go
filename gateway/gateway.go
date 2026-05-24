@@ -62,6 +62,10 @@ type Gateway struct {
 	// start blocking). Callers can <-gw.Ready to wait for adapters to
 	// be available for TelegramBot() etc.
 	Ready chan struct{}
+
+	// SimMessages, when set, provides the message sequence for a sim
+	// adapter. Set by the sim command before calling Run().
+	SimMessages []SimMessage
 }
 
 // adapterEntry pairs an adapter with its pipeline for message routing.
@@ -209,6 +213,19 @@ func (g *Gateway) TelegramBot() *bot.Bot {
 	return nil
 }
 
+// SimAdapter returns the sim adapter if one is running.
+// Used by the sim command to wait for completion and read results.
+func (g *Gateway) SimAdapter() *simAdapter {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, e := range g.adapters {
+		if sa, ok := e.adapter.(*simAdapter); ok {
+			return sa
+		}
+	}
+	return nil
+}
+
 // Stop gracefully shuts down all adapters.
 func (g *Gateway) Stop() error {
 	g.mu.Lock()
@@ -292,6 +309,8 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 		return newTelegramAdapter(acfg, g.cfg, g.deps, store, g.bus)
 	case "gradio":
 		return newGradioAdapter(acfg)
+	case "sim":
+		return newSimAdapter(acfg, g.SimMessages)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}

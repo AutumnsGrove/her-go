@@ -144,14 +144,14 @@ var disableReasoningFlag bool
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
 // subcommands in Python, but the wiring is struct-based instead of method calls.
 var simCmd = &cobra.Command{
-	Use:   "sim",
-	Short: "Run a scripted conversation simulation",
-	Long: `Runs a suite of scripted messages through the real chatbot pipeline
-in a clean-room environment. Results are saved to sims/sim.db and a
-Markdown report is generated in sims/results/.
+	Use:   "sim-legacy",
+	Short: "Run a simulation (legacy — calls agent.Run directly, bypasses gateway)",
+	Long: `Legacy simulation mode. Calls agent.Run() directly, bypassing the
+gateway pipeline. Use "her sim" for the gateway-based simulation that
+tests the full production path.
 
 Example:
-  her sim --suite sims/getting-to-know-you.yaml`,
+  her sim-legacy --suite sims/getting-to-know-you.yaml`,
 	RunE: runSim,
 }
 
