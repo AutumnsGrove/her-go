@@ -345,6 +345,7 @@ func (a *gradioAdapter) handleTraceSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush() // send headers immediately so clients unblock
 
 	ch := make(chan TraceEvent, 64)
 	a.tracesMu.Lock()
