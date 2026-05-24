@@ -19,8 +19,13 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
 	"her/compact"
+	"her/memory"
+	"her/mood"
 	"her/persona"
+	"her/scheduler"
 
 	"gopkg.in/yaml.v3"
 )
@@ -597,4 +602,31 @@ func (b *Bot) ExecLastTrace() string {
 		return "No trace available yet — send a message first (with /traces enabled)."
 	}
 	return snapshot
+}
+
+// ExecRollup forces a daily mood rollup. In production the scheduler
+// fires this at 21:00; this command lets sims and manual testing
+// trigger it on demand.
+func (b *Bot) ExecRollup() (string, error) {
+	noopSend := func(_ int64, text string) (int, error) { return 0, nil }
+	deps := &scheduler.Deps{Store: b.store, Send: noopSend, ChatID: 1}
+
+	before, _ := b.store.RecentMoodEntries(memory.MoodKindMomentary, 1)
+	var beforeID int64
+	if len(before) > 0 {
+		beforeID = before[0].ID
+	}
+
+	h := mood.DailyRollupHandler()
+	if err := h.Execute(context.Background(), json.RawMessage(`{}`), deps); err != nil {
+		return "", fmt.Errorf("running rollup: %w", err)
+	}
+
+	after, _ := b.store.RecentMoodEntries(memory.MoodKindDaily, 1)
+	if len(after) > 0 && after[0].ID != beforeID {
+		entry := after[0]
+		return fmt.Sprintf("Rollup logged entry #%d: valence=%d labels=%s",
+			entry.ID, entry.Valence, entry.Labels), nil
+	}
+	return "Rollup ran — no new daily entry (already exists or insufficient data).", nil
 }

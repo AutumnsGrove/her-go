@@ -256,6 +256,7 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
 		TavilyClient:        b.tavilyClient,
+		CalendarBridge:      b.calendarBridge,
 		Cfg:                 b.cfg,
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
@@ -282,5 +283,3 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		},
 	}
 }
-
-

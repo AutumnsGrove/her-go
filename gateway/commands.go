@@ -108,5 +108,12 @@ func buildCommandsFromBot(bot *bot.Bot) []CommandDef {
 				return bot.ExecLastTrace(), nil
 			},
 		},
+		{
+			Name:        "rollup",
+			Description: "Force the daily mood rollup",
+			Handler: func(_ context.Context, _ string) (string, error) {
+				return bot.ExecRollup()
+			},
+		},
 	}
 }

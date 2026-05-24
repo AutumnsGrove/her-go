@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"her/bot"
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -34,6 +35,7 @@ type Deps struct {
 	TavilyClient     *search.TavilyClient
 	VoiceClient      *voice.Client    // STT — nil if voice disabled
 	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
+	CalendarBridge   calendar.Bridge  // nil in prod, FakeBridge in sims
 	ConfigPath       string
 }
 
@@ -65,9 +67,9 @@ type Gateway struct {
 
 	// SimMessages, when set, provides the message sequence for a sim
 	// adapter. Set by the sim command before calling Run().
-	SimMessages  []SimMessage
-	SimTriggers  SimTriggers
-	SimOptions   SimOptions
+	SimMessages []SimMessage
+	SimTriggers SimTriggers
+	SimOptions  SimOptions
 }
 
 // adapterEntry pairs an adapter with its pipeline for message routing.

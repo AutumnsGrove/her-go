@@ -671,9 +671,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 	}
 	schedDeps := &scheduler.Deps{
-		Store:   store,
-		Send:    sendFunc,
-		ChatID:  cfg.Telegram.OwnerChat,
+		Store:  store,
+		Send:   sendFunc,
+		ChatID: cfg.Telegram.OwnerChat,
 	}
 	sched, err := scheduler.New(store, schedDeps, rootDir)
 	if err != nil {

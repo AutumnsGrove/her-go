@@ -121,7 +121,7 @@ func (a *telegramAdapter) Receive() <-chan InboundMsg {
 
 // Send is unused for Telegram — replies go through TelegramFrontend
 // inside bot.Bot's handler flow.
-func (a *telegramAdapter) Send(msg OutboundMsg) error  { return nil }
+func (a *telegramAdapter) Send(msg OutboundMsg) error   { return nil }
 func (a *telegramAdapter) SendStatus(text string) error { return nil }
 func (a *telegramAdapter) StartTyping() func()          { return func() {} }
 func (a *telegramAdapter) RegisterCommands(cmds []CommandDef) {

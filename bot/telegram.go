@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"her/agent"
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -34,24 +35,25 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb             *tele.Bot
-	llm            *llm.Client          // conversational model (chat)
-	driverLLM      *llm.Client          // tool-calling orchestrator
-	memoryAgentLLM *llm.Client          // post-turn memory agent — nil if not configured
-	moodAgentLLM   *llm.Client          // post-turn mood agent — nil if not configured
-	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
-	dreamAgentLLM       *llm.Client     // memory dreamer — nil falls back to memoryAgentLLM
-	introspectionLLM    *llm.Client     // self-reflection agent — nil falls back to memoryAgentLLM
-	embedClient    *embed.Client        // local embedding model for similarity
-	tavilyClient   *search.TavilyClient // web search and URL extraction
-	voiceClient    *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
-	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store          memory.Store
-	cfg            *config.Config
-	configPath     string // path to config.yaml — needed for /traces toggle
-	systemPrompt   string
-	startTime      time.Time
+	tb               *tele.Bot
+	llm              *llm.Client          // conversational model (chat)
+	driverLLM        *llm.Client          // tool-calling orchestrator
+	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
+	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
+	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
+	dreamAgentLLM    *llm.Client          // memory dreamer — nil falls back to memoryAgentLLM
+	introspectionLLM *llm.Client          // self-reflection agent — nil falls back to memoryAgentLLM
+	embedClient      *embed.Client        // local embedding model for similarity
+	tavilyClient     *search.TavilyClient // web search and URL extraction
+	calendarBridge   calendar.Bridge      // nil in prod (tools create CLIBridge), FakeBridge in sims
+	voiceClient      *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
+	ttsClient        *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	store            memory.Store
+	cfg              *config.Config
+	configPath       string // path to config.yaml — needed for /traces toggle
+	systemPrompt     string
+	startTime        time.Time
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
@@ -60,7 +62,7 @@ type Bot struct {
 	moodRunner      *mood.Runner
 	moodSweeper     *mood.ProposalSweeper
 	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
-	shutdownCh      chan struct{}       // closed on Stop(); goroutines select on this to exit cleanly
+	shutdownCh      chan struct{}      // closed on Stop(); goroutines select on this to exit cleanly
 
 	// moodVocab is the loaded vocab used by both the agent and the
 	// /mood wizard. Shared so the two paths can't drift.
@@ -204,27 +206,27 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	}
 
 	bot := &Bot{
-		tb:             tb,
-		llm:            llmClient,
-		driverLLM:      driverLLM,
-		memoryAgentLLM: memoryAgentLLM,
-		moodAgentLLM:   moodAgentLLM,
-		visionLLM:      visionLLM,
-		classifierLLM:  classifierLLM,
-		dreamAgentLLM:       dreamAgentLLM,
-		introspectionLLM:    introspectionLLM,
-		embedClient:    embedClient,
-		tavilyClient:   tavilyClient,
-		voiceClient:    voiceClient,
-		ttsClient:      ttsClient,
-		store:          store,
-		cfg:            cfg,
-		configPath:     configPath,
-		systemPrompt:   string(promptBytes),
-		startTime:      time.Now(),
-		eventBus:       eventBus,
-		agentEvents:    make(chan agent.AgentEvent, 16),
-		shutdownCh:     make(chan struct{}),
+		tb:               tb,
+		llm:              llmClient,
+		driverLLM:        driverLLM,
+		memoryAgentLLM:   memoryAgentLLM,
+		moodAgentLLM:     moodAgentLLM,
+		visionLLM:        visionLLM,
+		classifierLLM:    classifierLLM,
+		dreamAgentLLM:    dreamAgentLLM,
+		introspectionLLM: introspectionLLM,
+		embedClient:      embedClient,
+		tavilyClient:     tavilyClient,
+		voiceClient:      voiceClient,
+		ttsClient:        ttsClient,
+		store:            store,
+		cfg:              cfg,
+		configPath:       configPath,
+		systemPrompt:     string(promptBytes),
+		startTime:        time.Now(),
+		eventBus:         eventBus,
+		agentEvents:      make(chan agent.AgentEvent, 16),
+		shutdownCh:       make(chan struct{}),
 	}
 
 	// Build the mood runner + sweeper if the mood agent is configured.
@@ -328,6 +330,13 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 	}
 
 	return b, nil
+}
+
+// SetCalendarBridge injects a calendar bridge for sim/test use.
+// In production the calendar tools create their own CLIBridge; in sims
+// we inject a FakeBridge so calendar operations work without Swift/EventKit.
+func (b *Bot) SetCalendarBridge(bridge calendar.Bridge) {
+	b.calendarBridge = bridge
 }
 
 // ProcessMessage runs a user message through the full agent pipeline
@@ -436,7 +445,7 @@ func (b *Bot) Stop() {
 	if b.tb != nil {
 		b.tb.Stop() // stop accepting new Telegram updates
 	}
-	close(b.agentEvents)             // signals consumeAgentEvents goroutine to exit
+	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }
 
 // IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).

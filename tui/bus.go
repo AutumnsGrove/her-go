@@ -60,6 +60,25 @@ func (b *Bus) Emit(e Event) {
 	}
 }
 
+// Unsubscribe removes a subscriber channel from the bus. After this call,
+// the channel will no longer receive events from Emit(). The channel is
+// NOT closed — the caller owns it and can drain/discard as needed.
+//
+// This is the cleanup counterpart to Subscribe(). Without it, each call
+// to Subscribe() permanently grows the subscriber slice — fine for
+// long-lived consumers (TUI, file logger), but SSE HTTP handlers come
+// and go with each browser tab.
+func (b *Bus) Unsubscribe(ch <-chan Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, sub := range b.subs {
+		if sub == ch {
+			b.subs = append(b.subs[:i], b.subs[i+1:]...)
+			return
+		}
+	}
+}
+
 // Close closes all subscriber channels. This signals consumers to shut down:
 // - The TUI's listenForEvents() sees channel close → returns tea.Quit
 // - The file logger's range loop exits naturally

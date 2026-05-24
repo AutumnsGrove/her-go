@@ -25,6 +25,7 @@ type SimTriggers struct {
 	CompactAfter int   // force compaction after turn N (0 = disabled)
 	DreamAfter   []int // run dream cycle after these turns
 	RunDream     bool  // run dream after all messages complete
+	RunRollup    bool  // force the daily mood rollup after all messages complete
 }
 
 // SimOptions holds runtime options for sim execution.
@@ -45,12 +46,12 @@ type SimResult struct {
 	ToolCalls int
 
 	// Agent verdicts captured from bus events.
-	MoodVerdict          string   // "auto_logged", "dropped_dedup", etc.
-	MoodLabels           []string // emotion labels
-	MoodValence          int
-	MemoriesSaved        []string // memory tool call results (save_memory, update_memory)
-	IntrospectionSaved   []string // introspection tool call results (save_self_memory)
-	ToolLog              []string // condensed log of all tool calls for the report
+	MoodVerdict        string   // "auto_logged", "dropped_dedup", etc.
+	MoodLabels         []string // emotion labels
+	MoodValence        int
+	MemoriesSaved      []string // memory tool call results (save_memory, update_memory)
+	IntrospectionSaved []string // introspection tool call results (save_self_memory)
+	ToolLog            []string // condensed log of all tool calls for the report
 }
 
 // simAdapter implements the Adapter interface for simulation runs.
@@ -210,6 +211,11 @@ func (a *simAdapter) Start(ctx context.Context) error {
 	// Post-run dream cycle.
 	if a.triggers.RunDream {
 		a.fireCommand(ctx, "dream", "")
+	}
+
+	// Post-run mood rollup — mirrors what the scheduler does at 21:00.
+	if a.triggers.RunRollup {
+		a.fireCommand(ctx, "rollup", "")
 	}
 
 	close(a.Done)
@@ -405,8 +411,8 @@ func (a *simAdapter) Send(msg OutboundMsg) error {
 	return nil
 }
 
-func (a *simAdapter) SendStatus(text string) error     { return nil }
-func (a *simAdapter) StartTyping() func()               { return func() {} }
+func (a *simAdapter) SendStatus(text string) error       { return nil }
+func (a *simAdapter) StartTyping() func()                { return func() {} }
 func (a *simAdapter) RegisterCommands(cmds []CommandDef) { a.commands = cmds }
 
 // Results returns the collected sim results after Done is closed.

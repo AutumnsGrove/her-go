@@ -33,6 +33,7 @@ var expectedGatewayCommands = []string{
 	"dream",
 	"dreamlog",
 	"lasttrace",
+	"rollup",
 }
 
 func TestBuildCommandsFromBot_ReturnsExpectedNames(t *testing.T) {
