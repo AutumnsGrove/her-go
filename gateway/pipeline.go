@@ -48,6 +48,11 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 	}, nil
 }
 
+// Engine returns the underlying bot for adapters that need direct
+// access to handler methods (e.g., Telegram adapter calls
+// ProcessMessage with its own Frontend implementation).
+func (p *Pipeline) Engine() *bot.Bot { return p.bot }
+
 // Process runs an inbound message through the agent pipeline and
 // returns the result. The adapter is used to provide Frontend
 // capabilities (typing, status updates) during processing.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"her/bot"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -12,6 +13,7 @@ import (
 	"her/memory"
 	"her/search"
 	"her/tui"
+	"her/voice"
 )
 
 var log = logger.WithPrefix("gateway")
@@ -30,6 +32,8 @@ type Deps struct {
 	IntrospectionLLM *llm.Client
 	EmbedClient      *embed.Client
 	TavilyClient     *search.TavilyClient
+	VoiceClient      *voice.Client    // STT — nil if voice disabled
+	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
 	ConfigPath       string
 }
 
@@ -53,6 +57,11 @@ type Gateway struct {
 
 	mu       sync.Mutex
 	adapters []adapterEntry
+
+	// Ready is closed when all adapters have been created (before they
+	// start blocking). Callers can <-gw.Ready to wait for adapters to
+	// be available for TelegramBot() etc.
+	Ready chan struct{}
 }
 
 // adapterEntry pairs an adapter with its pipeline for message routing.
@@ -69,6 +78,7 @@ func New(cfg *config.Config, deps Deps, bus *tui.Bus) *Gateway {
 		deps:   deps,
 		bus:    bus,
 		stores: make(map[string]memory.Store),
+		Ready:  make(chan struct{}),
 	}
 }
 
@@ -100,23 +110,29 @@ func (g *Gateway) Run(ctx context.Context) error {
 			continue
 		}
 
-		adapter, err := g.createAdapter(acfg)
-		if err != nil {
-			return fmt.Errorf("creating adapter %q: %w", acfg.Name, err)
-		}
-		if adapter == nil {
-			log.Infof("adapter %q (type=%s) not yet implemented in gateway, skipping", acfg.Name, acfg.Type)
-			continue
-		}
-
 		store, err := g.getOrCreateStore(acfg)
 		if err != nil {
 			return fmt.Errorf("opening store for adapter %q: %w", acfg.Name, err)
 		}
 
-		pipeline, err := NewPipeline(g.cfg, g.deps, store, g.bus)
+		adapter, err := g.createAdapter(acfg, store)
 		if err != nil {
-			return fmt.Errorf("creating pipeline for adapter %q: %w", acfg.Name, err)
+			return fmt.Errorf("creating adapter %q: %w", acfg.Name, err)
+		}
+		if adapter == nil {
+			log.Infof("gateway: adapter %q (type=%s) not yet implemented, skipping", acfg.Name, acfg.Type)
+			continue
+		}
+
+		// Gradio and other pull adapters need a pipeline for message routing.
+		// Telegram is a push adapter — it handles messages internally via
+		// bot.Bot, so pipeline is nil for it.
+		var pipeline *Pipeline
+		if acfg.Type != "telegram" {
+			pipeline, err = NewPipeline(g.cfg, g.deps, store, g.bus)
+			if err != nil {
+				return fmt.Errorf("creating pipeline for adapter %q: %w", acfg.Name, err)
+			}
 		}
 
 		adapter.RegisterCommands(g.commands)
@@ -140,6 +156,7 @@ func (g *Gateway) Run(ctx context.Context) error {
 
 	if len(started) == 0 {
 		log.Infof("no gateway adapters started (all legacy or disabled)")
+		close(g.Ready)
 		<-ctx.Done()
 		return nil
 	}
@@ -147,11 +164,26 @@ func (g *Gateway) Run(ctx context.Context) error {
 	g.mu.Lock()
 	g.adapters = started
 	g.mu.Unlock()
+	close(g.Ready) // signal that adapters are available
 
 	log.Infof("%d adapter(s) running", len(started))
 
 	<-ctx.Done()
 	return g.Stop()
+}
+
+// TelegramBot returns the bot.Bot from the Telegram adapter, if one
+// is running. Returns nil if no Telegram adapter is active. Used by
+// cmd/run.go to wire the scheduler's Send callback.
+func (g *Gateway) TelegramBot() *bot.Bot {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, e := range g.adapters {
+		if ta, ok := e.adapter.(*telegramAdapter); ok {
+			return ta.Engine()
+		}
+	}
+	return nil
 }
 
 // Stop gracefully shuts down all adapters.
@@ -231,16 +263,12 @@ func (g *Gateway) getOrCreateStore(acfg config.AdapterConfig) (memory.Store, err
 
 // createAdapter builds an Adapter from config. This is the adapter
 // factory — add new adapter types here as they're implemented.
-// Returns (nil, nil) for adapter types that aren't implemented yet
-// (e.g., "telegram" is handled by the legacy bot path in Phase 1).
-func (g *Gateway) createAdapter(acfg config.AdapterConfig) (Adapter, error) {
+func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (Adapter, error) {
 	switch acfg.Type {
+	case "telegram":
+		return newTelegramAdapter(acfg, g.cfg, g.deps, store, g.bus)
 	case "gradio":
 		return newGradioAdapter(acfg)
-	case "telegram":
-		// Phase 1: Telegram is handled by the legacy bot/ path.
-		// Phase 2 will add a Telegram adapter here.
-		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}
