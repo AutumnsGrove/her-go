@@ -26,8 +26,11 @@ Requirements (installed automatically by uv):
 # ]
 # ///
 
+import base64
 import json
+import mimetypes
 import threading
+from pathlib import Path
 
 import requests
 import sseclient
@@ -47,13 +50,29 @@ def check_backend():
         return False
 
 
-def chat(message: str, history: list) -> str:
-    """Send a message to the Go backend and return the reply."""
+def chat(message: dict, history: list) -> str:
+    """Send a message to the Go backend and return the reply.
+
+    In multimodal mode, Gradio sends message as a dict with:
+      - "text": the user's text
+      - "files": list of uploaded file paths (images, etc.)
+    """
     global conversation_id
 
-    payload = {"message": message}
+    text = message.get("text", "") if isinstance(message, dict) else message
+    files = message.get("files", []) if isinstance(message, dict) else []
+
+    payload = {"message": text}
     if conversation_id:
         payload["conversation_id"] = conversation_id
+
+    # Attach the first image if one was uploaded.
+    if files:
+        img_path = Path(files[0])
+        if img_path.exists():
+            with open(img_path, "rb") as f:
+                payload["image_base64"] = base64.b64encode(f.read()).decode()
+            payload["image_mime"] = mimetypes.guess_type(str(img_path))[0] or "image/png"
 
     try:
         resp = requests.post(
@@ -154,9 +173,10 @@ with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
             chatbot = gr.ChatInterface(
                 fn=chat,
                 type="messages",
+                multimodal=True,
                 examples=[
-                    "hey, how are you?",
-                    "what do you remember about me?",
+                    {"text": "hey, how are you?"},
+                    {"text": "what do you remember about me?"},
                 ],
             )
 

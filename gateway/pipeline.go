@@ -59,7 +59,12 @@ func (p *Pipeline) Engine() *bot.Bot { return p.bot }
 func (p *Pipeline) Process(ctx context.Context, msg InboundMsg, adapter Adapter) (OutboundMsg, error) {
 	fe := &gatewayFrontend{adapter: adapter}
 
-	replyText, err := p.bot.ProcessMessage(fe, msg.Text, msg.ConversationID)
+	replyText, err := p.bot.ProcessMessageInput(fe, bot.MessageInput{
+		Text:           msg.Text,
+		ConversationID: msg.ConversationID,
+		ImageBase64:    msg.ImageBase64,
+		ImageMIME:      msg.ImageMIME,
+	})
 	if err != nil {
 		return OutboundMsg{}, err
 	}
