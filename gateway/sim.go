@@ -20,6 +20,13 @@ type SimMessage struct {
 	Image string // path to local image file (optional)
 }
 
+// SimTriggers defines lifecycle events to fire during a sim run.
+type SimTriggers struct {
+	CompactAfter int   // force compaction after turn N (0 = disabled)
+	DreamAfter   []int // run dream cycle after these turns
+	RunDream     bool  // run dream after all messages complete
+}
+
 // SimResult holds the response for one sim turn, enriched with
 // structured data captured from the bus event stream.
 type SimResult struct {
@@ -49,10 +56,14 @@ type SimResult struct {
 type simAdapter struct {
 	cfg      config.AdapterConfig
 	messages []SimMessage
+	triggers SimTriggers
 	bus      *tui.Bus
 
 	msgCh    chan InboundMsg
 	commands []CommandDef
+
+	// compactHandler is set by the gateway after pipeline creation.
+	compactHandler func(ctx context.Context, convID string) (string, error)
 
 	// Synchronous request/reply — same pattern as Gradio.
 	pendingMu sync.Mutex
@@ -86,10 +97,11 @@ type turnCapture struct {
 	introspectionSaved []string
 }
 
-func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, bus *tui.Bus) (Adapter, error) {
+func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, bus *tui.Bus) (Adapter, error) {
 	return &simAdapter{
 		cfg:          acfg,
 		messages:     messages,
+		triggers:     triggers,
 		bus:          bus,
 		msgCh:        make(chan InboundMsg, 1),
 		finishedTurn: make(chan *turnCapture, 1),
@@ -177,6 +189,15 @@ func (a *simAdapter) Start(ctx context.Context) error {
 				result.Cost, result.ToolCalls,
 				truncateSimText(result.Reply, 100))
 		}
+
+		// Fire lifecycle triggers after this turn.
+		turnNum := i + 1
+		a.fireTriggers(ctx, turnNum, convID)
+	}
+
+	// Post-run dream cycle.
+	if a.triggers.RunDream {
+		a.fireCommand(ctx, "dream", "")
 	}
 
 	close(a.Done)
@@ -314,6 +335,47 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 			}
 		}
 	}
+}
+
+// fireTriggers checks if any lifecycle events should fire after this turn.
+func (a *simAdapter) fireTriggers(ctx context.Context, turnNum int, convID string) {
+	if a.triggers.CompactAfter > 0 && turnNum == a.triggers.CompactAfter {
+		log.Infof("sim: triggering compaction after turn %d", turnNum)
+		if a.compactHandler != nil {
+			result, err := a.compactHandler(ctx, convID)
+			if err != nil {
+				log.Errorf("sim: compact failed: %v", err)
+			} else {
+				log.Infof("sim: /compact → %s", truncateSimText(result, 100))
+			}
+		} else {
+			log.Warnf("sim: compact_after=%d but no compactHandler wired", turnNum)
+		}
+	}
+
+	for _, dt := range a.triggers.DreamAfter {
+		if turnNum == dt {
+			log.Infof("sim: triggering dream cycle after turn %d", turnNum)
+			a.fireCommand(ctx, "dream", "")
+			break
+		}
+	}
+}
+
+// fireCommand executes a registered command by name.
+func (a *simAdapter) fireCommand(ctx context.Context, name, args string) {
+	for _, cmd := range a.commands {
+		if cmd.Name == name {
+			result, err := cmd.Handler(ctx, args)
+			if err != nil {
+				log.Errorf("sim: command /%s failed: %v", name, err)
+			} else {
+				log.Infof("sim: /%s → %s", name, truncateSimText(result, 100))
+			}
+			return
+		}
+	}
+	log.Warnf("sim: command /%s not registered", name)
 }
 
 func (a *simAdapter) Stop() error { return nil }

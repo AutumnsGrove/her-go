@@ -246,6 +246,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	gw := gateway.New(cfg, deps, bus)
 	gw.RegisterStore(tmpDBPath, store)
 	gw.SimMessages = gwMessages
+	gw.SimTriggers = gateway.SimTriggers{
+		CompactAfter: s.CompactAfter,
+		DreamAfter:   s.DreamAfter,
+		RunDream:     s.RunDream,
+	}
 
 	// context.WithCancel lets us stop the gateway once the sim adapter
 	// signals Done. In Go, ctx.Done() is a channel — when we call cancel(),
