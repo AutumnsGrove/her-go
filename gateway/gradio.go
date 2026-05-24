@@ -81,6 +81,7 @@ func (a *gradioAdapter) Capabilities() CapSet {
 
 func (a *gradioAdapter) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", a.handleUI)
 	mux.HandleFunc("POST /api/chat", a.handleChat)
 	mux.HandleFunc("POST /api/clear", a.handleClear)
 	mux.HandleFunc("GET /api/status", a.handleStatus)

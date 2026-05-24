@@ -158,13 +158,13 @@ listener_thread.start()
 
 # --- Build the Gradio UI ---
 
-with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="her-go dev") as demo:
     gr.Markdown("## her-go dev chat")
 
     if not check_backend():
         gr.Markdown(
-            "> **Backend not running.** Start it with `her run` "
-            "(with gradio adapter enabled in config.yaml)."
+            "> **Backend not running.** Start it with `her run --adapter=gradio` "
+            "or just `her run` with gradio enabled in config.yaml."
         )
 
     with gr.Row():
@@ -172,7 +172,6 @@ with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
         with gr.Column(scale=2):
             chatbot = gr.ChatInterface(
                 fn=chat,
-                type="messages",
                 multimodal=True,
                 examples=[
                     {"text": "hey, how are you?"},
@@ -193,4 +192,4 @@ with gr.Blocks(title="her-go dev", theme=gr.themes.Soft()) as demo:
             )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=gr.themes.Soft())
