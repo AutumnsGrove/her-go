@@ -2,8 +2,11 @@ package bot
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"her/trace"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -21,6 +24,10 @@ type TelegramFrontend struct {
 	b           *Bot
 	placeholder *tele.Message
 	html        bool // whether placeholder was sent with HTML parse mode
+
+	// Trace state — lazily initialized on first TraceCallback call.
+	traceBoard *trace.Board
+	traceMsg   *tele.Message
 }
 
 // NewTelegramFrontend creates a frontend for a Telegram message context.
@@ -142,11 +149,114 @@ func (f *TelegramFrontend) SendError(text string) error {
 
 func (f *TelegramFrontend) ReplyText() string { return "" }
 
-// Placeholder returns the current placeholder message. Used by the
-// stream callback builder which needs direct access to the message
-// for incremental edits.
-func (f *TelegramFrontend) Placeholder() *tele.Message { return f.placeholder }
+// --- TraceProvider implementation ---
 
-// Context returns the underlying tele.Context for Telegram-specific
-// operations (TTS, voice replies) that don't go through the Frontend.
-func (f *TelegramFrontend) Context() tele.Context { return f.c }
+func (f *TelegramFrontend) TraceCallback(slot string) func(text string) error {
+	f.initTrace()
+	return func(text string) error {
+		go f.traceBoard.Set(slot, text)
+		return nil
+	}
+}
+
+func (f *TelegramFrontend) TraceFinalize() {
+	if f.traceBoard == nil {
+		return
+	}
+	snapshot := f.traceBoard.Snapshot()
+	if snapshot == "" {
+		return
+	}
+	f.b.lastTraceMu.Lock()
+	f.b.lastTraceSnapshot = snapshot
+	f.b.lastTraceMu.Unlock()
+
+	const paginateThreshold = 3800
+	if len(snapshot) > paginateThreshold && f.traceMsg != nil {
+		_ = f.c.Bot().Delete(f.traceMsg)
+		_ = f.b.sendPaginated(f.c, snapshot)
+	}
+}
+
+func (f *TelegramFrontend) initTrace() {
+	if f.traceBoard != nil {
+		return
+	}
+	traceMsg, err := f.c.Bot().Send(f.c.Recipient(), "🧠")
+	if err != nil {
+		log.Warn("trace: failed to send placeholder", "err", err)
+	}
+	f.traceMsg = traceMsg
+
+	edit := func(text string) {
+		if text == "" {
+			return
+		}
+		if f.traceMsg == nil {
+			msg, err := f.c.Bot().Send(f.c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil {
+				msg, err = f.c.Bot().Send(f.c.Recipient(), stripHTML(text))
+				if err != nil {
+					return
+				}
+			}
+			f.traceMsg = msg
+			return
+		}
+		_, err := f.c.Bot().Edit(f.traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		if err != nil && !strings.Contains(err.Error(), "not modified") {
+			_, _ = f.c.Bot().Edit(f.traceMsg, stripHTML(text))
+		}
+	}
+
+	f.traceBoard = trace.NewBoard(edit)
+}
+
+// --- TTSProvider implementation ---
+
+func (f *TelegramFrontend) SendVoice(text string) {
+	f.b.sendVoiceReply(f.c, text)
+}
+
+// --- StreamProvider implementation ---
+
+func (f *TelegramFrontend) MakeStreamCallback() (func(chunk string) error, func()) {
+	var mu sync.Mutex
+	var buf strings.Builder
+	var lastFlushed string
+	done := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(400 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				current := buf.String()
+				mu.Unlock()
+				if current == lastFlushed || current == "" {
+					continue
+				}
+				_, err := f.c.Bot().Edit(f.placeholder, current+"▋")
+				if err != nil && !strings.Contains(err.Error(), "not modified") {
+					continue
+				}
+				lastFlushed = current
+			}
+		}
+	}()
+
+	cb := func(chunk string) error {
+		mu.Lock()
+		buf.WriteString(chunk)
+		mu.Unlock()
+		return nil
+	}
+
+	stop := func() { close(done) }
+
+	return cb, stop
+}

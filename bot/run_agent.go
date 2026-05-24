@@ -21,8 +21,6 @@ import (
 	"her/scrub"
 	"her/tools"
 	"her/turn"
-
-	tele "gopkg.in/telebot.v4"
 )
 
 // AgentInput holds the variable parts of an interactive agent run.
@@ -127,20 +125,12 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	var introspectionTraceCallback tools.TraceCallback
 	var traceFinalize func()
 
-	// Traces can flow through two paths:
-	// 1. Telegram: renders into an editable Telegram message (type assertion)
-	// 2. TraceProvider: any frontend that implements the optional interface
-	//    (e.g., gateway adapters route traces to SSE streams, panels, etc.)
+	// Traces flow through the TraceProvider optional interface.
+	// Both TelegramFrontend and gatewayFrontend implement it —
+	// Telegram renders into an editable message, gateway routes
+	// to SSE streams / adapter panels.
 	if b.cfg.Driver.Trace {
-		if tfe, ok := fe.(*TelegramFrontend); ok {
-			tr := b.makeTraceCallbacks(tfe.Context())
-			traceCallback = tr.getCallback("main")
-			memoryTraceCallback = tr.getCallback("memory")
-			moodTraceCallback = tr.getCallback("mood")
-			personaTraceCallback = tr.getCallback("persona")
-			introspectionTraceCallback = tr.getCallback("introspection")
-			traceFinalize = tr.finalize
-		} else if tp, ok := fe.(TraceProvider); ok {
+		if tp, ok := fe.(TraceProvider); ok {
 			traceCallback = tp.TraceCallback("main")
 			memoryTraceCallback = tp.TraceCallback("memory")
 			moodTraceCallback = tp.TraceCallback("mood")
@@ -171,22 +161,23 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	deletePlaceholderCallback := func() error { return fe.DeletePlaceholder() }
 	sendPaginatedCallback := func(text string) error { return fe.SendPaginated(text) }
 
-	// TTS callback — only wired for Telegram frontends with voice support.
+	// TTS callback — any frontend implementing TTSProvider gets voice replies.
 	var ttsCallback tools.TTSCallback
-	if tfe, ok := fe.(*TelegramFrontend); ok {
+	if tp, ok := fe.(TTSProvider); ok {
 		if b.ttsClient != nil && (input.ForceTTS || b.ttsClient.ReplyMode() == "voice") {
 			ttsCallback = func(text string) {
-				b.sendVoiceReply(tfe.Context(), text)
+				tp.SendVoice(text)
 			}
 		}
 	}
 
-	// Stream callback — only for frontends that support streaming.
+	// Stream callback — any frontend implementing StreamProvider gets
+	// token-level streaming with its own buffering strategy.
 	var streamCallback tools.StreamCallback
 	var stopStream func()
 	if fe.SupportsStreaming() {
-		if tfe, ok := fe.(*TelegramFrontend); ok {
-			streamCallback, stopStream = b.makeStreamCallback(tfe.Context(), func() *tele.Message { return tfe.Placeholder() })
+		if sp, ok := fe.(StreamProvider); ok {
+			streamCallback, stopStream = sp.MakeStreamCallback()
 		}
 	}
 
@@ -293,62 +284,3 @@ func (b *Bot) baseRunParams() agent.RunParams {
 }
 
 
-// makeStreamCallback creates a streaming callback that funnels LLM tokens to
-// Telegram via incremental message edits. Returns the callback (for injection
-// into tools.Context.StreamCallback) and a stop function that shuts down the
-// background ticker goroutine.
-//
-// Design: tokens arrive fast (one per ~10ms) but Telegram's edit rate limit
-// is ~1 per second per message. We collect tokens in a mutex-protected buffer
-// and flush to Telegram every 400ms — fast enough to feel live, safely under
-// the rate limit. A "▋" block cursor appends while streaming to signal the
-// response is still in progress.
-//
-// getPlaceholder is a closure so that stageResetCallback's reassignment of
-// the placeholder variable is picked up at flush time rather than capturing
-// the pointer value at construction time.
-func (b *Bot) makeStreamCallback(c tele.Context, getPlaceholder func() *tele.Message) (tools.StreamCallback, func()) {
-	var mu sync.Mutex
-	var buf strings.Builder
-	var lastFlushed string
-	done := make(chan struct{})
-
-	// Flush goroutine — edits the Telegram message every 400ms.
-	go func() {
-		ticker := time.NewTicker(400 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				mu.Lock()
-				current := buf.String()
-				mu.Unlock()
-				if current == lastFlushed || current == "" {
-					continue
-				}
-				// Append cursor so the user can see the reply is still coming.
-				_, err := c.Bot().Edit(getPlaceholder(), current+"▋")
-				if err != nil && !strings.Contains(err.Error(), "not modified") {
-					// Rate limit or edit conflict — skip this tick, try next.
-					continue
-				}
-				lastFlushed = current
-			}
-		}
-	}()
-
-	cb := func(chunk string) error {
-		mu.Lock()
-		buf.WriteString(chunk)
-		mu.Unlock()
-		return nil
-	}
-
-	stop := func() {
-		close(done)
-	}
-
-	return cb, stop
-}

@@ -90,3 +90,17 @@ type TraceProvider interface {
 	// cleanup (e.g., store the final snapshot).
 	TraceFinalize()
 }
+
+// TTSProvider is an optional interface for frontends that can deliver
+// voice replies. The pipeline checks for this instead of asserting
+// a concrete Telegram type.
+type TTSProvider interface {
+	SendVoice(text string)
+}
+
+// StreamProvider is an optional interface for frontends that handle
+// token-level streaming with their own buffering/flush strategy.
+// Telegram edits a message every 400ms; other adapters might use SSE.
+type StreamProvider interface {
+	MakeStreamCallback() (func(chunk string) error, func())
+}
