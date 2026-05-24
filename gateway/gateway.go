@@ -135,7 +135,22 @@ func (g *Gateway) Run(ctx context.Context) error {
 			}
 		}
 
-		adapter.RegisterCommands(g.commands)
+		// Register commands: gateway-level first, then pipeline-derived.
+		// Pipeline commands wrap bot.Bot's Exec* methods so every slash
+		// command works on every adapter — not just Telegram.
+		cmds := append([]CommandDef{}, g.commands...)
+		if pipeline != nil {
+			cmds = append(cmds, buildCommands(pipeline)...)
+
+			// Wire adapter-specific handlers that need pipeline access.
+			if ga, ok := adapter.(*gradioAdapter); ok {
+				bot := pipeline.Engine()
+				ga.compactHandler = func(ctx context.Context, convID string) (string, error) {
+					return bot.ExecCompact(convID)
+				}
+			}
+		}
+		adapter.RegisterCommands(cmds)
 
 		entry := adapterEntry{
 			adapter:  adapter,
