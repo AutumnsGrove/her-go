@@ -33,6 +33,10 @@ type gradioAdapter struct {
 	server   *http.Server
 	commands []CommandDef
 
+	// compactHandler is set by the gateway after pipeline creation.
+	// It needs the conversation ID, which only the adapter knows.
+	compactHandler func(ctx context.Context, convID string) (string, error)
+
 	// SSE trace subscribers — each connected /api/traces client gets a channel.
 	tracesMu sync.Mutex
 	traceSubs []chan TraceEvent
@@ -182,6 +186,18 @@ func (a *gradioAdapter) handleChat(w http.ResponseWriter, r *http.Request) {
 		a.setConvID(convID)
 	}
 
+	// Intercept slash commands before they hit the pipeline.
+	if strings.HasPrefix(req.Message, "/") {
+		if result, handled := a.tryCommand(r.Context(), req.Message, convID); handled {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(chatResponse{
+				Reply:          result,
+				ConversationID: convID,
+			})
+			return
+		}
+	}
+
 	// Create a channel for the pipeline reply.
 	replyCh := make(chan OutboundMsg, 1)
 	a.pendingMu.Lock()
@@ -215,6 +231,50 @@ func (a *gradioAdapter) handleChat(w http.ResponseWriter, r *http.Request) {
 	case <-time.After(2 * time.Minute):
 		http.Error(w, "request timed out", http.StatusGatewayTimeout)
 	}
+}
+
+// tryCommand checks if a message is a registered command and executes it.
+// Returns the result text and true if handled, or ("", false) if the
+// message should fall through to the pipeline.
+func (a *gradioAdapter) tryCommand(ctx context.Context, message, convID string) (string, bool) {
+	parts := strings.SplitN(message, " ", 2)
+	cmdName := strings.TrimPrefix(parts[0], "/")
+	args := ""
+	if len(parts) > 1 {
+		args = parts[1]
+	}
+
+	// /clear is adapter-specific — it resets the conversation ID.
+	if cmdName == "clear" {
+		newID := fmt.Sprintf("gradio-%d", time.Now().UnixMilli())
+		a.setConvID(newID)
+		return "Context cleared. Fresh start!", true
+	}
+
+	// /compact needs the current conversation ID from the adapter,
+	// so it's handled here rather than as a generic CommandDef.
+	if cmdName == "compact" {
+		if a.compactHandler != nil {
+			result, err := a.compactHandler(ctx, convID)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err), true
+			}
+			return result, true
+		}
+		return "Compact not available.", true
+	}
+
+	for _, cmd := range a.commands {
+		if cmd.Name == cmdName {
+			result, err := cmd.Handler(ctx, args)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err), true
+			}
+			return result, true
+		}
+	}
+
+	return "", false
 }
 
 func (a *gradioAdapter) handleClear(w http.ResponseWriter, r *http.Request) {
