@@ -105,13 +105,18 @@ func (a *telegramAdapter) Stop() error {
 	return nil
 }
 
+// closedInboundCh is a pre-closed channel shared by all push adapters.
+var closedInboundCh = func() <-chan InboundMsg {
+	ch := make(chan InboundMsg)
+	close(ch)
+	return ch
+}()
+
 // Receive returns a closed channel. Telegram is a push adapter —
 // messages are handled directly by telebot handlers inside bot.Bot,
 // not routed through the gateway's message loop.
 func (a *telegramAdapter) Receive() <-chan InboundMsg {
-	ch := make(chan InboundMsg)
-	close(ch)
-	return ch
+	return closedInboundCh
 }
 
 // Send is unused for Telegram — replies go through TelegramFrontend

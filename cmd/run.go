@@ -578,6 +578,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	var gw *gateway.Gateway
 	var tgBot *bot.Bot
 	gwCtx, gwCancel := context.WithCancel(context.Background())
+	defer gwCancel()
 	gwDone := make(chan struct{})
 
 	// Check if the gateway config includes a Telegram adapter.

@@ -26,6 +26,7 @@ type TelegramFrontend struct {
 	html        bool // whether placeholder was sent with HTML parse mode
 
 	// Trace state — lazily initialized on first TraceCallback call.
+	traceOnce  sync.Once
 	traceBoard *trace.Board
 	traceMsg   *tele.Message
 }
@@ -179,9 +180,10 @@ func (f *TelegramFrontend) TraceFinalize() {
 }
 
 func (f *TelegramFrontend) initTrace() {
-	if f.traceBoard != nil {
-		return
-	}
+	f.traceOnce.Do(f.initTraceOnce)
+}
+
+func (f *TelegramFrontend) initTraceOnce() {
 	traceMsg, err := f.c.Bot().Send(f.c.Recipient(), "🧠")
 	if err != nil {
 		log.Warn("trace: failed to send placeholder", "err", err)
