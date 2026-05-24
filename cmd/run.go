@@ -570,9 +570,26 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// alongside the Telegram bot. The gateway handles non-Telegram transports;
 	// Telegram stays on the legacy path for now (Phase 2 migrates it).
 
+	// --- Gateway (multi-adapter transport layer) ---
+	// When gateway.adapters is configured, the gateway manages ALL
+	// adapters — including Telegram. The legacy bot.New() path only
+	// runs when there's no gateway config at all (backwards compat).
+
 	var gw *gateway.Gateway
+	var tgBot *bot.Bot
 	gwCtx, gwCancel := context.WithCancel(context.Background())
 	gwDone := make(chan struct{})
+
+	// Check if the gateway config includes a Telegram adapter.
+	gatewayOwnsTelegram := false
+	for _, a := range cfg.Gateway.Adapters {
+		if a.Type == "telegram" && a.IsEnabled() {
+			if adapterFilter == "" || adapterFilter == "telegram" {
+				gatewayOwnsTelegram = true
+			}
+		}
+	}
+
 	if len(cfg.Gateway.Adapters) > 0 {
 		gwDeps := gateway.Deps{
 			ChatLLM:          llmClient,
@@ -585,6 +602,8 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			IntrospectionLLM: introspectionClient,
 			EmbedClient:      embedClient,
 			TavilyClient:     tavilyClient,
+			VoiceClient:      voiceClient,
+			TTSClient:        ttsClient,
 			ConfigPath:       cfgFile,
 		}
 		gw = gateway.New(cfg, gwDeps, bus)
@@ -600,11 +619,11 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		close(gwDone)
 	}
 
-	// --- Telegram bot ---
-	// Skipped when --adapter filters to a non-Telegram adapter.
-
-	var tgBot *bot.Bot
-	if !skipTelegram {
+	// --- Telegram bot (legacy path) ---
+	// Only used when the gateway config does NOT include a Telegram adapter.
+	// When the gateway owns Telegram, the TelegramAdapter creates its own
+	// bot.Bot internally — no need for a second one here.
+	if !skipTelegram && !gatewayOwnsTelegram {
 		var botErr error
 		tgBot, botErr = bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
 		if botErr != nil {
@@ -614,9 +633,11 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 		tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
-	} else {
+	} else if skipTelegram {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "skipped"})
 	}
+	// When gatewayOwnsTelegram, the TelegramAdapter emitted its own
+	// startup event inside bot.New().
 
 	// --- Scheduler ---
 	// Powers the extension-based task system (mood daily rollup, future
@@ -630,9 +651,17 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		log.Error("scheduler: getting cwd", "err", err)
 		rootDir = "."
 	}
+	// Resolve the Telegram bot for scheduler wiring. When the gateway
+	// owns Telegram, wait for it to be ready and grab the bot from there.
 	var sendFunc func(int64, string) (int, error)
 	if tgBot != nil {
 		sendFunc = tgBot.SendWithID
+	} else if gatewayOwnsTelegram && gw != nil {
+		<-gw.Ready
+		if gwBot := gw.TelegramBot(); gwBot != nil {
+			tgBot = gwBot
+			sendFunc = gwBot.SendWithID
+		}
 	}
 	schedDeps := &scheduler.Deps{
 		Store:   store,
@@ -760,8 +789,10 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start the bot in yet another goroutine — tgBot.Start() blocks.
+	// When the gateway owns Telegram, the adapter already called Start()
+	// in its own goroutine — don't double-start.
 	botDone := make(chan struct{})
-	if tgBot != nil {
+	if tgBot != nil && !gatewayOwnsTelegram {
 		go func() {
 			tgBot.Start()
 			close(botDone)
@@ -825,7 +856,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			}
 		}
 	}
-	if tgBot != nil {
+	if tgBot != nil && !gatewayOwnsTelegram {
 		tgBot.Stop()
 	}
 	<-botDone // wait for tgBot.Start() to return
