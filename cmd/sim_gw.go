@@ -67,6 +67,8 @@ func init() {
 //  5. Run the gateway; wait for the sim adapter to signal Done
 //  6. Cancel the gateway context and print results
 func runSimGW(cmd *cobra.Command, args []string) error {
+	startTime := time.Now()
+
 	// --- Load config ---
 	cfg, err := config.Load(cfgFile)
 	if err != nil {
@@ -323,9 +325,17 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 	_ = gatewayErr
 
-	// --- Print results ---
+	// --- Print results + generate report ---
+	elapsed := time.Since(startTime)
 	results := sa.Results()
 	printSimResults(s.Name, results)
+
+	reportPath, err := generateSimReport(cfg, s, results, store, elapsed)
+	if err != nil {
+		log.Errorf("sim: report generation failed: %v", err)
+	} else {
+		fmt.Printf("Report: %s\n", reportPath)
+	}
 
 	return nil
 }
@@ -460,6 +470,160 @@ func applySimModelOverrides(cfg *config.Config) {
 	if disableReasoningFlag {
 		log.Infof("sim: reasoning disabled for hybrid models")
 	}
+}
+
+// generateSimReport builds a markdown report from sim results and the
+// store's post-run state, writes it to sims/results/, and returns the path.
+func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult, store memory.Store, elapsed time.Duration) (string, error) {
+	var b strings.Builder
+
+	// --- Header ---
+	totalCost := 0.0
+	totalTools := 0
+	for _, r := range results {
+		totalCost += r.Cost
+		totalTools += r.ToolCalls
+	}
+
+	fmt.Fprintf(&b, "# Simulation Report: %s\n\n", s.Name)
+	if s.Description != "" {
+		fmt.Fprintf(&b, "> %s\n\n", s.Description)
+	}
+	fmt.Fprintf(&b, "**Date:** %s | **Duration:** %s | **Cost:** $%.4f | **Turns:** %d\n\n",
+		time.Now().Format("2006-01-02 15:04"),
+		elapsed.Round(time.Second),
+		totalCost, len(results))
+
+	// Model table
+	modelOrNone := func(m string) string {
+		if m == "" {
+			return "(none)"
+		}
+		return m
+	}
+	fmt.Fprintf(&b, "| Role | Model |\n|------|-------|\n")
+	fmt.Fprintf(&b, "| Chat | %s |\n", modelOrNone(cfg.Chat.Model))
+	fmt.Fprintf(&b, "| Driver | %s |\n", modelOrNone(cfg.Driver.Model))
+	fmt.Fprintf(&b, "| Memory | %s |\n", modelOrNone(cfg.MemoryAgent.Model))
+	fmt.Fprintf(&b, "| Mood | %s |\n", modelOrNone(cfg.MoodAgent.Model))
+	fmt.Fprintf(&b, "| Classifier | %s |\n", modelOrNone(cfg.Classifier.Model))
+	fmt.Fprintf(&b, "| Vision | %s |\n", modelOrNone(cfg.Vision.Model))
+	fmt.Fprintf(&b, "| Introspection | %s |\n", modelOrNone(cfg.IntrospectionAgent.Model))
+	fmt.Fprintf(&b, "| Embed | %s |\n\n", modelOrNone(cfg.Embed.Model))
+
+	// --- Conversation ---
+	b.WriteString("## Conversation\n\n")
+	for i, r := range results {
+		if r.Error != nil {
+			fmt.Fprintf(&b, "### Turn %d *(ERROR)*\n", i+1)
+			fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
+			fmt.Fprintf(&b, "**Error:** %v\n\n---\n\n", r.Error)
+			continue
+		}
+
+		fmt.Fprintf(&b, "### Turn %d *(%.1fs, $%.4f, %d tools)*\n",
+			i+1, r.Duration.Seconds(), r.Cost, r.ToolCalls)
+		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
+		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, r.Reply)
+
+		// Memory saves
+		if len(r.MemoriesSaved) > 0 {
+			fmt.Fprintf(&b, "> 🧩 **memory:** saved %d\n", len(r.MemoriesSaved))
+			for _, m := range r.MemoriesSaved {
+				fmt.Fprintf(&b, "> - %s\n", m)
+			}
+			b.WriteString("\n")
+		}
+
+		// Mood verdict
+		if r.MoodVerdict != "" {
+			labels := strings.Join(r.MoodLabels, ", ")
+			if r.MoodValence > 0 {
+				fmt.Fprintf(&b, "> 🎭 **mood:** %s v=%d [%s]\n\n", r.MoodVerdict, r.MoodValence, labels)
+			} else {
+				fmt.Fprintf(&b, "> 🎭 **mood:** %s\n\n", r.MoodVerdict)
+			}
+		}
+
+		// Introspection
+		if len(r.IntrospectionSaved) > 0 {
+			fmt.Fprintf(&b, "> 🪡 **introspection:** saved %d\n", len(r.IntrospectionSaved))
+			for _, m := range r.IntrospectionSaved {
+				fmt.Fprintf(&b, "> - %s\n", m)
+			}
+			b.WriteString("\n")
+		}
+
+		// Tool log (collapsible)
+		if len(r.ToolLog) > 0 {
+			b.WriteString("<details><summary>Tool trace</summary>\n\n```\n")
+			for _, line := range r.ToolLog {
+				fmt.Fprintf(&b, "%s\n", line)
+			}
+			b.WriteString("```\n</details>\n\n")
+		}
+
+		b.WriteString("---\n\n")
+	}
+
+	// --- Final Memories ---
+	b.WriteString("## Memories (post-run)\n\n")
+	memories, err := store.AllActiveMemories()
+	if err != nil {
+		fmt.Fprintf(&b, "*Error loading memories: %v*\n\n", err)
+	} else if len(memories) == 0 {
+		b.WriteString("*No memories saved.*\n\n")
+	} else {
+		fmt.Fprintf(&b, "**%d active memories:**\n\n", len(memories))
+		for _, m := range memories {
+			subject := "user"
+			if m.Subject != "" {
+				subject = m.Subject
+			}
+			fmt.Fprintf(&b, "- **#%d** [%s] %s\n", m.ID, subject, m.Content)
+		}
+		b.WriteString("\n")
+	}
+
+	// --- Mood Entries ---
+	b.WriteString("## Mood Entries (post-run)\n\n")
+	moods, err := store.RecentMoodEntries(memory.MoodKindMomentary, 50)
+	if err != nil {
+		fmt.Fprintf(&b, "*Error loading mood entries: %v*\n\n", err)
+	} else if len(moods) == 0 {
+		b.WriteString("*No mood entries.*\n\n")
+	} else {
+		fmt.Fprintf(&b, "| # | Valence | Labels | Source |\n|---|---------|--------|--------|\n")
+		for i, m := range moods {
+			fmt.Fprintf(&b, "| %d | %d | %s | %s |\n", i+1, m.Valence, m.Labels, m.Source)
+		}
+		b.WriteString("\n")
+	}
+
+	// --- Cost Summary ---
+	b.WriteString("## Cost Summary\n\n")
+	fmt.Fprintf(&b, "| Metric | Value |\n|--------|-------|\n")
+	fmt.Fprintf(&b, "| Total cost | $%.4f |\n", totalCost)
+	fmt.Fprintf(&b, "| Total tools | %d |\n", totalTools)
+	fmt.Fprintf(&b, "| Turns | %d |\n", len(results))
+	if len(results) > 0 {
+		fmt.Fprintf(&b, "| Avg cost/turn | $%.4f |\n", totalCost/float64(len(results)))
+	}
+	fmt.Fprintf(&b, "| Duration | %s |\n\n", elapsed.Round(time.Second))
+
+	// --- Write to file ---
+	if err := os.MkdirAll("sims/results", 0o755); err != nil {
+		return "", fmt.Errorf("creating results dir: %w", err)
+	}
+
+	slug := strings.ReplaceAll(strings.ToLower(s.Name), " ", "-")
+	filename := fmt.Sprintf("sims/results/%s-%s.md",
+		slug, time.Now().Format("20060102-150405"))
+	if err := os.WriteFile(filename, []byte(b.String()), 0o644); err != nil {
+		return "", fmt.Errorf("writing report: %w", err)
+	}
+
+	return filename, nil
 }
 
 // seedSimDB pre-populates the sim database with cards, memories, self
