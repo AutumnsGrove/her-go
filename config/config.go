@@ -50,6 +50,7 @@ type Config struct {
 	Tunnel      TunnelConfig      `yaml:"tunnel"`
 	Cloudflare  CloudflareConfig  `yaml:"cloudflare"`
 	Update      UpdateConfig      `yaml:"update"`
+	Gateway     GatewayConfig     `yaml:"gateway"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -110,6 +111,51 @@ type SyncConfig struct {
 type UpdateConfig struct {
 	RepoPath     string `yaml:"repo_path"`     // path to the git repo (default: working directory)
 	ServiceLabel string `yaml:"service_label"` // launchd service label (default: "com.<botname>.her-go")
+}
+
+// GatewayConfig holds the multi-adapter gateway configuration. Each adapter
+// entry describes a transport (Telegram, Gradio, etc.) with its own settings
+// including database path, memory toggle, and adapter-specific options.
+// Two adapters pointing to the same DB share memory; different paths = isolated.
+type GatewayConfig struct {
+	Adapters []AdapterConfig `yaml:"adapters"`
+}
+
+// AdapterConfig configures a single gateway adapter instance. The Type field
+// selects which adapter implementation to use ("telegram", "gradio"). Each
+// adapter gets its own DB path and feature flags — this is how you get shared
+// vs. isolated memory without any special logic.
+type AdapterConfig struct {
+	Name    string `yaml:"name"`    // human-readable instance name ("telegram", "gradio-dev")
+	Type    string `yaml:"type"`    // adapter type: "telegram", "gradio"
+	Enabled *bool  `yaml:"enabled"` // nil = true (enabled by default)
+	DB      string `yaml:"db"`      // database path (default: her.db)
+	Memory  *bool  `yaml:"memory"`  // nil = true (memory enabled by default)
+
+	// Adapter-specific fields promoted for convenience. Each adapter
+	// reads the fields relevant to its type and ignores the rest.
+	Token  string `yaml:"token,omitempty"`  // telegram: bot token
+	Port   int    `yaml:"port,omitempty"`   // gradio: HTTP server port
+	Mode   string `yaml:"mode,omitempty"`   // telegram: "poll" or "webhook"
+	Traces bool   `yaml:"traces,omitempty"` // show traces (gradio: SSE panel)
+}
+
+// IsEnabled returns whether this adapter is enabled. Defaults to true
+// when the Enabled field is nil (not specified in config).
+func (a AdapterConfig) IsEnabled() bool {
+	if a.Enabled == nil {
+		return true
+	}
+	return *a.Enabled
+}
+
+// MemoryEnabled returns whether memory/fact storage is enabled for this
+// adapter. Defaults to true when the Memory field is nil.
+func (a AdapterConfig) MemoryEnabled() bool {
+	if a.Memory == nil {
+		return true
+	}
+	return *a.Memory
 }
 
 // CalendarConfig holds settings for the Swift EventKit bridge and calendar tools.

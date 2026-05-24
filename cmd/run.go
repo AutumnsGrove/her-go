@@ -20,6 +20,7 @@ import (
 	"her/config"
 	"her/d1"
 	"her/embed"
+	"her/gateway"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -554,6 +555,40 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "introspection", Status: "skipped"})
 	}
 
+	// --- Gateway (multi-adapter transport layer) ---
+	// When gateway.adapters is configured, start enabled adapters (Gradio, etc.)
+	// alongside the Telegram bot. The gateway handles non-Telegram transports;
+	// Telegram stays on the legacy path for now (Phase 2 migrates it).
+
+	var gw *gateway.Gateway
+	gwCtx, gwCancel := context.WithCancel(context.Background())
+	gwDone := make(chan struct{})
+	if len(cfg.Gateway.Adapters) > 0 {
+		gwDeps := gateway.Deps{
+			ChatLLM:          llmClient,
+			DriverLLM:        driverClient,
+			MemoryAgentLLM:   memoryAgentClient,
+			MoodAgentLLM:     moodAgentClient,
+			VisionLLM:        visionClient,
+			ClassifierLLM:    classifierClient,
+			DreamAgentLLM:    dreamAgentClient,
+			IntrospectionLLM: introspectionClient,
+			EmbedClient:      embedClient,
+			TavilyClient:     tavilyClient,
+			ConfigPath:       cfgFile,
+		}
+		gw = gateway.New(cfg, gwDeps, bus)
+		go func() {
+			defer close(gwDone)
+			if err := gw.Run(gwCtx); err != nil && gwCtx.Err() == nil {
+				log.Error("gateway exited with error", "err", err)
+			}
+		}()
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "gateway", Status: "ready"})
+	} else {
+		close(gwDone)
+	}
+
 	// --- Telegram bot ---
 
 	tgBot, err := bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
@@ -725,6 +760,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		devCleanup()
 	}
 
+	gwCancel()      // stop gateway adapters
 	dreamerCancel() // tell the dreamer goroutine to stop at its next wake-up
 	schedCancel()   // same for the scheduler runner
 	if kvPollerCancel != nil {
@@ -734,7 +770,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// Wait for background goroutines to finish (up to 10s). This prevents
 	// mid-transaction database corruption from interrupted writes.
 	shutdownTimeout := time.After(10 * time.Second)
-	for _, ch := range []chan struct{}{dreamerDone, schedDone} {
+	for _, ch := range []chan struct{}{gwDone, dreamerDone, schedDone} {
 		select {
 		case <-ch:
 		case <-shutdownTimeout:
