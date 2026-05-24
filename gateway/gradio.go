@@ -37,9 +37,14 @@ type gradioAdapter struct {
 	// It needs the conversation ID, which only the adapter knows.
 	compactHandler func(ctx context.Context, convID string) (string, error)
 
+	// logCommand logs slash command usage for analytics parity with
+	// Telegram. Set by the gateway after pipeline creation.
+	logCommand func(command string, conversationID, args string)
+
 	// SSE trace subscribers — each connected /api/traces client gets a channel.
-	tracesMu sync.Mutex
-	traceSubs []chan TraceEvent
+	tracesMu    sync.Mutex
+	traceSubs   []chan TraceEvent
+	maxSSEConns int
 
 	// Pending replies — HTTP handler blocks until pipeline produces a result.
 	pendingMu sync.Mutex
@@ -213,14 +218,23 @@ func (a *gradioAdapter) handleChat(w http.ResponseWriter, r *http.Request) {
 		a.pendingMu.Unlock()
 	}()
 
+	// Validate image MIME if an image was included.
+	imgBase64 := req.ImageBase64
+	imgMIME := req.ImageMIME
+	if imgBase64 != "" && !validImageMIME(imgMIME) {
+		imgBase64 = ""
+		imgMIME = ""
+		log.Infof("gradio: dropped image with unsupported MIME: %s", req.ImageMIME)
+	}
+
 	// Send the message to the gateway for pipeline processing.
 	a.msgCh <- InboundMsg{
 		Text:           req.Message,
 		ConversationID: convID,
 		AdapterName:    a.Name(),
 		Timestamp:      time.Now(),
-		ImageBase64:    req.ImageBase64,
-		ImageMIME:      req.ImageMIME,
+		ImageBase64:    imgBase64,
+		ImageMIME:      imgMIME,
 	}
 
 	// Block until the pipeline responds (or timeout).
@@ -251,6 +265,7 @@ func (a *gradioAdapter) tryCommand(ctx context.Context, message, convID string) 
 
 	// /clear is adapter-specific — it resets the conversation ID.
 	if cmdName == "clear" {
+		a.logCmd("/clear", convID, args)
 		newID := fmt.Sprintf("gradio-%d", time.Now().UnixMilli())
 		a.setConvID(newID)
 		return "Context cleared. Fresh start!", true
@@ -259,6 +274,7 @@ func (a *gradioAdapter) tryCommand(ctx context.Context, message, convID string) 
 	// /compact needs the current conversation ID from the adapter,
 	// so it's handled here rather than as a generic CommandDef.
 	if cmdName == "compact" {
+		a.logCmd("/compact", convID, args)
 		if a.compactHandler != nil {
 			result, err := a.compactHandler(ctx, convID)
 			if err != nil {
@@ -271,6 +287,7 @@ func (a *gradioAdapter) tryCommand(ctx context.Context, message, convID string) 
 
 	for _, cmd := range a.commands {
 		if cmd.Name == cmdName {
+			a.logCmd("/"+cmdName, convID, args)
 			result, err := cmd.Handler(ctx, args)
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err), true
@@ -311,6 +328,19 @@ func (a *gradioAdapter) handleTraceSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	// Limit concurrent SSE connections to prevent file descriptor exhaustion.
+	maxConns := a.maxSSEConns
+	if maxConns == 0 {
+		maxConns = 10
+	}
+	a.tracesMu.Lock()
+	if len(a.traceSubs) >= maxConns {
+		a.tracesMu.Unlock()
+		http.Error(w, "too many trace connections", http.StatusServiceUnavailable)
+		return
+	}
+	a.tracesMu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -365,6 +395,22 @@ func (a *gradioAdapter) getOrCreateConvID() string {
 		a.convID = fmt.Sprintf("gradio-%d", time.Now().UnixMilli())
 	}
 	return a.convID
+}
+
+// logCmd logs a command to the store for analytics, if a logger is wired.
+func (a *gradioAdapter) logCmd(command, convID, args string) {
+	if a.logCommand != nil {
+		a.logCommand(command, convID, args)
+	}
+}
+
+// validImageMIME checks whether a MIME type is a supported image format.
+func validImageMIME(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
 }
 
 // corsMiddleware wraps a handler with permissive CORS headers for
