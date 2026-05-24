@@ -23,34 +23,34 @@ import (
 // This is called a "struct tag" — metadata attached to fields that libraries
 // can read at runtime (similar to Python decorators on steroids).
 type Config struct {
-	Debug       bool              `yaml:"debug"` // when true, logs full API request/response bodies
-	Identity    IdentityConfig    `yaml:"identity"`
-	Telegram    TelegramConfig    `yaml:"telegram"`
-	OpenRouter  LLMConfig         `yaml:"openrouter"`
-	Chat        ChatConfig        `yaml:"chat"`
-	Driver      DriverConfig      `yaml:"driver"`
-	Vision      VisionConfig      `yaml:"vision"`
-	Classifier  ClassifierConfig  `yaml:"classifier"`
-	MemoryAgent  MemoryAgentConfig  `yaml:"memory_agent"`
-	PersonaAgent PersonaAgentConfig `yaml:"persona_agent"`
-	DreamAgent   DreamAgentConfig   `yaml:"dream_agent"`
-	MoodAgent           MoodAgentConfig           `yaml:"mood_agent"`
-	IntrospectionAgent  IntrospectionAgentConfig  `yaml:"introspection_agent"`
-	Memory      MemoryConfig      `yaml:"memory"`
-	Mood        MoodConfig        `yaml:"mood"`
-	Embed       EmbedConfig       `yaml:"embed"`
-	Search      SearchConfig      `yaml:"search"`
-	Foursquare  FoursquareConfig  `yaml:"foursquare"`
-	Scrub       ScrubConfig       `yaml:"scrub"`
-	Persona     PersonaConfig     `yaml:"persona"`
-	Dream       DreamConfig       `yaml:"dream"`
-	Voice       VoiceConfig       `yaml:"voice"`
-	Location    LocationConfig    `yaml:"location,omitempty"`
-	Calendar    CalendarConfig    `yaml:"calendar"`
-	Tunnel      TunnelConfig      `yaml:"tunnel"`
-	Cloudflare  CloudflareConfig  `yaml:"cloudflare"`
-	Update      UpdateConfig      `yaml:"update"`
-	Gateway     GatewayConfig     `yaml:"gateway"`
+	Debug              bool                     `yaml:"debug"` // when true, logs full API request/response bodies
+	Identity           IdentityConfig           `yaml:"identity"`
+	Telegram           TelegramConfig           `yaml:"telegram"`
+	OpenRouter         LLMConfig                `yaml:"openrouter"`
+	Chat               ChatConfig               `yaml:"chat"`
+	Driver             DriverConfig             `yaml:"driver"`
+	Vision             VisionConfig             `yaml:"vision"`
+	Classifier         ClassifierConfig         `yaml:"classifier"`
+	MemoryAgent        MemoryAgentConfig        `yaml:"memory_agent"`
+	PersonaAgent       PersonaAgentConfig       `yaml:"persona_agent"`
+	DreamAgent         DreamAgentConfig         `yaml:"dream_agent"`
+	MoodAgent          MoodAgentConfig          `yaml:"mood_agent"`
+	IntrospectionAgent IntrospectionAgentConfig `yaml:"introspection_agent"`
+	Memory             MemoryConfig             `yaml:"memory"`
+	Mood               MoodConfig               `yaml:"mood"`
+	Embed              EmbedConfig              `yaml:"embed"`
+	Search             SearchConfig             `yaml:"search"`
+	Foursquare         FoursquareConfig         `yaml:"foursquare"`
+	Scrub              ScrubConfig              `yaml:"scrub"`
+	Persona            PersonaConfig            `yaml:"persona"`
+	Dream              DreamConfig              `yaml:"dream"`
+	Voice              VoiceConfig              `yaml:"voice"`
+	Location           LocationConfig           `yaml:"location,omitempty"`
+	Calendar           CalendarConfig           `yaml:"calendar"`
+	Tunnel             TunnelConfig             `yaml:"tunnel"`
+	Cloudflare         CloudflareConfig         `yaml:"cloudflare"`
+	Update             UpdateConfig             `yaml:"update"`
+	Gateway            GatewayConfig            `yaml:"gateway"`
 }
 
 // LocationConfig holds the user's saved home coordinates and unit
@@ -90,7 +90,7 @@ type CloudflareConfig struct {
 	APIToken      string     `yaml:"api_token"`       // API token with Workers KV + D1 write permission
 	KVNamespaceID string     `yaml:"kv_namespace_id"` // KV namespace ID from wrangler.toml
 	D1DatabaseID  string     `yaml:"d1_database_id"`  // D1 database ID — empty = sync disabled
-	Sync          SyncConfig `yaml:"sync"`             // D1 sync tuning knobs (all optional, sane defaults)
+	Sync          SyncConfig `yaml:"sync"`            // D1 sync tuning knobs (all optional, sane defaults)
 }
 
 // SyncConfig holds tuning knobs for the D1 sync layer. All fields are
@@ -295,7 +295,7 @@ type DriverConfig struct {
 	MaxTokens   int              `yaml:"max_tokens"`
 	Timeout     int              `yaml:"timeout"`             // HTTP timeout in seconds (0 = 60s default)
 	Trace       bool             `yaml:"trace"`               // show agent thinking traces in chat
-	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`   // optional fallback model for when primary is unavailable
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`  // optional fallback model for when primary is unavailable
 	Reasoning   *ReasoningConfig `yaml:"reasoning,omitempty"` // reasoning control for hybrid models (optional)
 
 	// RequireToolChoice forces tool_choice="required" on the first agent call.
@@ -605,13 +605,13 @@ type STTConfig struct {
 // HTTP server (piper TTS sidecar) running on BaseURL with an OpenAI-compatible
 // /v1/audio/speech endpoint. The Go side POSTs JSON and gets back WAV bytes.
 type TTSConfig struct {
-	Enabled   bool    `yaml:"enabled"`
-	Engine    string  `yaml:"engine"`     // "piper" (local) — future engines can be added
-	BaseURL   string  `yaml:"base_url"`   // e.g. "http://localhost:8766"
-	Model     string  `yaml:"model"`      // HuggingFace model ID or local path
-	VoiceID   string  `yaml:"voice_id"`   // voice preset (for piper: same as model)
-	Speed     float64 `yaml:"speed"`      // speaking rate (1.0 = normal)
-	ReplyMode string  `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
+	Enabled   bool           `yaml:"enabled"`
+	Engine    string         `yaml:"engine"`     // "piper" (local) — future engines can be added
+	BaseURL   string         `yaml:"base_url"`   // e.g. "http://localhost:8766"
+	Model     string         `yaml:"model"`      // HuggingFace model ID or local path
+	VoiceID   string         `yaml:"voice_id"`   // voice preset (for piper: same as model)
+	Speed     float64        `yaml:"speed"`      // speaking rate (1.0 = normal)
+	ReplyMode string         `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
 	Pauses    TTSPauseConfig `yaml:"pauses"`
 }
 

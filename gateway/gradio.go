@@ -335,7 +335,10 @@ func (a *gradioAdapter) handleTraceSSE(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	// Subscribe to the shared bus. Each SSE client gets its own channel.
+	// Unsubscribe on disconnect so the bus doesn't accumulate abandoned
+	// channels from closed browser tabs.
 	eventCh := a.bus.Subscribe(128)
+	defer a.bus.Unsubscribe(eventCh)
 
 	for {
 		select {
@@ -371,11 +374,11 @@ func marshalBusEvent(evt tui.Event) (string, []byte) {
 	case tui.AgentIterEvent:
 		data, _ := json.Marshal(map[string]any{
 			"turn_id":           e.TurnID,
-			"iteration":        e.Iteration,
-			"prompt_tokens":    e.PromptTokens,
+			"iteration":         e.Iteration,
+			"prompt_tokens":     e.PromptTokens,
 			"completion_tokens": e.CompletionTokens,
-			"cost_usd":         e.CostUSD,
-			"finish_reason":    e.FinishReason,
+			"cost_usd":          e.CostUSD,
+			"finish_reason":     e.FinishReason,
 		})
 		return "agent_iter", data
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/gateway"
@@ -138,8 +139,12 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	embedClient := embed.NewClient(cfg.Embed.BaseURL, cfg.Embed.Model, cfg.Embed.APIKey, cfg.Embed.Dimension)
 
-	if err := seedSimDB(store, embedClient, cfg, s); err != nil {
+	personaCleanup, err := seedSimDB(store, embedClient, cfg, s)
+	if err != nil {
 		return fmt.Errorf("seeding sim database: %w", err)
+	}
+	if personaCleanup != nil {
+		defer personaCleanup()
 	}
 
 	// --- LLM clients ---
@@ -250,6 +255,41 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	// --- Search client ---
 	tavilyClient := search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
 
+	// --- Calendar FakeBridge ---
+	// Create an in-memory calendar bridge for sims. This bypasses the
+	// Swift EventKit binary and lets calendar tools work without macOS
+	// dependencies. Events were already seeded into SQLite by seedSimDB;
+	// now we also seed them into the FakeBridge so calendar_list works.
+	var fakeBridge *calendar.FakeBridge
+	if len(s.SeedCalendarEvents) > 0 && len(cfg.Calendar.Calendars) > 0 {
+		fakeBridge = calendar.NewFakeBridge(cfg.Calendar.Calendars)
+		var fakeEvents []*calendar.FakeEvent
+		for _, seed := range s.SeedCalendarEvents {
+			start, err := time.Parse(time.RFC3339, seed.Start)
+			if err != nil {
+				continue
+			}
+			end, err := time.Parse(time.RFC3339, seed.End)
+			if err != nil {
+				continue
+			}
+			cal := seed.Calendar
+			if cal == "" {
+				cal = cfg.Calendar.DefaultCalendar
+			}
+			fakeEvents = append(fakeEvents, &calendar.FakeEvent{
+				ID: seed.ID, Title: seed.Title,
+				Start: start, End: end,
+				Location: seed.Location, Notes: seed.Notes,
+				Calendar: cal,
+			})
+		}
+		if len(fakeEvents) > 0 {
+			fakeBridge.Seed(fakeEvents)
+		}
+		log.Infof("sim: FakeBridge created with %d events", len(fakeEvents))
+	}
+
 	// --- Assemble deps ---
 	deps := gateway.Deps{
 		ChatLLM:          chatLLM,
@@ -262,6 +302,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		IntrospectionLLM: introspectionLLM,
 		EmbedClient:      embedClient,
 		TavilyClient:     tavilyClient,
+		CalendarBridge:   fakeBridge,
 		ConfigPath:       cfgFile,
 		// VoiceClient and TTSClient intentionally nil — no audio in sim mode.
 	}
@@ -293,6 +334,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		CompactAfter: s.CompactAfter,
 		DreamAfter:   s.DreamAfter,
 		RunDream:     s.RunDream,
+		RunRollup:    s.RunRollup,
 	}
 	gw.SimOptions = gateway.SimOptions{
 		DelaySeconds: delayFlag,
@@ -327,7 +369,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	var gatewayErr error
 	select {
 	case <-sa.Done:
-		cancel()              // sim finished normally — signal gateway to stop
+		cancel()               // sim finished normally — signal gateway to stop
 		gatewayErr = <-gwErrCh // drain; gw.Run returns nil after ctx cancel
 	case gatewayErr = <-gwErrCh:
 		cancel() // gateway exited before sim finished — cancel context anyway
@@ -356,10 +398,13 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	store.Close()
 	if reportPath != "" {
 		dbDest := strings.TrimSuffix(reportPath, ".md") + ".db"
-		if src, err := os.ReadFile(tmpDBPath); err == nil {
-			if err := os.WriteFile(dbDest, src, 0o644); err == nil {
-				fmt.Printf("Database: %s\n", dbDest)
-			}
+		src, err := os.ReadFile(tmpDBPath)
+		if err != nil {
+			log.Warnf("sim: failed to read temp DB for copy: %v", err)
+		} else if err := os.WriteFile(dbDest, src, 0o644); err != nil {
+			log.Warnf("sim: failed to copy DB to %s: %v", dbDest, err)
+		} else {
+			fmt.Printf("Database: %s\n", dbDest)
 		}
 	}
 
@@ -720,6 +765,9 @@ func writeGWClassifierSection(b *strings.Builder, s *memory.SQLiteStore) {
 		fmt.Fprintf(b, "| %s | %s | %s | %s |\n", writeType, verdict, content, reason)
 		count++
 	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(b, "\n*Error iterating classifier log: %v*\n", err)
+	}
 	if count == 0 {
 		b.WriteString("*No classifier verdicts.*\n")
 	}
@@ -755,6 +803,9 @@ func writeGWInboxSection(b *strings.Builder, s *memory.SQLiteStore) {
 		payload = truncSimText(payload, 60)
 		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", sender, recipient, msgType, status, payload)
 		count++
+	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(b, "\n*Error iterating inbox: %v*\n", err)
 	}
 	if count == 0 {
 		b.WriteString("*No inter-agent messages.*\n")
@@ -799,6 +850,9 @@ func writeGWCostBreakdownSection(b *strings.Builder, s *memory.SQLiteStore) {
 		fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f | %s |\n", role, calls, prompt, completion, cost, fb)
 		count++
 	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(b, "\n*Error iterating metrics: %v*\n", err)
+	}
 	if count == 0 {
 		b.WriteString("*No metrics recorded.*\n")
 	}
@@ -841,13 +895,16 @@ func writeGWFallbackSection(b *strings.Builder, s *memory.SQLiteStore) {
 		}
 		fmt.Fprintf(b, "| %s | %d | $%.4f |\n", model, calls, cost)
 	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(b, "\n*Error iterating fallback metrics: %v*\n", err)
+	}
 	b.WriteString("\n")
 }
 
 // seedSimDB pre-populates the sim database with cards, memories, self
 // memories, and persona before the gateway starts. This ensures the
 // agent has context to work with from the first message.
-func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config, s suite) error {
+func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config, s suite) (personaCleanup func(), err error) {
 	// --- Seed memory cards ---
 	if s.SeedCards {
 		log.Infof("sim: seeding memory cards...")
@@ -855,7 +912,7 @@ func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config
 		// infrastructure code that needs raw SQL.
 		sqlStore, ok := store.(*memory.SQLiteStore)
 		if !ok {
-			return fmt.Errorf("card seeding requires SQLiteStore")
+			return nil, fmt.Errorf("card seeding requires SQLiteStore")
 		}
 		seedCardSQL := `INSERT OR IGNORE INTO memory_cards (topic_slug, name, subject, protected) VALUES (?, ?, ?, ?)`
 		cards := []struct{ slug, name, subject string }{
@@ -945,20 +1002,50 @@ func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config
 		}
 	}
 
+	// --- Seed calendar events ---
+	if len(s.SeedCalendarEvents) > 0 {
+		log.Infof("sim: seeding %d calendar events...", len(s.SeedCalendarEvents))
+		for _, seed := range s.SeedCalendarEvents {
+			cal := seed.Calendar
+			if cal == "" {
+				cal = cfg.Calendar.DefaultCalendar
+			}
+			dbID, seedErr := store.InsertCalendarEvent(
+				seed.Title, seed.Start, seed.End,
+				seed.Location, seed.Notes, cal,
+				seed.ID, seed.Job,
+			)
+			if seedErr != nil {
+				log.Errorf("sim: seed calendar event failed: %v", seedErr)
+				continue
+			}
+			if seed.Job != "" {
+				log.Infof("sim:   seeded cal #%d: %s [%s shift] (event %s)", dbID, seed.Title, seed.Job, seed.ID)
+			} else {
+				log.Infof("sim:   seeded cal #%d: %s (event %s)", dbID, seed.Title, seed.ID)
+			}
+		}
+	}
+
 	// --- Seed persona ---
 	if s.SeedPersona != "" {
 		tmpPersona, err := os.CreateTemp("", "her-sim-persona-*.md")
 		if err != nil {
-			return fmt.Errorf("creating temp persona file: %w", err)
+			return nil, fmt.Errorf("creating temp persona file: %w", err)
 		}
 		if _, err := tmpPersona.WriteString(s.SeedPersona); err != nil {
 			tmpPersona.Close()
-			return fmt.Errorf("writing seed persona: %w", err)
+			os.Remove(tmpPersona.Name())
+			return nil, fmt.Errorf("writing seed persona: %w", err)
 		}
 		tmpPersona.Close()
 		cfg.Persona.PersonaFile = tmpPersona.Name()
+		// personaCleanup is returned so the caller can defer it.
+		// We can't defer here because seedSimDB returns before the
+		// gateway finishes using the file.
+		personaCleanup = func() { os.Remove(tmpPersona.Name()) }
 		log.Infof("sim: seeded persona (%d bytes)", len(s.SeedPersona))
 	}
 
-	return nil
+	return personaCleanup, nil
 }

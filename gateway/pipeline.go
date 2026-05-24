@@ -39,6 +39,10 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 		return nil, fmt.Errorf("creating dev bot for pipeline: %w", err)
 	}
 
+	if deps.CalendarBridge != nil {
+		b.SetCalendarBridge(deps.CalendarBridge)
+	}
+
 	return &Pipeline{
 		bot:   b,
 		store: store,
@@ -157,4 +161,3 @@ func (f *gatewayFrontend) ReplyText() string {
 	defer f.mu.Unlock()
 	return f.reply
 }
-
