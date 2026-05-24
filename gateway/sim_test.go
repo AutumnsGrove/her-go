@@ -7,10 +7,13 @@ package gateway
 // would require a real database), so Start() is not called.
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"her/config"
+	"her/tui"
 )
 
 // newTestSimAdapter creates a simAdapter with the given messages.
@@ -20,7 +23,7 @@ func newTestSimAdapter(t *testing.T, messages []SimMessage) *simAdapter {
 		Name: "test-sim",
 		Type: "sim",
 	}
-	a, err := newSimAdapter(cfg, messages)
+	a, err := newSimAdapter(cfg, messages, nil)
 	if err != nil {
 		t.Fatalf("newSimAdapter: %v", err)
 	}
@@ -201,6 +204,78 @@ func TestTruncateSimText_ExactLengthNotTruncated(t *testing.T) {
 	got := truncateSimText(s, 80)
 	if got != s {
 		t.Errorf("truncateSimText at exact limit: expected unchanged, got %q", got)
+	}
+}
+
+// ---- Bus capture tests ------------------------------------------------------
+
+func TestSimAdapter_BusCaptureEnrichesResults(t *testing.T) {
+	bus := tui.NewBus()
+	defer bus.Close()
+
+	cfg := config.AdapterConfig{Name: "test-sim-bus", Type: "sim"}
+	a, err := newSimAdapter(cfg, nil, bus)
+	if err != nil {
+		t.Fatalf("newSimAdapter: %v", err)
+	}
+	sa := a.(*simAdapter)
+
+	// Start the capture goroutine manually (normally Start() does this).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sa.captureBusEvents(ctx)
+	time.Sleep(20 * time.Millisecond) // let goroutine subscribe
+
+	// Simulate a turn's worth of events on the bus.
+	bus.Emit(tui.TurnStartEvent{Time: time.Now(), TurnID: 1, UserMessage: "hello"})
+	bus.Emit(tui.ToolCallEvent{Time: time.Now(), TurnID: 1, Source: "main", ToolName: "think", Args: `{"thought":"testing"}`, Result: "ok"})
+	bus.Emit(tui.ToolCallEvent{Time: time.Now(), TurnID: 1, Source: "memory", ToolName: "save_memory", Result: "saved: user likes Go"})
+	bus.Emit(tui.MoodEvent{Time: time.Now(), TurnID: 1, Action: "auto_logged", Valence: 5, Labels: []string{"curious"}, Confidence: 0.8})
+	bus.Emit(tui.TurnEndEvent{Time: time.Now(), TurnID: 1, TotalCost: 0.0042, ToolCalls: 2})
+
+	// Wait for the finalized turn to arrive.
+	select {
+	case tc := <-sa.finishedTurn:
+		if tc.cost != 0.0042 {
+			t.Errorf("cost: got %f, want 0.0042", tc.cost)
+		}
+		if tc.toolCalls != 2 {
+			t.Errorf("toolCalls: got %d, want 2", tc.toolCalls)
+		}
+		if tc.moodVerdict != "auto_logged" {
+			t.Errorf("moodVerdict: got %q, want %q", tc.moodVerdict, "auto_logged")
+		}
+		if tc.moodValence != 5 {
+			t.Errorf("moodValence: got %d, want 5", tc.moodValence)
+		}
+		if len(tc.memoriesSaved) != 1 {
+			t.Errorf("memoriesSaved: got %d, want 1", len(tc.memoriesSaved))
+		}
+		if len(tc.toolLog) != 2 {
+			t.Errorf("toolLog: got %d entries, want 2", len(tc.toolLog))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for finalized turn capture")
+	}
+}
+
+func TestSimAdapter_ExtractThought(t *testing.T) {
+	args := `{"thought":"User seems curious about Go"}`
+	got := extractThought(args)
+	if got != "User seems curious about Go" {
+		t.Errorf("extractThought: got %q, want %q", got, "User seems curious about Go")
+	}
+}
+
+func TestSimAdapter_ToolIcon(t *testing.T) {
+	if toolIcon("think") != "🧠" {
+		t.Error("expected brain emoji for think")
+	}
+	if toolIcon("save_memory") != "💾" {
+		t.Error("expected floppy for save_memory")
+	}
+	if toolIcon("unknown_tool") != "🔧" {
+		t.Error("expected wrench for unknown tool")
 	}
 }
 

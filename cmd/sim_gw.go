@@ -280,32 +280,57 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// printSimResults renders a simple table of sim turn results to stdout.
-// No TUI, no color — just clear text output for CI and shell usage.
+// printSimResults renders a detailed table of sim turn results to stdout.
+// Shows per-turn costs, tool counts, mood verdicts, and memory activity.
 func printSimResults(suiteName string, results []gateway.SimResult) {
 	passed := 0
 	failed := 0
+	totalCost := 0.0
+	totalTools := 0
 	for _, r := range results {
 		if r.Error == nil {
 			passed++
 		} else {
 			failed++
 		}
+		totalCost += r.Cost
+		totalTools += r.ToolCalls
 	}
 
 	fmt.Printf("\n=== Sim Results: %s ===\n", suiteName)
-	fmt.Printf("Turns: %d  Passed: %d  Failed: %d\n\n", len(results), passed, failed)
+	fmt.Printf("Turns: %d  Passed: %d  Failed: %d  Cost: $%.4f  Tools: %d\n\n",
+		len(results), passed, failed, totalCost, totalTools)
 
 	for i, r := range results {
-		status := "OK"
 		if r.Error != nil {
-			status = "ERR"
-		}
-		fmt.Printf("[%d/%d] %-4s  %s\n", i+1, len(results), status, truncSimText(r.Input, 60))
-		if r.Error != nil {
+			fmt.Printf("[%d/%d] ERR   %s\n", i+1, len(results), truncSimText(r.Input, 60))
 			fmt.Printf("         error: %v\n", r.Error)
-		} else {
-			fmt.Printf("         reply (%s): %s\n", r.Duration.Round(time.Millisecond), truncSimText(r.Reply, 80))
+			continue
+		}
+
+		fmt.Printf("[%d/%d] OK    %s\n", i+1, len(results), truncSimText(r.Input, 60))
+		fmt.Printf("         reply (%s, $%.4f, %d tools): %s\n",
+			r.Duration.Round(time.Millisecond), r.Cost, r.ToolCalls,
+			truncSimText(r.Reply, 80))
+
+		// Mood verdict
+		if r.MoodVerdict != "" {
+			labels := strings.Join(r.MoodLabels, ", ")
+			if labels != "" {
+				fmt.Printf("         mood: %s v=%d [%s]\n", r.MoodVerdict, r.MoodValence, labels)
+			} else {
+				fmt.Printf("         mood: %s\n", r.MoodVerdict)
+			}
+		}
+
+		// Memories saved
+		for _, m := range r.MemoriesSaved {
+			fmt.Printf("         💾 %s\n", truncSimText(m, 70))
+		}
+
+		// Introspection memories
+		for _, m := range r.IntrospectionSaved {
+			fmt.Printf("         🪡 %s\n", truncSimText(m, 70))
 		}
 	}
 

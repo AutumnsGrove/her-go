@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"her/config"
+	"her/tui"
 )
 
 // SimMessage is a single message in a simulation scenario.
@@ -19,22 +20,36 @@ type SimMessage struct {
 	Image string // path to local image file (optional)
 }
 
-// SimResult holds the response for one sim turn.
+// SimResult holds the response for one sim turn, enriched with
+// structured data captured from the bus event stream.
 type SimResult struct {
 	Input    string
 	Reply    string
 	Duration time.Duration
 	Error    error
+
+	// Per-turn metrics from bus events.
+	Cost      float64
+	ToolCalls int
+
+	// Agent verdicts captured from bus events.
+	MoodVerdict          string   // "auto_logged", "dropped_dedup", etc.
+	MoodLabels           []string // emotion labels
+	MoodValence          int
+	MemoriesSaved        []string // memory tool call results (save_memory, update_memory)
+	IntrospectionSaved   []string // introspection tool call results (save_self_memory)
+	ToolLog              []string // condensed log of all tool calls for the report
 }
 
 // simAdapter implements the Adapter interface for simulation runs.
 // It feeds pre-loaded messages through the gateway pipeline one at a
-// time, collecting responses. This is the integration test adapter —
-// it proves the full pipeline works end-to-end without any network
-// transport.
+// time, collecting responses. Subscribes to the tui.Bus to capture
+// rich per-turn data (costs, mood, memories, introspection) alongside
+// the reply text.
 type simAdapter struct {
 	cfg      config.AdapterConfig
 	messages []SimMessage
+	bus      *tui.Bus
 
 	msgCh    chan InboundMsg
 	commands []CommandDef
@@ -47,16 +62,38 @@ type simAdapter struct {
 	mu      sync.Mutex
 	results []SimResult
 
+	// Bus event capture — accumulates per-turn data from the event stream.
+	captureMu    sync.Mutex
+	activeTurn   *turnCapture
+	finishedTurn chan *turnCapture // signals when TurnEndEvent finalizes a turn
+
 	// Done is closed when all messages have been processed.
 	Done chan struct{}
 }
 
-func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage) (Adapter, error) {
+// turnCapture accumulates bus events for a single turn.
+type turnCapture struct {
+	turnID    int64
+	cost      float64
+	toolCalls int
+	toolLog   []string
+
+	moodVerdict string
+	moodLabels  []string
+	moodValence int
+
+	memoriesSaved      []string
+	introspectionSaved []string
+}
+
+func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, bus *tui.Bus) (Adapter, error) {
 	return &simAdapter{
-		cfg:      acfg,
-		messages: messages,
-		msgCh:    make(chan InboundMsg, 1),
-		Done:     make(chan struct{}),
+		cfg:          acfg,
+		messages:     messages,
+		bus:          bus,
+		msgCh:        make(chan InboundMsg, 1),
+		finishedTurn: make(chan *turnCapture, 1),
+		Done:         make(chan struct{}),
 	}, nil
 }
 
@@ -67,9 +104,14 @@ func (a *simAdapter) Capabilities() CapSet {
 }
 
 // Start drives the scenario — sends each message through the pipeline
-// sequentially, waits for the reply, collects results. Blocks until
-// all messages are processed or ctx is cancelled.
+// sequentially, waits for the reply, collects results. A background
+// goroutine subscribes to the bus and captures per-turn data.
 func (a *simAdapter) Start(ctx context.Context) error {
+	// Start bus capture goroutine.
+	if a.bus != nil {
+		go a.captureBusEvents(ctx)
+	}
+
 	convID := fmt.Sprintf("sim-%d", time.Now().UnixMilli())
 
 	for i, msg := range a.messages {
@@ -80,7 +122,6 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		start := time.Now()
 		log.Infof("sim: [%d/%d] sending: %s", i+1, len(a.messages), truncateSimText(msg.Text, 80))
 
-		// Build the inbound message.
 		inbound := InboundMsg{
 			Text:           msg.Text,
 			ConversationID: convID,
@@ -88,7 +129,6 @@ func (a *simAdapter) Start(ctx context.Context) error {
 			Timestamp:      time.Now(),
 		}
 
-		// Load image if specified.
 		if msg.Image != "" {
 			imgData, mime, err := loadImage(msg.Image)
 			if err != nil {
@@ -99,7 +139,6 @@ func (a *simAdapter) Start(ctx context.Context) error {
 			}
 		}
 
-		// Create reply channel and send message.
 		replyCh := make(chan OutboundMsg, 1)
 		a.pendingMu.Lock()
 		a.pending = replyCh
@@ -107,7 +146,6 @@ func (a *simAdapter) Start(ctx context.Context) error {
 
 		a.msgCh <- inbound
 
-		// Wait for pipeline response.
 		var result SimResult
 		result.Input = msg.Text
 
@@ -121,6 +159,11 @@ func (a *simAdapter) Start(ctx context.Context) error {
 			result.Error = fmt.Errorf("timeout after 5 minutes")
 		}
 
+		// Wait for bus capture to finalize this turn's data.
+		if a.bus != nil && result.Error == nil {
+			result = a.enrichFromCapture(result)
+		}
+
 		a.mu.Lock()
 		a.results = append(a.results, result)
 		a.mu.Unlock()
@@ -128,13 +171,149 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		if result.Error != nil {
 			log.Errorf("sim: [%d/%d] error: %v", i+1, len(a.messages), result.Error)
 		} else {
-			log.Infof("sim: [%d/%d] reply (%s): %s", i+1, len(a.messages),
-				result.Duration.Round(time.Millisecond), truncateSimText(result.Reply, 100))
+			log.Infof("sim: [%d/%d] reply (%s, $%.4f, %d tools): %s",
+				i+1, len(a.messages),
+				result.Duration.Round(time.Millisecond),
+				result.Cost, result.ToolCalls,
+				truncateSimText(result.Reply, 100))
 		}
 	}
 
 	close(a.Done)
 	return nil
+}
+
+// enrichFromCapture waits for the bus capture goroutine to finalize
+// the turn data and merges it into the SimResult.
+func (a *simAdapter) enrichFromCapture(result SimResult) SimResult {
+	select {
+	case tc := <-a.finishedTurn:
+		if tc != nil {
+			result.Cost = tc.cost
+			result.ToolCalls = tc.toolCalls
+			result.ToolLog = tc.toolLog
+			result.MoodVerdict = tc.moodVerdict
+			result.MoodLabels = tc.moodLabels
+			result.MoodValence = tc.moodValence
+			result.MemoriesSaved = tc.memoriesSaved
+			result.IntrospectionSaved = tc.introspectionSaved
+		}
+	case <-time.After(30 * time.Second):
+		// Background agents (mood, introspection) may still be running.
+		// Don't block forever — use whatever we have.
+		a.captureMu.Lock()
+		tc := a.activeTurn
+		a.activeTurn = nil
+		a.captureMu.Unlock()
+		if tc != nil {
+			result.Cost = tc.cost
+			result.ToolCalls = tc.toolCalls
+			result.ToolLog = tc.toolLog
+			result.MoodVerdict = tc.moodVerdict
+			result.MoodLabels = tc.moodLabels
+			result.MoodValence = tc.moodValence
+			result.MemoriesSaved = tc.memoriesSaved
+			result.IntrospectionSaved = tc.introspectionSaved
+		}
+	}
+	return result
+}
+
+// captureBusEvents subscribes to the tui.Bus and accumulates events
+// into turnCapture structs. Each TurnStartEvent opens a new capture;
+// TurnEndEvent finalizes it and signals the main loop.
+func (a *simAdapter) captureBusEvents(ctx context.Context) {
+	eventCh := a.bus.Subscribe(256)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-eventCh:
+			if !ok {
+				return
+			}
+			a.handleCaptureEvent(evt)
+		}
+	}
+}
+
+func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
+	switch e := evt.(type) {
+
+	case tui.TurnStartEvent:
+		a.captureMu.Lock()
+		a.activeTurn = &turnCapture{turnID: e.TurnID}
+		a.captureMu.Unlock()
+
+	case tui.AgentIterEvent:
+		a.captureMu.Lock()
+		if tc := a.activeTurn; tc != nil {
+			tc.cost += e.CostUSD
+		}
+		a.captureMu.Unlock()
+
+	case tui.ToolCallEvent:
+		a.captureMu.Lock()
+		tc := a.activeTurn
+		if tc != nil {
+			tc.toolCalls++
+
+			// Build a condensed log line.
+			icon := toolIcon(e.ToolName)
+			if e.IsError {
+				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s → ERROR: %s", e.Source, icon, e.ToolName, truncateSimText(e.Result, 60)))
+			} else if e.ToolName == "think" {
+				thought := extractThought(e.Args)
+				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s", e.Source, icon, truncateSimText(thought, 80)))
+			} else {
+				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s → %s", e.Source, icon, e.ToolName, truncateSimText(e.Result, 60)))
+			}
+
+			// Capture memory saves by tool name + source.
+			switch {
+			case e.Source == "introspection" && (e.ToolName == "save_self_memory" || e.ToolName == "save_memory"):
+				tc.introspectionSaved = append(tc.introspectionSaved, e.Result)
+			case e.Source == "memory" && (e.ToolName == "save_memory" || e.ToolName == "update_memory"):
+				tc.memoriesSaved = append(tc.memoriesSaved, e.Result)
+			}
+		}
+		a.captureMu.Unlock()
+
+	case tui.ReplyEvent:
+		a.captureMu.Lock()
+		if tc := a.activeTurn; tc != nil {
+			tc.cost += e.CostUSD
+		}
+		a.captureMu.Unlock()
+
+	case tui.MoodEvent:
+		a.captureMu.Lock()
+		if tc := a.activeTurn; tc != nil {
+			tc.moodVerdict = e.Action
+			tc.moodLabels = e.Labels
+			tc.moodValence = e.Valence
+		}
+		a.captureMu.Unlock()
+
+	case tui.TurnEndEvent:
+		a.captureMu.Lock()
+		tc := a.activeTurn
+		if tc != nil {
+			tc.cost = e.TotalCost // authoritative total from bot
+		}
+		a.activeTurn = nil
+		a.captureMu.Unlock()
+
+		if tc != nil {
+			// Non-blocking send — if the main loop isn't ready yet,
+			// we don't want to block the capture goroutine.
+			select {
+			case a.finishedTurn <- tc:
+			default:
+			}
+		}
+	}
 }
 
 func (a *simAdapter) Stop() error { return nil }
@@ -152,8 +331,8 @@ func (a *simAdapter) Send(msg OutboundMsg) error {
 	return nil
 }
 
-func (a *simAdapter) SendStatus(text string) error  { return nil }
-func (a *simAdapter) StartTyping() func()            { return func() {} }
+func (a *simAdapter) SendStatus(text string) error     { return nil }
+func (a *simAdapter) StartTyping() func()               { return func() {} }
 func (a *simAdapter) RegisterCommands(cmds []CommandDef) { a.commands = cmds }
 
 // Results returns the collected sim results after Done is closed.
@@ -163,7 +342,8 @@ func (a *simAdapter) Results() []SimResult {
 	return append([]SimResult{}, a.results...)
 }
 
-// loadImage reads a local image file and returns base64-encoded data + MIME type.
+// --- Helpers ---
+
 func loadImage(path string) (string, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -181,4 +361,46 @@ func truncateSimText(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+func toolIcon(name string) string {
+	switch name {
+	case "think":
+		return "🧠"
+	case "reply":
+		return "📝"
+	case "done":
+		return "✅"
+	case "save_memory", "update_memory":
+		return "💾"
+	case "save_self_memory":
+		return "🪡"
+	case "remove_memory":
+		return "🗑"
+	case "recall_memories":
+		return "🔍"
+	case "web_search":
+		return "🔍"
+	case "web_read":
+		return "🌐"
+	case "no_action":
+		return "⏭"
+	case "use_tools":
+		return "🧰"
+	case "log_mood":
+		return "💭"
+	default:
+		return "🔧"
+	}
+}
+
+func extractThought(args string) string {
+	// Args look like: {"thought":"User is feeling restless..."}
+	if idx := strings.Index(args, `"thought":"`); idx >= 0 {
+		start := idx + len(`"thought":"`)
+		if end := strings.LastIndex(args[start:], `"`); end >= 0 {
+			return args[start : start+end]
+		}
+	}
+	return args
 }
