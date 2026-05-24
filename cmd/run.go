@@ -55,8 +55,14 @@ var adapterFilter string
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Start the bot process (foreground)",
-	Long:  "Loads config, initializes the database and API clients, and runs the bot.\nThis blocks until the process receives SIGINT or SIGTERM.\n\nUse --adapter to start only a specific adapter (e.g., --adapter=gradio).",
-	RunE:  runBot,
+	Long:  "Loads config, initializes the database and API clients, and runs the bot.\nThis blocks until the process receives SIGINT or SIGTERM.\n\nUse --adapter to start only a specific adapter (e.g., --adapter=gradio).\nOr use 'her run gradio' as a shortcut for '--adapter=gradio'.",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 && adapterFilter == "" {
+			adapterFilter = args[0]
+		}
+		return runBot(cmd, args)
+	},
 }
 
 func init() {
