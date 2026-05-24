@@ -67,6 +67,7 @@ type Gateway struct {
 	// adapter. Set by the sim command before calling Run().
 	SimMessages  []SimMessage
 	SimTriggers  SimTriggers
+	SimOptions   SimOptions
 }
 
 // adapterEntry pairs an adapter with its pipeline for message routing.
@@ -327,7 +328,7 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 	case "gradio":
 		return newGradioAdapter(acfg, g.bus)
 	case "sim":
-		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.bus)
+		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}

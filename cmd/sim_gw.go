@@ -38,10 +38,23 @@ Example:
 }
 
 func init() {
-	// --suite / -s is the only required flag. The rest of the sim flags
-	// (--limit, --delay, model overrides) live on sim-legacy for now —
-	// they can be ported here if needed later.
-	simGWCmd.Flags().StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
+	f := simGWCmd.Flags()
+	f.StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
+	f.IntVarP(&limitFlag, "limit", "n", 0, "max messages to send (0 = all)")
+	f.IntVarP(&delayFlag, "delay", "d", 1, "seconds to wait between turns")
+	f.StringVar(&driverModelFlag, "driver-model", "", "override driver agent model")
+	f.StringVar(&chatModelFlag, "chat-model", "", "override chat (reply) model")
+	f.StringVar(&memoryModelFlag, "memory-model", "", "override memory agent model")
+	f.StringVar(&moodModelFlag, "mood-model", "", "override mood agent model")
+	f.StringVar(&introspectionModelFlag, "introspection-model", "", "override introspection agent model")
+	f.StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model")
+	f.StringVar(&embedModelFlag, "embed-model", "", "override embedding model")
+	f.StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL")
+	f.StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs")
+	f.IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension")
+	f.StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for all roles")
+	f.StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision")
+	f.BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models")
 	simGWCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(simGWCmd)
 }
@@ -60,9 +73,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	cfg.ExportEnv()
+
 	if cfg.OpenRouter.APIKey == "" {
 		return fmt.Errorf("LLM API key is required — set OPENROUTER_API_KEY or fill in config.yaml")
 	}
+
+	// --- Apply CLI flag overrides ---
+	applySimModelOverrides(cfg)
 
 	// --- Load suite YAML ---
 	suiteData, err := os.ReadFile(suiteFlag)
@@ -131,6 +149,10 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if cfg.Chat.Fallback != nil {
 		chatLLM.WithFallback(cfg.Chat.Fallback.Model, cfg.Chat.Fallback.Temperature, cfg.Chat.Fallback.MaxTokens)
 	}
+	if disableReasoningFlag {
+		disabled := false
+		chatLLM.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
+	}
 
 	driverLLM := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 		cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
@@ -139,6 +161,10 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.Driver.Fallback != nil {
 		driverLLM.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
+	}
+	if disableReasoningFlag {
+		disabled := false
+		driverLLM.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
 	}
 
 	var memoryAgentLLM *llm.Client
@@ -227,10 +253,13 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Convert suite messages to gateway.SimMessage ---
-	// simMessage (cmd package) → gateway.SimMessage (gateway package).
-	// Same shape, different types — the boundary between CLI and gateway.
-	gwMessages := make([]gateway.SimMessage, len(s.Messages))
-	for i, m := range s.Messages {
+	msgs := s.Messages
+	if limitFlag > 0 && limitFlag < len(msgs) {
+		log.Infof("sim: limiting to %d/%d messages (--limit)", limitFlag, len(msgs))
+		msgs = msgs[:limitFlag]
+	}
+	gwMessages := make([]gateway.SimMessage, len(msgs))
+	for i, m := range msgs {
 		gwMessages[i] = gateway.SimMessage{
 			Text:  m.Text,
 			Image: m.Image,
@@ -250,6 +279,9 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		CompactAfter: s.CompactAfter,
 		DreamAfter:   s.DreamAfter,
 		RunDream:     s.RunDream,
+	}
+	gw.SimOptions = gateway.SimOptions{
+		DelaySeconds: delayFlag,
 	}
 
 	// context.WithCancel lets us stop the gateway once the sim adapter
@@ -361,6 +393,73 @@ func truncSimText(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// applySimModelOverrides applies --driver-model, --chat-model, etc.
+// flags to the config before LLM clients are built.
+func applySimModelOverrides(cfg *config.Config) {
+	if driverModelFlag != "" {
+		cfg.Driver.Model = driverModelFlag
+		log.Infof("sim: driver model → %s", driverModelFlag)
+	}
+	if chatModelFlag != "" {
+		cfg.Chat.Model = chatModelFlag
+		log.Infof("sim: chat model → %s", chatModelFlag)
+	}
+	if memoryModelFlag != "" {
+		cfg.MemoryAgent.Model = memoryModelFlag
+		log.Infof("sim: memory model → %s", memoryModelFlag)
+	}
+	if moodModelFlag != "" {
+		cfg.MoodAgent.Model = moodModelFlag
+		log.Infof("sim: mood model → %s", moodModelFlag)
+	}
+	if introspectionModelFlag != "" {
+		cfg.IntrospectionAgent.Model = introspectionModelFlag
+		log.Infof("sim: introspection model → %s", introspectionModelFlag)
+	}
+	if classifierModelFlag != "" {
+		cfg.Classifier.Model = classifierModelFlag
+		log.Infof("sim: classifier model → %s", classifierModelFlag)
+	}
+	if embedModelFlag != "" {
+		cfg.Embed.Model = embedModelFlag
+		log.Infof("sim: embed model → %s", embedModelFlag)
+	}
+	if embedBaseURLFlag != "" {
+		cfg.Embed.BaseURL = embedBaseURLFlag
+	}
+	if embedAPIKeyFlag != "" {
+		cfg.Embed.APIKey = embedAPIKeyFlag
+	} else if embedBaseURLFlag != "" && cfg.Embed.APIKey == "" {
+		cfg.Embed.APIKey = cfg.OpenRouter.APIKey
+	}
+	if embedDimensionFlag > 0 {
+		cfg.Embed.Dimension = embedDimensionFlag
+	}
+
+	if fallbackModelFlag != "" {
+		log.Infof("sim: fallback model → %s", fallbackModelFlag)
+		setFB := func(fb **config.FallbackConfig) {
+			if *fb == nil {
+				*fb = &config.FallbackConfig{Temperature: 0.3, MaxTokens: 512}
+			}
+			(*fb).Model = fallbackModelFlag
+		}
+		setFB(&cfg.Chat.Fallback)
+		setFB(&cfg.Driver.Fallback)
+		setFB(&cfg.MemoryAgent.Fallback)
+		setFB(&cfg.MoodAgent.Fallback)
+	}
+	if fallbackVisionModelFlag != "" {
+		if cfg.Vision.Fallback == nil {
+			cfg.Vision.Fallback = &config.FallbackConfig{Temperature: 0.3, MaxTokens: 512}
+		}
+		cfg.Vision.Fallback.Model = fallbackVisionModelFlag
+	}
+	if disableReasoningFlag {
+		log.Infof("sim: reasoning disabled for hybrid models")
+	}
 }
 
 // seedSimDB pre-populates the sim database with cards, memories, self

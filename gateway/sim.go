@@ -27,6 +27,11 @@ type SimTriggers struct {
 	RunDream     bool  // run dream after all messages complete
 }
 
+// SimOptions holds runtime options for sim execution.
+type SimOptions struct {
+	DelaySeconds int // pause between turns (0 = no delay)
+}
+
 // SimResult holds the response for one sim turn, enriched with
 // structured data captured from the bus event stream.
 type SimResult struct {
@@ -57,6 +62,7 @@ type simAdapter struct {
 	cfg      config.AdapterConfig
 	messages []SimMessage
 	triggers SimTriggers
+	options  SimOptions
 	bus      *tui.Bus
 
 	msgCh    chan InboundMsg
@@ -97,11 +103,12 @@ type turnCapture struct {
 	introspectionSaved []string
 }
 
-func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, bus *tui.Bus) (Adapter, error) {
+func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus) (Adapter, error) {
 	return &simAdapter{
 		cfg:          acfg,
 		messages:     messages,
 		triggers:     triggers,
+		options:      opts,
 		bus:          bus,
 		msgCh:        make(chan InboundMsg, 1),
 		finishedTurn: make(chan *turnCapture, 1),
@@ -193,6 +200,11 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		// Fire lifecycle triggers after this turn.
 		turnNum := i + 1
 		a.fireTriggers(ctx, turnNum, convID)
+
+		// Delay between turns to avoid rate limits on free-tier models.
+		if a.options.DelaySeconds > 0 && i < len(a.messages)-1 {
+			time.Sleep(time.Duration(a.options.DelaySeconds) * time.Second)
+		}
 	}
 
 	// Post-run dream cycle.
