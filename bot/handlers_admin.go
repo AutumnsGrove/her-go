@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"her/compact"
+	"her/procmgr"
 
 	tele "gopkg.in/telebot.v4"
 )
@@ -100,10 +101,10 @@ func (b *Bot) handleStatus(c tele.Context) error {
 		}
 	}
 
-	// Check if running under launchd.
+	// Check if running under a process supervisor (launchd or systemd).
 	managedBy := "manual (go run)"
-	if os.Getenv("__CFBundleIdentifier") != "" || isLaunchdManaged(b.effectiveServiceLabel()) {
-		managedBy = "launchd"
+	if mgr := b.processManager(); mgr != nil && mgr.IsManaged() {
+		managedBy = mgr.Name()
 	}
 
 	msg := fmt.Sprintf(
@@ -139,29 +140,26 @@ func (b *Bot) handleStatus(c tele.Context) error {
 	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
-// handleRestart restarts the bot process. If running under launchd,
-// uses launchctl to do a clean restart. Otherwise, exits and relies
-// on the user to restart manually.
+// handleRestart restarts the bot process. If running under a process
+// supervisor (launchd or systemd), uses the supervisor to restart.
+// Otherwise, exits and relies on the user to restart manually.
 func (b *Bot) handleRestart(c tele.Context) error {
 	log.Info("/restart: restart requested via Telegram")
 
-	if isLaunchdManaged(b.effectiveServiceLabel()) {
-		_ = c.Send("Restarting via launchd... be right back.")
+	if mgr := b.processManager(); mgr != nil && mgr.IsManaged() {
+		_ = c.Send(fmt.Sprintf("Restarting via %s... be right back.", mgr.Name()))
 
-		// launchctl kickstart -k forces a restart of the service.
-		// The -k flag kills the existing instance first.
 		go func() {
 			time.Sleep(500 * time.Millisecond) // let the message send
-			cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.effectiveServiceLabel()))
-			if err := cmd.Run(); err != nil {
-				log.Error("launchctl kickstart failed, falling back to exit", "err", err)
-				os.Exit(0) // launchd will restart us via KeepAlive
+			if err := mgr.Restart(); err != nil {
+				log.Error("supervisor restart failed, falling back to exit", "err", err)
+				os.Exit(0) // supervisor's Restart=always / KeepAlive will bring us back
 			}
 		}()
 		return nil
 	}
 
-	// Not managed by launchd. Just exit cleanly.
+	// Not managed by a supervisor. Just exit cleanly.
 	_ = c.Send("Shutting down. Restart me manually with `go run main.go`.")
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -171,15 +169,16 @@ func (b *Bot) handleRestart(c tele.Context) error {
 }
 
 // handleUpdate pulls the latest code, builds a new binary, and restarts.
-// This is the self-update mechanism for the Mac Mini production instance.
+// This is the self-update mechanism for production instances.
 // The flow: git pull → go build → backup old binary → swap → restart via
-// launchd. Build failures are caught before the swap — the bot keeps
+// supervisor. Build failures are caught before the swap — the bot keeps
 // running with the old binary if compilation fails.
 func (b *Bot) handleUpdate(c tele.Context) error {
 	log.Info("/update: self-update requested via Telegram")
 
-	if !isLaunchdManaged(b.effectiveServiceLabel()) {
-		return c.Send("⚠️ /update only works when running as a launchd service. Use <code>her setup</code> first.", &tele.SendOptions{ParseMode: tele.ModeHTML})
+	mgr := b.processManager()
+	if mgr == nil || !mgr.IsManaged() {
+		return c.Send("⚠️ /update only works when running as a managed service. Use <code>her setup</code> first.", &tele.SendOptions{ParseMode: tele.ModeHTML})
 	}
 
 	// Determine repo and binary paths.
@@ -213,7 +212,6 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 	buildCmd.Dir = repoPath
 	buildOut, err := buildCmd.CombinedOutput()
 	if err != nil {
-		// Build failed — bot keeps running with old binary.
 		_ = os.Remove(nextBinary)
 		buildMsg := strings.TrimSpace(string(buildOut))
 		return c.Send(fmt.Sprintf("❌ Build failed:\n<pre>%s</pre>", truncateForTelegram(buildMsg, 3800)), &tele.SendOptions{ParseMode: tele.ModeHTML})
@@ -237,15 +235,14 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 	flagContent := fmt.Sprintf("✅ Updated and restarted successfully.\n\n<pre>%s</pre>", truncateForTelegram(pullMsg, 2000))
 	_ = os.WriteFile(flagPath, []byte(flagContent), 0644)
 
-	// Step 6: Restart via launchd.
+	// Step 6: Restart via supervisor.
 	_ = c.Send("🔄 Restarting...")
 
 	go func() {
 		time.Sleep(500 * time.Millisecond) // let the message send
-		cmd := exec.Command("launchctl", "kickstart", "-k", launchdTarget(b.effectiveServiceLabel()))
-		if err := cmd.Run(); err != nil {
-			log.Error("launchctl kickstart failed, falling back to exit", "err", err)
-			os.Exit(0) // launchd will restart us via KeepAlive
+		if err := mgr.Restart(); err != nil {
+			log.Error("supervisor restart failed, falling back to exit", "err", err)
+			os.Exit(0) // supervisor will bring us back (KeepAlive / Restart=always)
 		}
 	}()
 
@@ -311,30 +308,14 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, data, info.Mode())
 }
 
-// launchdServiceLabel returns the launchd service identifier derived from
-// the bot name. e.g., "Mira" → "com.mira.her-go".
-func launchdServiceLabel(botName string) string {
-	return "com." + strings.ToLower(botName) + ".her-go"
-}
-
-// effectiveServiceLabel returns the configured launchd service label,
-// falling back to the name-derived label when update.service_label is empty.
-func (b *Bot) effectiveServiceLabel() string {
-	if b.cfg.Update.ServiceLabel != "" {
-		return b.cfg.Update.ServiceLabel
+// processManager returns a procmgr.Manager for the current platform.
+// Returns nil if the platform is unsupported (shouldn't happen on
+// macOS or Linux).
+func (b *Bot) processManager() procmgr.Manager {
+	label := procmgr.EffectiveLabel(b.cfg.Update.ServiceLabel, b.cfg.Identity.Her)
+	mgr, err := procmgr.New(label)
+	if err != nil {
+		return nil
 	}
-	return launchdServiceLabel(b.cfg.Identity.Her)
-}
-
-// launchdTarget returns the full launchctl target path for the given service
-// label. e.g., "gui/501/com.mira.her-go" — used by kickstart and print commands.
-func launchdTarget(label string) string {
-	return fmt.Sprintf("gui/%d/%s", os.Getuid(), label)
-}
-
-// isLaunchdManaged checks if a service is running under launchd by
-// querying launchctl with the given service label.
-func isLaunchdManaged(label string) bool {
-	cmd := exec.Command("launchctl", "print", launchdTarget(label))
-	return cmd.Run() == nil
+	return mgr
 }

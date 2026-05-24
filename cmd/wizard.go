@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"gopkg.in/yaml.v3"
 	"her/config"
+	"her/procmgr"
 )
 
 // errWizardAborted is returned by runWizard when the user presses Ctrl+C.
@@ -331,7 +332,7 @@ func runWizard(cfgPath string) error {
 
 	// Auto-derive service label from bot name if left blank.
 	if cfg.Update.ServiceLabel == "" {
-		cfg.Update.ServiceLabel = serviceLabel(cfg.Identity.Her)
+		cfg.Update.ServiceLabel = procmgr.ServiceLabel(cfg.Identity.Her)
 	}
 
 	if err := saveConfig(cfg, cfgPath); err != nil {

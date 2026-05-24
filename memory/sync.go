@@ -41,6 +41,11 @@ var incrementalTables = []string{
 	"persona_versions",
 	"traits",
 	"mood_entries",
+	"pii_vault",
+	"metrics",
+	"agent_turns",
+	"dream_audit",
+	"scheduler_tasks",
 }
 
 // fullPullTables are pulled in their entirety on every sync. These
@@ -59,8 +64,8 @@ var fullPullTables = []string{
 //	Phase 2: memories → messages, traits → persona_versions, memory_log → memory_cards + memories
 //	Phase 3: memory_links → memories
 var pullPhases = [][]string{
-	{"messages", "summaries", "reflections", "persona_versions", "mood_entries", "persona_state", "memory_cards"},
-	{"memories", "traits"},
+	{"messages", "summaries", "reflections", "persona_versions", "mood_entries", "persona_state", "memory_cards", "dream_audit", "scheduler_tasks"},
+	{"memories", "traits", "pii_vault", "metrics", "agent_turns"},
 	{"memory_links", "memory_log"},
 }
 
