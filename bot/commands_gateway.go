@@ -480,78 +480,43 @@ func (b *Bot) execPersonaRewrite() (string, error) {
 	return fmt.Sprintf("Persona rewritten.\n\n%s", string(data)), nil
 }
 
-// ExecDream runs a full dream cycle and returns a summary.
+// ExecDream runs a full dream cycle via the unified RunDreamCycle and
+// returns a human-readable summary. ForceRewrite=true since the user
+// (or sim) explicitly requested a dream.
 func (b *Bot) ExecDream() (string, error) {
-	var msg strings.Builder
-	msg.WriteString("== Dream Complete ==\n\n")
-
 	dreamLLM := b.dreamAgentLLM
 	if dreamLLM == nil {
 		dreamLLM = b.memoryAgentLLM
 	}
-	if dreamLLM != nil && b.cfg.Dream.DreamEnabled() {
-		result := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
-			LLM:         dreamLLM,
-			Store:       b.store,
-			EmbedClient: b.embedClient,
-			Cfg:         b.cfg,
-		})
-		if result.Error != nil {
-			log.Error("dream consolidation", "err", result.Error)
-			fmt.Fprintf(&msg, "Consolidation error: %v\n\n", result.Error)
-		} else if result.Rewrites+result.Merges+result.Expires+result.Creates > 0 {
-			fmt.Fprintf(&msg, "Consolidated: %d rewrites, %d merges, %d expires, %d creates\n\n",
-				result.Rewrites, result.Merges, result.Expires, result.Creates)
-		} else {
-			msg.WriteString("Memories look tidy — nothing to consolidate.\n\n")
-		}
-	}
 
-	if err := persona.NightlyReflect(b.llm, b.store, b.cfg, b.cfg.Identity.Her, b.cfg.Identity.User); err != nil {
-		return "", fmt.Errorf("reflection failed: %w", err)
-	}
+	result := persona.RunDreamCycle(persona.DreamCycleParams{
+		LLM:           b.llm,
+		DreamLLM:      dreamLLM,
+		ClassifierLLM: b.classifierLLM,
+		Embed:         b.embedClient,
+		Store:         b.store,
+		Cfg:           b.cfg,
+		EventBus:      b.eventBus,
+		ForceRewrite:  true,
+		MinDays:       b.cfg.Persona.MinRewriteDays,
+		MinRefl:       b.cfg.Persona.MinReflections,
+	})
 
-	minDays := b.cfg.Persona.MinRewriteDays
-	if minDays == 0 {
-		minDays = 7
-	}
-	minRefl := b.cfg.Persona.MinReflections
-	if minRefl == 0 {
-		minRefl = 3
-	}
-	rewritten, err := persona.GatedRewrite(b.llm, b.classifierLLM, b.embedClient, b.store, b.cfg.Persona.PersonaFile, b.cfg.Identity.Her, true, minDays, minRefl)
-	if err != nil {
-		return "", fmt.Errorf("rewrite failed: %w", err)
-	}
-
+	// Append the latest reflection to the summary.
+	summary := result.Summary()
 	reflections, _ := b.store.ReflectionsSince(time.Now().Add(-30 * time.Second))
 	if len(reflections) > 0 {
-		fmt.Fprintf(&msg, "Reflection:\n%s\n\n", reflections[len(reflections)-1].Content)
-	} else {
-		msg.WriteString("Nothing notable to reflect on right now.\n\n")
+		summary = strings.Replace(summary, "== Dream Complete ==\n\n",
+			fmt.Sprintf("== Dream Complete ==\n\nReflection:\n%s\n\n", reflections[len(reflections)-1].Content), 1)
 	}
 
-	// Step 3: Tomorrow's preload.
-	if b.cfg.Dream.TomorrowPreload.Enabled {
-		if err := persona.RunTomorrowPreload(persona.TomorrowPreloadParams{
-			LLM:      b.llm,
-			Store:    b.store,
-			Cfg:      b.cfg,
-			EventBus: b.eventBus,
-		}); err != nil {
-			log.Error("dream preload", "err", err)
-			fmt.Fprintf(&msg, "Preload error: %v\n\n", err)
-		} else {
-			msg.WriteString("Tomorrow's preload generated.\n\n")
-		}
+	if result.ReflectionError != nil {
+		return "", fmt.Errorf("reflection failed: %w", result.ReflectionError)
 	}
-
-	if rewritten {
-		msg.WriteString("Persona rewritten. Use /persona to see the update.")
-	} else {
-		msg.WriteString("No persona changes — not enough has shifted yet.")
+	if result.RewriteError != nil {
+		return "", fmt.Errorf("rewrite failed: %w", result.RewriteError)
 	}
-	return msg.String(), nil
+	return summary, nil
 }
 
 // ExecDreamLog returns recent memory dreamer audit entries.
