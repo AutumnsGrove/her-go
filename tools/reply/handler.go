@@ -84,6 +84,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				args.Memories = append(args.Memories, mem.Content)
 			}
 		}
+		// Track that these memories were used in the chat prompt.
+		if err := ctx.Store.MarkMemoriesRecalled(args.MemoryIDs); err != nil {
+			log.Warn("reply: failed to mark memories recalled", "err", err)
+		}
 	}
 
 	// If the agent passed memories (by ID or text), store them on ctx so the
@@ -109,8 +113,10 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	systemPrompt, chatLayerResults := layers.BuildAll(layers.StreamChat, chatLayerCtx)
 
-	// Log chat prompt shape for observability.
+	// Log chat prompt shape for observability and collect injected memory
+	// IDs for usage tracking (blended retrieval scoring).
 	var chatTotalTokens int
+	var layerInjectedIDs []int64
 	for _, lr := range chatLayerResults {
 		chatTotalTokens += lr.Tokens
 		if lr.Detail != "" {
@@ -120,6 +126,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 		// Pass injected memories observability to the TUI.
 		for _, m := range lr.InjectedMemories {
+			layerInjectedIDs = append(layerInjectedIDs, m.ID)
 			memArgs := fmt.Sprintf("#%d %s", m.ID, m.Source)
 			if m.Distance > 0 {
 				memArgs = fmt.Sprintf("#%d %s dist=%.2f", m.ID, m.Source, m.Distance)
@@ -138,6 +145,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 	log.Infof("  chat system prompt total: ~%d tokens", chatTotalTokens)
+
+	// Mark layer-injected memories as recalled for usage tracking.
+	if len(layerInjectedIDs) > 0 && ctx.Store != nil {
+		if err := ctx.Store.MarkMemoriesRecalled(layerInjectedIDs); err != nil {
+			log.Warn("reply: failed to mark layer-injected memories recalled", "err", err)
+		}
+	}
 
 	// Combine any accumulated search context with the explicit context parameter.
 	fullContext := ctx.SearchContext

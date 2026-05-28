@@ -145,6 +145,14 @@ func runBot(cmd *cobra.Command, args []string) error {
 	store.AutoLinkCount = cfg.Memory.AutoLinkCount
 	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
 
+	// Blended retrieval weights — see config.RecallConfig for the formula.
+	rc := cfg.Memory.Recall.WithDefaults()
+	store.RecallSimilarityWeight = rc.SimilarityWeight
+	store.RecallImportanceWeight = rc.ImportanceWeight
+	store.RecallRecencyWeight = rc.RecencyWeight
+	store.RecallRecencyHalfLifeDays = rc.RecencyHalfLifeDays
+	store.RecallUsageBoostFactor = rc.UsageBoostFactor
+
 	// If D1 sync is configured, wrap SQLiteStore in SyncedStore for
 	// bidirectional sync with Cloudflare D1. Writes push to D1 in the
 	// background; Pull() on startup hydrates local her.db with any

@@ -37,6 +37,11 @@ parameters:
         Comma-separated topic tags for semantic search — describes WHAT this
         self-memory is about. Example: 'identity, communication style,
         authenticity' or 'relationship, boundaries, user dynamic'.
+    importance:
+      type: integer
+      description: >-
+        How important is this memory? 1-10. Default 5. See the scoring
+        anchors in your system prompt. When unsure, pick the lower score.
     context:
       type: string
       description: >-

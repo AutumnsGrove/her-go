@@ -135,6 +135,17 @@ memory:
   auto_link_threshold: 0.7       # min cosine similarity to create a link (0.0-1.0). Higher = stricter, fewer links.
   max_memory_length: 1000        # hard character limit per memory. Raised from 300 to support dream consolidation merges. The SPLIT classifier catches packed memories before this fires.
 
+  # Blended retrieval scoring — weights for the formula that ranks memories
+  # by a blend of similarity, importance, recency, and usage frequency.
+  # Similarity still dominates; importance + recency + usage act as tiebreakers
+  # that promote well-used, recent, high-importance memories over raw distance.
+  recall:
+    similarity_weight: 0.60       # cosine similarity contribution
+    importance_weight: 0.25       # importance score (1-10, normalized to 0-1)
+    recency_weight: 0.15          # exponential decay on memory age
+    recency_half_life_days: 30    # half-life for recency decay (days)
+    usage_boost_factor: 0.10      # boost from recall_count (log-scaled, diminishing returns)
+
 scrub:
   enabled: true
   # tier 1 (hard redact) and tier 2 (tokenize) are always on

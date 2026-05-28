@@ -507,15 +507,44 @@ type ProviderConfig struct {
 
 // MemoryConfig controls the SQLite-backed memory system.
 type MemoryConfig struct {
-	DBPath              string  `yaml:"db_path"`
-	RecentMessages      int     `yaml:"recent_messages"`
-	MaxFactsInContext   int     `yaml:"max_facts_in_context"`
-	ExtractionInterval  int     `yaml:"extraction_interval"`
-	MaxHistoryTokens    int     `yaml:"max_history_tokens"`    // history token budget for compaction — both triggers fire at 75% of this
-	DriverContextBudget int     `yaml:"driver_context_budget"` // driver model total prompt budget for action history compaction; 0 = use 6000 default
-	AutoLinkCount       int     `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
-	AutoLinkThreshold   float64 `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
-	MaxMemoryLength     int     `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
+	DBPath              string       `yaml:"db_path"`
+	RecentMessages      int          `yaml:"recent_messages"`
+	MaxFactsInContext   int          `yaml:"max_facts_in_context"`
+	ExtractionInterval  int          `yaml:"extraction_interval"`
+	MaxHistoryTokens    int          `yaml:"max_history_tokens"`    // history token budget for compaction — both triggers fire at 75% of this
+	DriverContextBudget int          `yaml:"driver_context_budget"` // driver model total prompt budget for action history compaction; 0 = use 6000 default
+	AutoLinkCount       int          `yaml:"auto_link_count"`       // max links per new fact (0 = disabled)
+	AutoLinkThreshold   float64      `yaml:"auto_link_threshold"`   // min cosine similarity to create a link (0.0-1.0)
+	MaxMemoryLength     int          `yaml:"max_memory_length"`     // hard character limit for a single memory (0 = use default 300)
+	Recall              RecallConfig `yaml:"recall"`
+}
+
+// RecallConfig controls the blended retrieval scoring formula.
+// Instead of ranking memories purely by cosine distance, retrieval uses a
+// weighted blend of similarity, importance, recency, and usage frequency.
+// Weights should sum to ~1.0 for interpretability but this isn't enforced.
+type RecallConfig struct {
+	SimilarityWeight    float64 `yaml:"similarity_weight"`     // cosine similarity contribution (default 0.60)
+	ImportanceWeight    float64 `yaml:"importance_weight"`     // importance score normalized 0-1 (default 0.25)
+	RecencyWeight       float64 `yaml:"recency_weight"`        // exponential decay on age (default 0.15)
+	RecencyHalfLifeDays int     `yaml:"recency_half_life_days"` // how fast recency decays (default 30)
+	UsageBoostFactor    float64 `yaml:"usage_boost_factor"`    // boost from recall_count with diminishing returns (default 0.10)
+}
+
+// RecallDefaults returns a RecallConfig with sensible defaults when the
+// config file doesn't specify recall settings.
+func (rc RecallConfig) WithDefaults() RecallConfig {
+	if rc.SimilarityWeight == 0 && rc.ImportanceWeight == 0 && rc.RecencyWeight == 0 {
+		// Nothing configured — use plan defaults (similarity-dominant).
+		rc.SimilarityWeight = 0.60
+		rc.ImportanceWeight = 0.25
+		rc.RecencyWeight = 0.15
+		rc.UsageBoostFactor = 0.10
+	}
+	if rc.RecencyHalfLifeDays == 0 {
+		rc.RecencyHalfLifeDays = 30
+	}
+	return rc
 }
 
 // ScrubConfig controls PII scrubbing behavior.
