@@ -237,6 +237,15 @@ func (s stubStore) CardLogEntries(cardID int64, limit int) ([]memory.MemoryLogEn
 func (s stubStore) SemanticSearchByCard(queryVec []float32, cardID int64, topK int) ([]memory.Memory, error) {
 	return nil, nil
 }
+func (s stubStore) MarkMemoriesRecalled(ids []int64) error { return nil }
+func (s stubStore) MemoryCardForMemory(memoryID int64) (*memory.MemoryCard, error) {
+	return nil, nil
+}
+func (s stubStore) SaveTomorrowPreload(content string, expiresAfter time.Duration) (int64, error) {
+	return 0, nil
+}
+func (s stubStore) ActiveTomorrowPreload() (*memory.TomorrowPreload, error) { return nil, nil }
+func (s stubStore) ConsumeTomorrowPreload(id int64) error                   { return nil }
 func (s stubStore) SemanticSearchBySubject(queryVec []float32, subject string, topK int) ([]memory.Memory, error) {
 	return nil, nil
 }
