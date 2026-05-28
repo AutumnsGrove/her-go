@@ -46,6 +46,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if !ctx.Cfg.Dream.Forgetting.Enabled {
 			return ""
 		}
+		// Per-cycle quota: cap removals to prevent sweeps.
+		maxRemoves := ctx.Cfg.Dream.Forgetting.MaxRemovesPerCycle
+		if maxRemoves <= 0 {
+			maxRemoves = 5
+		}
+		if ctx.DreamRemoveCount >= maxRemoves {
+			return fmt.Sprintf("refused: already removed %d memories this cycle (max %d). Leave the rest alone.", ctx.DreamRemoveCount, maxRemoves)
+		}
 		mem, err := ctx.Store.GetMemory(id)
 		if err != nil || mem == nil {
 			return ""
@@ -71,6 +79,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 				continue
 			}
 			removed++
+			if isDream {
+				ctx.DreamRemoveCount++
+			}
 		}
 		log.Infof("  remove_memory: batch deactivated %d/%d (reason: %s)", removed, len(args.MemoryIDs), args.Reason)
 		if len(errors) > 0 {
@@ -103,6 +114,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	if err := ctx.Store.DeactivateMemory(args.MemoryID); err != nil {
 		return fmt.Sprintf("error removing memory: %v", err)
+	}
+	if isDream {
+		ctx.DreamRemoveCount++
 	}
 
 	log.Infof("  remove_memory: deactivated ID=%d (reason: %s)", args.MemoryID, args.Reason)

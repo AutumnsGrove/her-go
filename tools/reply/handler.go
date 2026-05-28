@@ -2,12 +2,12 @@
 // user-facing response via the chat model.
 //
 // This is the most complex tool in the system. It:
-//   1. Builds the chat system prompt from the layer registry (persona,
-//      memory, time, etc.)
-//   2. Assembles the conversation history with day-boundary detection
-//   3. Calls the chat LLM with the agent's instruction and context
-//   4. Guards against degenerate and overly-long responses
-//   5. Saves the response to the DB and delivers it to Telegram + TTS
+//  1. Builds the chat system prompt from the layer registry (persona,
+//     memory, time, etc.)
+//  2. Assembles the conversation history with day-boundary detection
+//  3. Calls the chat LLM with the agent's instruction and context
+//  4. Guards against degenerate and overly-long responses
+//  5. Saves the response to the DB and delivers it to Telegram + TTS
 //
 // Previously execReply lived inside agent/agent.go as a special-cased
 // function. Moving it here makes reply a first-class tool: traceable,
@@ -215,18 +215,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Length directive — injected per-call so the base prompt stays clean.
-	// The driver picks brief/normal/detailed; the chat model only sees the
-	// one-liner relevant to this specific reply.
-	var lengthDirective string
-	switch args.Length {
-	case "detailed":
-		lengthDirective = "Length: This warrants a longer, more thoughtful response. Take the space you need."
-	case "normal":
-		lengthDirective = "Length: Keep this to 1-3 sentences."
-	default:
-		lengthDirective = "Length: Keep this SHORT. One sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
-	}
+	lengthDirective := lengthDirectiveFor(args.Length)
 
 	// Build the user message. Search context and the agent's instruction
 	// go into a lightweight system note so they don't masquerade as user
@@ -719,4 +708,18 @@ func reduceEmDashes(text string) string {
 	}
 
 	return b.String()
+}
+
+// lengthDirectiveFor returns the per-call length directive injected into
+// the chat model's system note. The driver picks brief/normal/detailed;
+// unknown values fall to the default (brief).
+func lengthDirectiveFor(length string) string {
+	switch length {
+	case "detailed":
+		return "Length: This warrants a longer, more thoughtful response. Take the space you need."
+	case "normal":
+		return "Length: Keep this to 1-3 sentences."
+	default:
+		return "Length: Keep this SHORT. One sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
+	}
 }

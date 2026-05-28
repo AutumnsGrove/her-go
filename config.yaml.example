@@ -184,7 +184,6 @@ dream:
   tomorrow_preload:
     enabled: true
     expires_after_hours: 48           # how long the note stays active
-    max_bullets: 5                    # max bullet points in the note
     history_lookback_days: 7          # how many days of messages to scan
 
 location:

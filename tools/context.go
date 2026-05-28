@@ -189,6 +189,10 @@ type Context struct {
 	// reply_direct to enforce the sim-only guard.
 	IsSimRun bool
 
+	// DreamRemoveCount tracks how many memories the dream agent has removed
+	// this cycle. Used by the forgetting guard to enforce MaxRemovesPerCycle.
+	DreamRemoveCount int
+
 	// Ctx is the parent context for this turn. Tools that spawn retries
 	// or background work should derive from this so they respect shutdown
 	// and turn cancellation. Defaults to context.Background() if unset.

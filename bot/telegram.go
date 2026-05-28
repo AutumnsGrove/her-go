@@ -54,6 +54,7 @@ type Bot struct {
 	configPath       string // path to config.yaml — needed for /traces toggle
 	systemPrompt     string
 	startTime        time.Time
+	isSimRun         bool   // true when running via the sim adapter
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
@@ -338,6 +339,10 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 func (b *Bot) SetCalendarBridge(bridge calendar.Bridge) {
 	b.calendarBridge = bridge
 }
+
+// SetSimRun marks this bot as running in sim mode. Used by the gateway
+// sim adapter so reply_direct's sim-only guard can verify context.
+func (b *Bot) SetSimRun(v bool) { b.isSimRun = v }
 
 // ProcessMessage runs a user message through the full agent pipeline
 // using the given Frontend for I/O. This is the transport-agnostic

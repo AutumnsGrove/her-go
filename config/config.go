@@ -424,20 +424,19 @@ type DreamConfig struct {
 // step of the dream cycle.
 type TomorrowPreloadConfig struct {
 	Enabled             bool `yaml:"enabled"`
-	ExpiresAfterHours   int  `yaml:"expires_after_hours"`    // how long the note stays active (default 48)
-	MaxBullets          int  `yaml:"max_bullets"`            // max bullet points (default 5)
-	HistoryLookbackDays int  `yaml:"history_lookback_days"`  // how many days of messages to scan (default 7)
+	ExpiresAfterHours   int  `yaml:"expires_after_hours"`   // how long the note stays active (default 48)
+	HistoryLookbackDays int  `yaml:"history_lookback_days"` // how many days of messages to scan (default 7)
 }
 
 // ForgettingConfig controls the conservative forgetting policy enforced
 // during the dream cycle. Hard rules are in code (canForget guard);
 // soft rules are in the dreamer prompt.
 type ForgettingConfig struct {
-	Enabled            bool `yaml:"enabled"`
-	MaxRemovesPerCycle int  `yaml:"max_removes_per_cycle"` // hard ceiling per dream (default 5)
-	RequireLowImportance int `yaml:"require_low_importance"` // only memories ≤ this are eligible (default 3)
-	MinAgeDays         int  `yaml:"min_age_days"`           // eligible only after this many days (default 60)
-	MinUnusedDays      int  `yaml:"min_unused_days"`        // eligible only if unused for this many days (default 60)
+	Enabled              bool `yaml:"enabled"`
+	MaxRemovesPerCycle   int  `yaml:"max_removes_per_cycle"`  // hard ceiling per dream (default 5)
+	RequireLowImportance int  `yaml:"require_low_importance"` // only memories ≤ this are eligible (default 3)
+	MinAgeDays           int  `yaml:"min_age_days"`           // eligible only after this many days (default 60)
+	MinUnusedDays        int  `yaml:"min_unused_days"`        // eligible only if unused for this many days (default 60)
 }
 
 // DreamEnabled returns whether the memory dreamer is enabled.
@@ -558,11 +557,11 @@ type MemoryConfig struct {
 // weighted blend of similarity, importance, recency, and usage frequency.
 // Weights should sum to ~1.0 for interpretability but this isn't enforced.
 type RecallConfig struct {
-	SimilarityWeight    float64 `yaml:"similarity_weight"`     // cosine similarity contribution (default 0.60)
-	ImportanceWeight    float64 `yaml:"importance_weight"`     // importance score normalized 0-1 (default 0.25)
-	RecencyWeight       float64 `yaml:"recency_weight"`        // exponential decay on age (default 0.15)
+	SimilarityWeight    float64 `yaml:"similarity_weight"`      // cosine similarity contribution (default 0.60)
+	ImportanceWeight    float64 `yaml:"importance_weight"`      // importance score normalized 0-1 (default 0.25)
+	RecencyWeight       float64 `yaml:"recency_weight"`         // exponential decay on age (default 0.15)
 	RecencyHalfLifeDays int     `yaml:"recency_half_life_days"` // how fast recency decays (default 30)
-	UsageBoostFactor    float64 `yaml:"usage_boost_factor"`    // boost from recall_count with diminishing returns (default 0.10)
+	UsageBoostFactor    float64 `yaml:"usage_boost_factor"`     // boost from recall_count with diminishing returns (default 0.10)
 }
 
 // RecallDefaults returns a RecallConfig with sensible defaults when the

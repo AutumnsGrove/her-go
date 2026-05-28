@@ -204,6 +204,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	params.ImageBase64 = input.ImageBase64
 	params.ImageMIME = input.ImageMIME
 	params.OCRText = input.OCRText
+	params.IsSimRun = b.isSimRun
 
 	b.agentBusy.Store(true)
 	result, err := agent.Run(params)
