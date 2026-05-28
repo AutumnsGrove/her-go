@@ -36,11 +36,36 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
+	// Conservative forgetting guard — only applies to the dream agent.
+	// The memory agent handling user requests can remove anything.
+	isDream := ctx.AgentName == "dream"
+	checkForget := func(id int64) string {
+		if !isDream || ctx.Cfg == nil {
+			return ""
+		}
+		if !ctx.Cfg.Dream.Forgetting.Enabled {
+			return ""
+		}
+		mem, err := ctx.Store.GetMemory(id)
+		if err != nil || mem == nil {
+			return ""
+		}
+		ok, reason := tools.CanForget(mem, ctx.Store, ctx.Cfg.Dream.Forgetting)
+		if !ok {
+			return fmt.Sprintf("refused: memory ID=%d cannot be forgotten (%s). Leave it alone.", id, reason)
+		}
+		return ""
+	}
+
 	// Batch mode: deactivate multiple memories at once.
 	if len(args.MemoryIDs) > 0 {
 		var removed int
 		var errors []string
 		for _, id := range args.MemoryIDs {
+			if refusal := checkForget(id); refusal != "" {
+				errors = append(errors, fmt.Sprintf("ID=%d: %s", id, refusal))
+				continue
+			}
 			if err := ctx.Store.DeactivateMemory(id); err != nil {
 				errors = append(errors, fmt.Sprintf("ID=%d: %v", id, err))
 				continue
@@ -60,8 +85,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: provide either memory_id (single) or memory_ids (batch)"
 	}
 
+	// Check forgetting guard for single mode.
+	if refusal := checkForget(args.MemoryID); refusal != "" {
+		return refusal
+	}
+
 	// If replaced_by is set, use SupersedeMemory to record the chain.
-	// Otherwise, plain DeactivateMemory (same behavior as before).
+	// Supersession bypasses the forgetting guard — replacing a memory
+	// with a newer version is not forgetting, it's updating.
 	if args.ReplacedBy > 0 {
 		if err := ctx.Store.SupersedeMemory(args.MemoryID, args.ReplacedBy, args.Reason); err != nil {
 			return fmt.Sprintf("error superseding memory: %v", err)
