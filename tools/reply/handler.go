@@ -2,12 +2,12 @@
 // user-facing response via the chat model.
 //
 // This is the most complex tool in the system. It:
-//   1. Builds the chat system prompt from the layer registry (persona,
-//      memory, time, etc.)
-//   2. Assembles the conversation history with day-boundary detection
-//   3. Calls the chat LLM with the agent's instruction and context
-//   4. Guards against degenerate and overly-long responses
-//   5. Saves the response to the DB and delivers it to Telegram + TTS
+//  1. Builds the chat system prompt from the layer registry (persona,
+//     memory, time, etc.)
+//  2. Assembles the conversation history with day-boundary detection
+//  3. Calls the chat LLM with the agent's instruction and context
+//  4. Guards against degenerate and overly-long responses
+//  5. Saves the response to the DB and delivers it to Telegram + TTS
 //
 // Previously execReply lived inside agent/agent.go as a special-cased
 // function. Moving it here makes reply a first-class tool: traceable,

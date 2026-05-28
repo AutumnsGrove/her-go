@@ -148,6 +148,9 @@ func (g *Gateway) Run(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("creating pipeline for adapter %q: %w", acfg.Name, err)
 			}
+			if acfg.Type == "sim" {
+				pipeline.Engine().SetSimRun(true)
+			}
 		}
 
 		// Register commands: gateway-level first, then pipeline-derived.

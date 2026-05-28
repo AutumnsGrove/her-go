@@ -50,7 +50,7 @@ type SyncedStore struct {
 	// This is Go's version of inheritance — composition + delegation.
 	*SQLiteStore
 
-	d1Client *d1.Client   // Cloudflare D1 HTTP client
+	d1Client *d1.Client    // Cloudflare D1 HTTP client
 	notify   chan struct{} // signals the carrier that new outbox entries exist
 	done     chan struct{} // closed when the carrier goroutine exits
 
@@ -285,11 +285,11 @@ func (s *SyncedStore) carrier() {
 
 // outboxEntry represents one row from the _d1_outbox table.
 type outboxEntry struct {
-	id      int64
-	table   string
-	rowID   int64
-	rowID2  sql.NullInt64 // NULL for single-PK tables
-	op      string
+	id     int64
+	table  string
+	rowID  int64
+	rowID2 sql.NullInt64 // NULL for single-PK tables
+	op     string
 }
 
 // processOutbox reads a batch of outbox entries, builds D1 statements for
