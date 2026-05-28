@@ -148,6 +148,20 @@ func runDream(ctx context.Context, p DreamerParams) {
 		log.Info("dreamer: persona rewritten during dream cycle")
 		emitPersonaEvent(p.EventBus, "dream_rewrite", "persona updated via dream")
 	}
+
+	// Step 3: Tomorrow's preload — write a note about what to bring up
+	// in the next conversation. Runs after reflection and rewrite so it
+	// has access to tonight's fresh outputs.
+	if p.Cfg.Dream.TomorrowPreload.Enabled {
+		if err := RunTomorrowPreload(TomorrowPreloadParams{
+			LLM:      p.LLM,
+			Store:    p.Store,
+			Cfg:      p.Cfg,
+			EventBus: p.EventBus,
+		}); err != nil {
+			log.Error("dreamer: tomorrow preload failed", "err", err)
+		}
+	}
 }
 
 // durationUntilNextDream returns how long to sleep until the next occurrence
