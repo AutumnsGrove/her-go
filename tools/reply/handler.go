@@ -573,6 +573,15 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
 	}
 
+	// Consume tomorrow's preload after successful delivery. The preload
+	// layer set the ID during prompt building; consuming it here means it
+	// only fires once per day (the first successfully delivered reply).
+	if chatLayerCtx.PreloadID > 0 && ctx.Store != nil {
+		if err := ctx.Store.ConsumeTomorrowPreload(chatLayerCtx.PreloadID); err != nil {
+			log.Warn("reply: failed to consume preload", "err", err)
+		}
+	}
+
 	// TTS fires only for delivered messages — no point synthesizing audio
 	// for a reply the user never received.
 	if ctx.TTSCallback != nil {

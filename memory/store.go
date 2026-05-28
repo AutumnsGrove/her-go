@@ -89,6 +89,11 @@ type Store interface {
 	RecentLogEntries(hours int) ([]MemoryLogEntry, error)
 	CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry, error)
 
+	// Tomorrow's preload
+	SaveTomorrowPreload(content string, expiresAfter time.Duration) (int64, error)
+	ActiveTomorrowPreload() (*TomorrowPreload, error)
+	ConsumeTomorrowPreload(id int64) error
+
 	// Dream audit
 	SaveDreamAudit(op string, sourceIDs []int64, resultID int64, before, after, reason string, dryRun bool) error
 	RecentDreamAudits(limit int) ([]DreamAudit, error)
