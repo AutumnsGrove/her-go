@@ -68,6 +68,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		Instruction string   `json:"instruction"`
 		Context     string   `json:"context"`
+		Length      string   `json:"length"`
 		MemoryIDs   []int64  `json:"memory_ids"`
 		Memories    []string `json:"memories"`
 	}
@@ -200,10 +201,23 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
+	// Length directive — injected per-call so the base prompt stays clean.
+	// The driver picks brief/normal/detailed; the chat model only sees the
+	// one-liner relevant to this specific reply.
+	var lengthDirective string
+	switch args.Length {
+	case "detailed":
+		lengthDirective = "Length: This warrants a longer, more thoughtful response. Take the space you need."
+	case "normal":
+		lengthDirective = "Length: Keep this to 1-3 sentences."
+	default:
+		lengthDirective = "Length: Keep this SHORT. One sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
+	}
+
 	// Build the user message. Search context and the agent's instruction
 	// go into a lightweight system note so they don't masquerade as user
 	// speech (which confused some models and caused degenerate outputs).
-	if args.Instruction != "" || fullContext != "" {
+	{
 		var note strings.Builder
 		if fullContext != "" {
 			note.WriteString("The following reference material may be useful for your response — use it naturally, don't quote verbatim or mention that you searched unless appropriate:\n\n")
@@ -213,7 +227,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		if args.Instruction != "" {
 			note.WriteString("Guidance from the assistant's planning layer: ")
 			note.WriteString(args.Instruction)
+			note.WriteString("\n")
 		}
+		note.WriteString(lengthDirective)
 		llmMessages = append(llmMessages, llm.ChatMessage{
 			Role:    "system",
 			Content: note.String(),
