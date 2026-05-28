@@ -407,6 +407,9 @@ type DreamConfig struct {
 	// TomorrowPreload controls the forward-looking dream step that writes
 	// a short note about what to bring up in tomorrow's conversation.
 	TomorrowPreload TomorrowPreloadConfig `yaml:"tomorrow_preload"`
+	// Forgetting controls the conservative forgetting policy. Hard rules
+	// are enforced in code; soft rules live in the dreamer prompt.
+	Forgetting ForgettingConfig `yaml:"forgetting"`
 }
 
 // TomorrowPreloadConfig controls the preload agent that runs as the last
@@ -416,6 +419,17 @@ type TomorrowPreloadConfig struct {
 	ExpiresAfterHours   int  `yaml:"expires_after_hours"`    // how long the note stays active (default 48)
 	MaxBullets          int  `yaml:"max_bullets"`            // max bullet points (default 5)
 	HistoryLookbackDays int  `yaml:"history_lookback_days"`  // how many days of messages to scan (default 7)
+}
+
+// ForgettingConfig controls the conservative forgetting policy enforced
+// during the dream cycle. Hard rules are in code (canForget guard);
+// soft rules are in the dreamer prompt.
+type ForgettingConfig struct {
+	Enabled            bool `yaml:"enabled"`
+	MaxRemovesPerCycle int  `yaml:"max_removes_per_cycle"` // hard ceiling per dream (default 5)
+	RequireLowImportance int `yaml:"require_low_importance"` // only memories ≤ this are eligible (default 3)
+	MinAgeDays         int  `yaml:"min_age_days"`           // eligible only after this many days (default 60)
+	MinUnusedDays      int  `yaml:"min_unused_days"`        // eligible only if unused for this many days (default 60)
 }
 
 // DreamEnabled returns whether the memory dreamer is enabled.

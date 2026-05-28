@@ -168,6 +168,16 @@ dream:
   dry_run: false                      # true = log what would change without touching DB
   # enabled: true                     # master switch — omit or set true to enable
 
+  # Conservative forgetting: hard rules in code prevent the dreamer from
+  # removing protected, important, recent, or actively-used memories.
+  # Even when all conditions are met, removals are capped per cycle.
+  forgetting:
+    enabled: true
+    max_removes_per_cycle: 5          # hard ceiling per nightly dream
+    require_low_importance: 3         # only memories with importance <= this
+    min_age_days: 60                  # eligible only after 60 days
+    min_unused_days: 60               # eligible only if unused for 60 days
+
   # Tomorrow's preload: the dream cycle writes a short note about what
   # to bring up in the next conversation. Auto-injected into the first
   # chat turn of the day, then consumed.
