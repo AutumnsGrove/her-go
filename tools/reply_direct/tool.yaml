@@ -1,0 +1,28 @@
+name: reply_direct
+agent: [main]
+hint: "write and send a response directly (experimental)"
+description: >-
+  Write the actual response text and send it to the user. Unlike the standard
+  reply tool, YOU write the words — there is no separate conversational model.
+  Your output IS what the user sees. Write as {{her}} — short, warm, specific.
+  Only available when direct_reply is enabled in config.
+hot: false
+parameters:
+  type: object
+  properties:
+    text:
+      type: string
+      description: >-
+        The exact text to send to the user. Delivered verbatim after PII
+        deanonymization and style gate checks.
+    memory_ids:
+      type: array
+      items:
+        type: integer
+      description: >-
+        Memory IDs used in composing this reply. Tracked for usage metrics.
+  required:
+    - text
+trace:
+  emoji: "✍️"
+  format: "<i>{{.text | truncate 200 | escape}}</i>"

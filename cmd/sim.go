@@ -139,6 +139,11 @@ var moodModelFlag string
 // Example: --disable-reasoning
 var disableReasoningFlag bool
 
+// directReplyFlag enables the reply_direct tool — the driver agent writes
+// the actual reply text instead of delegating to the chat model. Sim-only
+// experiment for A/B testing reply mechanisms.
+var directReplyFlag bool
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse
