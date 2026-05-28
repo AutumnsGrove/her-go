@@ -161,12 +161,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Save to DB.
-	respID, err := ctx.Store.SaveMessage("assistant", replyText, replyText, ctx.ConversationID)
-	if err != nil {
-		log.Error("reply_direct: saving response", "err", err)
-	}
-	if respID > 0 {
-		ctx.Store.SaveMetric("direct", 0, 0, 0, 0, 0, respID, false, memory.RoleChat)
+	if ctx.Store != nil {
+		respID, err := ctx.Store.SaveMessage("assistant", replyText, replyText, ctx.ConversationID)
+		if err != nil {
+			log.Error("reply_direct: saving response", "err", err)
+		}
+		if respID > 0 {
+			ctx.Store.SaveMetric("direct", 0, 0, 0, 0, 0, respID, false, memory.RoleChat)
+		}
 	}
 
 	// TTS.

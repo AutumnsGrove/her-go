@@ -11,6 +11,7 @@ package memory
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -399,8 +400,11 @@ func (s *SQLiteStore) MemoryCardForMemory(memoryID int64) (*MemoryCard, error) {
 		JOIN memories m ON m.card_id = c.id
 		WHERE m.id = ?`, memoryID,
 	).Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Subject, &summary, &c.Version, &c.Protected, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil // no card — not an error
+		return nil, fmt.Errorf("MemoryCardForMemory(%d): %w", memoryID, err)
 	}
 	if summary.Valid {
 		c.Summary = summary.String

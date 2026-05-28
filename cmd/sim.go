@@ -241,12 +241,12 @@ func (m *seedMemory) UnmarshalYAML(unmarshal func(interface{}) error) error {
 // Stored in both the DB (SQLite source of truth) and FakeBridge (for EventKit simulation).
 // Can represent any calendar event — meetings, shifts, appointments, etc.
 type SeedCalendarEvent struct {
-	ID       string `yaml:"id"`       // EventKit-style identifier (e.g., "SEED-001")
-	Title    string `yaml:"title"`    // Event title
-	Start    string `yaml:"start"`    // ISO8601 with timezone
-	End      string `yaml:"end"`      // ISO8601 with timezone
+	ID       string `yaml:"id"`    // EventKit-style identifier (e.g., "SEED-001")
+	Title    string `yaml:"title"` // Event title
+	Start    string `yaml:"start"` // ISO8601 with timezone
+	End      string `yaml:"end"`   // ISO8601 with timezone
 	Location string `yaml:"location,omitempty"`
-	Notes    string `yaml:"notes,omitempty"` // Can include shift metadata like "position: Bake\ntrainer: Mike\n..."
+	Notes    string `yaml:"notes,omitempty"`    // Can include shift metadata like "position: Bake\ntrainer: Mike\n..."
 	Calendar string `yaml:"calendar,omitempty"` // defaults to config.Calendar.DefaultCalendar
 	Job      string `yaml:"job,omitempty"`      // Job name (e.g., "Panera") — marks this as a shift event
 }
@@ -317,18 +317,18 @@ func (m simMessage) DisplayText() string {
 // inside a function are scoped to that function — they can't be used as
 // parameters elsewhere.
 type simTurnResult struct {
-	userMsg                string
-	botReply               string
-	followUpReply          string // from EventInboxReady — empty if no background task reported back
-	moodVerdict            string // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
-	introspectionVerdict   string // per-turn introspection agent outcome (skip/save/update)
-	introspectionMemories  []string // actual self-memory texts saved this turn
-	memoryVerdict          string   // per-turn memory agent outcome (saved N facts, etc.)
-	memoriesSaved          []string // actual memory texts saved this turn
-	compactionSummary      string   // inline compaction summary (empty if no compaction this turn)
-	compactionMsgCount     int      // messages summarized by compaction
-	turnCost               float64  // total cost for this turn (all agents combined)
-	elapsed                time.Duration
+	userMsg               string
+	botReply              string
+	followUpReply         string   // from EventInboxReady — empty if no background task reported back
+	moodVerdict           string   // per-turn mood agent outcome (logged/updated/dropped/dedup/error)
+	introspectionVerdict  string   // per-turn introspection agent outcome (skip/save/update)
+	introspectionMemories []string // actual self-memory texts saved this turn
+	memoryVerdict         string   // per-turn memory agent outcome (saved N facts, etc.)
+	memoriesSaved         []string // actual memory texts saved this turn
+	compactionSummary     string   // inline compaction summary (empty if no compaction this turn)
+	compactionMsgCount    int      // messages summarized by compaction
+	turnCost              float64  // total cost for this turn (all agents combined)
+	elapsed               time.Duration
 }
 
 // simRollupResult captures the output of a forced daily mood rollup
@@ -337,16 +337,16 @@ type simTurnResult struct {
 // handler directly so we can verify the aggregation without waiting
 // for an actual day to pass.
 type simRollupResult struct {
-	Ran         bool
-	Skipped     bool   // true when the handler decided there was nothing to roll up
-	SkipReason  string // human-readable reason for Skipped
-	EntryID     int64
-	Valence     int
-	Labels      []string
+	Ran          bool
+	Skipped      bool   // true when the handler decided there was nothing to roll up
+	SkipReason   string // human-readable reason for Skipped
+	EntryID      int64
+	Valence      int
+	Labels       []string
 	Associations []string
-	Note        string
-	SummaryText string // what the bot would have sent to the owner chat
-	Error       string
+	Note         string
+	SummaryText  string // what the bot would have sent to the owner chat
+	Error        string
 }
 
 // simDreamResult captures the output of the dream cycle (run_dream: true)
@@ -396,8 +396,8 @@ func runDreamCycle(memoryAgentClient *llm.Client, classifierClient *llm.Client, 
 		log.Infof("[dream] %s — running memory consolidation", turnContext)
 		dreamerResult := persona.RunMemoryDreamer(persona.MemoryDreamerParams{
 			LLM:   memoryAgentClient,
-			Store:  store,
-			Cfg:    cfg,
+			Store: store,
+			Cfg:   cfg,
 		})
 		result.ConsolidationRewrites = dreamerResult.Rewrites
 		result.ConsolidationMerges = dreamerResult.Merges
@@ -1269,13 +1269,13 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 		// Run the full agent pipeline — same call the Telegram bot makes.
 		result, err := agent.Run(agent.RunParams{
-			DriverLLM:            driverClient,
-			MemoryAgentLLM:       memoryAgentClient, // nil if not configured — memory agent skips
+			DriverLLM:           driverClient,
+			MemoryAgentLLM:      memoryAgentClient, // nil if not configured — memory agent skips
 			ChatLLM:             chatClient,
-			VisionLLM:           visionClient,      // nil if no vision model configured
-			ClassifierLLM:       classifierClient,   // nil if not configured, active if classifier section in config
-			ImageBase64:         imageBase64,         // empty if no image this turn
-			ImageMIME:           imageMIME,           // empty if no image this turn
+			VisionLLM:           visionClient,     // nil if no vision model configured
+			ClassifierLLM:       classifierClient, // nil if not configured, active if classifier section in config
+			ImageBase64:         imageBase64,      // empty if no image this turn
+			ImageMIME:           imageMIME,        // empty if no image this turn
 			Store:               store,
 			EmbedClient:         embedClient,
 			SimilarityThreshold: cfg.Embed.SimilarityThreshold,
@@ -1861,8 +1861,8 @@ func copyMoodEntries(tmpDB, simDB *sql.DB, runID int64) error {
 	for rows.Next() {
 		var (
 			ts, kind, labels, associations, note, source, convID string
-			valence                                               int
-			confidence                                            float64
+			valence                                              int
+			confidence                                           float64
 		)
 		if err := rows.Scan(&ts, &kind, &valence, &labels, &associations, &note,
 			&source, &confidence, &convID); err != nil {
@@ -2537,13 +2537,13 @@ func writeMemoriesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type memoryRow struct {
-		id              int64
-		memory          string
-		category        sql.NullString
-		subject         string
-		importance      int
-		active          bool
-		superseded_by   sql.NullInt64
+		id               int64
+		memory           string
+		category         sql.NullString
+		subject          string
+		importance       int
+		active           bool
+		superseded_by    sql.NullInt64
 		supersede_reason sql.NullString
 	}
 	var memories []memoryRow
@@ -2758,8 +2758,8 @@ func writeMoodSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 
 	type moodRow struct {
 		ts, kind, labels, associations, note, source string
-		valence                                       int
-		confidence                                    float64
+		valence                                      int
+		confidence                                   float64
 	}
 	var moods []moodRow
 	for rows.Next() {
@@ -2876,9 +2876,9 @@ func writeSummariesSection(b *strings.Builder, simDB *sql.DB, runID int64) {
 	defer rows.Close()
 
 	type summaryRow struct {
-		ts               string
-		summary          string
-		msgsSummarized   int
+		ts             string
+		summary        string
+		msgsSummarized int
 	}
 	var summaries []summaryRow
 	for rows.Next() {

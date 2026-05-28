@@ -820,7 +820,6 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 		memories = append(memories, r.mem)
 	}
 
-
 	// Zettelkasten 1-hop traversal: for each primary KNN result, pull in
 	// linked neighbors that didn't directly match the query. This is the
 	// graph payoff — "what does she like to cook?" finds cooking memories via

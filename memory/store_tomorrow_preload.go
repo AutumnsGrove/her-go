@@ -1,6 +1,11 @@
 package memory
 
-import "time"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+)
 
 // TomorrowPreload is a short note the dream cycle writes about what Mira
 // should be ready to bring up in the next conversation. Single-row pattern:
@@ -41,8 +46,11 @@ func (s *SQLiteStore) ActiveTomorrowPreload() (*TomorrowPreload, error) {
 		 ORDER BY generated_at DESC
 		 LIMIT 1`,
 	).Scan(&p.ID, &generatedAt, &expiresAt, &p.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil, nil // no active preload — not an error
+		return nil, fmt.Errorf("querying active preload: %w", err)
 	}
 	p.GeneratedAt = parseTimestamp(generatedAt)
 	p.ExpiresAt = parseTimestamp(expiresAt)

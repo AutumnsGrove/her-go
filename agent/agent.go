@@ -163,6 +163,7 @@ type RunParams struct {
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
 	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
 	IntrospectionWG           *sync.WaitGroup             // nil-safe — signaled when memory goroutine finishes, introspection waits on this
+	IsSimRun                  bool                        // true when running via the sim adapter
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -405,6 +406,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ActiveTools:               &toolDefs,
 		EventBus:                  params.EventBus,
 		ConfigPath:                params.ConfigPath,
+		IsSimRun:                  params.IsSimRun,
 		PreApprovedRewrites:       make(map[string]bool),
 	}
 
