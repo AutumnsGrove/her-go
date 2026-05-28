@@ -57,6 +57,7 @@ func init() {
 	f.StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for all roles")
 	f.StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision")
 	f.BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models")
+	f.BoolVar(&directReplyFlag, "direct-reply", false, "enable reply_direct tool — driver writes reply text directly (experimental)")
 	simGWCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(simGWCmd)
 }
@@ -545,6 +546,12 @@ func applySimModelOverrides(cfg *config.Config) {
 	}
 	if disableReasoningFlag {
 		log.Infof("sim: reasoning disabled for hybrid models")
+	}
+	if directReplyFlag {
+		cfg.Driver.DirectReply = true
+		simOnly := false
+		cfg.Driver.DirectReplySimOnly = &simOnly
+		log.Infof("sim: direct reply mode enabled — driver writes reply text directly")
 	}
 }
 

@@ -316,6 +316,14 @@ type DriverConfig struct {
 	// is a hard ceiling on top of that. Default 2 (enough for "let me look
 	// that up" → "here's what I found").
 	MaxRepliesPerTurn int `yaml:"max_replies_per_turn"` // 0 = 2
+
+	// DirectReply enables the reply_direct tool — the driver agent writes
+	// the actual reply text instead of delegating to the chat model. This
+	// is an experimental feature for A/B testing in sims.
+	DirectReply bool `yaml:"direct_reply"`
+	// DirectReplySimOnly restricts direct reply to sim runs only. When true
+	// (default), the flag is ignored in production even if set.
+	DirectReplySimOnly *bool `yaml:"direct_reply_sim_only,omitempty"` // nil = true
 }
 
 // VisionConfig holds settings for the vision language model (VLM).
