@@ -641,6 +641,18 @@ func (s *SyncedStore) MarkMemoriesRecalled(ids []int64) error {
 	return s.SQLiteStore.MarkMemoriesRecalled(ids)
 }
 
+// Tomorrow's preload — local-only, not synced to D1. Each machine generates
+// its own preload during its own dream cycle.
+func (s *SyncedStore) SaveTomorrowPreload(content string, expiresAfter time.Duration) (int64, error) {
+	return s.SQLiteStore.SaveTomorrowPreload(content, expiresAfter)
+}
+func (s *SyncedStore) ActiveTomorrowPreload() (*TomorrowPreload, error) {
+	return s.SQLiteStore.ActiveTomorrowPreload()
+}
+func (s *SyncedStore) ConsumeTomorrowPreload(id int64) error {
+	return s.SQLiteStore.ConsumeTomorrowPreload(id)
+}
+
 // DeactivateMemory soft-deletes a memory locally and records in outbox.
 // The vec_memories DELETE only happens locally — D1 has no vector tables.
 func (s *SyncedStore) DeactivateMemory(memoryID int64) error {

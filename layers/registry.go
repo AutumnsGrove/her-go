@@ -97,6 +97,11 @@ type LayerContext struct {
 	// how Mira is approaching this turn (not just what the user said).
 	ThinkTraces      []string
 	ReplyInstruction string
+
+	// PreloadID is set by the tomorrow's preload layer when it injects
+	// a preload note. The reply handler reads this to consume the preload
+	// after successful delivery.
+	PreloadID int64
 }
 
 // PromptLayer defines a single layer in the prompt assembly pipeline.
