@@ -168,6 +168,15 @@ dream:
   dry_run: false                      # true = log what would change without touching DB
   # enabled: true                     # master switch — omit or set true to enable
 
+  # Tomorrow's preload: the dream cycle writes a short note about what
+  # to bring up in the next conversation. Auto-injected into the first
+  # chat turn of the day, then consumed.
+  tomorrow_preload:
+    enabled: true
+    expires_after_hours: 48           # how long the note stays active
+    max_bullets: 5                    # max bullet points in the note
+    history_lookback_days: 7          # how many days of messages to scan
+
 location:
   latitude: 0                   # written by set_location — leave 0/0 until set
   longitude: 0

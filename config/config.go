@@ -404,6 +404,18 @@ type DreamConfig struct {
 	// Enabled is the master switch. Default true (enabled when config
 	// section is absent — zero value false means we need to check).
 	Enabled *bool `yaml:"enabled,omitempty"`
+	// TomorrowPreload controls the forward-looking dream step that writes
+	// a short note about what to bring up in tomorrow's conversation.
+	TomorrowPreload TomorrowPreloadConfig `yaml:"tomorrow_preload"`
+}
+
+// TomorrowPreloadConfig controls the preload agent that runs as the last
+// step of the dream cycle.
+type TomorrowPreloadConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	ExpiresAfterHours   int  `yaml:"expires_after_hours"`    // how long the note stays active (default 48)
+	MaxBullets          int  `yaml:"max_bullets"`            // max bullet points (default 5)
+	HistoryLookbackDays int  `yaml:"history_lookback_days"`  // how many days of messages to scan (default 7)
 }
 
 // DreamEnabled returns whether the memory dreamer is enabled.
