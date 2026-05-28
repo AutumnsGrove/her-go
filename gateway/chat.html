@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>her-go</title>
+<style>
+  :root {
+    --bg: #1a1a2e; --surface: #16213e; --surface2: #1c2a4a;
+    --text: #e0e0e0; --text-dim: #888; --text-muted: #666;
+    --accent: #a78bfa; --cyan: #67e8f9; --green: #86efac;
+    --pink: #f9a8d4; --orange: #fdba74; --red: #f87171;
+    --input-bg: #0f3460; --border: #333;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; }
+
+  /* Chat column */
+  .chat-col { flex: 2; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+  .header { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 14px; font-weight: 600; color: var(--accent); display: flex; align-items: center; gap: 12px; }
+  .header .stats { font-size: 12px; color: var(--text-dim); font-weight: 400; }
+  .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--input-bg); border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--surface); border-bottom-left-radius: 4px; }
+  .msg.err { color: var(--red); }
+  .msg.status { color: var(--text-dim); font-style: italic; font-size: 13px; }
+  .input-row { display: flex; padding: 12px; gap: 8px; border-top: 1px solid var(--border); }
+  .input-row input { flex: 1; background: var(--input-bg); border: 1px solid #444; border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; outline: none; }
+  .input-row input:focus { border-color: var(--accent); }
+  .input-row button { background: var(--accent); color: #111; border: none; border-radius: 8px; padding: 10px 18px; font-weight: 600; cursor: pointer; font-size: 14px; }
+  .input-row button:disabled { opacity: 0.5; cursor: default; }
+
+  /* Trace column */
+  .trace-col { flex: 1; display: flex; flex-direction: column; min-width: 320px; }
+  .turns { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+
+  /* Turn cards */
+  .turn-card { background: var(--surface); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
+  .turn-header { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+  .turn-header:hover { background: var(--surface2); }
+  .turn-title { font-size: 13px; font-weight: 600; color: var(--cyan); }
+  .turn-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 8px; }
+  .turn-body { display: none; border-top: 1px solid var(--border); }
+  .turn-card.expanded .turn-body { display: block; }
+
+  /* Sections within a turn */
+  .section { border-bottom: 1px solid #222; padding: 6px 12px; }
+  .section:last-child { border-bottom: none; }
+  .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .section-label.driver { color: var(--cyan); }
+  .section-label.reply { color: var(--green); }
+  .section-label.memory { color: var(--text-dim); }
+  .section-label.mood { color: var(--pink); }
+  .section-label.persona { color: var(--accent); }
+  .section-label.introspection { color: var(--accent); }
+  .section-label.context { color: var(--text-dim); }
+
+  .tool-line { font-family: "SF Mono", Menlo, monospace; font-size: 11px; line-height: 1.6; color: var(--text-dim); padding: 1px 0; white-space: pre-wrap; word-wrap: break-word; }
+  .tool-line .icon { margin-right: 4px; }
+  .tool-line .name { color: var(--cyan); font-weight: 500; }
+  .tool-line .arrow { color: var(--text-muted); margin: 0 4px; }
+  .tool-line .result { color: var(--text-dim); }
+  .tool-line .think { color: var(--accent); font-style: italic; }
+  .tool-line .error { color: var(--red); }
+  .tool-line .iter-meta { color: var(--orange); }
+
+  .reply-metrics { font-family: "SF Mono", Menlo, monospace; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+  .reply-text { font-size: 12px; color: var(--green); }
+  .mood-line { font-size: 12px; color: var(--pink); }
+  .persona-line { font-size: 12px; color: var(--accent); }
+
+  .cost { color: var(--orange); }
+  .waiting { color: var(--text-muted); font-style: italic; font-size: 13px; padding: 16px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="chat-col">
+  <div class="header">
+    <span>her-go</span>
+    <span class="stats" id="stats">msgs: 0 · cost: $0.0000</span>
+  </div>
+  <div class="messages" id="messages"></div>
+  <div class="input-row">
+    <input id="input" type="text" placeholder="say something..." autocomplete="off">
+    <button id="send" onclick="sendMessage()">send</button>
+  </div>
+</div>
+
+<div class="trace-col">
+  <div class="header">turns</div>
+  <div class="turns" id="turns">
+    <div class="waiting">waiting for activity...</div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let convId = null;
+let busy = false;
+let msgCount = 0;
+let totalCost = 0;
+
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const msgBox = document.getElementById('messages');
+const turnsBox = document.getElementById('turns');
+const statsEl = document.getElementById('stats');
+
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !busy) sendMessage(); });
+
+// --- Chat ---
+
+function addMsg(text, cls) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  msgBox.appendChild(d);
+  msgBox.scrollTop = msgBox.scrollHeight;
+  return d;
+}
+
+async function sendMessage() {
+  const text = input.value.trim();
+  if (!text || busy) return;
+  input.value = '';
+  addMsg(text, 'user');
+  busy = true;
+  sendBtn.disabled = true;
+  const thinking = addMsg('thinking...', 'status');
+
+  try {
+    const payload = { message: text };
+    if (convId) payload.conversation_id = convId;
+    const resp = await fetch(API + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    thinking.remove();
+    if (!resp.ok) {
+      addMsg('error: ' + resp.status + ' ' + (await resp.text()), 'err');
+      return;
+    }
+    const data = await resp.json();
+    convId = data.conversation_id;
+    addMsg(data.reply || '(empty reply)', 'bot');
+    msgCount++;
+    updateStats();
+  } catch (e) {
+    thinking.remove();
+    addMsg('connection error: ' + e.message, 'err');
+  } finally {
+    busy = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+function updateStats() {
+  statsEl.textContent = `msgs: ${msgCount} · cost: $${totalCost.toFixed(4)}`;
+}
+
+// --- Turn cards ---
+
+const turns = {};  // turnID → { el, sections, expanded }
+
+function getOrCreateTurn(turnId) {
+  if (turns[turnId]) return turns[turnId];
+
+  // Remove "waiting" placeholder
+  const waiting = turnsBox.querySelector('.waiting');
+  if (waiting) waiting.remove();
+
+  const card = document.createElement('div');
+  card.className = 'turn-card expanded';
+
+  const header = document.createElement('div');
+  header.className = 'turn-header';
+  header.innerHTML = `
+    <span class="turn-title">Turn #${Object.keys(turns).length + 1}</span>
+    <span class="turn-meta" id="meta-${turnId}"></span>
+  `;
+  header.onclick = () => card.classList.toggle('expanded');
+
+  const body = document.createElement('div');
+  body.className = 'turn-body';
+
+  card.appendChild(header);
+  card.appendChild(body);
+  turnsBox.appendChild(card);
+
+  const turn = {
+    el: card, body, header,
+    sections: {},
+    toolCount: 0, cost: 0, elapsed: 0,
+    userMsg: '',
+  };
+  turns[turnId] = turn;
+
+  // Auto-scroll turns panel
+  turnsBox.scrollTop = turnsBox.scrollHeight;
+  return turn;
+}
+
+function getOrCreateSection(turn, name, label, cssClass) {
+  if (turn.sections[name]) return turn.sections[name];
+
+  const sec = document.createElement('div');
+  sec.className = 'section';
+  sec.innerHTML = `<div class="section-label ${cssClass}">${label}</div>`;
+
+  const content = document.createElement('div');
+  content.className = 'section-content';
+  sec.appendChild(content);
+  turn.body.appendChild(sec);
+
+  turn.sections[name] = { el: sec, content };
+  return turn.sections[name];
+}
+
+function addLine(section, html) {
+  const line = document.createElement('div');
+  line.className = 'tool-line';
+  line.innerHTML = html;
+  section.content.appendChild(line);
+  turnsBox.scrollTop = turnsBox.scrollHeight;
+}
+
+function updateTurnMeta(turnId) {
+  const turn = turns[turnId];
+  if (!turn) return;
+  const meta = turn.el.querySelector(`#meta-${turnId}`);
+  if (!meta) return;
+
+  const parts = [];
+  if (turn.cost > 0) parts.push(`<span class="cost">$${turn.cost.toFixed(4)}</span>`);
+  if (turn.elapsed > 0) parts.push(`${(turn.elapsed / 1000).toFixed(1)}s`);
+  if (turn.toolCount > 0) parts.push(`${turn.toolCount} tools`);
+  meta.innerHTML = parts.join(' · ');
+}
+
+// --- Tool rendering ---
+
+const toolIcons = {
+  think: '🧠', reply: '📝', done: '✅', save_memory: '💾',
+  update_memory: '💾', remove_memory: '🗑', web_search: '🔍',
+  web_read: '🌐', book_search: '📚', view_image: '👁',
+  no_action: '⏭', use_tools: '🧰', log_mood: '💭',
+  create_reminder: '⏰', create_schedule: '⏰', 'fact→chat': '📎',
+};
+
+function renderToolCall(e) {
+  const icon = toolIcons[e.tool_name] || '🔧';
+
+  if (e.is_error) {
+    return `<span class="icon">❌</span><span class="name">${esc(e.tool_name)}</span><span class="arrow">→</span><span class="error">${esc(trunc(e.result, 80))}</span>`;
+  }
+
+  if (e.tool_name === 'think') {
+    let thought = e.args;
+    try {
+      const parsed = JSON.parse(e.args);
+      if (parsed.thought) thought = parsed.thought;
+    } catch(_) {}
+    return `<span class="icon">${icon}</span><span class="think">${esc(trunc(thought, 120))}</span>`;
+  }
+
+  return `<span class="icon">${icon}</span><span class="name">${esc(e.tool_name)}</span><span class="arrow">→</span><span class="result">${esc(trunc(e.result, 80))}</span>`;
+}
+
+// --- SSE event handlers ---
+
+function connectEvents() {
+  const src = new EventSource(API + '/api/traces');
+
+  src.addEventListener('turn_start', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    turn.userMsg = d.user_message || '';
+    const title = turn.el.querySelector('.turn-title');
+    if (title && turn.userMsg) {
+      const preview = trunc(turn.userMsg, 40);
+      title.textContent = `Turn #${Object.keys(turns).length} "${preview}"`;
+    }
+  });
+
+  src.addEventListener('context', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    const sec = getOrCreateSection(turn, 'context', '📋 context', 'context');
+    addLine(sec, '<span class="result">context ready</span>');
+  });
+
+  src.addEventListener('agent_iter', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    const sec = getOrCreateSection(turn, 'driver', '🛠️ driver', 'driver');
+    addLine(sec, `<span class="iter-meta">tokens: ${d.prompt_tokens}+${d.completion_tokens} | $${d.cost_usd.toFixed(6)} | ${d.finish_reason}</span>`);
+    turn.cost += d.cost_usd || 0;
+    updateTurnMeta(d.turn_id);
+  });
+
+  src.addEventListener('tool_call', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+
+    // Route by source — same as TUI
+    let secName = 'driver', label = '🛠️ driver', css = 'driver';
+    if (d.source === 'memory') { secName = 'memory'; label = '🧩 memory'; css = 'memory'; }
+    else if (d.source === 'mood') { secName = 'mood'; label = '🎭 mood'; css = 'mood'; }
+    else if (d.source === 'dreamer') { secName = 'dreamer'; label = '🌙 dreamer'; css = 'driver'; }
+    else if (d.source === 'introspection') { secName = 'introspection'; label = '🪡 introspection'; css = 'introspection'; }
+
+    const sec = getOrCreateSection(turn, secName, label, css);
+    addLine(sec, renderToolCall(d));
+    turn.toolCount++;
+    updateTurnMeta(d.turn_id);
+  });
+
+  src.addEventListener('reply', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    const sec = getOrCreateSection(turn, 'reply', '💬 reply', 'reply');
+    addLine(sec, `<span class="reply-metrics">${d.prompt_tokens}+${d.completion_tokens}=${d.total_tokens} tokens | <span class="cost">$${d.cost_usd.toFixed(6)}</span> | ${d.latency_ms}ms</span>`);
+    addLine(sec, `<span class="reply-text">${esc(trunc(d.text, 100))}</span>`);
+    turn.cost += d.cost_usd || 0;
+    updateTurnMeta(d.turn_id);
+  });
+
+  src.addEventListener('turn_end', e => {
+    const d = JSON.parse(e.data);
+    const turn = turns[d.turn_id];
+    if (!turn) return;
+    turn.cost = d.total_cost || turn.cost;
+    turn.elapsed = d.elapsed_ms || 0;
+    turn.toolCount = d.tool_calls || turn.toolCount;
+    totalCost += d.total_cost || 0;
+    updateTurnMeta(d.turn_id);
+    updateStats();
+    // Collapse previous turns to save space
+    for (const [id, t] of Object.entries(turns)) {
+      if (id != d.turn_id) t.el.classList.remove('expanded');
+    }
+  });
+
+  src.addEventListener('mood', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    const sec = getOrCreateSection(turn, 'mood', '🎭 mood', 'mood');
+    let detail = d.action;
+    if (d.valence > 0) {
+      const labels = (d.labels || []).join(', ');
+      detail = `${d.action} v=${d.valence} [${labels}] conf=${d.confidence.toFixed(2)}`;
+    }
+    if (d.reason && d.action.startsWith('dropped')) detail += ` — ${d.reason}`;
+    addLine(sec, `<span class="mood-line">${detail}</span>`);
+  });
+
+  src.addEventListener('persona', e => {
+    const d = JSON.parse(e.data);
+    const turn = getOrCreateTurn(d.turn_id);
+    const sec = getOrCreateSection(turn, 'persona', '🪞 persona', 'persona');
+    addLine(sec, `<span class="persona-line">${esc(d.action)} ${esc(d.detail || '')}</span>`);
+  });
+
+  src.onerror = () => {
+    src.close();
+    setTimeout(connectEvents, 3000);
+  };
+}
+
+// --- Helpers ---
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function trunc(s, n) { return s && s.length > n ? s.slice(0, n) + '…' : (s || ''); }
+
+// --- Init ---
+connectEvents();
+input.focus();
+</script>
+</body>
+</html>

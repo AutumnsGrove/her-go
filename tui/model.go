@@ -30,7 +30,8 @@ type Section struct {
 	PersonaLines []string // reflection/rewrite events
 	MemoryLines  []string // memory agent tool calls (background)
 	MoodLines    []string // mood agent results (background)
-	DreamerLines []string // memory dreamer consolidation (dream cycle)
+	DreamerLines       []string // memory dreamer consolidation (dream cycle)
+	IntrospectionLines []string // introspection agent self-reflection (background)
 
 	// Turn-specific metadata for the collapsed one-line summary
 	UserMessage string
@@ -278,6 +279,8 @@ func (m *Model) handleEvent(e Event) {
 			group = "mood"
 		case "dreamer":
 			group = "dreamer"
+		case "introspection":
+			group = "introspection"
 		}
 		m.appendToTurnGroup(ev.TurnID, group, renderToolCallEvent(ev))
 		m.incrementTurnToolCount(ev.TurnID)
@@ -435,6 +438,8 @@ func (m *Model) appendToTurnGroup(turnID int64, group, line string) {
 		sec.MoodLines = append(sec.MoodLines, line)
 	case "dreamer":
 		sec.DreamerLines = append(sec.DreamerLines, line)
+	case "introspection":
+		sec.IntrospectionLines = append(sec.IntrospectionLines, line)
 	}
 	m.autoScroll()
 }
@@ -513,7 +518,7 @@ func (m *Model) sectionHeight(idx int) int {
 // embed \n within a single slice element, producing more rendered lines than len(group) suggests.
 func (m *Model) turnContentHeight(sec *Section) int {
 	height := 0
-	for _, group := range [][]string{sec.ContextLines, sec.ToolLines, sec.ReplyLines, sec.PersonaLines, sec.MemoryLines, sec.MoodLines, sec.DreamerLines} {
+	for _, group := range [][]string{sec.ContextLines, sec.ToolLines, sec.ReplyLines, sec.PersonaLines, sec.MemoryLines, sec.MoodLines, sec.DreamerLines, sec.IntrospectionLines} {
 		if len(group) > 0 {
 			// Count real content lines — each element may contain \n
 			contentLines := 0

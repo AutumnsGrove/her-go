@@ -148,6 +148,7 @@ func (m Model) renderTurnContent(sec *Section) []string {
 		{"memory", "🧩", sec.MemoryLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorDim).Width(boxWidth).Padding(0, 1)},
 		{"mood", "🎭", sec.MoodLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
 		{"dreamer", "🌙", sec.DreamerLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorCyan).Width(boxWidth).Padding(0, 1)},
+		{"introspection", "🪡", sec.IntrospectionLines, lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colorPurple).Width(boxWidth).Padding(0, 1)},
 	}
 
 	for _, g := range groups {

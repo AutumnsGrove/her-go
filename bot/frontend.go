@@ -72,3 +72,35 @@ type Frontend interface {
 	// (replies are sent inline).
 	ReplyText() string
 }
+
+// TraceProvider is an optional interface that a Frontend can implement
+// to receive agent trace callbacks. When runAgent detects a Frontend
+// that satisfies TraceProvider, it wires the trace callbacks through
+// it — no Telegram type assertion needed.
+//
+// This is how the gateway bridges traces to adapters: the
+// gatewayFrontend implements TraceProvider and routes trace text
+// to the adapter's OnTraceEvent method.
+type TraceProvider interface {
+	// TraceCallback returns a trace callback for the named slot
+	// ("main", "memory", "mood", "persona", "introspection").
+	TraceCallback(slot string) func(text string) error
+
+	// TraceFinalize is called after the turn completes to do any
+	// cleanup (e.g., store the final snapshot).
+	TraceFinalize()
+}
+
+// TTSProvider is an optional interface for frontends that can deliver
+// voice replies. The pipeline checks for this instead of asserting
+// a concrete Telegram type.
+type TTSProvider interface {
+	SendVoice(text string)
+}
+
+// StreamProvider is an optional interface for frontends that handle
+// token-level streaming with their own buffering/flush strategy.
+// Telegram edits a message every 400ms; other adapters might use SSE.
+type StreamProvider interface {
+	MakeStreamCallback() (func(chunk string) error, func())
+}

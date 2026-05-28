@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"her/agent"
+	"her/calendar"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -34,24 +35,25 @@ var log = logger.WithPrefix("bot")
 // to all the services a component needs. Similar to dependency injection
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
-	tb             *tele.Bot
-	llm            *llm.Client          // conversational model (chat)
-	driverLLM      *llm.Client          // tool-calling orchestrator
-	memoryAgentLLM *llm.Client          // post-turn memory agent — nil if not configured
-	moodAgentLLM   *llm.Client          // post-turn mood agent — nil if not configured
-	visionLLM      *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM  *llm.Client          // classifier for memory writes — nil if not configured
-	dreamAgentLLM       *llm.Client     // memory dreamer — nil falls back to memoryAgentLLM
-	introspectionLLM    *llm.Client     // self-reflection agent — nil falls back to memoryAgentLLM
-	embedClient    *embed.Client        // local embedding model for similarity
-	tavilyClient   *search.TavilyClient // web search and URL extraction
-	voiceClient    *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
-	ttsClient      *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
-	store          memory.Store
-	cfg            *config.Config
-	configPath     string // path to config.yaml — needed for /traces toggle
-	systemPrompt   string
-	startTime      time.Time
+	tb               *tele.Bot
+	llm              *llm.Client          // conversational model (chat)
+	driverLLM        *llm.Client          // tool-calling orchestrator
+	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
+	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
+	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
+	dreamAgentLLM    *llm.Client          // memory dreamer — nil falls back to memoryAgentLLM
+	introspectionLLM *llm.Client          // self-reflection agent — nil falls back to memoryAgentLLM
+	embedClient      *embed.Client        // local embedding model for similarity
+	tavilyClient     *search.TavilyClient // web search and URL extraction
+	calendarBridge   calendar.Bridge      // nil in prod (tools create CLIBridge), FakeBridge in sims
+	voiceClient      *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
+	ttsClient        *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	store            memory.Store
+	cfg              *config.Config
+	configPath       string // path to config.yaml — needed for /traces toggle
+	systemPrompt     string
+	startTime        time.Time
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a
@@ -60,7 +62,7 @@ type Bot struct {
 	moodRunner      *mood.Runner
 	moodSweeper     *mood.ProposalSweeper
 	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
-	shutdownCh      chan struct{}       // closed on Stop(); goroutines select on this to exit cleanly
+	shutdownCh      chan struct{}      // closed on Stop(); goroutines select on this to exit cleanly
 
 	// moodVocab is the loaded vocab used by both the agent and the
 	// /mood wizard. Shared so the two paths can't drift.
@@ -113,6 +115,12 @@ type Bot struct {
 	// traceFinalize, read from the /lasttrace handler.
 	lastTraceMu       sync.Mutex
 	lastTraceSnapshot string
+
+	// gatewayCmds holds gateway-level command handlers registered by
+	// the Telegram adapter. handleMessage checks these before falling
+	// through to the agent pipeline. This replaces the individual
+	// tb.Handle("/cmd", ...) registrations for migrated commands.
+	gatewayCmds []GatewayCommand
 
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
@@ -198,27 +206,27 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 	}
 
 	bot := &Bot{
-		tb:             tb,
-		llm:            llmClient,
-		driverLLM:      driverLLM,
-		memoryAgentLLM: memoryAgentLLM,
-		moodAgentLLM:   moodAgentLLM,
-		visionLLM:      visionLLM,
-		classifierLLM:  classifierLLM,
-		dreamAgentLLM:       dreamAgentLLM,
-		introspectionLLM:    introspectionLLM,
-		embedClient:    embedClient,
-		tavilyClient:   tavilyClient,
-		voiceClient:    voiceClient,
-		ttsClient:      ttsClient,
-		store:          store,
-		cfg:            cfg,
-		configPath:     configPath,
-		systemPrompt:   string(promptBytes),
-		startTime:      time.Now(),
-		eventBus:       eventBus,
-		agentEvents:    make(chan agent.AgentEvent, 16),
-		shutdownCh:     make(chan struct{}),
+		tb:               tb,
+		llm:              llmClient,
+		driverLLM:        driverLLM,
+		memoryAgentLLM:   memoryAgentLLM,
+		moodAgentLLM:     moodAgentLLM,
+		visionLLM:        visionLLM,
+		classifierLLM:    classifierLLM,
+		dreamAgentLLM:    dreamAgentLLM,
+		introspectionLLM: introspectionLLM,
+		embedClient:      embedClient,
+		tavilyClient:     tavilyClient,
+		voiceClient:      voiceClient,
+		ttsClient:        ttsClient,
+		store:            store,
+		cfg:              cfg,
+		configPath:       configPath,
+		systemPrompt:     string(promptBytes),
+		startTime:        time.Now(),
+		eventBus:         eventBus,
+		agentEvents:      make(chan agent.AgentEvent, 16),
+		shutdownCh:       make(chan struct{}),
 	}
 
 	// Build the mood runner + sweeper if the mood agent is configured.
@@ -244,24 +252,18 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		}
 	}
 
-	// Register command handlers — each wrapped with cmd() for logging.
-	tb.Handle("/help", cmd("/help", bot.handleHelp))
-	tb.Handle("/clear", cmd("/clear", bot.handleClear))
-	tb.Handle("/stats", cmd("/stats", bot.handleStats))
-	tb.Handle("/forget", cmd("/forget", bot.handleForget))
-	tb.Handle("/facts", cmd("/facts", bot.handleFacts))
-	tb.Handle("/reflect", cmd("/reflect", bot.handleReflect))
-	tb.Handle("/persona", cmd("/persona", bot.handlePersona))
-	tb.Handle("/compact", cmd("/compact", bot.handleCompact))
-	tb.Handle("/status", cmd("/status", bot.handleStatus))
-	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
-	tb.Handle("/traces", cmd("/traces", bot.handleTraces))
-	tb.Handle("/reflections", cmd("/reflections", bot.handleReflections))
+	// Register Telegram-specific command handlers. These commands use
+	// Telegram UI features (inline buttons, multi-step progress, process
+	// management) that can't be expressed as simple (string, error) returns.
+	//
+	// All other commands (/help, /stats, /facts, /forget, /traces,
+	// /status, /reflect, /reflections, /persona, /dream, /dreamlog,
+	// /lasttrace, /clear, /compact) are handled by the gateway command
+	// system — they're intercepted in handleMessage before hitting the
+	// agent pipeline. See tryGatewayCommand().
 	tb.Handle("/mood", cmd("/mood", bot.handleMoodCommand))
-	tb.Handle("/dream", cmd("/dream", bot.handleDream))
-	tb.Handle("/dreamlog", cmd("/dreamlog", bot.handleDreamLog))
 	tb.Handle("/update", cmd("/update", bot.handleUpdate))
-	tb.Handle("/lasttrace", cmd("/lasttrace", bot.handleLastTrace))
+	tb.Handle("/restart", cmd("/restart", bot.handleRestart))
 
 	// Register message handler for all text messages.
 	tb.Handle(tele.OnText, bot.handleMessage)
@@ -330,34 +332,56 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 	return b, nil
 }
 
+// SetCalendarBridge injects a calendar bridge for sim/test use.
+// In production the calendar tools create their own CLIBridge; in sims
+// we inject a FakeBridge so calendar operations work without Swift/EventKit.
+func (b *Bot) SetCalendarBridge(bridge calendar.Bridge) {
+	b.calendarBridge = bridge
+}
+
 // ProcessMessage runs a user message through the full agent pipeline
 // using the given Frontend for I/O. This is the transport-agnostic
 // entry point — the HTTP dev server and any future frontends call this
 // instead of going through Telegram's handleMessage.
-func (b *Bot) ProcessMessage(fe Frontend, userText, conversationID string) (string, error) {
-	log.Info("─── incoming message ───")
-	log.Infof("  user: %s", truncate(userText, 100))
+// MessageInput holds the fields for ProcessMessage. Text and
+// ConversationID are required; image fields are optional.
+type MessageInput struct {
+	Text           string
+	ConversationID string
+	ImageBase64    string
+	ImageMIME      string
+}
 
-	// Save the raw message.
-	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+func (b *Bot) ProcessMessage(fe Frontend, userText, conversationID string) (string, error) {
+	return b.ProcessMessageInput(fe, MessageInput{
+		Text:           userText,
+		ConversationID: conversationID,
+	})
+}
+
+func (b *Bot) ProcessMessageInput(fe Frontend, input MessageInput) (string, error) {
+	log.Info("─── incoming message ───")
+	log.Infof("  user: %s", truncate(input.Text, 100))
+
+	msgID, err := b.store.SaveMessage("user", input.Text, "", input.ConversationID)
 	if err != nil {
 		log.Error("saving message", "err", err)
 	}
 
-	// PII scrub.
-	scrubResult := b.scrubText(userText)
+	scrubResult := b.scrubText(input.Text)
 	if msgID > 0 {
 		b.store.UpdateMessageScrubbed(msgID, scrubResult.Text)
 		b.savePIIVaultEntries(msgID, scrubResult.Vault)
 	}
 
-	// Run the agent pipeline.
 	err = b.runAgent(fe, AgentInput{
-		UserMessage:    userText,
+		UserMessage:    input.Text,
 		ScrubbedText:   scrubResult.Text,
 		ScrubVault:     scrubResult.Vault,
-		ConversationID: conversationID,
+		ConversationID: input.ConversationID,
 		TriggerMsgID:   msgID,
+		ImageBase64:    input.ImageBase64,
+		ImageMIME:      input.ImageMIME,
 	})
 	if err != nil {
 		return "", err
@@ -421,7 +445,7 @@ func (b *Bot) Stop() {
 	if b.tb != nil {
 		b.tb.Stop() // stop accepting new Telegram updates
 	}
-	close(b.agentEvents)             // signals consumeAgentEvents goroutine to exit
+	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
 }
 
 // IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).
@@ -601,6 +625,13 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// the agent pipeline.
 	if b.HandleMoodWizardNote(c) {
 		return nil
+	}
+
+	// Check for gateway commands (/help, /stats, /facts, etc.).
+	// These are handled by the unified command system — same Exec*
+	// methods that Gradio and other adapters use.
+	if result, handled := b.tryGatewayCommand(c.Message().Text, c.Message().Chat.ID); handled {
+		return c.Send(result)
 	}
 
 	msg := c.Message()

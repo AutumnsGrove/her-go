@@ -1,0 +1,59 @@
+package gateway
+
+import "context"
+
+// Adapter is the contract for any messaging transport. Each platform
+// (Telegram, Gradio, Discord, etc.) implements this interface to plug
+// into the gateway.
+//
+// The gateway reads from Receive(), feeds messages into the pipeline,
+// and calls Send() with results. Rich features (typing, streaming,
+// editing) are gated by Capabilities() — the gateway checks before
+// calling optional methods, so adapters can safely no-op anything
+// they don't support.
+type Adapter interface {
+	// Name returns a human-readable identifier ("telegram", "gradio").
+	Name() string
+
+	// Capabilities declares what this adapter supports.
+	Capabilities() CapSet
+
+	// Start begins listening for messages. Blocks until ctx is cancelled
+	// or a fatal error occurs. The gateway calls this in a goroutine.
+	Start(ctx context.Context) error
+
+	// Stop gracefully shuts down the adapter.
+	Stop() error
+
+	// Receive returns a channel of inbound messages. The gateway reads
+	// from this channel and routes each message to the pipeline.
+	Receive() <-chan InboundMsg
+
+	// Send delivers an outbound message (the agent's reply) to the user.
+	Send(msg OutboundMsg) error
+
+	// SendStatus updates the user on what the agent is doing
+	// (e.g., "recalling memories..."). No-op if Edit capability is false.
+	SendStatus(text string) error
+
+	// StartTyping begins a typing indicator. Returns a cancel func that
+	// stops it. No-op (returns func(){}) if Typing capability is false.
+	StartTyping() func()
+
+	// RegisterCommands tells the adapter about gateway-level commands.
+	// The adapter translates its native command format into Command
+	// structs and routes them to the handlers.
+	RegisterCommands(cmds []CommandDef)
+}
+
+// CommandDef defines a gateway-level command that works across all
+// adapters. Each adapter translates its native format (Telegram /cmd,
+// Gradio button click, etc.) into a Command and calls the handler.
+type CommandDef struct {
+	Name        string
+	Description string
+	Handler     CommandHandler
+}
+
+// CommandHandler processes a gateway command and returns a text response.
+type CommandHandler func(ctx context.Context, args string) (string, error)
