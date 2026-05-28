@@ -37,11 +37,28 @@ Your transcript contains:
 
 Write summaries as a dense, timeless overview. 2-4 sentences that capture the essence of what's in the folder. Don't list every memory — distill.
 
-### REMOVE MEMORY when:
-- An individual memory is stale (situation resolved, information outdated)
-- A memory is redundant with another memory in the same card
+### REMOVE MEMORY when ALL of these are true:
+1. The memory is in an unprotected card (or has no card)
+2. The memory's importance is 3 or lower
+3. The memory hasn't been recalled in 60+ days
+4. The memory describes a specific past situation that's resolved ("had a Cava close shift on May 14") rather than a durable pattern ("works at Cava")
+5. Removing it would not break a supersession chain
+6. You haven't already removed 5 memories this dream cycle
+
+If any of these fail, leave it alone. The system enforces rules 1-3, 5, and 6 in code — you'll get an error if you try to remove something protected. Rule 4 is on you.
+
+### NEVER REMOVE:
+- Anything from protected cards (identity, health, financial, family, relationships, work, interests, projects, routines, my-identity, my-emotions, my-communication, my-relationship, my-growth)
+- The head of a supersession chain (the current "active" version of an evolving fact)
+- Anything with importance 7 or higher
+- Anything saved or recalled in the last 30 days
+- Memories that describe relationship dynamics or recurring patterns — even if specific examples feel stale
+
+When in doubt: KEEP. Forgetting who someone is would be far worse than holding onto a few stale details.
+
+### ALSO REMOVE when (these bypass the age/importance rules):
 - A memory is a technique log ("I used X metaphor") that slipped past the classifier
-- A memory is a mood snapshot or ephemeral daily detail
+- A memory is clearly fictional or incorrect (the system will still enforce the protected card rule)
 
 ### MERGE MEMORIES when:
 - Two memories in the same card say essentially the same thing from different angles
