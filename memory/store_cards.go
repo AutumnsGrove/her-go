@@ -387,6 +387,30 @@ func (s *SQLiteStore) CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry,
 	return entries, rows.Err()
 }
 
+// MemoryCardForMemory looks up which card a memory belongs to. Returns nil
+// if the memory has no card_id or the card doesn't exist. Used by the
+// forgetting guard to check whether a memory is in a protected card.
+func (s *SQLiteStore) MemoryCardForMemory(memoryID int64) (*MemoryCard, error) {
+	var c MemoryCard
+	var updatedAt, summary sql.NullString
+	err := s.db.QueryRow(`
+		SELECT c.id, c.topic_slug, c.name, c.subject, c.summary, c.version, c.protected, c.updated_at
+		FROM memory_cards c
+		JOIN memories m ON m.card_id = c.id
+		WHERE m.id = ?`, memoryID,
+	).Scan(&c.ID, &c.TopicSlug, &c.Name, &c.Subject, &summary, &c.Version, &c.Protected, &updatedAt)
+	if err != nil {
+		return nil, nil // no card — not an error
+	}
+	if summary.Valid {
+		c.Summary = summary.String
+	}
+	if updatedAt.Valid {
+		c.UpdatedAt = parseTimestamp(updatedAt.String)
+	}
+	return &c, nil
+}
+
 // MemoriesByCard returns all active memories belonging to a specific card,
 // ordered by most recent first. Used by the dream cycle to see a card's
 // children, and by recall_memories for card-scoped search.

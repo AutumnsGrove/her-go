@@ -85,6 +85,7 @@ type Store interface {
 	CreateCard(topicSlug, name, subject string, sourceMessageID int64) (*MemoryCard, error)
 	ExpireCard(topicSlug, reason string) error
 	MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*MemoryCard, error)
+	MemoryCardForMemory(memoryID int64) (*MemoryCard, error)
 	MemoriesByCard(cardID int64) ([]Memory, error)
 	RecentLogEntries(hours int) ([]MemoryLogEntry, error)
 	CardLogEntries(cardID int64, limit int) ([]MemoryLogEntry, error)
