@@ -44,6 +44,11 @@ parameters:
         memory is about so it surfaces in the right conversations. Example:
         'mental health, burnout, coping, energy' or 'programming, go,
         backend, projects'. Be specific to the memory's topic.
+    importance:
+      type: integer
+      description: >-
+        How important is this memory? 1-10. Default 5. See the scoring
+        anchors in your system prompt. When unsure, pick the lower score.
     context:
       type: string
       description: >-

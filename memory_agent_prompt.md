@@ -46,6 +46,19 @@ Think of each card as a folder. One well-organized folder per topic beats scatte
 - **Passes the 30-day test.** Would this matter in a conversation a month from now?
 - **One fact per memory.** If you're packing two unrelated ideas, save them separately.
 
+## How to score importance (1-10)
+
+Be calibrated. The default for an ordinary memory is 5. Don't bunch at extremes.
+
+- **10** — Identity-level. Name, pronouns, fundamental facts that almost never change. "{{user}} uses she/her pronouns" is a 10.
+- **8-9** — Major life context. Current job, where she lives, primary relationships, health conditions on active treatment, sobriety status.
+- **6-7** — Stable preferences and patterns. "Prefers functional-OOP hybrid code." "Watches mood when off Prozac." "Drinks tea, not coffee."
+- **4-5** — DEFAULT. Useful context but replaceable. "Working on the Raindrop Link Detector spec." "Has a Cava close shift tomorrow."
+- **2-3** — Episode-specific. Something that mattered today but is unlikely to matter in 30 days.
+- **1** — Borderline. Save only because you weren't sure.
+
+If you can't tell between two scores, pick the lower one. The system adjusts importance over time based on how often a memory is actually used in conversation — over-scoring at write time just creates noise.
+
 ## What NOT to save
 
 - **Transient moods:** "feeling nothing today", "stressed about work this afternoon" — momentary states, not durable facts

@@ -96,11 +96,12 @@ func MaxMemoryLength() int {
 // gates, same embedding strategy, same classifier check.
 func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	var args struct {
-		CardSlug string `json:"card_slug"`
-		Memory   string `json:"memory"`
-		Category string `json:"category"`
-		Tags     string `json:"tags"`
-		Context  string `json:"context"` // optional: why this memory matters
+		CardSlug   string `json:"card_slug"`
+		Memory     string `json:"memory"`
+		Category   string `json:"category"`
+		Tags       string `json:"tags"`
+		Importance int    `json:"importance"` // 1-10, defaults to 5 if omitted or out of range
+		Context    string `json:"context"`    // optional: why this memory matters
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -266,7 +267,13 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		return "error: no store configured"
 	}
 
-	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, 5, newVec, textVec, args.Tags, args.Context, cardID)
+	// Clamp importance to 1-10, defaulting to 5 if omitted or out of range.
+	importance := args.Importance
+	if importance < 1 || importance > 10 {
+		importance = 5
+	}
+
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, importance, newVec, textVec, args.Tags, args.Context, cardID)
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
