@@ -59,6 +59,7 @@ type Store interface {
 	GetMemoryContent(memoryID int64) (string, error)
 	UpdateMemory(memoryID int64, content, category string, importance int, tags string) error
 	UpdateMemoryTags(memoryID int64, tags string) error
+	MarkMemoriesRecalled(ids []int64) error
 	DeactivateMemory(memoryID int64) error
 	LinkMemories(id1, id2 int64, similarity float64) error
 	LinkedMemories(memoryID int64, limit int) ([]Memory, error)
@@ -192,6 +193,15 @@ type SQLiteStore struct {
 	// stored in SQLite so it persists across restarts.
 	AutoLinkCount     int     // max links per new memory (0 = disabled)
 	AutoLinkThreshold float64 // min cosine similarity to create a link (0.0-1.0)
+
+	// Blended retrieval weights — used by SemanticSearch to rank results
+	// by a weighted blend of similarity, importance, recency, and usage.
+	// Set from config.RecallConfig at store creation time.
+	RecallSimilarityWeight    float64
+	RecallImportanceWeight    float64
+	RecallRecencyWeight       float64
+	RecallRecencyHalfLifeDays int
+	RecallUsageBoostFactor    float64
 }
 
 // NewStore opens (or creates) the SQLite database at the given path

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
@@ -45,6 +46,11 @@ type Memory struct {
 	Embedding       []float32 // cached tag embedding vector (nil if not yet computed)
 	EmbeddingText   []float32 // cached text embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
+
+	// Usage tracking — how often this memory is actually pulled into chat.
+	// Populated by MarkMemoriesRecalled; used by blended retrieval scoring.
+	RecallCount    int       // number of times this memory entered the chat prompt
+	LastRecalledAt time.Time // most recent time it was pulled into the chat prompt
 
 	// Zettelkasten fields — knowledge graph edges and supersession tracking.
 	SupersededBy    int64  // ID of the memory that replaced this one (0 = not superseded)
@@ -300,6 +306,38 @@ func (s *SQLiteStore) UpdateMemory(memoryID int64, content, category string, imp
 // Used by `her retag` to backfill tags for existing memories.
 func (s *SQLiteStore) UpdateMemoryTags(memoryID int64, tags string) error {
 	_, err := s.db.Exec(`UPDATE memories SET tags = ? WHERE id = ?`, tags, memoryID)
+	return err
+}
+
+// MarkMemoriesRecalled bumps the usage signal for memories that were just
+// pulled into the chat prompt — either via the reply tool's memory_ids or
+// via auto-injection from the memory layers. This is the write side of the
+// blended retrieval scoring: memories that are actually used in conversation
+// accumulate recall_count and a fresh last_recalled_at, which the retrieval
+// formula rewards.
+func (s *SQLiteStore) MarkMemoriesRecalled(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	// Build a placeholder string for the IN clause. Go's database/sql
+	// doesn't support slice parameters directly — you have to expand
+	// the placeholders yourself. Same pattern as Python's ", ".join().
+	placeholders := make([]byte, 0, len(ids)*2)
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args[i] = id
+	}
+	_, err := s.db.Exec(
+		`UPDATE memories
+		 SET last_recalled_at = CURRENT_TIMESTAMP,
+		     recall_count = recall_count + 1
+		 WHERE id IN (`+string(placeholders)+`) AND active = 1`,
+		args...,
+	)
 	return err
 }
 
@@ -649,17 +687,23 @@ func (s *SQLiteStore) AllActiveMemories() ([]Memory, error) {
 	return memories, nil
 }
 
-// SemanticSearch finds the top-K memories most similar to a query vector
-// using sqlite-vec's KNN search. Returns memories with their cosine distance
-// (0 = identical, up to 2 = opposite). Only returns active memories.
+// SemanticSearch finds the top-K memories most relevant to a query vector
+// using a blended scoring formula. Instead of returning results purely by
+// cosine distance, it oversamples from the KNN index (4x topK) and reranks
+// using a weighted blend of:
 //
-// This is the core of v0.4's "She Understands" — instead of just grabbing
-// the most important memories, we find the memories most RELEVANT to what the
-// user is talking about right now.
+//   - Similarity (1 - cosine distance)
+//   - Importance (the 1-10 score, normalized to 0-1)
+//   - Recency (exponential decay on age)
+//   - Usage (log-scaled recall_count — memories that are actually used often
+//     get a boost, with diminishing returns)
 //
-// Under the hood, sqlite-vec uses the MATCH operator on the vec0 virtual
-// table. The query plan: KNN on vec_memories → get rowids → JOIN memories for
-// metadata → filter out inactive memories.
+// The weights come from config via the store's Recall* fields. When all
+// weights are zero (unconfigured), defaults to similarity-only (the old
+// behavior).
+//
+// Under the hood: sqlite-vec KNN on vec_memories → oversample candidates →
+// JOIN memories for metadata + usage columns → rerank in Go → take top-K.
 func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, error) {
 	if s.EmbedDimension == 0 {
 		return nil, fmt.Errorf("semantic search not available: embed dimension is 0")
@@ -670,47 +714,112 @@ func (s *SQLiteStore) SemanticSearch(queryVec []float32, topK int) ([]Memory, er
 		return nil, fmt.Errorf("serializing query vector: %w", err)
 	}
 
-	// We request more than topK from vec_memories because some results may
-	// be inactive memories (soft-deleted). We filter those out after the JOIN.
-	// Requesting 2x is a reasonable buffer.
+	// Oversample 4x so we have enough candidates for reranking after
+	// filtering inactive memories. The old 2x buffer was for pure-KNN;
+	// blended scoring needs a wider candidate pool to let importance and
+	// recency promote results that aren't in the top-K by distance alone.
+	oversample := topK * 4
+	if oversample < 20 {
+		oversample = 20
+	}
+
 	rows, err := s.db.Query(
 		`SELECT m.id, m.timestamp, m.memory, m.category, COALESCE(m.subject, 'user'),
-		        m.importance, COALESCE(m.tags, ''), m.embedding_text, v.distance
+		        m.importance, COALESCE(m.tags, ''), m.embedding_text, v.distance,
+		        COALESCE(m.recall_count, 0), m.last_recalled_at
 		 FROM vec_memories v
 		 JOIN memories m ON m.id = v.rowid
 		 WHERE v.embedding MATCH ?
 		   AND k = ?
 		   AND m.active = 1
 		 ORDER BY v.distance ASC`,
-		queryBytes, topK*2,
+		queryBytes, oversample,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("semantic search query: %w", err)
 	}
 	defer rows.Close()
 
-	var memories []Memory
+	var candidates []Memory
 	for rows.Next() {
 		var m Memory
 		var ts string
 		var embTextData []byte
-		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance, &m.Tags, &embTextData, &m.Distance); err != nil {
+		var lastRecalled sql.NullString
+		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject,
+			&m.Importance, &m.Tags, &embTextData, &m.Distance,
+			&m.RecallCount, &lastRecalled); err != nil {
 			return nil, fmt.Errorf("scanning semantic search result: %w", err)
 		}
 		m.Timestamp = parseTimestamp(ts)
-		m.Active = true
-		m.Source = "semantic"
-		m.EmbeddingText = deserializeEmbedding(embTextData)
-		memories = append(memories, m)
-
-		// Stop once we have enough active results.
-		if len(memories) >= topK {
-			break
+		if lastRecalled.Valid {
+			m.LastRecalledAt = parseTimestamp(lastRecalled.String)
 		}
+		m.Active = true
+		m.EmbeddingText = deserializeEmbedding(embTextData)
+		candidates = append(candidates, m)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
+
+	// Blended reranking. If no weights are configured, similarity dominates
+	// (same behavior as before, just with the oversample buffer).
+	wSim := s.RecallSimilarityWeight
+	wImp := s.RecallImportanceWeight
+	wRec := s.RecallRecencyWeight
+	wUse := s.RecallUsageBoostFactor
+	halfLife := float64(s.RecallRecencyHalfLifeDays)
+	if halfLife <= 0 {
+		halfLife = 30
+	}
+	// If nothing configured, fall back to pure similarity ranking.
+	if wSim == 0 && wImp == 0 && wRec == 0 && wUse == 0 {
+		wSim = 1.0
+	}
+
+	now := time.Now()
+	type scored struct {
+		mem   Memory
+		score float64
+	}
+	ranked := make([]scored, len(candidates))
+	for i, m := range candidates {
+		similarity := 1 - m.Distance
+		importanceNorm := float64(m.Importance) / 10.0
+		ageDays := now.Sub(m.Timestamp).Hours() / 24.0
+		recency := math.Exp(-ageDays * math.Ln2 / halfLife)
+		usage := math.Min(1.0, math.Log1p(float64(m.RecallCount))/4.0)
+
+		score := similarity*wSim + importanceNorm*wImp + recency*wRec + usage*wUse
+
+		// Tag the source based on what dominated the score. This makes the
+		// Source field meaningful again — "importance" means the memory
+		// surfaced because of its importance/recency/usage, not just distance.
+		source := "semantic"
+		if wImp+wRec+wUse > 0 {
+			nonSimContribution := importanceNorm*wImp + recency*wRec + usage*wUse
+			simContribution := similarity * wSim
+			if nonSimContribution > simContribution {
+				source = "importance"
+			}
+		}
+		m.Source = source
+		ranked[i] = scored{mem: m, score: score}
+	}
+
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].score > ranked[j].score
+	})
+
+	memories := make([]Memory, 0, topK)
+	for _, r := range ranked {
+		if len(memories) >= topK {
+			break
+		}
+		memories = append(memories, r.mem)
+	}
+
 
 	// Zettelkasten 1-hop traversal: for each primary KNN result, pull in
 	// linked neighbors that didn't directly match the query. This is the
