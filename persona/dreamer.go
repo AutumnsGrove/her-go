@@ -11,7 +11,6 @@ package persona
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"her/config"
@@ -99,69 +98,27 @@ func StartDreamer(ctx context.Context, p DreamerParams) {
 	}
 }
 
-// runDream executes one full dream cycle: reflection + optional gated rewrite.
-// It's extracted from the loop so the catch-up call and the scheduled call share
-// identical logic — no code duplication.
+// runDream delegates to RunDreamCycle — the single entry point for all
+// dream steps. The nightly timer uses ForceRewrite=false (respect cooldown).
 func runDream(ctx context.Context, p DreamerParams) {
-	// Check for cancellation before starting — avoid burning tokens during shutdown.
 	select {
 	case <-ctx.Done():
 		return
 	default:
 	}
 
-	log.Info("dreamer: running dream cycle")
-
-	// Step 0: Memory consolidation — clean house before reflecting.
-	// Only runs if the dream agent is configured and consolidation is enabled.
-	if p.DreamLLM != nil && p.Cfg.Dream.DreamEnabled() {
-		dreamerResult := RunMemoryDreamer(MemoryDreamerParams{
-			LLM:         p.DreamLLM,
-			Store:       p.Store,
-			EmbedClient: p.Embed,
-			Cfg:         p.Cfg,
-			EventBus:    p.EventBus,
-		})
-		if dreamerResult.Error != nil {
-			log.Error("dreamer: memory consolidation failed", "err", dreamerResult.Error)
-		} else {
-			log.Infof("dreamer: %d rewrites, %d merges, %d expires, %d creates",
-				dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates)
-			emitPersonaEvent(p.EventBus, "dream_consolidate",
-				fmt.Sprintf("%d rewrites, %d merges, %d expires, %d creates",
-					dreamerResult.Rewrites, dreamerResult.Merges, dreamerResult.Expires, dreamerResult.Creates))
-		}
-	}
-
-	// Step 1: Nightly reflection — always runs.
-	if err := NightlyReflect(p.LLM, p.Store, p.Cfg, p.Cfg.Identity.Her, p.Cfg.Identity.User); err != nil {
-		log.Error("dreamer: nightly reflection failed", "err", err)
-	} else {
-		emitPersonaEvent(p.EventBus, "dream_reflect", "nightly reflection complete")
-	}
-
-	// Step 2: Gated rewrite — only runs if gates pass.
-	rewritten, err := GatedRewrite(p.LLM, p.ClassifierLLM, p.Embed, p.Store, p.Cfg.Persona.PersonaFile, p.Cfg.Identity.Her, false, p.MinDays, p.MinRefl)
-	if err != nil {
-		log.Error("dreamer: gated rewrite failed", "err", err)
-	} else if rewritten {
-		log.Info("dreamer: persona rewritten during dream cycle")
-		emitPersonaEvent(p.EventBus, "dream_rewrite", "persona updated via dream")
-	}
-
-	// Step 3: Tomorrow's preload — write a note about what to bring up
-	// in the next conversation. Runs after reflection and rewrite so it
-	// has access to tonight's fresh outputs.
-	if p.Cfg.Dream.TomorrowPreload.Enabled {
-		if err := RunTomorrowPreload(TomorrowPreloadParams{
-			LLM:      p.LLM,
-			Store:    p.Store,
-			Cfg:      p.Cfg,
-			EventBus: p.EventBus,
-		}); err != nil {
-			log.Error("dreamer: tomorrow preload failed", "err", err)
-		}
-	}
+	RunDreamCycle(DreamCycleParams{
+		LLM:           p.LLM,
+		DreamLLM:      p.DreamLLM,
+		ClassifierLLM: p.ClassifierLLM,
+		Embed:         p.Embed,
+		Store:         p.Store,
+		Cfg:           p.Cfg,
+		EventBus:      p.EventBus,
+		ForceRewrite:  false,
+		MinDays:       p.MinDays,
+		MinRefl:       p.MinRefl,
+	})
 }
 
 // durationUntilNextDream returns how long to sleep until the next occurrence
