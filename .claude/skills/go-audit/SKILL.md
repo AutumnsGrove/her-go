@@ -125,6 +125,22 @@ New tools must follow the established registration pattern:
 - Markers in prompt files are preserved: `<!-- BEGIN MARKER --> ... <!-- END MARKER -->`
 - New prompt sections that should survive hot-reload use the marker pattern
 
+#### Gateway / Adapter Parity
+
+> **Every feature must work through the gateway adapter interface, not just through a single code path.**
+
+The gateway architecture means features have multiple entry points: the nightly timer, the `/command` system, the sim adapter, Telegram, Gradio. If a capability works on one path but not another, the boundary has leaked.
+
+Check that the diff does not violate adapter parity:
+
+- **Single entry point for shared logic.** If the same operation can be triggered from multiple places (e.g., dream cycle from timer vs. `/dream` command vs. sim), there must be ONE function that both callers use. Two implementations of the same workflow is a FAIL — they will diverge. The `RunDreamCycle()` pattern is the gold standard: both `dreamer.go:runDream()` and `ExecDream()` delegate to the same function.
+- **Adapter-agnostic pipeline.** The agent pipeline (`bot/run_agent.go`) must not import adapter-specific packages or branch on adapter type. If the diff adds `if adapterType == "telegram"` inside the pipeline, that's a FAIL — use the `CapSet` pattern instead.
+- **Commands work on all adapters.** New slash commands must go through the gateway command system (`CommandDef` + `CommandHandler`), not be wired directly to a single adapter. If a command exists in `tg_handlers_*.go` but not `commands_gateway.go`, it's Telegram-only — flag as WARN.
+- **Config flags apply uniformly.** A feature gated by a config flag must behave the same regardless of which adapter triggers it. If `cfg.Dream.TomorrowPreload.Enabled` is checked in one dream path but not another, the flag is partially wired — FAIL.
+- **Store access is adapter-neutral.** Two adapters pointing to the same DB path share the same `memory.Store` pointer via the gateway's store deduplication. New features must not assume a single adapter owns the store. If code caches state on the adapter that should live in the store, flag it.
+
+**The test:** *"If I add a new adapter tomorrow, does this feature work automatically?"* If yes, parity is clean. If the feature requires adapter-specific wiring in the new adapter, the abstraction leaked.
+
 ---
 
 ### Step 4 — Boundary Validation Check
@@ -205,6 +221,10 @@ Packages changed: [list]
 | **Function boundaries — embeddings via `embed` only** | | |
 | **Function boundaries — no leaked dependencies** | | |
 | **Function boundaries — escape hatches documented** | | |
+| **Gateway parity — single entry point for shared logic** | | |
+| **Gateway parity — adapter-agnostic pipeline** | | |
+| **Gateway parity — commands on all adapters** | | |
+| **Gateway parity — config flags apply uniformly** | | |
 | Tool registration pattern | | |
 | Context bundle usage | | |
 | PII scrubbing at boundaries | | |
