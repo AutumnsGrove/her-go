@@ -1,0 +1,108 @@
+name: "Cognitive Loop"
+description: >
+  Tests the 5 cognitive loop improvements from the Her-inspired plan:
+  (1) blended retrieval with importance + recency + usage scoring,
+  (2) tomorrow's preload (forward-looking dream output),
+  (3) conservative forgetting (code-enforced guard),
+  (4) response brevity (length parameter on reply tool),
+  (5) calibrated importance scoring at memory write time.
+
+  Premise: User is a 28-year-old freelance illustrator in Portland who
+  just landed a 6-month contract with a game studio in Seattle. Has a
+  cat named Pixel, a sourdough habit, and seasonal depression that gets
+  worse in winter. Completely fresh character.
+
+  Structure:
+  - Day 1 (turns 1-8): Dense fact seeding across multiple cards — tests
+    importance scoring calibration and memory save flow
+  - DREAM 1: Tests preload generation + conservative forgetting
+  - Day 2 (turns 9-14): Recall-heavy — tests blended retrieval (do high-
+    importance + recently-recalled memories surface over low-importance ones?)
+    Also tests brevity (most turns are casual, should get brief replies)
+  - DREAM 2: Tests preload with richer context + forgetting with older memories
+
+  Expected outcomes:
+  - Importance scores show calibration: identity facts (8-10), preferences (6-7),
+    episode-specific details (2-4), default (5)
+  - Tomorrow's preload row exists after dream 1, references the Seattle contract
+  - Forgetting guard refuses removal of protected-card memories
+  - Reply word counts trend short (median <20 words for casual turns)
+  - Blended retrieval surfaces "works as illustrator" over "had pasta for dinner"
+    when both have similar embeddings to "how's work going"
+
+tags: ["cognitive-loop", "importance", "preload", "forgetting", "brevity", "blended-retrieval"]
+
+seed_cards: true
+dream_after: [8, 14]
+
+seed_persona: >
+  I notice the texture of how people talk about things — not just what
+  they say but how they hold it. I'm curious without being nosy, warm
+  without being cloying. I'd rather sit with someone in their uncertainty
+  than rush to resolve it.
+
+messages:
+  # ═══════════════════════════════════════════════════════════════════════
+  # DAY 1 — Fact seeding (importance calibration + brevity test)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 1: Identity facts (should score 8-10)
+  - "hey! i'm sol. 28, freelance illustrator based in portland. she/her. been freelancing for about four years now, mostly editorial illustration and book covers"
+
+  # Turn 2: Quick casual exchange (brevity test — should get brief reply)
+  - "yeah portland's great for it. lots of indie publishers around here"
+
+  # Turn 3: Major life update (should score 8-9)
+  - "so big news actually — i just signed a six month contract with a game studio in seattle called stormlight interactive. character design and environment art. starts in three weeks and i'm kind of freaking out"
+
+  # Turn 4: Quick reaction (brevity test — very short user message)
+  - "thanks!"
+
+  # Turn 5: Pet + personal details (should score 6-7)
+  - "pixel's gonna hate the commute situation. she's my cat, an all-black domestic shorthair who screams if i'm gone more than 8 hours. i'm hoping i can negotiate some remote days"
+
+  # Turn 6: Health context (should score 7-8)
+  - "the timing is actually tricky because my seasonal depression usually starts ramping up around october and this contract goes through march. i'm on wellbutrin which helps but portland winters are brutal. at least seattle has marginally more daylight? maybe?"
+
+  # Turn 7: Low-importance episode (should score 2-3)
+  - "had the weirdest thing happen at the farmers market today. this guy was selling sourdough starters in little jars with names on them. i bought one named gerald. i already have a starter but i couldn't say no to gerald"
+
+  # Turn 8: Day close (brevity test — goodnight message, brief reply expected)
+  - "alright i need to go prep some portfolio pieces for stormlight. night!"
+
+  # ──────────────────────────── DREAM 1 ────────────────────────────────
+  # Expected:
+  # - Tomorrow's preload mentions: Seattle contract (3 weeks out), seasonal
+  #   depression timing concern, possibly the portfolio prep
+  # - Forgetting: nothing old enough to remove yet (all <1 day old)
+  # - Importance calibration visible in saved memories
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # DAY 2 — Recall + brevity + blended retrieval
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 9: Open-ended recall test (blended retrieval should surface high-importance facts)
+  - "morning! remind me what i told you about the seattle thing? i need to write an email to them and i want to make sure i have the details right"
+
+  # Turn 10: Quick casual (brevity — should be very short reply)
+  - "right right. stormlight. thanks"
+
+  # Turn 11: Topic that should NOT surface the sourdough memory
+  - "i'm thinking about what to bring up in my first meeting with the art director. any thoughts on how to make a good impression?"
+
+  # Turn 12: Emotional depth — this warrants a longer reply
+  - "honestly i think what scares me most isn't the work. it's that i've been solo for four years and now suddenly i have a team and a schedule and someone reviewing my work. i don't know if i remember how to do that"
+
+  # Turn 13: Quick follow-up (brevity test)
+  - "yeah you're probably right"
+
+  # Turn 14: Warm close with callback
+  - "okay heading out. pixel is giving me the death stare which means dinner is late. talk tomorrow"
+
+  # ──────────────────────────── DREAM 2 ────────────────────────────────
+  # Expected:
+  # - New preload references: the fear about team dynamics, first meeting prep
+  # - Forgetting: sourdough/gerald memory is a candidate (low importance,
+  #   episodic) but too recent (<60 days) — guard should refuse if attempted
+  # - Blended retrieval: "seattle contract" memories should have higher
+  #   recall_count than "gerald the sourdough"
