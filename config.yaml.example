@@ -260,3 +260,31 @@ cloudflare:
 update:
   repo_path: ""                    # path to the git repo (default: working directory). Set this on the Mac Mini.
   service_label: "com.mira.her-go" # launchd service label — must match the Label key in your .plist
+
+# Gateway: multi-adapter transport layer. Each adapter entry runs
+# independently with its own DB, memory toggle, and platform-specific settings.
+# Two adapters pointing to the same DB share facts/mood/persona.
+# Different DB paths = fully isolated (great for testing).
+#
+# Without this section, the bot runs in legacy mode (direct Telegram via
+# the telegram: config above). Add adapters here to use the gateway.
+gateway:
+  adapters:
+    # Telegram adapter — production messaging via Telegram Bot API.
+    # Uses the token from the telegram: section above if not overridden here.
+    - name: telegram
+      type: telegram
+      db: her.db
+      memory: true
+      token: "${TELEGRAM_BOT_TOKEN}"
+      mode: "poll"
+
+    # Gradio adapter — local development chat UI with trace panel.
+    # Run `her run --adapter=gradio` for dev work without touching Telegram.
+    - name: gradio-dev
+      type: gradio
+      enabled: false               # enable when you want local dev chat
+      db: her-dev.db               # separate DB so dev chat doesn't pollute production
+      memory: false                # disable memory for quick testing
+      port: 7777                   # Go API port — Gradio Python UI runs separately on :7860
+      traces: true                 # show agent traces in side panel

@@ -1,5 +1,47 @@
 # Gateway Architecture Plan
 
+## Progress (updated 2026-05-24)
+
+| Phase | Status | Branch | Commits |
+|-------|--------|--------|---------|
+| **Phase 1**: Gateway foundation + Gradio adapter | **Done** | `feat/gateway` | `98f632b`, `f15fa55` |
+| **Phase 2a**: Telegram adapter (wrapper) | **Done** | `feat/gateway` | `c11faf7` |
+| **Phase 2b**: Transport-neutral commands | **Done** | `feat/gateway` | `b354bd4`, `cb26710` |
+| **Phase 2c-i**: Decouple pipeline from tele | **Done** | `feat/gateway` | `35f8f05`, `da0ee92`, `bebf47c` |
+| **Phase 2c-ii**: File reorganization (tg_ prefix) | **Done** | `feat/gateway` | `4074d07` |
+| **Phase 2c-iii**: Image support (all adapters) | **Done** | `feat/gateway` | `610e3c6` |
+| **Sim adapter**: Integration test via gateway | **Done** | `feat/gateway` | `a87b8ba` |
+| **Observability unification** | **Done** | `feat/gateway` | `8229428` |
+| **Sim parity**: Bus capture, seeding, triggers, flags, reports | **Done** | `feat/gateway` | `5ca7fec`–`d94741f` |
+| **Phase 3**: TUI observer enhancements | Partial | `feat/gateway` | `8229428` (introspection fix) |
+| **Phase 4**: VPS deployment | Not started | — | — |
+
+### What shipped
+- 3 adapter types: **Telegram** (push), **Gradio** (pull + image upload), **Sim** (sequential test)
+- **Unified command system**: 13 commands (`/help`, `/stats`, `/facts`, `/forget`, `/traces`, `/status`, `/reflect`, `/reflections`, `/persona`, `/dream`, `/dreamlog`, `/lasttrace`, `/compact`) work on all adapters via `Exec*` methods
+- **Transport-agnostic pipeline**: `run_agent.go`, `commands_gateway.go`, `helpers.go` have zero `tele` imports. Optional interfaces (`TraceProvider`, `TTSProvider`, `StreamProvider`) replace type assertions
+- **Sim adapter found and fixed a real bug**: `gatewayFrontend.EditStatus` wasn't accumulating reply text — replies were silently dropped on non-Telegram adapters
+- **~1000 lines dead code removed** (bot/ cleanup + cmd/dev.go deletion)
+- **File reorganization**: Telegram-specific files prefixed with `tg_` for clear visual separation
+- Legacy `her sim` renamed to `her sim-legacy`; new `her sim` runs through the full gateway pipeline
+- **Unified observability**: `tui.Bus` is the single event channel for all adapters. Removed parallel `TraceEvent`/`OnTraceEvent` system. `OnTraceEvent` removed from `Adapter` interface. Web UI and Gradio Python script consume typed SSE events from the bus.
+- **TUI introspection**: Added 🪡 introspection section to TUI trace panel (#87)
+- **Web UI rich events**: Rebuilt chat.html with collapsible turn cards showing cost, tokens, tool calls, mood, introspection (#88)
+- **Embedded chat UI**: `her run gradio` serves a self-contained web chat at localhost:7777 — no Python dependency
+- **Sim near-parity with legacy**: Bus event capture (per-turn cost, tools, mood, memories, introspection), seeding (cards, memories, self-memories, persona), lifecycle triggers (compact_after, dream_after, run_dream), all 16 CLI flags, markdown report with 8 sections (conversation, memories, mood, classifier, inbox, cost breakdown, fallbacks, dream audit), persistent DB preservation
+
+### What remains
+- **Phase 3**: Add adapter status lines to TUI header (which adapters are running, message counts per adapter)
+- **Phase 4**: VPS deployment via `her run` with only Telegram adapter enabled
+- **Future**: Convert Telegram to pull-style adapter (full bot/ extraction); migrate mood wizard, /update, /restart to gateway commands; calendar FakeBridge for sim (0 suites currently use it)
+
+### Design changes from original plan
+- **TraceEvent removed**: The plan's §1.1 defined `TraceEvent` and `OnTraceEvent` on the Adapter interface. These were replaced by `tui.Bus` subscription — adapters subscribe to the shared bus and render events however they want. Cleaner, no parallel systems.
+- **Sim approach**: Plan didn't include a sim adapter. The sim runs through the full gateway pipeline (same code path as production) rather than calling `agent.Run()` directly like the legacy sim. Bus event capture provides rich per-turn data without coupling to agent internals.
+- **Persistent sim storage**: Instead of the legacy sim's 10 copy functions and parallel `sim_runs` table, the gateway sim preserves the entire temp DB alongside the report. Full post-mortem with any SQLite tool, zero data loss.
+
+---
+
 ## Context
 
 The `bot/` package is currently a 5,200-line monolith that owns transport (Telegram), agent orchestration, command handling, mood pipelines, voice, traces, and state management. A `Frontend` interface (14 methods) already abstracts transport, and `ProcessMessage()` is transport-neutral — but everything lives in `bot/`, making it impossible to cleanly add new interfaces (Gradio, Discord, etc.) without touching Telegram code.
@@ -38,7 +80,7 @@ This plan introduces a `gateway/` package that sits **above** `bot/`, owns all t
 
 ---
 
-## Phase 1: Gateway Foundation + Gradio Adapter
+## Phase 1: Gateway Foundation + Gradio Adapter ✅
 
 This is the first PR. Get local Gradio chat working through the gateway, with traces in a side panel. Telegram untouched — still works the old way via `bot/`.
 
@@ -303,9 +345,11 @@ The `her dev` command is **removed** — replaced by `her run --adapter=gradio` 
 
 ---
 
-## Phase 2: Telegram Adapter Migration
+## Phase 2: Telegram Adapter Migration ✅
 
 Move Telegram handling out of `bot/` into `gateway/telegram/`. This is the big refactor.
+
+> **Actual approach:** Rather than moving files to `gateway/telegram/` (Go's type system prevents methods on `bot.Bot` from living in another package), we: (a) wrapped `bot.Bot` in a `telegramAdapter` in `gateway/telegram.go`, (b) unified command routing so Telegram uses the same `Exec*` methods as Gradio, (c) extracted trace/stream/TTS into optional interfaces so `run_agent.go` has zero tele imports, (d) prefixed Telegram-specific files with `tg_` for visual separation.
 
 ### 2.1 Telegram Adapter
 
@@ -445,7 +489,7 @@ With gateway in place:
 | TUI role | Observer only | Read-only dashboard, no chat. Simplifies adapter count |
 | Rich features | Capability flags (CapSet) | Adapters declare support; gateway checks before calling |
 | Commands | Mixed: core gateway-level + platform-specific in adapters | Common commands work everywhere; platform chrome stays local |
-| Traces | Event stream (TraceEvent channel) | Each adapter subscribes and renders its own way |
+| Traces | tui.Bus subscription (was TraceEvent channel) | Single bus, all adapters subscribe — TraceEvent type removed |
 | CLI shape | Single `her run` + config overrides, `her service` for mgmt | Simpler mental model, config is source of truth |
 | Voice | Separate service | Gateway is text-only; adapters connect to voice service independently |
 | Phase 1 target | Gateway + Gradio first | Develop/test locally without touching production Telegram |

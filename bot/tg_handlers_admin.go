@@ -1,4 +1,8 @@
-// Package bot — admin and system management handlers.
+// Package bot — Telegram-specific admin handlers.
+//
+// These commands stay registered with telebot because they use
+// Telegram-specific features (multi-step progress messages, process
+// management). Transport-neutral commands are in commands_gateway.go.
 package bot
 
 import (
@@ -6,139 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
-	"her/compact"
 	"her/procmgr"
 
 	tele "gopkg.in/telebot.v4"
 )
-
-// handleLastTrace re-sends the most recent turn's full trace snapshot
-// via paginated messages. Useful when traces are globally disabled but
-// you want the detail for a specific turn, or when the live trace was
-// truncated by Telegram's 4096-char limit.
-func (b *Bot) handleLastTrace(c tele.Context) error {
-	b.lastTraceMu.Lock()
-	snapshot := b.lastTraceSnapshot
-	b.lastTraceMu.Unlock()
-
-	if snapshot == "" {
-		return c.Send("No trace available yet — send a message first (with /traces enabled).")
-	}
-	return b.sendPaginated(c, snapshot)
-}
-
-// handleCompact manually triggers conversation compaction.
-func (b *Bot) handleCompact(c tele.Context) error {
-	convID := b.getConversationID(c.Message().Chat.ID)
-	recent, err := b.store.RecentMessages(convID, b.cfg.Memory.RecentMessages)
-	if err != nil || len(recent) < 4 {
-		return c.Send("Not enough messages to compact yet.")
-	}
-
-	tokensBefore := compact.EstimateHistoryTokens("", recent)
-
-	// Force compaction by passing a very low threshold (0 = always compact).
-	cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
-	if err != nil {
-		return c.Send(fmt.Sprintf("Compaction failed: %v", err))
-	}
-
-	tokensAfter := compact.EstimateHistoryTokens(cr.Summary, cr.KeptMessages)
-	saved := tokensBefore - tokensAfter
-
-	msg := fmt.Sprintf(
-		"\U0001F5DC <b>Compacted</b>\n\n"+
-			"Messages: %d \u2192 %d kept\n"+
-			"Tokens: ~%d \u2192 ~%d (saved ~%d)\n\n"+
-			"<i>Summary:</i>\n%s",
-		len(recent), len(cr.KeptMessages),
-		tokensBefore, tokensAfter, saved,
-		cr.Summary,
-	)
-	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
-}
-
-// handleStatus shows the bot's current operational state.
-func (b *Bot) handleStatus(c tele.Context) error {
-	uptime := time.Since(b.startTime).Round(time.Second)
-	convID := b.getConversationID(c.Message().Chat.ID)
-
-	stats, _ := b.store.GetStats()
-
-	// Check which services are available.
-	embedStatus := "off"
-	if b.embedClient != nil {
-		embedStatus = "on"
-	}
-	tavilyStatus := "off"
-	if b.tavilyClient != nil {
-		tavilyStatus = "on"
-	}
-	visionStatus := "off"
-	if b.visionLLM != nil {
-		visionStatus = "on"
-	}
-
-	// Check voice sidecars via health endpoints.
-	sttStatus := "off"
-	if b.voiceClient != nil {
-		if b.voiceClient.IsAvailable() {
-			sttStatus = "running"
-		} else {
-			sttStatus = "not responding"
-		}
-	}
-	ttsStatus := "off"
-	if b.ttsClient != nil {
-		if b.ttsClient.IsAvailable() {
-			ttsStatus = "running"
-		} else {
-			ttsStatus = "not responding"
-		}
-	}
-
-	// Check if running under a process supervisor (launchd or systemd).
-	managedBy := "manual (go run)"
-	if mgr := b.processManager(); mgr != nil && mgr.IsManaged() {
-		managedBy = mgr.Name()
-	}
-
-	msg := fmt.Sprintf(
-		"\U0001F4DF <b>Status</b>\n\n"+
-			"<b>Uptime:</b> %s\n"+
-			"<b>Process:</b> %s\n"+
-			"<b>Go:</b> %s\n"+
-			"<b>Conversation:</b> %s\n\n"+
-			"<b>Models:</b>\n"+
-			"  Chat: %s\n"+
-			"  Agent: %s\n"+
-			"  Vision: %s\n\n"+
-			"<b>Services:</b>\n"+
-			"  Embeddings: %s\n"+
-			"  Web search: %s\n"+
-			"  Vision: %s\n\n"+
-			"<b>Voice:</b>\n"+
-			"  STT (%s): %s [%s]\n"+
-			"  TTS (Piper): %s [%s]\n\n"+
-			"<b>Session:</b>\n"+
-			"  Messages: %d\n"+
-			"  Facts: %d\n"+
-			"  Cost: $%.4f\n\n"+
-			"<b>Chat ID:</b> <code>%d</code>",
-		uptime, managedBy, runtime.Version(), convID,
-		b.cfg.Chat.Model, b.cfg.Driver.Model, b.cfg.Vision.Model,
-		embedStatus, tavilyStatus, visionStatus,
-		b.cfg.Voice.STT.Engine, sttStatus, b.cfg.Voice.STT.Model,
-		ttsStatus, b.cfg.Voice.TTS.VoiceID,
-		stats.TotalMessages, stats.TotalFacts, stats.TotalCostUSD,
-		c.Message().Chat.ID,
-	)
-	return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
-}
 
 // handleRestart restarts the bot process. If running under a process
 // supervisor (launchd or systemd), uses the supervisor to restart.

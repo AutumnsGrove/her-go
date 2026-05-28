@@ -9,10 +9,6 @@ import (
 
 	"her/memory"
 	"her/scrub"
-	"her/tools"
-	"her/trace"
-
-	tele "gopkg.in/telebot.v4"
 )
 
 // truncate shortens a string for log output, adding "..." if it was cut.
@@ -82,116 +78,6 @@ func (b *Bot) getConversationID(chatID int64) string {
 	newID := fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 	b.conversationIDs.Store(key, newID)
 	return newID
-}
-
-// traceResult holds the return values from makeTraceCallbacks: the slot
-// callback factory (used by agents to write into their trace slot) and a
-// finalize function called after the turn completes to store the snapshot
-// and paginate overflow.
-type traceResult struct {
-	getCallback func(slot string) tools.TraceCallback
-	finalize    func() // call after turn completes
-}
-
-// makeTraceCallbacks wires up the trace inbox for one turn: one
-// Telegram message, N named slots (one per registered trace.Stream),
-// shared across every agent that fires during this turn.
-//
-// The getCallback function — call trace("main"), trace("memory"),
-// trace("mood"), or any other registered stream name — returns a
-// tools.TraceCallback that writes into that slot. Slots not in the
-// trace.Streams() registry still work as a fallback (they render
-// after registered ones in insertion order), so a new agent in a
-// new package can call trace.Register + request a callback without
-// any edit to this function.
-//
-// The finalize function should be called when the turn completes. It
-// stores the final Board snapshot in b.lastTraceSnapshot (for /lasttrace)
-// and replaces the live trace message with a paginated version if it
-// exceeds ~3800 characters.
-//
-// Slots render in registry order, not completion order — main always
-// comes first, then memory and mood, regardless of which post-turn
-// agent finishes writing first.
-func (b *Bot) makeTraceCallbacks(c tele.Context) traceResult {
-	traceMsg, err := c.Bot().Send(c.Recipient(), "🧠")
-	if err != nil {
-		log.Warn("trace: failed to send placeholder", "err", err)
-		traceMsg = nil
-	}
-
-	// edit is the single function the board calls on every slot
-	// change. Handles Telegram's HTML-parse fallback inline.
-	edit := func(text string) {
-		if text == "" {
-			return
-		}
-		if traceMsg == nil {
-			msg, err := c.Bot().Send(c.Recipient(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			if err != nil {
-				msg, err = c.Bot().Send(c.Recipient(), stripHTML(text))
-				if err != nil {
-					return
-				}
-			}
-			traceMsg = msg
-			return
-		}
-		_, err := c.Bot().Edit(traceMsg, text, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		if err != nil && !strings.Contains(err.Error(), "not modified") {
-			_, _ = c.Bot().Edit(traceMsg, stripHTML(text))
-		}
-	}
-
-	board := trace.NewBoard(edit)
-
-	getCallback := func(slot string) tools.TraceCallback {
-		return func(text string) error {
-			// Fire the board update in a goroutine so the agent
-			// loop isn't blocked on Telegram API latency.
-			go board.Set(slot, text)
-			return nil
-		}
-	}
-
-	finalize := func() {
-		snapshot := board.Snapshot()
-		if snapshot == "" {
-			return
-		}
-		// Store for /lasttrace — always, regardless of length.
-		b.lastTraceMu.Lock()
-		b.lastTraceSnapshot = snapshot
-		b.lastTraceMu.Unlock()
-
-		// If the final trace exceeds ~3800 chars, the live-edited single
-		// message is likely truncated by Telegram's 4096-char limit. Delete
-		// the live message and re-send as paginated. During the turn we
-		// keep the single message (splitting mid-stream is disruptive), but
-		// once the turn is done we can paginate cleanly.
-		const paginateThreshold = 3800
-		if len(snapshot) > paginateThreshold && traceMsg != nil {
-			_ = c.Bot().Delete(traceMsg)
-			_ = b.sendPaginated(c, snapshot)
-		}
-	}
-
-	return traceResult{getCallback: getCallback, finalize: finalize}
-}
-
-// handleTraces toggles agent thinking traces on/off.
-// When enabled, Mira sends a separate message before each reply showing
-// the agent's tool calls, thinking, and decision-making process.
-func (b *Bot) handleTraces(c tele.Context) error {
-	newState := !b.cfg.Driver.Trace
-	if err := b.cfg.SetTrace(b.configPath, newState); err != nil {
-		log.Error("/traces: failed to update config", "err", err)
-		return c.Send(fmt.Sprintf("Failed to update config: %v", err))
-	}
-	if newState {
-		return c.Send("🧠 Agent traces <b>enabled</b> — you'll see thinking traces before each reply.", &tele.SendOptions{ParseMode: tele.ModeHTML})
-	}
-	return c.Send("🧠 Agent traces <b>disabled</b>.", &tele.SendOptions{ParseMode: tele.ModeHTML})
 }
 
 // buildSystemPrompt assembles the full system prompt by reading prompt.md

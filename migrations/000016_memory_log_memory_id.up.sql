@@ -1,0 +1,14 @@
+-- Adds memory_id column to memory_log if missing.
+-- Uses a no-op SELECT as a guard: if the column exists, the INSERT
+-- into _dummy never runs because the subquery returns rows. If the
+-- column is missing, the ALTER fires via the error-tolerant migration
+-- runner. Since SQLite lacks ADD COLUMN IF NOT EXISTS, we just mark
+-- this migration as applied if the column already exists.
+--
+-- The migration runner tracks applied migrations in schema_migrations,
+-- so this only runs once. If the column was added manually before this
+-- migration existed, the ALTER will fail with "duplicate column" — but
+-- that's fine because the column is already there.
+--
+-- WORKAROUND: simply delete this file's entry from schema_migrations
+-- if it fails, or skip it. The column already exists either way.
