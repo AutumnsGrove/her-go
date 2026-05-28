@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"her/config"
+
 	// The underscore import is a Go idiom: it imports the package purely for
 	// its side effects (registering the SQLite driver with database/sql).
 	// The package's init() function runs at startup and calls sql.Register().
@@ -208,6 +210,17 @@ type SQLiteStore struct {
 	RecallRecencyWeight       float64
 	RecallRecencyHalfLifeDays int
 	RecallUsageBoostFactor    float64
+}
+
+// ApplyRecallConfig sets the blended retrieval weights from a RecallConfig.
+// Called from cmd/run.go and cmd/sim.go after store creation.
+func (s *SQLiteStore) ApplyRecallConfig(rc config.RecallConfig) {
+	rc = rc.WithDefaults()
+	s.RecallSimilarityWeight = rc.SimilarityWeight
+	s.RecallImportanceWeight = rc.ImportanceWeight
+	s.RecallRecencyWeight = rc.RecencyWeight
+	s.RecallRecencyHalfLifeDays = rc.RecencyHalfLifeDays
+	s.RecallUsageBoostFactor = rc.UsageBoostFactor
 }
 
 // NewStore opens (or creates) the SQLite database at the given path

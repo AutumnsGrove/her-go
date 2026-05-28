@@ -692,12 +692,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 	store.AutoLinkCount = cfg.Memory.AutoLinkCount
 	store.AutoLinkThreshold = cfg.Memory.AutoLinkThreshold
-	rc := cfg.Memory.Recall.WithDefaults()
-	store.RecallSimilarityWeight = rc.SimilarityWeight
-	store.RecallImportanceWeight = rc.ImportanceWeight
-	store.RecallRecencyWeight = rc.RecencyWeight
-	store.RecallRecencyHalfLifeDays = rc.RecencyHalfLifeDays
-	store.RecallUsageBoostFactor = rc.UsageBoostFactor
+	store.ApplyRecallConfig(cfg.Memory.Recall)
 
 	// ------------------------------------------------------------------
 	// 5. Create LLM + embed + search clients (same pattern as run.go)

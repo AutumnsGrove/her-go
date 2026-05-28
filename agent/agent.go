@@ -350,15 +350,14 @@ func Run(params RunParams) (*RunResult, error) {
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile, params.Cfg)
 
-	// When direct reply mode is active, append instructions telling the
-	// driver to use reply_direct instead of reply.
+	// When direct reply mode is active, append the direct reply prompt
+	// section from disk. Follows data primacy: prompt text in .md, not Go.
 	if params.Cfg.Driver.DirectReply {
-		agentPrompt += "\n\n## Direct Reply Mode (ACTIVE)\n\n" +
-			"You are writing the actual words the user will see. There is no separate " +
-			"conversational model — your text IS the reply. Carry " + params.Cfg.Identity.Her + "'s " +
-			"voice yourself: short, warm, specific, curious. Refer to your persona notes above.\n\n" +
-			"Use reply_direct(text=\"your actual words\") instead of reply(instruction=\"...\").\n" +
-			"The text parameter is delivered verbatim to the user.\n"
+		if drp, err := os.ReadFile("direct_reply_prompt.md"); err == nil {
+			agentPrompt += "\n\n" + params.Cfg.ExpandPrompt(string(drp))
+		} else {
+			log.Warn("direct reply enabled but prompt file missing", "err", err)
+		}
 	}
 
 	// Set up the conversation with the agent model.
