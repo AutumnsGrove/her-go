@@ -1,5 +1,5 @@
 ---
-title: "Tomorrow's Preload, Importance Rewire, and Conservative Forgetting"
+title: "Cognitive Loop Improvements: Preload, Importance, Forgetting, Brevity, and Direct Reply"
 status: planning
 created: 2026-05-23
 updated: 2026-05-23
@@ -7,11 +7,11 @@ category: features
 priority: high
 ---
 
-# Plan: Tomorrow's Preload, Importance Rewire, and Conservative Forgetting
+# Plan: Cognitive Loop Improvements
 
-Three connected improvements to Mira's cognitive loop, surfaced during a research conversation comparing her-go against the Her-clone landscape and recent agent-memory literature (Generative Agents, MemGPT/Letta, Mem0, MaRS, LinkedIn's CMA, Livia).
+Five connected improvements to Mira's cognitive loop. Features 1-3 surfaced during a research conversation comparing her-go against the Her-clone landscape and recent agent-memory literature (Generative Agents, MemGPT/Letta, Mem0, MaRS, LinkedIn's CMA, Livia). Features 4-5 surfaced from analysis of the HaltiaAI Her movie dialogue dataset (306 rows of Samantha/Theodore exchanges), which revealed that Samantha's median response is 7 words, 43% of her replies are ≤5 words, and her long responses are reserved for moments of genuine emotional depth.
 
-**Goal:** Make Mira more "Samantha-like" by adding forward-looking dream output, fixing the unused importance signal, and adding a conservative forgetting policy that won't erode identity. None of these change the agent loop itself — they extend the dream cycle and the retrieval blend.
+**Goal:** Make Mira more "Samantha-like" by adding forward-looking dream output, fixing the unused importance signal, adding a conservative forgetting policy that won't erode identity, calibrating response length to match real conversational patterns, and experimentally testing whether the driver agent can speak directly (bypassing the chat model handoff). Features 1-3 extend the dream cycle and retrieval blend. Features 4-5 address the reply mechanism and conversational style.
 
 -----
 
@@ -114,9 +114,9 @@ Example:
 
 ### Schema change
 
-New migration: `migrations/000016_add_memory_usage_tracking.up.sql` (see Feature 2 — usage tracking migration goes first per implementation order)
+New migration: `migrations/000017_add_memory_usage_tracking.up.sql` (see Feature 2 — usage tracking migration goes first per implementation order)
 
-New migration: `migrations/000017_add_tomorrow_preload.up.sql`
+New migration: `migrations/000018_add_tomorrow_preload.up.sql`
 
 ```sql
 CREATE TABLE tomorrow_preload (
@@ -225,7 +225,7 @@ Three connected changes:
 
 ### Schema change
 
-Migration: `migrations/000016_add_memory_usage_tracking.up.sql`
+Migration: `migrations/000017_add_memory_usage_tracking.up.sql`
 
 ```sql
 ALTER TABLE memories ADD COLUMN last_recalled_at TIMESTAMP;
@@ -488,6 +488,306 @@ The dry-run flag already exists (`Cfg.Dream.DryRun`); the simulate command is a 
 
 -----
 
+## Feature 4: Direct Reply Experiment (Sim-Only A/B Test)
+
+### Why
+
+The current reply mechanism separates the "brain" (driver agent, Qwen3) from the "mouth" (chat model, Kimi K2). The driver thinks, recalls memories, plans — then writes a short instruction like "Respond warmly, ask about their day." The chat model receives that instruction along with the full layer stack (persona, memory, conversation history) and generates the actual text.
+
+This works well — the chat model gets a clean, purpose-built context window, and the driver keeps its own context focused on tool use and planning. But the handoff is **lossy by design.** The driver's thinking — its emotional read on the moment, its sense of pacing, its awareness of unresolved threads — gets compressed into 1-2 sentences of instruction. The chat model then reconstructs intent from that compressed signal. Sometimes it nails it. Sometimes it expands a quick "hey, how'd it go?" into a paragraph because nothing told it to be brief.
+
+Analysis of the Her movie dataset confirms this matters. Samantha's responses show:
+- **Median 7 words.** 43% of responses are 5 words or fewer.
+- Her long responses (80+ words) happen only at emotionally significant moments.
+- She interrupts, redirects, and brings up things *already on her mind* — behaviors that emerge from a unified thinking-and-speaking process, not from an instruction interpreter.
+
+The question: **does the instruction handoff lose enough nuance to justify a direct mode?** We don't know yet. This feature builds the mechanism to test it in sim, side by side, so we can answer the question with data instead of intuition.
+
+### What
+
+A **sim-only, flag-gated** alternative reply path where the driver agent generates the reply text directly instead of delegating to a separate chat model. This is an experiment, not a replacement — the current two-model system remains the default and the direct mode exists exclusively for comparative testing.
+
+### Why keep both (the case for the current system)
+
+The two-model split has real advantages that the direct mode must compete with:
+
+1. **Clean context partitioning.** The chat model sees: persona + memories + conversation history + a short instruction. No tool call noise, no planning artifacts, no search results that weren't relevant. The driver's context window is polluted with tool schemas, search results, think traces — none of that leaks into the reply generation.
+
+2. **Persona layer injection.** The `layers/` system builds a rich personality context (`prompt.md` + `persona.md` + memories + mood + time-of-day + tomorrow's preload). This stack is purpose-built for *sounding like Mira*. The driver model's system prompt is purpose-built for *thinking like Mira's brain*.
+
+3. **Independent model choice.** The chat model can be chosen for prose quality (Kimi K2 is good at natural conversation), while the driver model can be chosen for reasoning and tool use (Qwen3 is good at structured thinking). Direct mode forces one model to do both jobs.
+
+4. **Style and safety gates.** The gates catch AI-isms, escalation, and sycophancy *after* generation but *before* delivery. In direct mode, the driver writes the final text — the gates still run, but there's no "rephrase naturally" retry path because there's no separate chat model to regenerate.
+
+### How it works
+
+New tool: `reply_direct` — only registered when the `driver.direct_reply` config flag is true. Uses the same tool registry as other tools (YAML definition + handler).
+
+**`tools/reply_direct/tool.yaml`:**
+```yaml
+name: reply_direct
+agent: [main]
+hint: "write and send a response directly (experimental)"
+description: >-
+  Write the actual response text and send it to the user. Unlike the standard
+  reply tool, YOU write the words — there is no separate conversational model.
+  Your output IS what the user sees.
+
+  The chat model's personality layers (persona, memory, mood) are NOT available
+  in this path. You must carry the persona yourself from your system prompt.
+hot: false  # not hot — only loaded when feature flag is on
+parameters:
+  type: object
+  properties:
+    text:
+      type: string
+      description: >-
+        The exact text to send to the user. This is delivered verbatim (after
+        PII deanonymization and style gate checks). Write as Mira — short,
+        warm, specific.
+    memory_ids:
+      type: array
+      items:
+        type: integer
+      description: >-
+        Memory IDs used in composing this reply. Tracked for usage metrics.
+  required:
+    - text
+```
+
+**`tools/reply_direct/handler.go`** — a stripped-down version of `tools/reply/handler.go` that:
+
+1. Takes `text` verbatim instead of calling the chat LLM
+2. Still runs the style gate and safety gate (catches AI tics even in direct text)
+3. Still runs degenerate detection and length guard
+4. Still handles PII deanonymization, TTS, delivery, DB save
+5. Still tracks `MarkMemoriesRecalled()` for the usage signal (Feature 2)
+6. Skips: layer building, chat LLM call, conversation history assembly (all chat-model concerns)
+
+The driver agent prompt gets a conditional section when direct mode is on:
+
+```
+## Direct Reply Mode (ACTIVE)
+
+You are writing the actual words the user will see. There is no separate
+conversational model — your text IS the reply. Carry Mira's voice yourself:
+short, warm, specific, curious. Refer to your persona notes above.
+
+Use reply_direct(text="your actual words") instead of reply(instruction="...").
+The text parameter is delivered verbatim to the user.
+```
+
+### Sim A/B testing
+
+The sim adapter gets a new flag:
+
+```yaml
+# sims/her-brevity-ab.yaml
+name: her-brevity-ab
+description: Compare driven vs direct reply modes
+variants:
+  - name: driven
+    driver:
+      direct_reply: false
+    messages:
+      - "hey, how was your day?"
+      - "i had a rough shift at work"
+      - "yeah the manager was being weird about schedules"
+
+  - name: direct
+    driver:
+      direct_reply: true
+    messages:
+      - "hey, how was your day?"
+      - "i had a rough shift at work"
+      - "yeah the manager was being weird about schedules"
+```
+
+The sim report compares:
+- Mean/median reply word count per variant
+- Question ratio (% of replies containing a `?`)
+- Style gate hit rate (does one mode produce more AI-isms?)
+- Reply latency (direct mode skips one LLM call — how much faster?)
+- Qualitative: do the direct replies feel more natural, or do they lose persona coherence?
+
+### Config
+
+```yaml
+driver:
+  direct_reply: false          # default OFF — current system is the default
+  direct_reply_sim_only: true  # when true, the flag only takes effect in sim runs
+```
+
+The `direct_reply_sim_only` guard ensures that even if someone accidentally sets `direct_reply: true` in production config, it's ignored unless running through the sim adapter. This is a testing tool, not a production feature — until we have data that says otherwise.
+
+### New files
+
+- `tools/reply_direct/tool.yaml` — tool definition
+- `tools/reply_direct/handler.go` — direct reply handler (subset of reply/handler.go)
+- `sims/her-brevity-ab.yaml` — A/B comparison sim suite
+
+### Files to modify
+
+- `config/config.go` — add `Driver.DirectReply` and `Driver.DirectReplySimOnly`
+- `config.yaml.example` — document the flags
+- `driver_agent_prompt.md` — conditional direct-reply section
+- `cmd/sim_gw.go` — wire the variant flag into per-sim config overrides
+- `gateway/sim.go` — pass variant config to the pipeline
+
+### What this does NOT change
+
+- The current `reply` tool stays exactly as-is. It's still the default, still hot-loaded, still the production path.
+- The layer system (`layers/`) is untouched — it still powers the standard reply path.
+- The style and safety gates still run on direct replies.
+- No prompt.md changes. No persona.md changes. No chat model changes.
+
+### Decision point
+
+After running the A/B sim at least 5 times across different conversational scenarios (casual, emotional, factual, multi-turn), we review the reports and decide:
+
+1. **Direct mode wins clearly** → promote to production behind a config flag, eventually make it the default
+2. **Mixed results** → investigate whether a hybrid works (direct for short replies, driven for complex ones)
+3. **Driven mode wins** → close the experiment, focus on improving instruction quality in the driver prompt instead
+
+The most likely outcome is #2 — direct mode probably wins for brevity and naturalness on simple exchanges, while driven mode wins for complex replies where the layer stack provides critical context. If so, the driver could choose which tool to call based on the situation.
+
+-----
+
+## Feature 5: Response Brevity (Her-Calibrated Length Norms)
+
+### Why
+
+Analysis of the Her movie dataset (306 dialogue rows, HaltiaAI/Her-The-Movie-Samantha-and-Theodore-Dataset on HuggingFace) reveals that Samantha's response lengths follow a distribution that is dramatically shorter than typical LLM output:
+
+| Bucket | Samantha | Typical LLM |
+|--------|----------|-------------|
+| 1-5 words | **43%** | ~5% |
+| 6-10 words | **19%** | ~10% |
+| 11-20 words | **20%** | ~25% |
+| 21-40 words | **12%** | ~35% |
+| 41+ words | **6%** | ~25% |
+
+Median: **7 words.** Mean: 13.2 (pulled up by rare long responses at emotional peaks).
+
+The current `prompt.md` already says "Keep it short. 1-3 sentences." But the chat model still trends verbose because:
+1. The instruction from the driver often implies detail ("respond warmly and ask about their day, referencing the Cava shift")
+2. LLMs have a built-in verbosity bias — they're trained on long-form text and gravitate toward completeness
+3. Nothing in the system *measures* or *enforces* brevity — it's guidance, not a constraint
+
+The fix is not to clamp output length mechanically (that kills the rare valuable long response). It's to make brevity the **default mode** with length escalation requiring explicit justification from the driver.
+
+### What
+
+Three changes that work together:
+
+#### 5a. Length signal in the reply tool
+
+Add an optional `length` parameter to the existing `reply` tool:
+
+```yaml
+    length:
+      type: string
+      enum: [brief, normal, detailed]
+      description: >-
+        How long should this reply be? Brief = 1 sentence, a few words.
+        Normal = 1-3 sentences. Detailed = paragraph-length, for emotional
+        depth or complex explanations. Default: brief.
+```
+
+The chat model's system prompt gets a length directive injected based on this parameter. In `tools/reply/handler.go`, before building the LLM messages:
+
+```go
+lengthDirective := ""
+switch args.Length {
+case "detailed":
+    lengthDirective = "This warrants a longer, more thoughtful response. Take the space you need."
+case "normal":
+    lengthDirective = "Keep this to 1-3 sentences."
+default: // "brief" or empty
+    lengthDirective = "Keep this SHORT — one sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
+}
+```
+
+This directive is appended to the system note alongside the instruction, so the chat model sees it in the same place.
+
+**The default is "brief."** The driver must actively choose "normal" or "detailed" when the moment warrants it. This inverts the current dynamic where the chat model defaults to verbose and nothing constrains it.
+
+#### 5b. Driver prompt update
+
+Update `driver_agent_prompt.md` — add to the "Rules for reply" section:
+
+```
+- **Default to brief.** Most replies should be a sentence or a few words.
+  Use length="brief" (the default) for: greetings, acknowledgements,
+  quick reactions, follow-up questions, casual banter. This is most of
+  conversation.
+- Use length="normal" for: answering a direct question, sharing a thought
+  that needs context, responding to something emotional.
+- Use length="detailed" ONLY for: moments of genuine emotional depth,
+  complex explanations the user explicitly asked for, or when you have
+  something important to say that can't be compressed. This should be
+  rare — maybe 1 in 20 replies.
+- When in doubt, go shorter. The user can always ask for more.
+```
+
+#### 5c. Brevity metric in sim reports
+
+Add to the sim report's per-turn metrics:
+
+```
+Reply length: 12 words (brief)
+```
+
+And to the summary section:
+
+```
+Response length distribution:
+  brief (≤10 words):    8/15 turns (53%)
+  normal (11-40 words): 5/15 turns (33%)
+  detailed (41+ words): 2/15 turns (13%)
+
+Her-calibration score: 0.82
+  (1.0 = matches Samantha's distribution perfectly)
+```
+
+The Her-calibration score is a simple distribution distance:
+```
+target = [0.62, 0.32, 0.06]  # ≤10, 11-40, 41+ from the movie data
+actual = [count_brief/total, count_normal/total, count_detailed/total]
+score  = 1 - (sum of absolute differences) / 2
+```
+
+This gives sims a quantitative signal for whether Mira's reply lengths are Samantha-like.
+
+### Schema change
+
+None. This is prompt and handler changes only.
+
+### New files
+
+None — all changes fit into existing files.
+
+### Files to modify
+
+- `tools/reply/tool.yaml` — add `length` parameter
+- `tools/reply/handler.go` — read `length`, inject directive into system note
+- `driver_agent_prompt.md` — brevity guidance in "Rules for reply"
+- `prompt.md` — strengthen the existing brevity section with concrete targets
+- `cmd/sim_gw.go` — add brevity metrics to report output
+- `gateway/sim.go` — track word counts per turn
+
+### Interaction with Feature 4 (direct reply)
+
+In direct reply mode, the driver writes the text itself — brevity is entirely in its hands, no length directive needed. The sim A/B test (Feature 4) naturally measures whether direct mode produces shorter replies than driven mode. If direct mode consistently hits the Her-calibrated distribution without any length parameter, that's strong evidence for the "mouth-brain unification" hypothesis.
+
+### Validation
+
+- Update existing sims to check that `brief` is the most common length signal
+- `sims/her-brevity-ab.yaml` (from Feature 4) measures word count distribution
+- Manual: compare 20 real conversations before/after the change — count words per reply, check the distribution shift
+
+-----
+
 ## Implementation Order
 
 ```
@@ -499,11 +799,17 @@ Step 2: Tomorrow's preload — schema + agent + layer + dream-cycle Step 3
 
 Step 3: Conservative forgetting — code guard + prompt update + quota config
         (depends on Step 1's last_recalled_at column)
+
+Step 4: Response brevity — length signal + driver prompt update + sim metrics
+        (independent of Steps 1-3, can be done in parallel)
+
+Step 5: Direct reply experiment — new tool + sim A/B framework
+        (depends on Step 4's brevity metrics for meaningful comparison)
 ```
 
-Steps 1 and 2 are independent and can be parallelized if convenient. Step 3 depends on Step 1.
+Steps 1, 2, and 4 are independent and can be parallelized. Step 3 depends on Step 1. Step 5 depends on Step 4.
 
-Each step ships behind a config flag (`recall.use_blended_score`, `dream.tomorrow_preload.enabled`, `dream.forgetting.enabled`) so they can be enabled one at a time in production and rolled back if something feels off.
+Each step ships behind a config flag (`recall.use_blended_score`, `dream.tomorrow_preload.enabled`, `dream.forgetting.enabled`, `driver.direct_reply`) so they can be enabled one at a time in production and rolled back if something feels off.
 
 -----
 
@@ -511,15 +817,18 @@ Each step ships behind a config flag (`recall.use_blended_score`, `dream.tomorro
 
 ```
 New:
-  migrations/000016_add_memory_usage_tracking.up.sql
-  migrations/000017_add_tomorrow_preload.up.sql
+  migrations/000017_add_memory_usage_tracking.up.sql
+  migrations/000018_add_tomorrow_preload.up.sql
   memory/store_tomorrow_preload.go
   persona/tomorrow_preload.go
   persona/tomorrow_preload_prompt.md
   layers/chat_tomorrow_preload.go
+  tools/reply_direct/tool.yaml       — direct reply tool definition (Feature 4)
+  tools/reply_direct/handler.go      — direct reply handler (Feature 4)
   sims/importance-rewire.yaml
   sims/tomorrow-preload.yaml
   sims/forgetting-policy.yaml
+  sims/her-brevity-ab.yaml           — A/B comparison: driven vs direct (Features 4+5)
 
 Modified:
   memory/store_facts.go            — blended retrieval, MarkMemoriesRecalled
@@ -528,12 +837,17 @@ Modified:
   persona/dreamer.go               — add Step 3 (preload)
   persona/memory_dreamer.go        — canForget guard, recalibration pass
   persona/memory_dreamer_prompt.md — forgetting policy section, importance recalibration
-  tools/reply/handler.go           — mark recalled on reply, consume preload
+  tools/reply/tool.yaml            — add length parameter (Feature 5)
+  tools/reply/handler.go           — mark recalled on reply, consume preload, length directive
   layers/chat_memory.go            — mark recalled on inject
   layers/chat_self_memory.go       — mark recalled on inject
-  config/config.go                 — three new config blocks
+  config/config.go                 — five new config blocks (recall, preload, forgetting, direct_reply, brevity)
   config.yaml.example              — document the new options
   cmd/run.go                       — wire preload agent client (mirrors dreamAgentClient setup)
+  cmd/sim_gw.go                    — brevity metrics in sim report, variant config for A/B
+  gateway/sim.go                   — word count tracking per turn, variant flag passthrough
+  driver_agent_prompt.md           — brevity rules, conditional direct-reply section
+  prompt.md                        — strengthen brevity targets
   docs/ARCHITECTURE.md             — update the "Journey of a Message" diagram
 ```
 
@@ -558,6 +872,7 @@ These came up in the conversation but aren't part of this plan:
 - **MemGPT/Letta** — <https://docs.letta.com> — Self-editing memory tiers and the "sleep-time compute" paradigm that maps onto Mira's dream cycle. Useful background for why moving work to idle time matters.
 - **LinkedIn Cognitive Memory Agent** — InfoQ writeup, April 2026 — Temporal pivot summaries for evolving user state. Mira already does this via `SupersedeMemory()`; cited here so a future reader can see we're in good company.
 - **Mem0** — Chhikara, P. et al. (2025). arXiv:2504.19413. Graph memory + LOCOMO benchmark. If Mira ever needs an objective number to compare against, LOCOMO is the standard.
+- **Her Movie Dataset** — HaltiaAI (2023). <https://huggingface.co/datasets/HaltiaAI/Her-The-Movie-Samantha-and-Theodore-Dataset> — 306 rows of Samantha/Theodore dialogue from the 2013 film. Source for the response length distribution and conversational pattern analysis that informed Features 4 and 5. Dataset saved locally at `data/her_movie_dataset.csv` with exploration scripts.
 
 -----
 
@@ -565,9 +880,23 @@ These came up in the conversation but aren't part of this plan:
 
 This plan is done when:
 
+**Features 1-3 (cognitive loop):**
 - [ ] All three feature flags default to `enabled: true` in `config.yaml.example`
 - [ ] Sims pass: `importance-rewire`, `tomorrow-preload`, `forgetting-policy`
 - [ ] After 7 days of real use: top 20 memories by `recall_count` are intuitively the ones Mira refers to most often
 - [ ] After 7 days of real use: at least one `tomorrow_preload` row shows up in the chat prompt and references a real signal from the prior day
 - [ ] After 7 days of real use: `forgetting.refused` count > `forgetting.removed` count (the policy is biased toward keeping)
 - [ ] Zero identity-class memories removed across 30 days of simulated dream cycles
+
+**Feature 4 (direct reply experiment):**
+- [ ] `reply_direct` tool exists behind `driver.direct_reply` flag, defaults to `false`
+- [ ] `direct_reply_sim_only: true` prevents accidental production use
+- [ ] A/B sim suite (`her-brevity-ab.yaml`) runs both variants and produces a comparison report
+- [ ] Decision documented: direct mode promoted, hybrid explored, or experiment closed
+
+**Feature 5 (response brevity):**
+- [ ] `length` parameter on reply tool with `brief` as default
+- [ ] Driver prompt explicitly instructs brief as the default mode
+- [ ] Sim reports include word count distribution and Her-calibration score
+- [ ] After enabling: median reply length drops below 15 words (from current baseline)
+- [ ] Long responses (41+ words) occur in less than 15% of turns
