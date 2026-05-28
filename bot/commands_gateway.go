@@ -531,6 +531,21 @@ func (b *Bot) ExecDream() (string, error) {
 		msg.WriteString("Nothing notable to reflect on right now.\n\n")
 	}
 
+	// Step 3: Tomorrow's preload.
+	if b.cfg.Dream.TomorrowPreload.Enabled {
+		if err := persona.RunTomorrowPreload(persona.TomorrowPreloadParams{
+			LLM:      b.llm,
+			Store:    b.store,
+			Cfg:      b.cfg,
+			EventBus: b.eventBus,
+		}); err != nil {
+			log.Error("dream preload", "err", err)
+			fmt.Fprintf(&msg, "Preload error: %v\n\n", err)
+		} else {
+			msg.WriteString("Tomorrow's preload generated.\n\n")
+		}
+	}
+
 	if rewritten {
 		msg.WriteString("Persona rewritten. Use /persona to see the update.")
 	} else {
