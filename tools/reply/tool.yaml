@@ -33,6 +33,13 @@ parameters:
         Memory IDs from recall_memories results. Preferred over memories — the
         full text is looked up automatically, avoiding truncation or paraphrasing.
         Pass the numeric ID from each recall result.
+    length:
+      type: string
+      enum: [brief, normal, detailed]
+      description: >-
+        How long should this reply be? brief = a sentence or a few words,
+        fragments fine. normal = 1-3 sentences. detailed = paragraph-length,
+        for emotional depth or complex explanations. Defaults to brief.
     memories:
       type: array
       items:
