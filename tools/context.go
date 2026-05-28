@@ -185,6 +185,10 @@ type Context struct {
 	// deferred loading to the agent's declared tool set.
 	AgentName string
 
+	// IsSimRun is true when running through the sim adapter. Used by
+	// reply_direct to enforce the sim-only guard.
+	IsSimRun bool
+
 	// Ctx is the parent context for this turn. Tools that spawn retries
 	// or background work should derive from this so they respect shutdown
 	// and turn cancellation. Defaults to context.Background() if unset.

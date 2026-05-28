@@ -501,6 +501,14 @@ func HotToolDefs(agentName string, cfg *config.Config) []llm.ToolDef {
 	}
 	if agentName == "main" {
 		result = append(result, UseToolsDef())
+		// Conditionally inject reply_direct when the experiment is active.
+		// The tool is hot:false in YAML so it doesn't load by default —
+		// it only appears when the driver.direct_reply flag is set.
+		if cfg != nil && cfg.Driver.DirectReply {
+			if t, ok := toolDefs["reply_direct"]; ok {
+				result = append(result, ExpandToolIdentity(t, cfg))
+			}
+		}
 	}
 	return result
 }
