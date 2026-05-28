@@ -635,6 +635,12 @@ func (s *SyncedStore) UpdateMemoryTags(memoryID int64, tags string) error {
 	return nil
 }
 
+// MarkMemoriesRecalled bumps usage counters locally. No outbox write — recall
+// tracking is local-only (each machine tracks its own usage patterns).
+func (s *SyncedStore) MarkMemoriesRecalled(ids []int64) error {
+	return s.SQLiteStore.MarkMemoriesRecalled(ids)
+}
+
 // DeactivateMemory soft-deletes a memory locally and records in outbox.
 // The vec_memories DELETE only happens locally — D1 has no vector tables.
 func (s *SyncedStore) DeactivateMemory(memoryID int64) error {
