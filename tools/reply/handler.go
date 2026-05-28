@@ -215,18 +215,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Length directive — injected per-call so the base prompt stays clean.
-	// The driver picks brief/normal/detailed; the chat model only sees the
-	// one-liner relevant to this specific reply.
-	var lengthDirective string
-	switch args.Length {
-	case "detailed":
-		lengthDirective = "Length: This warrants a longer, more thoughtful response. Take the space you need."
-	case "normal":
-		lengthDirective = "Length: Keep this to 1-3 sentences."
-	default:
-		lengthDirective = "Length: Keep this SHORT. One sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
-	}
+	lengthDirective := lengthDirectiveFor(args.Length)
 
 	// Build the user message. Search context and the agent's instruction
 	// go into a lightweight system note so they don't masquerade as user
@@ -719,4 +708,18 @@ func reduceEmDashes(text string) string {
 	}
 
 	return b.String()
+}
+
+// lengthDirectiveFor returns the per-call length directive injected into
+// the chat model's system note. The driver picks brief/normal/detailed;
+// unknown values fall to the default (brief).
+func lengthDirectiveFor(length string) string {
+	switch length {
+	case "detailed":
+		return "Length: This warrants a longer, more thoughtful response. Take the space you need."
+	case "normal":
+		return "Length: Keep this to 1-3 sentences."
+	default:
+		return "Length: Keep this SHORT. One sentence, maybe a few words. Fragments are fine. Don't elaborate unless asked."
+	}
 }

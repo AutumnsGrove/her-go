@@ -542,12 +542,15 @@ func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	var supersededBy sql.NullInt64
 	var supersedeReason sql.NullString
 	var context sql.NullString
+	var lastRecalled sql.NullString
 	err := s.db.QueryRow(
 		`SELECT id, timestamp, memory, category, subject, importance, tags, active,
-		        superseded_by, supersede_reason, COALESCE(context, '')
+		        superseded_by, supersede_reason, COALESCE(context, ''),
+		        COALESCE(recall_count, 0), last_recalled_at
 		 FROM memories WHERE id = ?`, memoryID,
 	).Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance,
-		&m.Tags, &active, &supersededBy, &supersedeReason, &context)
+		&m.Tags, &active, &supersededBy, &supersedeReason, &context,
+		&m.RecallCount, &lastRecalled)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -556,6 +559,9 @@ func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	}
 	m.Timestamp = parseTimestamp(ts)
 	m.Active = active
+	if lastRecalled.Valid {
+		m.LastRecalledAt = parseTimestamp(lastRecalled.String)
+	}
 	if supersededBy.Valid {
 		m.SupersededBy = supersededBy.Int64
 	}

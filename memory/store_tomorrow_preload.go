@@ -23,10 +23,10 @@ type TomorrowPreload struct {
 // SaveTomorrowPreload inserts a new preload note. expiresAfter controls
 // how long the note stays active before it's considered stale.
 func (s *SQLiteStore) SaveTomorrowPreload(content string, expiresAfter time.Duration) (int64, error) {
-	expiresAt := time.Now().Add(expiresAfter)
+	expiresAt := time.Now().UTC().Add(expiresAfter)
 	result, err := s.db.Exec(
 		`INSERT INTO tomorrow_preload (content, expires_at) VALUES (?, ?)`,
-		content, expiresAt.Format(time.RFC3339),
+		content, expiresAt.Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
 		return 0, err
@@ -43,7 +43,7 @@ func (s *SQLiteStore) ActiveTomorrowPreload() (*TomorrowPreload, error) {
 		`SELECT id, generated_at, expires_at, content
 		 FROM tomorrow_preload
 		 WHERE consumed = 0 AND expires_at > datetime('now')
-		 ORDER BY generated_at DESC
+		 ORDER BY id DESC
 		 LIMIT 1`,
 	).Scan(&p.ID, &generatedAt, &expiresAt, &p.Content)
 	if errors.Is(err, sql.ErrNoRows) {
