@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // newCoreTestStore creates a fresh temp store for testing. Used by
@@ -278,6 +279,52 @@ func TestGetUsageReport(t *testing.T) {
 	// Per-model breakdown should have 2 models
 	if len(report.ByModel) != 2 {
 		t.Errorf("got %d models, want 2", len(report.ByModel))
+	}
+}
+
+func TestCostSince(t *testing.T) {
+	store := newCoreTestStore(t)
+
+	// Save metrics with different roles and timestamps.
+	store.SaveMetric("model-a", 100, 50, 150, 0.003, 0, 0, false, "dream")
+	store.SaveMetric("model-a", 200, 100, 300, 0.007, 0, 0, false, "dream")
+	store.SaveMetric("model-b", 50, 25, 75, 0.002, 0, 0, false, "driver")
+
+	tests := []struct {
+		name     string
+		role     string
+		wantCost float64
+	}{
+		{"dream costs sum correctly", "dream", 0.010},
+		{"driver cost isolated", "driver", 0.002},
+		{"unknown role returns zero", "nonexistent", 0},
+	}
+
+	// All metrics were just saved, so "since" one second ago covers them all.
+	since := time.Now().Add(-1 * time.Second)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cost, err := store.CostSince(tt.role, since)
+			if err != nil {
+				t.Fatalf("CostSince(%q): %v", tt.role, err)
+			}
+			if diff := cost - tt.wantCost; diff > 0.0001 || diff < -0.0001 {
+				t.Errorf("CostSince(%q) = %.6f, want %.6f", tt.role, cost, tt.wantCost)
+			}
+		})
+	}
+}
+
+func TestCostSince_Empty(t *testing.T) {
+	store := newCoreTestStore(t)
+
+	cost, err := store.CostSince("dream", time.Now().Add(-1*time.Hour))
+	if err != nil {
+		t.Fatalf("CostSince on empty table: %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("expected 0 cost on empty table, got %.6f", cost)
 	}
 }
 

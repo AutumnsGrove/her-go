@@ -3,6 +3,7 @@ package persona
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"her/config"
 	"her/embed"
@@ -51,6 +52,9 @@ type DreamCycleResult struct {
 	// Step 3: Tomorrow's preload
 	PreloadGenerated bool
 	PreloadError     error
+
+	// Accumulated cost across all dream steps.
+	TotalCost float64
 }
 
 // Summary returns a human-readable summary of the dream cycle, suitable
@@ -79,9 +83,13 @@ func (r DreamCycleResult) Summary() string {
 	}
 
 	if r.PersonaRewritten {
-		msg.WriteString("Persona rewritten. Use /persona to see the update.")
+		msg.WriteString("Persona rewritten. Use /persona to see the update.\n\n")
 	} else {
-		msg.WriteString("No persona changes — not enough has shifted yet.")
+		msg.WriteString("No persona changes — not enough has shifted yet.\n\n")
+	}
+
+	if r.TotalCost > 0 {
+		fmt.Fprintf(&msg, "Total cost: $%.4f", r.TotalCost)
 	}
 
 	return msg.String()
@@ -92,6 +100,7 @@ func (r DreamCycleResult) Summary() string {
 // Adding a new dream step means changing only this function.
 func RunDreamCycle(p DreamCycleParams) DreamCycleResult {
 	var result DreamCycleResult
+	dreamStart := time.Now()
 
 	if p.MinDays == 0 {
 		p.MinDays = 7
@@ -162,5 +171,13 @@ func RunDreamCycle(p DreamCycleParams) DreamCycleResult {
 		}
 	}
 
+	// Sum all dream costs from the metrics table. Every LLM call in the
+	// dream pipeline already saves to metrics with RoleDream — we query
+	// the window rather than threading cost through every nested function.
+	if cost, err := p.Store.CostSince(memory.RoleDream, dreamStart); err == nil {
+		result.TotalCost = cost
+	}
+
+	log.Infof("dreamer: dream cycle complete | cost=$%.4f", result.TotalCost)
 	return result
 }

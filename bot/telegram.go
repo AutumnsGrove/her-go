@@ -330,6 +330,15 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 		shutdownCh:       make(chan struct{}),
 	}
 
+	// Wire the mood runner in dev mode too — same as Telegram New().
+	// The Propose callback won't fire (no Telegram to send proposals
+	// to), but mood logging and TUI events work normally.
+	if moodAgentLLM != nil {
+		if err := b.initMood(); err != nil {
+			return nil, fmt.Errorf("initializing mood pipeline: %w", err)
+		}
+	}
+
 	return b, nil
 }
 
