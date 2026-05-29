@@ -54,6 +54,22 @@ func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, t
 	return nil
 }
 
+// CostSince returns the total cost_usd for a given agent role since the
+// given timestamp. Used by the dream cycle to sum costs across all steps
+// without threading cost return values through every nested function.
+func (s *SQLiteStore) CostSince(role string, since time.Time) (float64, error) {
+	var cost float64
+	err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(cost_usd), 0) FROM metrics
+		 WHERE agent_role = ? AND timestamp >= ?`,
+		role, since.Format("2006-01-02 15:04:05"),
+	).Scan(&cost)
+	if err != nil {
+		return 0, fmt.Errorf("querying cost since: %w", err)
+	}
+	return cost, nil
+}
+
 // Stats holds aggregate usage statistics for the /stats command.
 // CommandCount holds usage info for a single slash command.
 type CommandCount struct {

@@ -1,99 +1,28 @@
+// bot/tg_mood.go — Telegram-specific mood UI: proposals, sweeper,
+// graph rendering, and inline button callbacks.
+//
+// General mood agent wiring (initMood, launchMoodAgent) lives in mood.go.
 package bot
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"her/memory"
 	"her/mood"
-	"her/tui"
-	"her/turn"
 
 	tele "gopkg.in/telebot.v4"
 )
 
-// initMood wires the mood runner + proposal sweeper onto the Bot
-// struct. Called from New() when cfg.MoodAgent.Model is non-empty.
-// The sweeper goroutine is launched later by Start() so it shares
-// the bot's lifecycle.
-func (b *Bot) initMood() error {
-	vocab := mood.Default()
-	if b.cfg.Mood.VocabPath != "" {
-		v, err := mood.LoadVocab(b.cfg.Mood.VocabPath)
-		if err != nil {
-			return fmt.Errorf("loading mood vocab: %w", err)
-		}
-		vocab = v
-	}
-	b.moodVocab = vocab
-
-	// Fill in AgentConfig defaults from config.yaml.
-	high := b.cfg.Mood.ConfidenceHigh
-	if high == 0 {
-		high = 0.75
-	}
-	low := b.cfg.Mood.ConfidenceLow
-	if low == 0 {
-		low = 0.40
-	}
-	dedupWin := time.Duration(b.cfg.Mood.DedupWindowMinutes) * time.Minute
-	if dedupWin == 0 {
-		dedupWin = 2 * time.Hour
-	}
-	dedupSim := b.cfg.Mood.DedupSimilarity
-	if dedupSim == 0 {
-		dedupSim = 0.80
-	}
-	proposalExpiry := time.Duration(b.cfg.Mood.ProposalExpiryMinutes) * time.Minute
-	if proposalExpiry == 0 {
-		proposalExpiry = 30 * time.Minute
-	}
-	ctxTurns := b.cfg.Mood.ContextTurns
-	if ctxTurns == 0 {
-		ctxTurns = 5
-	}
-
-	// Embed bridge: mood.Deps expects a context-aware signature;
-	// embed.Client.Embed only takes text.
-	embedFn := func(_ context.Context, text string) ([]float32, error) {
-		if b.embedClient == nil {
-			return nil, nil
-		}
-		return b.embedClient.Embed(text)
-	}
-
-	// Derive the prompt directory from the main prompt file path —
-	// mood_agent_prompt.md lives alongside prompt.md in the project root.
-	promptDir := filepath.Dir(b.cfg.Persona.PromptFile)
-
-	updateWin := time.Duration(b.cfg.Mood.UpdateWindowMinutes) * time.Minute
-
-	b.moodRunner = &mood.Runner{
-		Deps: mood.Deps{
-			LLM:        b.moodAgentLLM,
-			Classifier: b.classifierLLM, // reuse main classifier
-			Store:      b.store,
-			Vocab:      vocab,
-			Embed:      embedFn,
-			Propose:    b.sendMoodProposal,
-			PromptDir:  promptDir,
-		},
-		Config: mood.AgentConfig{
-			ContextTurns:    ctxTurns,
-			ConfidenceHigh:  high,
-			ConfidenceLow:   low,
-			DedupWindow:     dedupWin,
-			DedupSimilarity: dedupSim,
-			UpdateWindow:    updateWin,
-			ProposalExpiry:  proposalExpiry,
-			SessionGap:      time.Duration(b.cfg.Mood.SessionGapMinutes) * time.Minute,
-		},
+// initMoodTelegram wires the Telegram-specific parts of the mood
+// pipeline: proposal sweeper and inline button handlers. Called from
+// initMood() — no-op when b.tb is nil (dev/gateway mode).
+func (b *Bot) initMoodTelegram() {
+	if b.tb == nil {
+		return
 	}
 
 	sweeperInterval := time.Duration(b.cfg.Mood.SweeperIntervalMinutes) * time.Minute
@@ -106,13 +35,8 @@ func (b *Bot) initMood() error {
 		Interval: sweeperInterval,
 	}
 
-	// Register the mood_proposal callback handler (Log it / Edit / No).
 	b.tb.Handle(&tele.InlineButton{Unique: "mood_proposal"}, b.handleMoodProposalCallback)
-
-	// Register the /mood wizard callback handler + command.
 	b.tb.Handle(&tele.InlineButton{Unique: "mood_wizard"}, b.handleMoodWizardCallback)
-
-	return nil
 }
 
 // sendMoodProposal is the Propose callback the mood agent invokes for
@@ -124,8 +48,6 @@ func (b *Bot) sendMoodProposal(
 	entry *memory.MoodEntry,
 	_ time.Time,
 ) (int64, int64, error) {
-	// Need a concrete chat to target. In a personal-use bot this is
-	// the owner chat; if unset, there's nowhere to send it.
 	if b.ownerChat == 0 {
 		return 0, 0, fmt.Errorf("sendMoodProposal: ownerChat is zero")
 	}
@@ -170,8 +92,7 @@ func (b *Bot) editTelegramMessage(chatID int64, messageID int, text string) erro
 }
 
 // handleMoodProposalCallback routes taps on the mood proposal inline
-// keyboard. The Data field (set via markup.Data's third arg) carries
-// the action name — "confirm", "reject", or "edit".
+// keyboard. The Data field carries the action: "confirm", "reject", or "edit".
 func (b *Bot) handleMoodProposalCallback(c tele.Context) error {
 	data := strings.TrimSpace(c.Callback().Data)
 	chatID := c.Callback().Message.Chat.ID
@@ -199,10 +120,6 @@ func (b *Bot) handleMoodProposalCallback(c tele.Context) error {
 		return nil
 
 	case "edit":
-		// Edit routes to /mood <existing proposal id> wizard — that
-		// lands with the dedicated wizard work. Until then, mark the
-		// proposal as rejected so it doesn't haunt the expiry sweep,
-		// and tell the user we're not quite there yet.
 		_ = mood.RejectProposal(b.store, chatID, msgID, b.editTelegramMessage)
 		_ = c.Respond(&tele.CallbackResponse{Text: "manual edit is coming soon — dropped this one for now"})
 		return nil
@@ -214,7 +131,7 @@ func (b *Bot) handleMoodProposalCallback(c tele.Context) error {
 }
 
 // Thin aliases so the wizard command handler (in bot/mood_wizard.go)
-// doesn't have to import mood directly. Keeping the coupling narrow.
+// doesn't have to import mood directly.
 const (
 	moodGraphRangeWeek  = mood.GraphRangeWeek
 	moodGraphRangeMonth = mood.GraphRangeMonth
@@ -222,8 +139,7 @@ const (
 )
 
 // sendMoodGraph renders a PNG of the user's mood trajectory for the
-// given range and sends it as a Telegram photo reply. Runs
-// synchronously — the render is sub-second for a month of data.
+// given range and sends it as a Telegram photo reply.
 func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
 	png, err := mood.RenderValencePNG(b.store, b.moodVocab, r, time.Now())
 	if err != nil {
@@ -238,91 +154,8 @@ func (b *Bot) sendMoodGraph(c tele.Context, r mood.GraphRange) error {
 	return c.Send(photo)
 }
 
-// launchMoodAgent fires mood.Runner.RunForConversation in a goroutine.
-// Called from runAgent after the main reply is sent. No-op when the
-// mood runner isn't configured. When trace is non-nil, decision-point
-// traces flow into its slot of the turn's TraceBoard.
-//
-// The tracker manages the phase lifecycle: Begin is called here
-// (before launching the goroutine to prevent a race) and Done fires
-// inside the goroutine when the mood agent finishes.
-func (b *Bot) launchMoodAgent(convID string, trace func(string) error, tracker *turn.Tracker, introspectionWG *sync.WaitGroup) {
-	if b.moodRunner == nil || convID == "" {
-		return
-	}
-
-	// Begin the mood phase BEFORE launching the goroutine. This
-	// increments the Tracker's pending count so TurnEndEvent doesn't
-	// fire prematurely if the main + memory phases finish first.
-	var moodPhase *turn.PhaseHandle
-	if tracker != nil {
-		moodPhase = tracker.Begin("mood")
-	}
-
-	// Signal introspection WaitGroup — Add before goroutine, Done inside.
-	if introspectionWG != nil {
-		introspectionWG.Add(1)
-	}
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("mood agent panic (recovered)", "panic", r)
-			}
-		}()
-		// Signal introspection WaitGroup after mood work completes.
-		if introspectionWG != nil {
-			defer introspectionWG.Done()
-		}
-		// Ensure phase completion even if the mood agent panics.
-		if moodPhase != nil {
-			defer moodPhase.Done(turn.PhaseMetrics{})
-		}
-
-		// 60s timeout — mood agent does one LLM call plus an
-		// optional classifier pass. Safely past any reasonable
-		// round-trip.
-		var res mood.Result
-		if trace != nil {
-			res = b.moodRunner.RunForConversationWithTrace(
-				context.Background(), convID, 60*time.Second, trace,
-			)
-		} else {
-			res = b.moodRunner.RunForConversationWithTimeout(
-				context.Background(), convID, 60*time.Second,
-			)
-		}
-
-		if res.Action == mood.ActionErrored {
-			log.Warn("mood agent errored", "reason", res.Reason)
-		}
-
-		// Emit a MoodEvent so the TUI shows what happened.
-		if moodPhase != nil {
-			var labels []string
-			var valence int
-			var confidence float64
-			if res.Inference != nil {
-				labels = res.Inference.Labels
-				valence = res.Inference.Valence
-				confidence = res.Confidence
-			}
-			moodPhase.Emit(tui.MoodEvent{
-				Time:       time.Now(),
-				TurnID:     moodPhase.TurnID(),
-				Action:     string(res.Action),
-				Valence:    valence,
-				Labels:     labels,
-				Confidence: confidence,
-				Reason:     res.Reason,
-			})
-		}
-	}()
-}
-
 // startMoodSweeper launches the proposal-expiry sweeper goroutine.
-// The sweeper shuts down when Bot.Stop() calls the stored cancel func,
-// so it doesn't leak on graceful shutdown.
+// The sweeper shuts down when Bot.Stop() calls the stored cancel func.
 func (b *Bot) startMoodSweeper() {
 	if b.moodSweeper == nil {
 		return
@@ -335,17 +168,10 @@ func (b *Bot) startMoodSweeper() {
 
 // parseMoodProposalData is a small helper for tests and CLI paths that
 // need to reason about callback payloads without invoking telebot.
-// Kept exported so the sim (when it grows) can use it.
 func parseMoodProposalData(data string) (action string) {
 	s := strings.TrimSpace(data)
 	if s == "" {
 		return "unknown"
 	}
-	// Data is one of: confirm | reject | edit (set above).
 	return s
 }
-
-// formatProposalForLog is used by the log line we emit when firing a
-// proposal. Kept private; exposed via its callers. strconv import
-// is used here so Go doesn't complain in future additions.
-var _ = strconv.Itoa
