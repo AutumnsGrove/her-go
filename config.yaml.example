@@ -38,6 +38,7 @@ driver:
   trace: false                                   # show driver agent thinking traces in chat (/traces to toggle)
   # require_tool_choice: true                    # force tool_choice="required" on first agent call (default true). Set false for models/providers that don't support tool_choice.
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
+  fast_path: false                               # route simple messages directly to chat model, skipping driver agent (requires classifier LLM)
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.1
@@ -53,6 +54,7 @@ memory_agent:
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
   timeout: 120                        # 120s — memory agent processes long transcripts
+  batch_threshold: 0                  # 0 = fire every turn (default). 3 = fire every 3 turns (~60% cost savings)
 
 persona_agent:
   model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — persona evolution. Falls back to memory_agent if empty.
@@ -317,3 +319,12 @@ gateway:
       memory: false                # disable memory for quick testing
       port: 7777                   # Go API port — Gradio Python UI runs separately on :7860
       traces: true                 # show agent traces in side panel
+
+    # WebSocket adapter — real-time chat with token streaming.
+    # Connect from a SvelteKit app, browser, or any WebSocket client.
+    # Run `her run --adapter=websocket` to start.
+    - name: websocket
+      type: websocket
+      enabled: false               # enable when using the web chat UI
+      db: her.db                   # shares production DB (or use her-dev.db for testing)
+      port: 7778                   # WebSocket server port (ws://localhost:7778/ws)

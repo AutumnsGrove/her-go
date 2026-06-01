@@ -317,6 +317,13 @@ type DriverConfig struct {
 	// that up" → "here's what I found").
 	MaxRepliesPerTurn int `yaml:"max_replies_per_turn"` // 0 = 2
 
+	// FastPath enables the fast-path classifier — a cheap LLM call that
+	// routes simple conversational messages directly to the chat model,
+	// skipping the driver agent entirely. Requires a configured classifier
+	// LLM. Messages with images or the first message in a conversation
+	// always go through the full pipeline regardless of this setting.
+	FastPath bool `yaml:"fast_path"`
+
 	// DirectReply enables the reply_direct tool — the driver agent writes
 	// the actual reply text instead of delegating to the chat model. This
 	// is an experimental feature for A/B testing in sims.
@@ -364,6 +371,13 @@ type MemoryAgentConfig struct {
 	// Loop tuning — same as DriverConfig. Defaults: 15 iterations, 2 continuations (= 45 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 15
 	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 2
+
+	// BatchThreshold controls how many turns accumulate before background
+	// agents (memory, mood, introspection) fire. 0 = disabled (fire every
+	// turn, original behavior). 3 is recommended — saves ~60% on background
+	// agent costs. An inactivity timer (45s) flushes early if the user
+	// goes idle before the threshold.
+	BatchThreshold int `yaml:"batch_threshold"` // 0 = disabled
 }
 
 // PersonaAgentConfig holds settings for the persona evolution model — the

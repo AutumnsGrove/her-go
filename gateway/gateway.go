@@ -176,6 +176,8 @@ func (g *Gateway) Run(ctx context.Context) error {
 					return b.ExecCompact(convID)
 				}
 			}
+			// WebSocket adapter currently needs no special wiring —
+			// it uses the standard command registry for slash commands.
 		}
 
 		// For the Telegram adapter, build commands from its own bot.Bot.
@@ -334,6 +336,8 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 		return newGradioAdapter(acfg, g.bus)
 	case "sim":
 		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus)
+	case "websocket":
+		return newWSAdapter(acfg, g.bus)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}

@@ -89,6 +89,11 @@ type Bot struct {
 	// eventBus emits structured events for the TUI. Nil-safe.
 	eventBus *tui.Bus
 
+	// batcher controls when background agents (memory, mood, introspection)
+	// fire. When nil, background agents fire on every turn (original behavior).
+	// When set, they fire every N turns or after an inactivity timeout.
+	batcher *BackgroundBatcher
+
 	// agentBusy is an atomic flag the scheduler checks to avoid firing
 	// tasks while a conversation turn is in progress. Set before
 	// agent.Run(), cleared after. atomic.Bool is lock-free — no mutex
@@ -240,6 +245,25 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		}
 	}
 
+	// Initialize the background batcher if configured. The flush function
+	// launches mood + introspection agents on a timer when the user goes
+	// idle between batch boundaries. Memory agent is handled separately
+	// (suppressed by clearing MemoryAgentLLM in RunParams on non-batch turns).
+	if cfg.MemoryAgent.BatchThreshold > 0 {
+		bot.batcher = NewBackgroundBatcher(
+			cfg.MemoryAgent.BatchThreshold,
+			45*time.Second,
+			func() {
+				log.Info("batcher: inactivity flush — launching background agents")
+				// The timer-based flush runs mood only (no tracker/trace context).
+				// Memory agent will catch up on the next batch turn.
+				if bot.moodRunner != nil {
+					bot.launchMoodAgent("", nil, nil, nil)
+				}
+			},
+		)
+	}
+
 	// cmd wraps a handler to log the command to the command_log table.
 	// This gives us usage analytics (how often /clear is used, etc.)
 	// without touching any of the individual handler functions.
@@ -337,6 +361,20 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 		if err := b.initMood(); err != nil {
 			return nil, fmt.Errorf("initializing mood pipeline: %w", err)
 		}
+	}
+
+	// Initialize batcher in dev mode too.
+	if cfg.MemoryAgent.BatchThreshold > 0 {
+		b.batcher = NewBackgroundBatcher(
+			cfg.MemoryAgent.BatchThreshold,
+			45*time.Second,
+			func() {
+				log.Info("batcher: inactivity flush — launching background agents")
+				if b.moodRunner != nil {
+					b.launchMoodAgent("", nil, nil, nil)
+				}
+			},
+		)
 	}
 
 	return b, nil

@@ -145,6 +145,19 @@ func (f *gatewayFrontend) OnStreamToken(token string) {}
 
 func (f *gatewayFrontend) StopStream() {}
 
+// MakeStreamCallback implements bot.StreamProvider. When the adapter
+// supports streaming (implements gateway.Streamer), this returns
+// callbacks that route tokens directly to the client connection.
+// This is how WebSocket streaming works — the chat model emits tokens
+// via ChatCompletionStreaming, the reply tool calls StreamCallback for
+// each token, and it ends up here, flowing to the WebSocket client.
+func (f *gatewayFrontend) MakeStreamCallback() (func(chunk string) error, func()) {
+	if s, ok := f.adapter.(Streamer); ok {
+		return s.StreamToken, s.StreamEnd
+	}
+	return nil, nil
+}
+
 func (f *gatewayFrontend) SendBusy() error {
 	return f.adapter.Send(OutboundMsg{
 		Text:    "I'm still thinking about your last message — give me a moment.",

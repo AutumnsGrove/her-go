@@ -181,7 +181,43 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		}
 	}
 
-	// --- Run the agent ---
+	// --- Fast-path check ---
+	// Before spinning up the full driver agent, ask a cheap classifier
+	// whether this message can be handled directly by the chat model.
+	// Simple conversational turns (greetings, banter, emotional reactions)
+	// skip the driver entirely — saves 3-5 LLM calls per turn.
+	if b.shouldFastPath(input) {
+		if verdict := b.classifyRoute(scrubbedText, input.ConversationID); verdict == "SKIP" {
+			b.agentBusy.Store(true)
+			err := func() (runErr error) {
+				defer b.agentBusy.Store(false)
+				return b.runFastPath(fe, input, scrubbedText, vault, tracker,
+					statusCallback, streamCallback, ttsCallback, b.eventBus, input.TriggerMsgID)
+			}()
+			if stopStream != nil {
+				stopStream()
+			}
+			tracker.StopTyping()
+			if err != nil {
+				log.Error("fast-path error", "err", err)
+				_ = fe.SendError("Sorry, I'm having trouble right now. Try again in a moment?")
+			} else {
+				log.Info("─── fast-path reply sent ───")
+			}
+			// Fast-path turns still count toward the batch threshold.
+			// When the batcher fires, background agents run and see all
+			// intermediate turns (including fast-path ones) in the DB.
+			if b.batcher != nil {
+				if b.batcher.RecordTurn() {
+					log.Info("batcher: threshold reached on fast-path turn — launching background agents")
+					b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker, nil)
+				}
+			}
+			return nil
+		}
+	}
+
+	// --- Run the agent (full pipeline) ---
 	var introWG sync.WaitGroup
 
 	params := b.baseRunParams()
@@ -206,6 +242,19 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	params.OCRText = input.OCRText
 	params.IsSimRun = b.isSimRun
 
+	// If the batcher is active, check whether background agents should
+	// fire this turn. If not, suppress the memory agent by clearing its
+	// LLM client — agent.Run() skips the memory goroutine when this is nil.
+	// Mood and introspection are controlled after agent.Run() below.
+	fireBackground := true
+	if b.batcher != nil {
+		fireBackground = b.batcher.RecordTurn()
+		if !fireBackground {
+			params.MemoryAgentLLM = nil
+			log.Info("batcher: skipping background agents this turn")
+		}
+	}
+
 	b.agentBusy.Store(true)
 	result, err := agent.Run(params)
 	b.agentBusy.Store(false)
@@ -224,9 +273,13 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// Fire background agents (mood, introspection).
-	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker, &introWG)
-	b.launchIntrospectionAgent(result, params, &introWG, introspectionTraceCallback, tracker)
+	// Fire background agents (mood, introspection) — only on batch turns.
+	// On non-batch turns, these are skipped and will run when the batcher
+	// flushes (either threshold reached or inactivity timer fires).
+	if fireBackground {
+		b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker, &introWG)
+		b.launchIntrospectionAgent(result, params, &introWG, introspectionTraceCallback, tracker)
+	}
 
 	if traceFinalize != nil {
 		go func() {
