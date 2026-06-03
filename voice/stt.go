@@ -16,11 +16,13 @@ package voice
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -94,15 +96,71 @@ type transcriptionResponse struct {
 // transcribed text. The filename parameter signals the audio format to the
 // server (e.g. "voice.ogg", "memo.wav").
 //
-// The wire format is identical for both engines: multipart/form-data with a
-// "file" part and an optional "model" field — same as the OpenAI Whisper API.
-// The only engine-specific difference is the Authorization header.
+// Two wire formats are supported:
 //
-// Python equivalent:
+//   - **Multipart** (OpenAI Whisper, local parakeet): standard multipart/form-data
+//     with a "file" part — the original protocol.
 //
-//	requests.post(url, files={"file": ("voice.ogg", audio_bytes)},
-//	              headers={"Authorization": f"Bearer {api_key}"})
+//   - **JSON+base64** (OpenRouter): application/json with audio bytes base64-encoded
+//     in an `input_audio` object. OpenRouter uses this instead of multipart.
+//
+// The format is auto-detected from the base URL: OpenRouter gets JSON, everything
+// else gets multipart. This keeps config simple — no extra field needed.
 func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) {
+	if isOpenRouter(c.baseURL) {
+		return c.transcribeJSON(audioBytes, filename)
+	}
+	return c.transcribeMultipart(audioBytes, filename)
+}
+
+// isOpenRouter checks whether the base URL points to OpenRouter's API.
+func isOpenRouter(baseURL string) bool {
+	return strings.Contains(baseURL, "openrouter.ai")
+}
+
+// audioFormatFromFilename extracts the format string OpenRouter expects
+// from the filename extension. Falls back to "ogg" if unrecognized.
+func audioFormatFromFilename(filename string) string {
+	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
+	switch ext {
+	case "ogg", "wav", "mp3", "flac", "webm":
+		return ext
+	default:
+		return "ogg"
+	}
+}
+
+// transcribeJSON uses OpenRouter's JSON+base64 format.
+func (c *Client) transcribeJSON(audioBytes []byte, filename string) (string, error) {
+	payload := map[string]any{
+		"model": c.model,
+		"input_audio": map[string]string{
+			"data":   base64.StdEncoding.EncodeToString(audioBytes),
+			"format": audioFormatFromFilename(filename),
+		},
+		"language": "en",
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshaling JSON: %w", err)
+	}
+
+	url := c.baseURL + "/audio/transcriptions"
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	return c.doTranscribe(req)
+}
+
+// transcribeMultipart uses the standard OpenAI Whisper multipart/form-data format.
+func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -120,8 +178,6 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 		}
 	}
 
-	// Close must be called before reading from body — it writes the final
-	// boundary marker. Missing this produces a malformed request.
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("closing multipart writer: %w", err)
 	}
@@ -132,13 +188,16 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) 
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	// Remote engines (whisper) require Bearer auth. Local engines (parakeet)
-	// run on localhost with no auth — apiKey will be empty.
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
+	return c.doTranscribe(req)
+}
+
+// doTranscribe executes the HTTP request and parses the transcription response.
+// Shared by both JSON and multipart paths.
+func (c *Client) doTranscribe(req *http.Request) (string, error) {
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
