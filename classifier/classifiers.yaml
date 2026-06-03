@@ -376,6 +376,45 @@ classifiers:
       Respond with exactly one verdict on a single line. Return the FIRST matching verdict.
       Examples: "PASS", "PASSIVE_DRIFT — four paragraphs about restraint, zero about curiosity", "DETAIL_LEAK — references 'Tony' and 'Zaxbys' by name"
 
+  substance:
+    preamble: >-
+      You are a quick filter for a personal chatbot's background processing.
+      Given a user message and the bot's reply, decide whether this exchange
+      contains anything worth analyzing for memory extraction, mood tracking,
+      or self-reflection. Most casual exchanges (greetings, acknowledgments,
+      short reactions) are NOT worth analyzing. Only flag exchanges that
+      contain new factual information, meaningful emotional content,
+      relationship dynamics, or substantive topics.
+    write_types:
+      - substance
+    verdicts:
+      - name: SKIP
+        description: >-
+          The exchange is casual, trivial, or contains no extractable
+          substance. Greetings, acknowledgments, short reactions, logistics
+          confirmations, or content-free banter.
+        examples:
+          - '"User: hey / Bot: hey! how are you?"'
+          - '"User: ok / Bot: sounds good!"'
+          - '"User: lol / Bot: 😄"'
+          - '"User: brb / Bot: take your time!"'
+          - '"User: thanks / Bot: of course!"'
+          - '"User: good morning / Bot: morning! hope you slept well"'
+        rejection:
+          default_detail: exchange is too casual to warrant background analysis
+          suffix: Skipping memory/mood/introspection for this turn.
+
+      - name: ANALYZE
+        description: >-
+          The exchange contains substantive content worth analyzing —
+          new facts about the user, emotional disclosure, relationship
+          dynamics, plans, preferences, experiences, or meaningful
+          conversation.
+    footer: |-
+      Respond with exactly one verdict on a single line: SKIP or ANALYZE.
+      Be aggressive about skipping — when in doubt, SKIP. Only ANALYZE when
+      there is clearly extractable substance.
+
   reply:
     preamble: >-
       You are a style gate for a personal chatbot's reply system.

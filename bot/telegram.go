@@ -117,6 +117,14 @@ type Bot struct {
 	lastTraceMu       sync.Mutex
 	lastTraceSnapshot string
 
+	// Turn batching — background agents (memory, mood, introspection)
+	// accumulate skipped turns here until a substance gate fires or the
+	// counter hits the threshold. Protected by pendingMu; turnCounter
+	// is atomic for lock-free reads in the hot path.
+	turnCounter  atomic.Int32
+	pendingTurns []PendingTurn
+	pendingMu    sync.Mutex
+
 	// gatewayCmds holds gateway-level command handlers registered by
 	// the Telegram adapter. handleMessage checks these before falling
 	// through to the agent pipeline. This replaces the individual
@@ -126,6 +134,21 @@ type Bot struct {
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
 	ownerChat int64
+}
+
+// PendingTurn stores the data needed to run background agents on a
+// deferred turn. When the substance gate says "skip", the turn's key
+// fields are stashed here so the memory agent can process them later
+// when either a substantive turn arrives or the batch threshold fires.
+//
+// Think of this like a Python deque of pending work items — each one
+// holds just enough context to replay the background agent pipeline.
+type PendingTurn struct {
+	UserMessage    string
+	ReplyText      string
+	ThinkTraces    []string
+	TriggerMsgID   int64
+	ConversationID string
 }
 
 // SetOwnerChat sets the chat ID for event-triggered agent replies.

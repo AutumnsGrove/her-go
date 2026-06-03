@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"her/calendar"
@@ -162,7 +161,6 @@ type RunParams struct {
 	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
 	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
-	IntrospectionWG           *sync.WaitGroup             // nil-safe — signaled when memory goroutine finishes, introspection waits on this
 	IsSimRun                  bool                        // true when running via the sim adapter
 }
 
@@ -803,58 +801,10 @@ outer:
 		})
 	}
 
-	// --- Memory Agent ---
-	// Runs AFTER the response has been sent to the user in a goroutine.
-	// Begin the memory phase BEFORE launching the goroutine so the
-	// Tracker's ref count is correct (prevents premature TurnEndEvent).
-	var memPhase *turn.PhaseHandle
-	if params.Tracker != nil && params.MemoryAgentLLM != nil {
-		memPhase = params.Tracker.Begin("memory")
-	}
-
-	// Signal introspection WaitGroup before launching the goroutine.
-	// Add(1) here, Done() deferred inside — keeps the pair in one place.
-	if params.IntrospectionWG != nil {
-		params.IntrospectionWG.Add(1)
-	}
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("memory agent panic (recovered)", "panic", r)
-			}
-		}()
-		// Signal introspection WaitGroup AFTER all memory work completes.
-		if params.IntrospectionWG != nil {
-			defer params.IntrospectionWG.Done()
-		}
-		if params.MemoryAgentLLM != nil {
-			if memPhase != nil {
-				defer memPhase.Done(turn.PhaseMetrics{})
-			}
-			RunMemoryAgent(
-				MemoryAgentInput{
-					UserMessage:    params.ScrubbedUserMessage,
-					ThinkTraces:    thinkTraces,
-					ReplyText:      result.ReplyText,
-					TriggerMsgID:   params.TriggerMsgID,
-					ConversationID: params.ConversationID,
-				},
-				MemoryAgentParams{
-					LLM:           params.MemoryAgentLLM,
-					ClassifierLLM: params.ClassifierLLM,
-					Store:         params.Store,
-					EmbedClient:   params.EmbedClient,
-					Cfg:           params.Cfg,
-					TraceCallback: params.MemoryTraceCallback,
-					EventBus:      params.EventBus,
-					AgentEventCB:  params.AgentEventCB,
-					Phase:         memPhase,
-				},
-			)
-		}
-
-	}()
+	// Memory agent launch has been moved to the caller (bot/run_agent.go).
+	// The caller controls batching: a substance gate skips casual turns,
+	// and a counter forces a batch after a threshold. This avoids wasting
+	// LLM calls on "lol" / "ok" / "brb" messages.
 
 	return result, nil
 }
