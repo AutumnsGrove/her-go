@@ -257,6 +257,57 @@ func RejectionMessage(v Verdict) string {
 	return fmt.Sprintf("rejected: %s. %s", detail, rej.Suffix)
 }
 
+// CheckSubstance is a lightweight gate that decides whether a turn exchange
+// has enough substance to warrant running background agents (memory, mood,
+// introspection). Returns true if the exchange should be analyzed.
+//
+// This is a simpler cousin of Check — instead of validating a proposed memory
+// write, it just asks "is this conversation turn worth thinking about at all?"
+// Uses the "substance" classifier from classifiers.yaml.
+//
+// Fail-open: returns true on any error (missing classifier, LLM down, etc.)
+// so background agents run when in doubt. The worst case is wasted LLM calls,
+// not lost memories.
+func CheckSubstance(classifierLLM *llm.Client, userMessage, replyText string) bool {
+	if classifierLLM == nil {
+		return true
+	}
+
+	systemPrompt, ok := state.systemPrompts["substance"]
+	if !ok {
+		return true // classifier not loaded — fail-open
+	}
+
+	userPrompt := fmt.Sprintf(
+		"User: %s\nBot: %s",
+		truncateForClassifier(userMessage, 300),
+		truncateForClassifier(replyText, 300),
+	)
+
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	resp, err := classifierLLM.ChatCompletion(messages)
+	if err != nil {
+		return true // fail-open
+	}
+
+	upper := strings.ToUpper(strings.TrimSpace(resp.Content))
+	return !strings.HasPrefix(upper, "SKIP")
+}
+
+// truncateForClassifier clips a string to max runes and appends "..." if
+// truncated. Used by CheckSubstance to keep classifier prompts small —
+// the substance gate only needs the gist, not the full text.
+func truncateForClassifier(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

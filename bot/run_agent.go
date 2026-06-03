@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"her/agent"
+	"her/classifier"
 	"her/scrub"
 	"her/tools"
 	"her/turn"
@@ -182,11 +183,8 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	}
 
 	// --- Run the agent ---
-	var introWG sync.WaitGroup
-
 	params := b.baseRunParams()
 	params.Tracker = tracker
-	params.IntrospectionWG = &introWG
 	params.ScrubbedUserMessage = scrubbedText
 	params.ScrubVault = vault
 	params.ConversationID = input.ConversationID
@@ -224,9 +222,58 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// Fire background agents (mood, introspection).
-	b.launchMoodAgent(input.ConversationID, moodTraceCallback, tracker, &introWG)
-	b.launchIntrospectionAgent(result, params, &introWG, introspectionTraceCallback, tracker)
+	// --- Substance gate + batching ---
+	// Instead of firing all three background agents on every turn, we
+	// check whether this exchange has enough substance to warrant analysis.
+	// Casual turns ("lol", "ok", "thanks") get buffered; the batch fires
+	// when either a substantive turn arrives or the counter hits threshold.
+	//
+	// This is like a debounce — low-value turns are cheap to skip, but
+	// we guarantee nothing is lost by forcing a batch periodically.
+	threshold := b.cfg.BackgroundAgents.BatchThreshold
+	if threshold <= 0 {
+		threshold = 3 // default: batch every 3 skipped turns
+	}
+
+	shouldAnalyze := true
+	if b.cfg.BackgroundAgents.SubstanceGate && b.classifierLLM != nil {
+		shouldAnalyze = classifier.CheckSubstance(b.classifierLLM, input.UserMessage, result.ReplyText)
+		if shouldAnalyze {
+			log.Info("substance gate: ANALYZE")
+		} else {
+			log.Info("substance gate: SKIP")
+		}
+	}
+
+	// Build the current turn's pending data.
+	currentTurn := PendingTurn{
+		UserMessage:    scrubbedText,
+		ReplyText:      result.ReplyText,
+		ThinkTraces:    result.ThinkTraces,
+		TriggerMsgID:   input.TriggerMsgID,
+		ConversationID: input.ConversationID,
+	}
+
+	// Append to buffer and check whether to fire.
+	b.pendingMu.Lock()
+	b.pendingTurns = append(b.pendingTurns, currentTurn)
+	count := int(b.turnCounter.Add(1))
+	b.pendingMu.Unlock()
+
+	if shouldAnalyze || count >= threshold {
+		// Drain the buffer — run background agents on the accumulated batch.
+		b.pendingMu.Lock()
+		turns := b.pendingTurns
+		b.pendingTurns = nil
+		b.turnCounter.Store(0)
+		b.pendingMu.Unlock()
+
+		b.launchBackgroundAgents(turns, result, params, tracker,
+			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback)
+	} else {
+		log.Info("turn batched — background agents deferred",
+			"pending", count, "threshold", threshold)
+	}
 
 	if traceFinalize != nil {
 		go func() {
@@ -236,6 +283,80 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	}
 
 	return nil
+}
+
+// launchBackgroundAgents fires memory, mood, and introspection agents
+// for a batch of accumulated turns. The memory agent runs once on the
+// latest turn's context (it reads recent messages from the DB, so all
+// accumulated turns are visible in its conversation window). Mood and
+// introspection also run once on the latest turn.
+//
+// The sync.WaitGroup coordinates ordering: memory + mood finish first,
+// then introspection runs (it needs to see any self-memories the memory
+// agent just wrote). This is the same coordination that was previously
+// split between agent.Run() and runAgent — now it lives in one place.
+func (b *Bot) launchBackgroundAgents(
+	turns []PendingTurn,
+	latestResult *agent.RunResult,
+	latestParams agent.RunParams,
+	tracker *turn.Tracker,
+	memoryTrace tools.TraceCallback,
+	moodTrace tools.TraceCallback,
+	introspectionTrace tools.TraceCallback,
+) {
+	if len(turns) == 0 {
+		return
+	}
+	latest := turns[len(turns)-1]
+	var introWG sync.WaitGroup
+
+	// --- Memory agent ---
+	// Runs once on the latest turn. The memory agent reads recent
+	// conversation from the DB, so it sees all accumulated turns
+	// in its context window — no need to run per-buffered-turn.
+	if b.memoryAgentLLM != nil {
+		var memPhase *turn.PhaseHandle
+		if tracker != nil {
+			memPhase = tracker.Begin("memory")
+		}
+		introWG.Add(1)
+
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error("memory agent panic (recovered)", "panic", r)
+				}
+			}()
+			defer introWG.Done()
+			if memPhase != nil {
+				defer memPhase.Done(turn.PhaseMetrics{})
+			}
+			agent.RunMemoryAgent(
+				agent.MemoryAgentInput{
+					UserMessage:    latest.UserMessage,
+					ThinkTraces:    latest.ThinkTraces,
+					ReplyText:      latest.ReplyText,
+					TriggerMsgID:   latest.TriggerMsgID,
+					ConversationID: latest.ConversationID,
+				},
+				agent.MemoryAgentParams{
+					LLM:           b.memoryAgentLLM,
+					ClassifierLLM: b.classifierLLM,
+					Store:         b.store,
+					EmbedClient:   b.embedClient,
+					Cfg:           b.cfg,
+					TraceCallback: memoryTrace,
+					EventBus:      b.eventBus,
+					AgentEventCB:  latestParams.AgentEventCB,
+					Phase:         memPhase,
+				},
+			)
+		}()
+	}
+
+	// --- Mood + introspection ---
+	b.launchMoodAgent(latest.ConversationID, moodTrace, tracker, &introWG)
+	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker)
 }
 
 // baseRunParams returns a RunParams pre-filled with all the constant fields

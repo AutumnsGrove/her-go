@@ -50,7 +50,22 @@ type Config struct {
 	Tunnel             TunnelConfig             `yaml:"tunnel"`
 	Cloudflare         CloudflareConfig         `yaml:"cloudflare"`
 	Update             UpdateConfig             `yaml:"update"`
+	BackgroundAgents   BackgroundAgentsConfig   `yaml:"background_agents"`
 	Gateway            GatewayConfig            `yaml:"gateway"`
+}
+
+// BackgroundAgentsConfig controls when the post-turn background agents
+// (memory, mood, introspection) fire. Instead of running on every turn,
+// they accumulate turns and run in batches — a substance gate skips
+// casual exchanges ("lol", "ok"), and a counter forces a batch after
+// a threshold of skipped turns so nothing is lost.
+//
+// This is like Python's @lru_cache or debounce — you're batching work
+// that doesn't need to happen immediately, saving LLM calls on low-value
+// turns while guaranteeing nothing falls through the cracks.
+type BackgroundAgentsConfig struct {
+	BatchThreshold int  `yaml:"batch_threshold"` // max turns before forced batch run (0 = use default of 3)
+	SubstanceGate  bool `yaml:"substance_gate"`  // use classifier to detect substantive turns (default true when section present)
 }
 
 // LocationConfig holds the user's saved home coordinates and unit

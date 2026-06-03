@@ -186,6 +186,14 @@ dream:
     expires_after_hours: 48           # how long the note stays active
     history_lookback_days: 7          # how many days of messages to scan
 
+# Background agent batching — controls when memory, mood, and introspection
+# agents run after each turn. Instead of firing on every message, a substance
+# gate skips casual exchanges ("lol", "ok", "brb") and a counter forces a
+# batch after a threshold so nothing is lost. Saves LLM calls on low-value turns.
+background_agents:
+  batch_threshold: 3     # max skipped turns before forced batch (0 = use default 3)
+  substance_gate: true   # use classifier to detect substantive turns
+
 location:
   latitude: 0                   # written by set_location — leave 0/0 until set
   longitude: 0

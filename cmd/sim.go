@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"her/agent"
@@ -1258,11 +1257,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// WaitGroup for introspection coordination — memory goroutine
-		// inside agent.Run() signals Done; we Wait before introspection.
-		var introWG sync.WaitGroup
-
 		// Run the full agent pipeline — same call the Telegram bot makes.
+		// Note: background agents (memory, mood, introspection) are NOT
+		// launched in sims — agent.Run only handles the driver + reply.
+		// The bot's launchBackgroundAgents handles batching in production.
 		result, err := agent.Run(agent.RunParams{
 			DriverLLM:           driverClient,
 			MemoryAgentLLM:      memoryAgentClient, // nil if not configured — memory agent skips
@@ -1287,7 +1285,6 @@ func runSim(cmd *cobra.Command, args []string) error {
 			ConfigPath:          cfgFile,
 			AgentEventCB:        agentEventCB,
 			Tracker:             tracker,
-			IntrospectionWG:     &introWG,
 		})
 		if err != nil {
 			log.Error("agent.Run failed", "turn", i+1, "err", err)
@@ -1384,14 +1381,10 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		// --- Introspection agent ---
-		// Runs synchronously after mood in sim mode. Waits for the
-		// memory goroutine's WaitGroup signal (already done by now since
-		// tracker.Wait() completed above), snapshots self-memories,
-		// then runs the introspection tool-calling loop.
+		// Runs synchronously after mood in sim mode. Memory agent no
+		// longer runs inside agent.Run() (it's batched in production),
+		// so there's no WaitGroup to wait on here — just proceed.
 		if introspectionClient != nil {
-			// Wait for memory goroutine's WG signal (should be instant
-			// since tracker.Wait() already ensured it finished).
-			introWG.Wait()
 
 			// Snapshot self-memories + persona (same as bot/introspection.go).
 			selfCards, scErr := store.CardsBySubject("self")

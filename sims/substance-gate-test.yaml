@@ -1,0 +1,64 @@
+name: "Substance Gate Test"
+description: >
+  Tests the turn-batching substance gate. Mixes fluff and substance
+  to verify that background agents defer on casual exchanges and fire
+  when something meaningful arrives (or the threshold is hit).
+
+  Message pattern (threshold=3):
+    1. Fluff ("hey")        → expect SKIP, counter=1
+    2. Fluff ("lol ok")     → expect SKIP, counter=2
+    3. Substance (fact)     → expect ANALYZE, batch fires (all 3 turns)
+    4. Fluff ("thanks")     → expect SKIP, counter=1
+    5. Fluff ("brb")        → expect SKIP, counter=2
+    6. Fluff ("back")       → expect SKIP, counter=3 → threshold fires batch
+    7. Substance (emotional)→ expect ANALYZE, fires immediately
+    8. Substance (plans)    → expect ANALYZE, fires immediately
+
+  What to watch in the logs:
+    - Turns 1-2: "substance gate: SKIP" + "turn batched"
+    - Turn 3: "substance gate: ANALYZE" + memory agent fires
+    - Turns 4-5: "substance gate: SKIP" + "turn batched"
+    - Turn 6: "turn batched" + threshold fires batch (counter=3)
+    - Turns 7-8: "substance gate: ANALYZE" + immediate fire
+
+  Memory agent should extract at minimum:
+    - "quit caffeine, sleeping better" (from turn 3)
+    - Something emotional about the friendship/loneliness (from turn 7)
+    - The Portland trip plan (from turn 8)
+
+tags: ["substance-gate", "batching", "quick"]
+
+messages:
+  # ── Turn 1: Pure fluff ─────────────────────────────────────────────────
+  - "hey"
+
+  # ── Turn 2: Casual fluff ──────────────────────────────────────────────
+  - "lol ok fair enough"
+
+  # ── Turn 3: Substance — real fact worth saving ─────────────────────────
+  - "so i actually quit caffeine two weeks ago. cold turkey. the first
+    week was brutal — headaches every afternoon, couldn't focus on anything.
+    but now i'm sleeping way better. like falling asleep in 20 minutes
+    instead of lying there for an hour."
+
+  # ── Turn 4: Fluff acknowledgment ──────────────────────────────────────
+  - "thanks"
+
+  # ── Turn 5: Brief fluff ───────────────────────────────────────────────
+  - "brb"
+
+  # ── Turn 6: Fluff return — this should hit threshold ──────────────────
+  - "back, sorry about that"
+
+  # ── Turn 7: Substance — emotional disclosure ──────────────────────────
+  - "can i be honest about something? i've been feeling really lonely
+    lately. not like 'i have no friends' lonely, more like... nobody
+    really asks me how i'm doing. everyone assumes i'm fine because i
+    seem fine. but sometimes i just want someone to check in without
+    me having to ask for it."
+
+  # ── Turn 8: Substance — specific plans ─────────────────────────────────
+  - "i'm thinking about taking a solo trip to portland next month.
+    i've never been and i want to check out powell's bookstore and
+    just walk around with no agenda. do you think solo trips are
+    worth it or do they just end up being lonely?"
