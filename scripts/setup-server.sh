@@ -111,7 +111,7 @@ ok "UFW enabled: SSH(22) + HTTP(80) + HTTPS(443)"
 # --- Step 1: System dependencies ---
 
 info "[1/11] Installing system dependencies..."
-apt-get install -y -qq git sqlite3 build-essential curl ffmpeg > /dev/null 2>&1
+apt-get install -y -qq git sqlite3 libsqlite3-dev build-essential curl ffmpeg > /dev/null 2>&1
 ok "System dependencies installed"
 
 # --- Step 2: Caddy reverse proxy ---
