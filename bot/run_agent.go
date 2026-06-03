@@ -13,6 +13,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -268,9 +269,20 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		b.turnCounter.Store(0)
 		b.pendingMu.Unlock()
 
+		if traceCallback != nil {
+			if shouldAnalyze {
+				traceCallback(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
+			} else {
+				traceCallback(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
+			}
+		}
+
 		b.launchBackgroundAgents(turns, result, params, tracker,
 			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback)
 	} else {
+		if traceCallback != nil {
+			traceCallback(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
+		}
 		log.Info("turn batched — background agents deferred",
 			"pending", count, "threshold", threshold)
 	}
