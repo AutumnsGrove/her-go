@@ -12,9 +12,17 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"her/config"
 	"her/procmgr"
 )
+
+// isInteractive returns true if stdin is connected to a terminal.
+// When running over an SSH pipe or inside a systemd unit, there's no TTY
+// and interactive TUI forms (huh) will fail trying to open /dev/tty.
+func isInteractive() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
 
 // loadBotName loads config and returns just the bot's name.
 // Used by service management commands (start, stop) that need the
@@ -211,14 +219,19 @@ func installDeps() <-chan depResult {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	// Run the interactive wizard first — walks through config.yaml fields
-	// and writes the file before we build or install anything. If the user
-	// quits mid-wizard nothing is written and setup stops cleanly.
-	if err := runWizard(cfgFile); err != nil {
-		if errors.Is(err, errWizardAborted) {
-			return nil
+	// Run the interactive wizard if we have a TTY. In headless environments
+	// (SSH pipes, systemd, CI) the huh form can't open /dev/tty, so we skip
+	// the wizard and rely on whatever config.yaml already has. This is like
+	// checking sys.stdin.isatty() in Python before prompting for input.
+	if isInteractive() {
+		if err := runWizard(cfgFile); err != nil {
+			if errors.Is(err, errWizardAborted) {
+				return nil
+			}
+			return fmt.Errorf("setup wizard: %w", err)
 		}
-		return fmt.Errorf("setup wizard: %w", err)
+	} else {
+		log.Info("no TTY detected — skipping interactive wizard, using existing config")
 	}
 
 	// Load config to get the bot's name for the service label.
