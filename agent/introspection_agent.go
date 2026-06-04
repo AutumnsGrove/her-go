@@ -79,12 +79,18 @@ Rules:
 - Every save_self_memory MUST specify a card_slug (one of the my-* self cards).
 - Call skip when there's nothing worth reflecting on. Call done after saving.`
 
+// IntrospectionAgentResult holds the outcome of an introspection agent run.
+type IntrospectionAgentResult struct {
+	SelfMemoriesSaved int
+	Cost              float64
+}
+
 // RunIntrospectionAgent reviews the turn for self-observations. Designed to
 // run in a goroutine after memory + mood complete. Logs results but never
 // returns errors — a missed self-observation is acceptable; a crash is not.
-func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAgentParams) {
+func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAgentParams) IntrospectionAgentResult {
 	if params.LLM == nil {
-		return
+		return IntrospectionAgentResult{}
 	}
 
 	// Pre-filter: skip introspection on turns that are purely informational
@@ -92,7 +98,7 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 	// the full introspection loop (~5 LLM calls on Kimi K2).
 	if params.ClassifierLLM != nil && !shouldIntrospect(input, params.ClassifierLLM) {
 		log.Info("─── introspection agent: skipped (pre-filter) ───")
-		return
+		return IntrospectionAgentResult{}
 	}
 
 	log.Info("─── introspection agent ───")
@@ -256,6 +262,11 @@ outer:
 
 	// Final trace update.
 	emitTrace()
+
+	return IntrospectionAgentResult{
+		SelfMemoriesSaved: memoriesSaved,
+		Cost:              totalCost,
+	}
 }
 
 // loadIntrospectionAgentPrompt reads the hot-reloadable prompt file.
