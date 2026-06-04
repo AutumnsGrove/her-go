@@ -319,10 +319,19 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 			"pending", count, "threshold", threshold)
 	}
 
-	if traceFinalize != nil {
+	// Emit total cost after all phases complete, then finalize the trace.
+	// Both full and lite modes get this — it's the last line on the board.
+	if traceFinalize != nil || liteTrace != nil {
 		go func() {
-			time.Sleep(2 * time.Second)
-			traceFinalize()
+			tracker.Wait()
+			m := tracker.Metrics()
+			costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, tracker.Elapsed().Round(time.Millisecond))
+			if tp, ok := fe.(TraceProvider); ok {
+				tp.TraceCallback("cost")(costLine)
+			}
+			if traceFinalize != nil {
+				traceFinalize()
+			}
 		}()
 	}
 
@@ -394,7 +403,7 @@ func (b *Bot) launchBackgroundAgents(
 				},
 			)
 			if liteTrace != nil {
-				liteTrace("memory", fmt.Sprintf("🧩 memory ✓ %d saved · $%.4f", result.MemoriesSaved, result.Cost))
+				liteTrace("memory", fmt.Sprintf("🧩 memory ✓ %d saved", result.MemoriesSaved))
 			}
 		}()
 	}
