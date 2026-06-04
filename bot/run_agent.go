@@ -20,6 +20,7 @@ import (
 
 	"her/agent"
 	"her/classifier"
+	"her/memory"
 	"her/scrub"
 	"her/tools"
 	"her/turn"
@@ -127,6 +128,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	var introspectionTraceCallback tools.TraceCallback
 	var traceFinalize func()
 	var liteToolHook func(toolName string)
+	var substanceTrace tools.TraceCallback
 
 	// Traces flow through the TraceProvider optional interface.
 	// Both TelegramFrontend and gatewayFrontend implement it —
@@ -146,6 +148,8 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 
 	if tp, ok := fe.(TraceProvider); ok {
 		traceFinalize = tp.TraceFinalize
+
+		substanceTrace = tp.TraceCallback("substance")
 
 		if b.cfg.Driver.Trace {
 			// Full mode — wire verbose callbacks into agents.
@@ -316,21 +320,20 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		b.turnCounter.Store(0)
 		b.pendingMu.Unlock()
 
-		// Emit to the memory trace section — not main, which would
-		// overwrite the driver's think/recall/reply trace.
-		if memoryTraceCallback != nil {
+		// Emit substance decision to its own trace slot.
+		if substanceTrace != nil {
 			if shouldAnalyze {
-				memoryTraceCallback(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
+				substanceTrace(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
 			} else {
-				memoryTraceCallback(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
+				substanceTrace(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
 			}
 		}
 
 		b.launchBackgroundAgents(turns, result, params, tracker,
 			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, liteTrace)
 	} else {
-		if memoryTraceCallback != nil {
-			memoryTraceCallback(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
+		if substanceTrace != nil {
+			substanceTrace(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
 		}
 		log.Info("turn batched — background agents deferred",
 			"pending", count, "threshold", threshold)
@@ -428,6 +431,16 @@ func (b *Bot) launchBackgroundAgents(
 	// --- Mood + introspection ---
 	b.launchMoodAgent(latest.ConversationID, moodTrace, tracker, &introWG)
 	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker)
+
+	// In lite mode, emit a mood summary once everything finishes.
+	if liteTrace != nil {
+		go func() {
+			tracker.Wait()
+			if entry, err := b.store.LatestMoodEntry(memory.MoodKindMomentary); err == nil && entry != nil {
+				liteTrace("mood", fmt.Sprintf("🎭 mood: %s", strings.Join(entry.Labels, ", ")))
+			}
+		}()
+	}
 }
 
 // baseRunParams returns a RunParams pre-filled with all the constant fields
