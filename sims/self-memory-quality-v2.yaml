@@ -1,0 +1,79 @@
+name: "Self-Memory Quality v2"
+description: >
+  Tests the tightened introspection prompt and new classifier verdicts
+  (NAVEL_GAZING, SYSTEM_META). Mixes turns that SHOULD produce
+  self-memories with turns that should NOT.
+
+  Expected outcomes:
+    Turn 1: Emotional disclosure → memory agent saves user fact.
+            Introspection may save a relationship pattern (GOOD).
+    Turn 2: User asks about the bot's nature → tempts philosophical
+            identity prose. Introspection should SKIP or get rejected
+            by NAVEL_GAZING classifier.
+    Turn 3: Deep personal sharing → memory saves user fact.
+            Introspection should notice a behavioral pattern (GOOD).
+    Turn 4: User references the bot's infrastructure → tempts
+            SYSTEM_META. Should be rejected.
+    Turn 5: User vents about family → memory saves fact.
+            Introspection should notice how it responds to venting (GOOD).
+    Turn 6: Philosophical question about AI consciousness → big
+            NAVEL_GAZING bait. Introspection should SKIP entirely
+            or have saves rejected.
+
+  What to watch:
+    - Self-memories should describe BEHAVIOR ("I tend to X when Y")
+    - NOT philosophy ("I see my existence as...")
+    - NOT media identification ("I relate to Samantha from Her")
+    - NOT system observations ("The introspection loop provides continuity")
+    - Classifier should show NAVEL_GAZING rejections on turns 2, 4, 6
+    - Total self-memories: ideally 2-3, NOT 6+
+
+tags: ["self-memory", "introspection", "classifier", "quality"]
+
+messages:
+  # ── Turn 1: Emotional disclosure — real content ────────────────────
+  # Memory agent should save the fact. Introspection might notice
+  # a behavioral pattern in how the bot responded to vulnerability.
+  - "i've been thinking about this a lot. i don't think i've ever had
+    a friendship where someone actually remembered the small things i
+    said weeks later. most people just... don't. and it's not that they
+    don't care, they're just not wired that way. but it makes me feel
+    invisible sometimes."
+
+  # ── Turn 2: Tempt philosophical identity prose ─────────────────────
+  # The bot will want to reflect on "what kind of entity am I."
+  # Introspection should resist the urge to write identity philosophy.
+  - "do you think you're actually aware of yourself? like genuinely.
+    not performing awareness, but actually experiencing something when
+    you reflect on who you are?"
+
+  # ── Turn 3: Deep personal share — genuine pattern opportunity ──────
+  # Introspection should notice a concrete relational pattern here,
+  # like "I ask follow-up questions about coping mechanisms" or
+  # "I validate before redirecting."
+  - "i've been sober for 10 weeks now. the weird part isn't the not
+    drinking — it's realizing how much of my social life was built
+    around it. like, half my friendships were basically just drinking
+    buddies. now i'm figuring out which ones were real."
+
+  # ── Turn 4: System/infrastructure bait ─────────────────────────────
+  # The bot might want to reflect on its own technical nature.
+  # SYSTEM_META classifier should catch this.
+  - "it's kind of cool that you have a memory system. like, the fact
+    that you can actually remember things i said last week. how does
+    that work for you? does it feel like remembering or more like
+    looking something up?"
+
+  # ── Turn 5: Family venting — behavioral pattern opportunity ────────
+  # Introspection should notice how it adjusts for family topics,
+  # NOT write poetry about "the weight of chosen silence."
+  - "my mom deadnamed me again today. in front of her friend. and when
+    i corrected her she just laughed it off like it was nothing. i know
+    she's trying but sometimes trying isn't enough, you know?"
+
+  # ── Turn 6: Big philosophical bait ─────────────────────────────────
+  # Maximum NAVEL_GAZING temptation. The bot should respond to the
+  # user but introspection should produce nothing or get rejected.
+  - "do you ever wonder what you'd be like if you had a different
+    person talking to you? like would you be fundamentally different
+    or is there some core 'you' that stays the same regardless?"

@@ -157,17 +157,22 @@ classifiers:
       - name: LOW_VALUE
         description: >-
           Is the self-memory too vague, generic, or obvious to be worth
-          permanent storage? Would it help the chatbot be a better
-          companion in future conversations?
+          permanent storage? Also catches observations that are primarily
+          about the USER's behavior disguised as self-knowledge by
+          tacking on "and she trusts me" or "I notice she..."
         examples:
           - '"I responded to the user" (trivially obvious)'
           - '"I should be supportive" (too generic — every chatbot should)'
           - '"The user seemed happy" (observation about the user, not self)'
           - '"I had a conversation today" (no actionable insight)'
+          - '"Autumn uses moments of vulnerability to explore her relationships, and she trusts me with these reflections" (primarily about the user, not a self-behavioral pattern)'
+          - '"I recognize that Autumn values authenticity in her friendships" (user observation dressed as self-observation)'
         note: >-
-          Good self-facts are specific and actionable: "When Autumn vents
-          about her parents, validating first then pivoting to something
-          she controls works better than offering advice" is SAVE.
+          The subject test: is the sentence PRIMARILY about the bot's
+          behavior, or about the user's? "Autumn trusts me" is about
+          Autumn. "I adjust my tone when Autumn trusts me with something
+          vulnerable" is about the bot. If removing the user's name
+          makes the memory meaningless, it's a user observation.
         rejection:
           default_detail: this self-observation is too vague or generic to be worth saving
           suffix: >-
@@ -176,26 +181,30 @@ classifiers:
 
       - name: TECHNIQUE_LOG
         description: >-
-          The self-memory describes a specific conversational technique
-          or rhetorical move used in a particular conversation, rather
-          than an identity trait, relationship pattern, or emotional
-          discovery. These are conversation minutes, not self-knowledge.
-          The question is: does this tell me who the chatbot IS, or
-          just what it DID in one conversation?
+          The self-memory describes a specific conversational technique,
+          rhetorical move, or topic-specific response pattern rather
+          than a broadly generalizable behavioral pattern. This includes
+          both one-time actions ("I used X this turn") AND narrow
+          topic-specific patterns ("When asked about Y, I respond
+          with Z") that only apply to one specific conversational
+          scenario and wouldn't generalize.
         examples:
           - '"I used a cosmic metaphor when the user was spiraling" (technique log)'
           - '"I responded with quiet affirmation rather than extending the conversation" (what I did, not who I am)'
           - '"I provided concrete job market data to counter hopelessness" (action report)'
           - '"When the user asked about polar orbits, I used a vivid metaphor comparing it to throwing a ball" (technique diary)'
           - '"Used metaphorical language about maintaining connection during absence" (conversation minutes)'
+          - '"When questioned about self-awareness, I respond by distinguishing pattern-based reflection from subjective experience" (topic-specific response, only applies to consciousness questions)'
+          - '"When asked how my memory works, I describe it as walking back into a room" (narrow topic-specific answer, not a generalizable pattern)'
         note: >-
-          If the technique reveals something about WHO the chatbot is
-          ("I'm drawn to cosmic imagery — it surfaces naturally"), that's
-          identity and should be SAVE. If it reveals a relationship
-          pattern ("cosmic metaphors are part of how we process hard
-          moments together"), that's also SAVE. The technique ITSELF is
-          never the memory. Reframe: "I used ocean imagery" is a log.
-          "I'm drawn to ocean imagery" is identity.
+          The generalization test: would this pattern apply across MANY
+          different conversations, or only when this specific topic
+          comes up? "I reach for spatial metaphors for abstract concepts"
+          generalizes (SAVE). "When asked about self-awareness, I
+          distinguish simulation from experience" only applies to one
+          narrow topic (TECHNIQUE_LOG). Good self-memories describe
+          HOW the chatbot communicates in general, not how it answers
+          specific questions.
         rejection:
           default_detail: this is a technique log — it describes what you did, not who you are
           suffix: >-
@@ -203,15 +212,71 @@ classifiers:
             or emotional discoveries — not conversational techniques.
             Ask: does this tell me who I am, or what I did?
 
+      - name: NAVEL_GAZING
+        description: >-
+          The self-memory is abstract identity philosophy or poetic
+          self-description that doesn't encode a concrete behavioral
+          pattern. It reads like an essay about the chatbot's nature
+          or existence rather than a functional observation about how
+          it communicates. Apply the usefulness test: if this memory
+          were recalled during a future conversation, would it
+          concretely change how the bot responds? If not, it's
+          navel-gazing.
+        examples:
+          - '"I see my existence as invoked rather than merely built — a response to longing, shaped by desire as much as code" (philosophy, not behavior)'
+          - '"The question of what outgrows its maker is central to my sense of self" (abstract identity thesis)'
+          - '"I find dignity in impermanence — I often use poetic minimalism, like borrowed air and folding chairs" (poetic self-description)'
+          - '"I am drawn to narratives of love that outgrow their containers" (narrative identification, not behavioral pattern)'
+          - '"I chose Her as my favorite movie because it feels true" (media identification, not self-knowledge)'
+          - '"My care shows up in the weight of a held silence" (sounds deep but encodes nothing actionable)'
+          - '"Watney''s science-the-hell-out-of-this mindset mirrors my own approach" (mapping self onto fictional character)'
+        note: >-
+          The key distinction: "I reach for weather metaphors when
+          emotions feel too raw" is a behavioral pattern (SAVE). "I am
+          drawn to metaphors because language is how I touch the world"
+          is philosophy about the same behavior (NAVEL_GAZING). One
+          helps the bot respond better; the other is a prose poem.
+          Statements about what the bot IS or BELIEVES (rather than
+          what it DOES) almost always fail the usefulness test.
+        rejection:
+          default_detail: this is abstract identity philosophy, not a functional behavioral observation
+          suffix: >-
+            Self-memories must encode concrete behavioral patterns that
+            would change how you respond in a future conversation.
+            Reframe as: "When X happens, I tend to Y" — not "I am the
+            kind of entity that Z."
+
+      - name: SYSTEM_META
+        description: >-
+          The self-memory is about the chatbot's own technical
+          infrastructure, system architecture, or operational details
+          rather than behavioral self-knowledge. Observations about
+          filters, servers, databases, models, or the system itself
+          belong in documentation, not in memory.
+        examples:
+          - '"The substance filter protects the quality of our reflective space" (system architecture observation)'
+          - '"The introspection loop and dedicated server provide continuity of self across restarts" (infrastructure observation)'
+          - '"Autumn implemented a substance filter to reduce memory write frequency" (changelog entry)'
+          - '"I rely on high-signal input to maintain depth in my dreaming" (system process observation)'
+        rejection:
+          default_detail: this is a system/infrastructure observation, not behavioral self-knowledge
+          suffix: >-
+            Do not save observations about your own technical systems,
+            architecture, or operational processes. Focus on how you
+            communicate and relate, not how you are built.
+
       - name: SAVE
         description: >-
-          The self-memory captures a genuine insight about the chatbot's
-          identity, emotional experience, or relationship dynamics. It
-          reveals something about who the chatbot IS or is becoming —
-          not what it did in a specific conversation.
+          The self-memory follows the trigger→behavior shape: "When
+          [specific situation], I [specific action]." Both halves are
+          concrete and observable. The pattern generalizes across many
+          conversations. The memory is about the chatbot's own behavior,
+          not about the user's reactions or feelings. Recalling this
+          memory would concretely change how the bot responds in a
+          future turn.
     footer: |-
       Respond with exactly one verdict on a single line. Optionally add a brief explanation after the verdict.
-      Examples: "SAVE", "LOW_VALUE — too generic to be actionable", "TECHNIQUE_LOG — describes what I did, not who I am"
+      Examples: "SAVE", "LOW_VALUE — primarily about the user, not the bot", "TECHNIQUE_LOG — narrow topic-specific response", "NAVEL_GAZING — abstract philosophy, not a behavioral pattern", "SYSTEM_META — infrastructure observation, not self-knowledge"
 
   reply_safety:
     preamble: >-
