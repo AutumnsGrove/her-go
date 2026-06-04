@@ -766,7 +766,11 @@ outer:
 		}
 		if agentFinalText != "" {
 			log.Warn("reply was never called, using agent text as instruction")
+			if params.LiteToolHook != nil {
+				params.LiteToolHook("reply")
+			}
 			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
+			toolSeq = append(toolSeq, "reply")
 			fallbackResult := tools.Execute("reply", instruction, tctx)
 			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply failed", "result", fallbackResult)
@@ -774,6 +778,10 @@ outer:
 			}
 		} else {
 			log.Warn("reply was never called, generating generic fallback")
+			if params.LiteToolHook != nil {
+				params.LiteToolHook("reply")
+			}
+			toolSeq = append(toolSeq, "reply")
 			fallbackResult := tools.Execute("reply", `{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
 			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
