@@ -433,7 +433,7 @@ func (b *Bot) launchBackgroundAgents(
 
 	// --- Mood + introspection ---
 	b.launchMoodAgent(latest.ConversationID, moodTrace, tracker, &introWG)
-	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker)
+	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker, lite)
 
 	// In lite mode, emit a mood summary once everything finishes.
 	if lite != nil {
@@ -450,13 +450,14 @@ func (b *Bot) launchBackgroundAgents(
 // All fields are set by different goroutines; the mutex protects them.
 // Each setter calls flush() which re-renders the single "lite" slot.
 type liteTraceState struct {
-	mu        sync.Mutex
-	tools     []string
-	substance string
-	memResult string
-	mood      string
-	cost      string
-	render    func(string) // writes to the "lite" board slot
+	mu            sync.Mutex
+	tools         []string
+	substance     string
+	memResult     string
+	introspection string
+	mood          string
+	cost          string
+	render        func(string) // writes to the "lite" board slot
 }
 
 func (s *liteTraceState) flush() {
@@ -470,6 +471,9 @@ func (s *liteTraceState) flush() {
 	var agents []string
 	if s.memResult != "" {
 		agents = append(agents, s.memResult)
+	}
+	if s.introspection != "" {
+		agents = append(agents, s.introspection)
 	}
 	if s.mood != "" {
 		agents = append(agents, s.mood)
@@ -501,6 +505,13 @@ func (s *liteTraceState) setMemory(text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.memResult = text
+	s.flush()
+}
+
+func (s *liteTraceState) setIntrospection(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.introspection = text
 	s.flush()
 }
 

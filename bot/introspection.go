@@ -6,6 +6,7 @@
 package bot
 
 import (
+	"fmt"
 	"os"
 	"sync"
 
@@ -27,6 +28,7 @@ func (b *Bot) launchIntrospectionAgent(
 	wg *sync.WaitGroup,
 	traceCallback tools.TraceCallback,
 	tracker *turn.Tracker,
+	lite *liteTraceState,
 ) {
 	if b.introspectionLLM == nil {
 		return
@@ -78,7 +80,7 @@ func (b *Bot) launchIntrospectionAgent(
 			}
 		}
 
-		agent.RunIntrospectionAgent(
+		introResult := agent.RunIntrospectionAgent(
 			agent.IntrospectionAgentInput{
 				UserMessage:    params.ScrubbedUserMessage,
 				ThinkTraces:    result.ThinkTraces,
@@ -99,5 +101,8 @@ func (b *Bot) launchIntrospectionAgent(
 				Phase:         introPhase,
 			},
 		)
+		if lite != nil {
+			lite.setIntrospection(fmt.Sprintf("🪡 %d self", introResult.SelfMemoriesSaved))
+		}
 	}()
 }
