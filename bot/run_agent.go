@@ -335,17 +335,23 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	}
 
 	// Emit total cost after all phases complete, then finalize the trace.
+	// The small sleep before finalize ensures async board edits from
+	// setCost have time to propagate to Telegram.
 	if traceFinalize != nil || lite != nil {
 		go func() {
 			tracker.Wait()
 			m := tracker.Metrics()
 			elapsed := tracker.Elapsed().Round(time.Millisecond)
+			costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed)
+			log.Info("turn complete", "cost", costLine)
 			if lite != nil {
-				lite.setCost(fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed))
+				lite.setCost(costLine)
 			}
 			if tp, ok := fe.(TraceProvider); ok && b.cfg.Driver.Trace {
-				tp.TraceCallback("cost")(fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed))
+				tp.TraceCallback("cost")(costLine)
 			}
+			// Let async board edits settle before finalizing.
+			time.Sleep(500 * time.Millisecond)
 			if traceFinalize != nil {
 				traceFinalize()
 			}
