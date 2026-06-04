@@ -97,9 +97,15 @@ Otherwise call done when finished.`
 // This function is designed to be called inside a goroutine — it logs
 // results but never returns an error to the caller. A missing fact is
 // acceptable; a crash in the background is not.
-func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) {
+// MemoryAgentResult holds the outcome of a memory agent run.
+type MemoryAgentResult struct {
+	MemoriesSaved int
+	Cost          float64
+}
+
+func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) MemoryAgentResult {
 	if params.LLM == nil {
-		return
+		return MemoryAgentResult{}
 	}
 
 	log.Info("─── memory agent ───")
@@ -291,17 +297,16 @@ outer:
 
 	log.Infof("  memory agent: %d memories saved | $%.6f", len(tctx.SavedMemories), totalCost)
 
-	// Update the phase metrics — the caller's deferred phase.Done() will
-	// merge these into the Tracker's accumulator. We update the deferred
-	// Done's metrics by calling Done here with the real values. The
-	// deferred Done in agent.go fires as a safety net with zero metrics
-	// if we crash, but if we reach here, this call takes precedence
-	// (PhaseHandle.Done is once-guarded).
 	if params.Phase != nil {
 		params.Phase.Done(turn.PhaseMetrics{
 			Cost:          totalCost,
 			MemoriesSaved: len(tctx.SavedMemories),
 		})
+	}
+
+	return MemoryAgentResult{
+		MemoriesSaved: len(tctx.SavedMemories),
+		Cost:          totalCost,
 	}
 }
 
