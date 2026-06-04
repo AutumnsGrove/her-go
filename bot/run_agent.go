@@ -269,19 +269,21 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		b.turnCounter.Store(0)
 		b.pendingMu.Unlock()
 
-		if traceCallback != nil {
+		// Emit to the memory trace section — not main, which would
+		// overwrite the driver's think/recall/reply trace.
+		if memoryTraceCallback != nil {
 			if shouldAnalyze {
-				traceCallback(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
+				memoryTraceCallback(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
 			} else {
-				traceCallback(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
+				memoryTraceCallback(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
 			}
 		}
 
 		b.launchBackgroundAgents(turns, result, params, tracker,
 			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback)
 	} else {
-		if traceCallback != nil {
-			traceCallback(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
+		if memoryTraceCallback != nil {
+			memoryTraceCallback(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
 		}
 		log.Info("turn batched — background agents deferred",
 			"pending", count, "threshold", threshold)
