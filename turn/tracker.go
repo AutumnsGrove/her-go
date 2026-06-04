@@ -130,6 +130,19 @@ func (t *Tracker) TurnID() int64 {
 	return t.turnID
 }
 
+// Metrics returns the accumulated metrics after all phases complete.
+// Call after Wait() or in an OnComplete callback to get final totals.
+func (t *Tracker) Metrics() Metrics {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.metrics
+}
+
+// Elapsed returns the duration since the turn started.
+func (t *Tracker) Elapsed() time.Duration {
+	return time.Since(t.startTime)
+}
+
 // phaseDone is called by PhaseHandle.Done(). Decrements the pending
 // ref count, accumulates metrics, and fires TurnEndEvent + StopTyping
 // when pending hits zero.

@@ -209,7 +209,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}()
 
 	// Step 4: Transcribe via the configured STT engine.
-	transcript, err := b.voiceClient.Transcribe(audioBytes, "voice.ogg")
+	sttResult, err := b.voiceClient.Transcribe(audioBytes, "voice.ogg")
 	if err != nil {
 		close(stopTyping)
 		if strings.Contains(err.Error(), "empty text") {
@@ -218,6 +218,11 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		}
 		log.Error("transcription failed", "err", err)
 		return c.Send("I couldn't transcribe that voice memo. The speech service may be unavailable.")
+	}
+	transcript := sttResult.Text
+
+	if sttResult.Cost > 0 {
+		_ = b.store.SaveMetric(b.cfg.Voice.STT.Model, 0, 0, 0, sttResult.Cost, 0, 0, false, "stt")
 	}
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))

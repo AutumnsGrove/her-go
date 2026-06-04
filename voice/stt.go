@@ -88,8 +88,18 @@ func NewClient(cfg *config.VoiceConfig, fallbackAPIKey string) *Client {
 }
 
 // transcriptionResponse matches the OpenAI Whisper API JSON response.
+// OpenRouter extends this with a usage block containing cost info.
 type transcriptionResponse struct {
-	Text string `json:"text"`
+	Text  string `json:"text"`
+	Usage *struct {
+		Cost float64 `json:"cost"`
+	} `json:"usage,omitempty"`
+}
+
+// TranscribeResult holds the transcribed text and associated cost.
+type TranscribeResult struct {
+	Text string
+	Cost float64 // USD cost from OpenRouter (0 for local engines)
 }
 
 // Transcribe sends audio bytes to the configured STT endpoint and returns the
@@ -106,7 +116,7 @@ type transcriptionResponse struct {
 //
 // The format is auto-detected from the base URL: OpenRouter gets JSON, everything
 // else gets multipart. This keeps config simple — no extra field needed.
-func (c *Client) Transcribe(audioBytes []byte, filename string) (string, error) {
+func (c *Client) Transcribe(audioBytes []byte, filename string) (TranscribeResult, error) {
 	if isOpenRouter(c.baseURL) {
 		return c.transcribeJSON(audioBytes, filename)
 	}
@@ -131,7 +141,7 @@ func audioFormatFromFilename(filename string) string {
 }
 
 // transcribeJSON uses OpenRouter's JSON+base64 format.
-func (c *Client) transcribeJSON(audioBytes []byte, filename string) (string, error) {
+func (c *Client) transcribeJSON(audioBytes []byte, filename string) (TranscribeResult, error) {
 	payload := map[string]any{
 		"model": c.model,
 		"input_audio": map[string]string{
@@ -143,13 +153,13 @@ func (c *Client) transcribeJSON(audioBytes []byte, filename string) (string, err
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshaling JSON: %w", err)
+		return TranscribeResult{}, fmt.Errorf("marshaling JSON: %w", err)
 	}
 
 	url := c.baseURL + "/audio/transcriptions"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
+		return TranscribeResult{}, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -160,32 +170,32 @@ func (c *Client) transcribeJSON(audioBytes []byte, filename string) (string, err
 }
 
 // transcribeMultipart uses the standard OpenAI Whisper multipart/form-data format.
-func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (string, error) {
+func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (TranscribeResult, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
-		return "", fmt.Errorf("creating form file: %w", err)
+		return TranscribeResult{}, fmt.Errorf("creating form file: %w", err)
 	}
 	if _, err := part.Write(audioBytes); err != nil {
-		return "", fmt.Errorf("writing audio bytes: %w", err)
+		return TranscribeResult{}, fmt.Errorf("writing audio bytes: %w", err)
 	}
 
 	if c.model != "" {
 		if err := writer.WriteField("model", c.model); err != nil {
-			return "", fmt.Errorf("writing model field: %w", err)
+			return TranscribeResult{}, fmt.Errorf("writing model field: %w", err)
 		}
 	}
 
 	if err := writer.Close(); err != nil {
-		return "", fmt.Errorf("closing multipart writer: %w", err)
+		return TranscribeResult{}, fmt.Errorf("closing multipart writer: %w", err)
 	}
 
 	url := c.baseURL + "/audio/transcriptions"
 	req, err := http.NewRequest("POST", url, &body)
 	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
+		return TranscribeResult{}, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if c.apiKey != "" {
@@ -197,41 +207,47 @@ func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (string
 
 // doTranscribe executes the HTTP request and parses the transcription response.
 // Shared by both JSON and multipart paths.
-func (c *Client) doTranscribe(req *http.Request) (string, error) {
+func (c *Client) doTranscribe(req *http.Request) (TranscribeResult, error) {
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("STT request failed: %w", err)
+		return TranscribeResult{}, fmt.Errorf("STT request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("reading STT response: %w", err)
+		return TranscribeResult{}, fmt.Errorf("reading STT response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("STT server returned %d: %s", resp.StatusCode, string(respBody))
+		return TranscribeResult{}, fmt.Errorf("STT server returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var result transcriptionResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("parsing STT response: %w", err)
+	var parsed transcriptionResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return TranscribeResult{}, fmt.Errorf("parsing STT response: %w", err)
 	}
 
 	elapsed := time.Since(start)
 
-	trimmed := strings.TrimSpace(result.Text)
+	trimmed := strings.TrimSpace(parsed.Text)
 	if trimmed == "" {
-		return "", fmt.Errorf("transcription returned empty text (audio may be silent or too short)")
+		return TranscribeResult{}, fmt.Errorf("transcription returned empty text (audio may be silent or too short)")
+	}
+
+	var cost float64
+	if parsed.Usage != nil {
+		cost = parsed.Usage.Cost
 	}
 
 	log.Info("transcription complete",
 		"duration", elapsed.Round(time.Millisecond),
 		"text_len", len(trimmed),
+		"cost", fmt.Sprintf("$%.6f", cost),
 	)
 
-	return trimmed, nil
+	return TranscribeResult{Text: trimmed, Cost: cost}, nil
 }
 
 // IsAvailable checks whether the STT backend is reachable.
