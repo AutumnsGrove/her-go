@@ -171,6 +171,7 @@ type RunParams struct {
 type RunResult struct {
 	ReplyText     string
 	ThinkTraces   []string // driver agent's think() calls — used by introspection agent
+	ToolSequence  []string // ordered tool names called this turn (e.g. ["think", "recall_memories", "reply", "done"])
 	TotalCost     float64  // accumulated cost across all LLM calls (agent + chat)
 	ToolCalls     int      // number of tool calls the agent made
 	MemoriesSaved int      // number of memories saved/updated during this turn
@@ -450,6 +451,7 @@ func Run(params RunParams) (*RunResult, error) {
 	// Separate from traceLines (which is formatted HTML for Telegram) —
 	// the memory agent needs the raw thought text, not the Telegram markup.
 	var thinkTraces []string
+	var toolSeq []string
 
 	// --- Trace builder ---
 	// Accumulates formatted trace lines as the agent executes. If tracing
@@ -655,6 +657,7 @@ outer:
 				}
 
 				result := executeTool(tc, tctx)
+				toolSeq = append(toolSeq, tc.Function.Name)
 				isError := strings.HasPrefix(result, "error:")
 				if isError {
 					log.Warn("tool call failed", "tool", tc.Function.Name, "result", truncateLog(result, 200))
@@ -786,6 +789,7 @@ outer:
 	result := &RunResult{
 		ReplyText:     tctx.ReplyText,
 		ThinkTraces:   thinkTraces,
+		ToolSequence:  toolSeq,
 		TotalCost:     totalCost + tctx.ReplyCost,
 		ToolCalls:     totalToolCalls,
 		MemoriesSaved: len(tctx.SavedMemories),

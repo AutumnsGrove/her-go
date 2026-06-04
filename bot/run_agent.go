@@ -131,14 +131,35 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	// Both TelegramFrontend and gatewayFrontend implement it —
 	// Telegram renders into an editable message, gateway routes
 	// to SSE streams / adapter panels.
-	if b.cfg.Driver.Trace {
-		if tp, ok := fe.(TraceProvider); ok {
+	//
+	// Two modes:
+	//   Full (/traces ON):  detailed per-tool-call traces passed into agents
+	//   Lite (/traces OFF): compact progress summaries written from here
+	//
+	// The trace board + message are ALWAYS created — lite mode gives
+	// visibility into the pipeline without the verbose tool-by-tool output.
+
+	// liteTrace writes to a slot on the trace board. Used in lite mode
+	// to show compact progress lines without passing callbacks into agents.
+	var liteTrace func(slot, text string)
+
+	if tp, ok := fe.(TraceProvider); ok {
+		traceFinalize = tp.TraceFinalize
+
+		if b.cfg.Driver.Trace {
+			// Full mode — wire verbose callbacks into agents.
 			traceCallback = tp.TraceCallback("main")
 			memoryTraceCallback = tp.TraceCallback("memory")
 			moodTraceCallback = tp.TraceCallback("mood")
 			personaTraceCallback = tp.TraceCallback("persona")
 			introspectionTraceCallback = tp.TraceCallback("introspection")
-			traceFinalize = tp.TraceFinalize
+		} else {
+			// Lite mode — agents get no callbacks (no verbose output).
+			// We write compact summaries via liteTrace after each phase.
+			memoryTraceCallback = tp.TraceCallback("memory")
+			liteTrace = func(slot, text string) {
+				tp.TraceCallback(slot)(text)
+			}
 		}
 	}
 	_ = personaTraceCallback
@@ -223,6 +244,15 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
+	// Lite trace: compact driver summary showing the tool sequence.
+	if liteTrace != nil {
+		seq := strings.Join(result.ToolSequence, " → ")
+		if seq == "" {
+			seq = "no tools"
+		}
+		liteTrace("main", fmt.Sprintf("🛠️ %s", seq))
+	}
+
 	// --- Substance gate + batching ---
 	// Instead of firing all three background agents on every turn, we
 	// check whether this exchange has enough substance to warrant analysis.
@@ -280,7 +310,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		}
 
 		b.launchBackgroundAgents(turns, result, params, tracker,
-			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback)
+			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, liteTrace)
 	} else {
 		if memoryTraceCallback != nil {
 			memoryTraceCallback(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
@@ -317,6 +347,7 @@ func (b *Bot) launchBackgroundAgents(
 	memoryTrace tools.TraceCallback,
 	moodTrace tools.TraceCallback,
 	introspectionTrace tools.TraceCallback,
+	liteTrace func(slot, text string),
 ) {
 	if len(turns) == 0 {
 		return
@@ -325,9 +356,6 @@ func (b *Bot) launchBackgroundAgents(
 	var introWG sync.WaitGroup
 
 	// --- Memory agent ---
-	// Runs once on the latest turn. The memory agent reads recent
-	// conversation from the DB, so it sees all accumulated turns
-	// in its context window — no need to run per-buffered-turn.
 	if b.memoryAgentLLM != nil {
 		var memPhase *turn.PhaseHandle
 		if tracker != nil {
@@ -345,7 +373,7 @@ func (b *Bot) launchBackgroundAgents(
 			if memPhase != nil {
 				defer memPhase.Done(turn.PhaseMetrics{})
 			}
-			agent.RunMemoryAgent(
+			result := agent.RunMemoryAgent(
 				agent.MemoryAgentInput{
 					UserMessage:    latest.UserMessage,
 					ThinkTraces:    latest.ThinkTraces,
@@ -365,6 +393,9 @@ func (b *Bot) launchBackgroundAgents(
 					Phase:         memPhase,
 				},
 			)
+			if liteTrace != nil {
+				liteTrace("memory", fmt.Sprintf("🧩 memory ✓ %d saved · $%.4f", result.MemoriesSaved, result.Cost))
+			}
 		}()
 	}
 
