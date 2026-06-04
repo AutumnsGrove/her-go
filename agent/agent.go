@@ -162,6 +162,7 @@ type RunParams struct {
 	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
 	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
 	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
+	LiteToolHook              func(toolName string)       // nil-safe — called after each tool execution in lite trace mode
 	IsSimRun                  bool                        // true when running via the sim adapter
 }
 
@@ -659,6 +660,9 @@ outer:
 
 				result := executeTool(tc, tctx)
 				toolSeq = append(toolSeq, tc.Function.Name)
+				if params.LiteToolHook != nil {
+					params.LiteToolHook(tc.Function.Name)
+				}
 				isError := strings.HasPrefix(result, "error:")
 				if isError {
 					log.Warn("tool call failed", "tool", tc.Function.Name, "result", truncateLog(result, 200))
