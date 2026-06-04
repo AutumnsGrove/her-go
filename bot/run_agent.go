@@ -126,6 +126,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	var personaTraceCallback tools.TraceCallback
 	var introspectionTraceCallback tools.TraceCallback
 	var traceFinalize func()
+	var liteToolHook func(toolName string)
 
 	// Traces flow through the TraceProvider optional interface.
 	// Both TelegramFrontend and gatewayFrontend implement it —
@@ -154,11 +155,32 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 			personaTraceCallback = tp.TraceCallback("persona")
 			introspectionTraceCallback = tp.TraceCallback("introspection")
 		} else {
-			// Lite mode — agents get no callbacks (no verbose output).
-			// We write compact summaries via liteTrace after each phase.
+			// Lite mode — agents get no verbose callbacks, but we wire
+			// a lightweight main callback that progressively renders the
+			// tool sequence as an arrow chain ("think → recall → reply → done").
+			// The agent loop calls TraceCallback after each tool call with
+			// the full trace text — we ignore that and render toolSeq instead.
 			memoryTraceCallback = tp.TraceCallback("memory")
+			mainSlot := tp.TraceCallback("main")
+
+			var liteSeq []string
+			var liteMu sync.Mutex
+			traceCallback = func(text string) error {
+				// Not used for content — we render from liteSeq instead.
+				return nil
+			}
 			liteTrace = func(slot, text string) {
 				tp.TraceCallback(slot)(text)
+			}
+
+			// LiteToolHook is called from agent.Run after each tool execution.
+			// It appends the tool name and re-renders the main slot.
+			liteToolHook = func(toolName string) {
+				liteMu.Lock()
+				liteSeq = append(liteSeq, toolName)
+				line := "🛠️ " + strings.Join(liteSeq, " → ")
+				liteMu.Unlock()
+				mainSlot(line)
 			}
 		}
 	}
@@ -224,6 +246,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	params.ImageBase64 = input.ImageBase64
 	params.ImageMIME = input.ImageMIME
 	params.OCRText = input.OCRText
+	params.LiteToolHook = liteToolHook
 	params.IsSimRun = b.isSimRun
 
 	b.agentBusy.Store(true)
@@ -244,14 +267,8 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// Lite trace: compact driver summary showing the tool sequence.
-	if liteTrace != nil {
-		seq := strings.Join(result.ToolSequence, " → ")
-		if seq == "" {
-			seq = "no tools"
-		}
-		liteTrace("main", fmt.Sprintf("🛠️ %s", seq))
-	}
+	// In lite mode, the driver tool sequence was already rendered
+	// progressively by liteToolHook during agent.Run().
 
 	// --- Substance gate + batching ---
 	// Instead of firing all three background agents on every turn, we
