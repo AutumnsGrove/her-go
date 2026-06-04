@@ -142,49 +142,34 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	// The trace board + message are ALWAYS created — lite mode gives
 	// visibility into the pipeline without the verbose tool-by-tool output.
 
-	// liteTrace writes to a slot on the trace board. Used in lite mode
-	// to show compact progress lines without passing callbacks into agents.
-	var liteTrace func(slot, text string)
+	// liteState accumulates compact progress data. A single "lite" slot
+	// on the trace board gets re-rendered as each piece arrives, producing
+	// a tight 2-4 line block with no separators or bold headers.
+	var lite *liteTraceState
 
 	if tp, ok := fe.(TraceProvider); ok {
 		traceFinalize = tp.TraceFinalize
 
-		substanceTrace = tp.TraceCallback("substance")
-
 		if b.cfg.Driver.Trace {
 			// Full mode — wire verbose callbacks into agents.
 			traceCallback = tp.TraceCallback("main")
+			substanceTrace = tp.TraceCallback("substance")
 			memoryTraceCallback = tp.TraceCallback("memory")
 			moodTraceCallback = tp.TraceCallback("mood")
 			personaTraceCallback = tp.TraceCallback("persona")
 			introspectionTraceCallback = tp.TraceCallback("introspection")
 		} else {
-			// Lite mode — agents get no verbose callbacks, but we wire
-			// a lightweight main callback that progressively renders the
-			// tool sequence as an arrow chain ("think → recall → reply → done").
-			// The agent loop calls TraceCallback after each tool call with
-			// the full trace text — we ignore that and render toolSeq instead.
-			memoryTraceCallback = tp.TraceCallback("memory")
-			mainSlot := tp.TraceCallback("main")
+			// Lite mode — all content goes into one "lite" slot on the board.
+			// No bold headers, no separators. Just compact progress lines.
+			liteSlot := tp.TraceCallback("lite")
+			lite = &liteTraceState{render: func(text string) { liteSlot(text) }}
 
-			var liteSeq []string
-			var liteMu sync.Mutex
-			traceCallback = func(text string) error {
-				// Not used for content — we render from liteSeq instead.
-				return nil
-			}
-			liteTrace = func(slot, text string) {
-				tp.TraceCallback(slot)(text)
-			}
+			// No-op traceCallback so agent.Run sees a non-nil callback
+			// (needed for the tracing flag) but doesn't render verbose output.
+			traceCallback = func(text string) error { return nil }
 
-			// LiteToolHook is called from agent.Run after each tool execution.
-			// It appends the tool name and re-renders the main slot.
 			liteToolHook = func(toolName string) {
-				liteMu.Lock()
-				liteSeq = append(liteSeq, toolName)
-				line := "🛠️ " + strings.Join(liteSeq, " → ")
-				liteMu.Unlock()
-				mainSlot(line)
+				lite.addTool(toolName)
 			}
 		}
 	}
@@ -320,7 +305,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		b.turnCounter.Store(0)
 		b.pendingMu.Unlock()
 
-		// Emit substance decision to its own trace slot.
+		// Substance + background agents.
 		if substanceTrace != nil {
 			if shouldAnalyze {
 				substanceTrace(fmt.Sprintf("⚡ substance: ANALYZE — processing %d turn(s)", len(turns)))
@@ -328,26 +313,38 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 				substanceTrace(fmt.Sprintf("⚡ substance: threshold hit (%d/%d) — processing batch", count, threshold))
 			}
 		}
+		if lite != nil {
+			if shouldAnalyze {
+				lite.setSubstance(fmt.Sprintf("⚡ ANALYZE — %d turn(s)", len(turns)))
+			} else {
+				lite.setSubstance(fmt.Sprintf("⚡ threshold (%d/%d) — batch", count, threshold))
+			}
+		}
 
 		b.launchBackgroundAgents(turns, result, params, tracker,
-			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, liteTrace)
+			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, lite)
 	} else {
 		if substanceTrace != nil {
 			substanceTrace(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
+		}
+		if lite != nil {
+			lite.setSubstance(fmt.Sprintf("⚡ SKIP (%d/%d)", count, threshold))
 		}
 		log.Info("turn batched — background agents deferred",
 			"pending", count, "threshold", threshold)
 	}
 
 	// Emit total cost after all phases complete, then finalize the trace.
-	// Both full and lite modes get this — it's the last line on the board.
-	if traceFinalize != nil || liteTrace != nil {
+	if traceFinalize != nil || lite != nil {
 		go func() {
 			tracker.Wait()
 			m := tracker.Metrics()
-			costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, tracker.Elapsed().Round(time.Millisecond))
-			if tp, ok := fe.(TraceProvider); ok {
-				tp.TraceCallback("cost")(costLine)
+			elapsed := tracker.Elapsed().Round(time.Millisecond)
+			if lite != nil {
+				lite.setCost(fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed))
+			}
+			if tp, ok := fe.(TraceProvider); ok && b.cfg.Driver.Trace {
+				tp.TraceCallback("cost")(fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed))
 			}
 			if traceFinalize != nil {
 				traceFinalize()
@@ -376,7 +373,7 @@ func (b *Bot) launchBackgroundAgents(
 	memoryTrace tools.TraceCallback,
 	moodTrace tools.TraceCallback,
 	introspectionTrace tools.TraceCallback,
-	liteTrace func(slot, text string),
+	lite *liteTraceState,
 ) {
 	if len(turns) == 0 {
 		return
@@ -422,8 +419,8 @@ func (b *Bot) launchBackgroundAgents(
 					Phase:         memPhase,
 				},
 			)
-			if liteTrace != nil {
-				liteTrace("memory", fmt.Sprintf("🧩 memory ✓ %d saved", result.MemoriesSaved))
+			if lite != nil {
+				lite.setMemory(fmt.Sprintf("🧩 %d saved", result.MemoriesSaved))
 			}
 		}()
 	}
@@ -433,14 +430,86 @@ func (b *Bot) launchBackgroundAgents(
 	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker)
 
 	// In lite mode, emit a mood summary once everything finishes.
-	if liteTrace != nil {
+	if lite != nil {
 		go func() {
 			tracker.Wait()
 			if entry, err := b.store.LatestMoodEntry(memory.MoodKindMomentary); err == nil && entry != nil {
-				liteTrace("mood", fmt.Sprintf("🎭 mood: %s", strings.Join(entry.Labels, ", ")))
+				lite.setMood(fmt.Sprintf("🎭 %s", strings.Join(entry.Labels, ", ")))
 			}
 		}()
 	}
+}
+
+// liteTraceState accumulates compact progress data for lite trace mode.
+// All fields are set by different goroutines; the mutex protects them.
+// Each setter calls flush() which re-renders the single "lite" slot.
+type liteTraceState struct {
+	mu        sync.Mutex
+	tools     []string
+	substance string
+	memResult string
+	mood      string
+	cost      string
+	render    func(string) // writes to the "lite" board slot
+}
+
+func (s *liteTraceState) flush() {
+	var lines []string
+	if len(s.tools) > 0 {
+		lines = append(lines, "🛠️ "+strings.Join(s.tools, " → "))
+	}
+	if s.substance != "" {
+		lines = append(lines, s.substance)
+	}
+	var agents []string
+	if s.memResult != "" {
+		agents = append(agents, s.memResult)
+	}
+	if s.mood != "" {
+		agents = append(agents, s.mood)
+	}
+	if len(agents) > 0 {
+		lines = append(lines, strings.Join(agents, " · "))
+	}
+	if s.cost != "" {
+		lines = append(lines, s.cost)
+	}
+	s.render(strings.Join(lines, "\n"))
+}
+
+func (s *liteTraceState) addTool(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tools = append(s.tools, name)
+	s.flush()
+}
+
+func (s *liteTraceState) setSubstance(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.substance = text
+	s.flush()
+}
+
+func (s *liteTraceState) setMemory(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.memResult = text
+	s.flush()
+}
+
+func (s *liteTraceState) setMood(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mood = text
+	s.flush()
+}
+
+func (s *liteTraceState) setCost(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cost = text
+	s.flush()
 }
 
 // baseRunParams returns a RunParams pre-filled with all the constant fields

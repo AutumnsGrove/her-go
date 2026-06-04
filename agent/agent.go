@@ -61,6 +61,7 @@ func init() {
 	trace.Register(trace.Stream{Name: "main", Order: 100, Label: "🛠️ <b>main</b>"})
 	trace.Register(trace.Stream{Name: "substance", Order: 150, Label: ""})
 	trace.Register(trace.Stream{Name: "memory", Order: 200, Label: "🧩 <b>memory</b>"})
+	trace.Register(trace.Stream{Name: "lite", Order: 50, Label: ""})
 	trace.Register(trace.Stream{Name: "cost", Order: 900, Label: ""})
 
 	// Turn phase registration — same pattern as trace streams.
