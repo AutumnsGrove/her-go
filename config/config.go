@@ -339,6 +339,14 @@ type DriverConfig struct {
 	// DirectReplySimOnly restricts direct reply to sim runs only. When true
 	// (default), the flag is ignored in production even if set.
 	DirectReplySimOnly *bool `yaml:"direct_reply_sim_only,omitempty"` // nil = true
+
+	// FastPath enables the fast-path classifier. When true, a cheap LLM
+	// call (the classifier model) decides whether each message can skip
+	// the driver agent entirely and go straight to the chat model. Simple
+	// conversational turns (greetings, reactions, short banter) take this
+	// shortcut — they still get the full prompt context via layers, just
+	// no driver orchestration. Saves 3-5 LLM calls per skipped turn.
+	FastPath bool `yaml:"fast_path"`
 }
 
 // VisionConfig holds settings for the vision language model (VLM).

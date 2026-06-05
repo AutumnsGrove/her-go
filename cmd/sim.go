@@ -143,6 +143,16 @@ var disableReasoningFlag bool
 // experiment for A/B testing reply mechanisms.
 var directReplyFlag bool
 
+// fastPathFlag enables the fast-path classifier for this sim run. When set,
+// a cheap classifier call routes simple messages directly to the chat model,
+// skipping the driver agent. Lets you A/B test cost vs quality in the sim
+// without editing config.yaml.
+var fastPathFlag bool
+
+// noFastPathFlag explicitly disables the fast-path classifier, overriding
+// config.yaml. Useful for A/B comparisons when config has fast_path: true.
+var noFastPathFlag bool
+
 // simCmd defines the "her sim" subcommand. Cobra commands are just structs
 // with metadata + a RunE function. RunE returns an error (vs Run which doesn't),
 // so Cobra can print it nicely and set the exit code. Same idea as argparse

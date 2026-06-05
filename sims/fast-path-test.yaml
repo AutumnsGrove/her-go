@@ -1,0 +1,87 @@
+name: "Fast-Path Classifier Test"
+description: >
+  Tests the fast-path routing classifier. Mixes messages that should SKIP
+  (go straight to chat model) and PASS (need the full driver pipeline).
+  Run with --fast-path to enable.
+
+  Expected routing (watch for "fast-path: SKIP" vs "fast-path: PASS" in logs):
+    1. "hey"                  → SKIP (greeting)
+    2. "haha yeah"            → SKIP (reaction)
+    3. Shares a real fact     → PASS (extractable memory)
+    4. "nice"                 → SKIP (acknowledgment)
+    5. "lol true"             → SKIP (reaction)
+    6. Asks a question        → PASS (might need tools/recall)
+    7. "ok cool"              → SKIP (acknowledgment)
+    8. Emotional disclosure   → PASS (worth remembering)
+    9. "goodnight"            → SKIP (farewell)
+    10. Plans with details    → PASS (extractable facts)
+    11. "hmm"                 → SKIP (filler)
+    12. Asks for web search   → PASS (needs search tool)
+
+  What to check in the report:
+    - SKIP turns should have NO driver tool calls (no think/reply/done)
+    - SKIP turns should be significantly cheaper than PASS turns
+    - PASS turns should show normal tool sequences (think → recall → reply → done)
+    - Reply quality on SKIP turns should still feel natural
+    - Total cost should be lower than running the same suite without --fast-path
+
+  Run twice to compare:
+    her sim -s sims/fast-path-test.yaml                   # baseline (no fast path)
+    her sim -s sims/fast-path-test.yaml --fast-path       # with fast path
+
+tags: ["fast-path", "routing", "cost", "quick"]
+
+seed_memories:
+  - content: "User's name is Autumn"
+  - content: "Autumn has a cat named Noodle"
+  - content: "Autumn works as a software developer"
+  - content: "Autumn likes hiking and being outdoors"
+
+messages:
+  # ── Turn 1: Greeting — should SKIP ────────────────────────────────────
+  - "hey"
+
+  # ── Turn 2: Short reaction — should SKIP ──────────────────────────────
+  - "haha yeah exactly"
+
+  # ── Turn 3: Shares real info — should PASS ────────────────────────────
+  - "so i started learning piano last week. i found a teacher who does
+    lessons over zoom on tuesday evenings. she's really good — she
+    teaches jazz and classical and said we'd start with basic chord
+    progressions."
+
+  # ── Turn 4: Brief acknowledgment — should SKIP ───────────────────────
+  - "nice"
+
+  # ── Turn 5: Casual reaction — should SKIP ─────────────────────────────
+  - "lol true"
+
+  # ── Turn 6: Question needing recall — should PASS ─────────────────────
+  - "do you remember what i said about noodle last time? she's been
+    acting weird and i'm trying to figure out if it started before or
+    after i moved the furniture around"
+
+  # ── Turn 7: Acknowledgment — should SKIP ──────────────────────────────
+  - "ok cool"
+
+  # ── Turn 8: Emotional substance — should PASS ─────────────────────────
+  - "i think i'm actually getting burned out at work. like not just
+    tired, but that thing where you stop caring about stuff that used
+    to matter to you. i caught myself not even reading PR reviews
+    anymore, just approving them."
+
+  # ── Turn 9: Farewell — should SKIP ───────────────────────────────────
+  - "goodnight"
+
+  # ── Turn 10: Specific plans — should PASS ──────────────────────────────
+  - "actually wait before i go — i'm thinking about taking friday off
+    and driving up to mt. rainier. the weather's supposed to be clear
+    and i haven't been up there since last october. want to do the
+    skyline trail if the snow's melted enough."
+
+  # ── Turn 11: Filler — should SKIP ────────────────────────────────────
+  - "hmm"
+
+  # ── Turn 12: Wants a search — should PASS ─────────────────────────────
+  - "can you look up what the trail conditions are like at mt rainier
+    right now? i want to know if skyline trail is open"
