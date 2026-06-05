@@ -58,6 +58,8 @@ func init() {
 	f.StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision")
 	f.BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models")
 	f.BoolVar(&directReplyFlag, "direct-reply", false, "enable reply_direct tool — driver writes reply text directly (experimental)")
+	f.BoolVar(&fastPathFlag, "fast-path", false, "enable fast-path classifier — route simple messages directly to chat model, skip driver")
+	f.BoolVar(&noFastPathFlag, "no-fast-path", false, "disable fast-path classifier (overrides config.yaml)")
 	simGWCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(simGWCmd)
 }
@@ -552,6 +554,13 @@ func applySimModelOverrides(cfg *config.Config) {
 		simOnly := false
 		cfg.Driver.DirectReplySimOnly = &simOnly
 		log.Infof("sim: direct reply mode enabled — driver writes reply text directly")
+	}
+	if noFastPathFlag {
+		cfg.Driver.FastPath = false
+		log.Infof("sim: fast-path classifier disabled (--no-fast-path)")
+	} else if fastPathFlag {
+		cfg.Driver.FastPath = true
+		log.Infof("sim: fast-path classifier enabled — simple messages skip driver agent")
 	}
 }
 

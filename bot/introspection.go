@@ -80,11 +80,19 @@ func (b *Bot) launchIntrospectionAgent(
 			}
 		}
 
+		// result may be nil for fast-path turns (no driver ran).
+		var thinkTraces []string
+		var replyText string
+		if result != nil {
+			thinkTraces = result.ThinkTraces
+			replyText = result.ReplyText
+		}
+
 		introResult := agent.RunIntrospectionAgent(
 			agent.IntrospectionAgentInput{
 				UserMessage:    params.ScrubbedUserMessage,
-				ThinkTraces:    result.ThinkTraces,
-				ReplyText:      result.ReplyText,
+				ThinkTraces:    thinkTraces,
+				ReplyText:      replyText,
 				TriggerMsgID:   params.TriggerMsgID,
 				ConversationID: params.ConversationID,
 				SelfMemories:   selfMemories,

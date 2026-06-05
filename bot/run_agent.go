@@ -215,7 +215,105 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		}
 	}
 
-	// --- Run the agent ---
+	// --- Fast-path check ---
+	// Before spinning up the full driver agent, ask a cheap classifier
+	// whether this message can be handled directly by the chat model.
+	// Simple conversational turns (greetings, banter, reactions) skip the
+	// driver entirely — saves 3-5 LLM calls per turn.
+	if b.shouldFastPath(input) {
+		if verdict := b.classifyRoute(scrubbedText, input.ConversationID); verdict == "SKIP" {
+			b.agentBusy.Store(true)
+			fpResult, fpErr := b.runFastPath(fe, input, scrubbedText, vault, tracker,
+				statusCallback, streamCallback, ttsCallback)
+			b.agentBusy.Store(false)
+
+			if stopStream != nil {
+				stopStream()
+			}
+			tracker.StopTyping()
+
+			if fpErr != nil {
+				log.Error("fast-path error", "err", fpErr)
+				_ = fe.SendError("Sorry, I'm having trouble right now. Try again in a moment?")
+				return nil
+			}
+
+			log.Info("─── fast-path reply sent ───")
+
+			// Feed into the substance gate + batching system so background
+			// agents (memory, mood, introspection) still process this turn.
+			currentTurn := PendingTurn{
+				UserMessage:    scrubbedText,
+				ReplyText:      fpResult.replyText,
+				TriggerMsgID:   input.TriggerMsgID,
+				ConversationID: input.ConversationID,
+			}
+
+			b.pendingMu.Lock()
+			b.pendingTurns = append(b.pendingTurns, currentTurn)
+			count := int(b.turnCounter.Add(1))
+			b.pendingMu.Unlock()
+
+			// Fast-path turns always count toward the batch threshold.
+			// The substance gate is skipped here — we already know this
+			// is a low-substance turn (that's why it was SKIP'd).
+			threshold := b.cfg.BackgroundAgents.BatchThreshold
+			if threshold <= 0 {
+				threshold = 3
+			}
+
+			if count >= threshold {
+				b.pendingMu.Lock()
+				turns := b.pendingTurns
+				b.pendingTurns = nil
+				b.turnCounter.Store(0)
+				b.pendingMu.Unlock()
+
+				if substanceTrace != nil {
+					substanceTrace(fmt.Sprintf("⚡ fast-path batch: threshold hit (%d/%d) — processing %d turn(s)", count, threshold, len(turns)))
+				}
+				if lite != nil {
+					lite.setSubstance(fmt.Sprintf("⚡ threshold (%d/%d) — batch", count, threshold))
+				}
+
+				b.launchBackgroundAgents(turns, nil, b.baseRunParams(), tracker,
+					memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, lite)
+			} else {
+				if substanceTrace != nil {
+					substanceTrace(fmt.Sprintf("⚡ fast-path: deferred (%d/%d)", count, threshold))
+				}
+				if lite != nil {
+					lite.setSubstance(fmt.Sprintf("⚡ SKIP (%d/%d)", count, threshold))
+				}
+				log.Info("fast-path turn batched — background agents deferred",
+					"pending", count, "threshold", threshold)
+			}
+
+			// Finalize traces (cost + timing).
+			if traceFinalize != nil || lite != nil {
+				go func() {
+					tracker.Wait()
+					m := tracker.Metrics()
+					elapsed := tracker.Elapsed().Round(time.Millisecond)
+					costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed)
+					if lite != nil {
+						lite.setCost(costLine)
+					}
+					if tp, ok := fe.(TraceProvider); ok && b.cfg.Driver.Trace {
+						tp.TraceCallback("cost")(costLine)
+					}
+					time.Sleep(500 * time.Millisecond)
+					if traceFinalize != nil {
+						traceFinalize()
+					}
+				}()
+			}
+
+			return nil
+		}
+	}
+
+	// --- Run the agent (full pipeline) ---
 	params := b.baseRunParams()
 	params.Tracker = tracker
 	params.ScrubbedUserMessage = scrubbedText
