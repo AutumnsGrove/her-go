@@ -278,9 +278,15 @@ func buildDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64]
 	}
 
 	// Cards grouped by subject, each with their children.
+	// Empty cards are omitted — there's nothing for the dreamer to
+	// review, and including them just wastes tokens on summary rewrites
+	// to "no current X documented" every cycle.
 	b.WriteString("## User Cards\n\n")
 	for _, c := range cards {
 		if c.Subject != "user" {
+			continue
+		}
+		if len(childrenByCard[c.ID]) == 0 {
 			continue
 		}
 		writeCardEntry(&b, c, childrenByCard[c.ID])
@@ -289,6 +295,9 @@ func buildDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64]
 	b.WriteString("## Self Cards\n\n")
 	for _, c := range cards {
 		if c.Subject != "self" {
+			continue
+		}
+		if len(childrenByCard[c.ID]) == 0 {
 			continue
 		}
 		writeCardEntry(&b, c, childrenByCard[c.ID])
