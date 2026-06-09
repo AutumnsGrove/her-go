@@ -173,10 +173,21 @@ type PeriodUsage struct {
 	CostUSD float64
 }
 
+// RoleUsage holds per-agent-role cost breakdown for a time period.
+type RoleUsage struct {
+	Role    string
+	Calls   int
+	Tokens  int
+	CostUSD float64
+}
+
 // UsageReport bundles everything the `her usage` command needs.
 type UsageReport struct {
-	Periods []PeriodUsage
-	ByModel []ModelUsage
+	Periods       []PeriodUsage
+	ByModel       []ModelUsage
+	ByRoleToday   []RoleUsage
+	ByRole7Days   []RoleUsage
+	ByRole30Days  []RoleUsage
 }
 
 // GetUsageReport builds a complete cost/token breakdown.
@@ -210,6 +221,36 @@ func (s *SQLiteStore) GetUsageReport() (*UsageReport, error) {
 			return nil, fmt.Errorf("querying period %s: %w", p.label, err)
 		}
 		r.Periods = append(r.Periods, pu)
+	}
+
+	// Per-role breakdown for each time window.
+	roleWindows := []struct {
+		where string
+		dest  *[]RoleUsage
+	}{
+		{"timestamp >= DATE('now')", &r.ByRoleToday},
+		{"timestamp >= DATE('now', '-7 days')", &r.ByRole7Days},
+		{"timestamp >= DATE('now', '-30 days')", &r.ByRole30Days},
+	}
+	for _, rw := range roleWindows {
+		rows, err := s.db.Query(
+			fmt.Sprintf(`SELECT COALESCE(agent_role, 'unknown'), COUNT(*),
+			        COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_usd), 0)
+			 FROM metrics WHERE %s
+			 GROUP BY agent_role
+			 ORDER BY SUM(cost_usd) DESC`, rw.where))
+		if err != nil {
+			return nil, fmt.Errorf("querying role usage: %w", err)
+		}
+		for rows.Next() {
+			var ru RoleUsage
+			if err := rows.Scan(&ru.Role, &ru.Calls, &ru.Tokens, &ru.CostUSD); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning role row: %w", err)
+			}
+			*rw.dest = append(*rw.dest, ru)
+		}
+		rows.Close()
 	}
 
 	// Per-model breakdown, sorted by total cost descending.

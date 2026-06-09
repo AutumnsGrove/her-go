@@ -624,6 +624,47 @@ func (b *Bot) ExecLastTrace() string {
 	return snapshot
 }
 
+// ExecUsage builds a cost/token breakdown by agent role and time period.
+func (b *Bot) ExecUsage() (string, error) {
+	report, err := b.store.GetUsageReport()
+	if err != nil {
+		return "", fmt.Errorf("couldn't load usage report: %w", err)
+	}
+
+	var msg strings.Builder
+	msg.WriteString("== Usage ==\n\n")
+
+	// Period totals.
+	for _, p := range report.Periods {
+		fmt.Fprintf(&msg, "%-14s %4d calls  %s tokens  $%.4f\n",
+			p.Label, p.Calls, formatTokens(p.Tokens), p.CostUSD)
+	}
+
+	// Per-role tables for each window.
+	type roleWindow struct {
+		label string
+		roles []memory.RoleUsage
+	}
+	windows := []roleWindow{
+		{"Today", report.ByRoleToday},
+		{"Last 7 days", report.ByRole7Days},
+		{"Last 30 days", report.ByRole30Days},
+	}
+	for _, w := range windows {
+		if len(w.roles) == 0 {
+			continue
+		}
+		fmt.Fprintf(&msg, "\n%s by agent:\n", w.label)
+		fmt.Fprintf(&msg, "  %-15s %5s  %8s  %s\n", "Agent", "Calls", "Tokens", "Cost")
+		for _, r := range w.roles {
+			fmt.Fprintf(&msg, "  %-15s %5d  %8s  $%.4f\n",
+				r.Role, r.Calls, formatTokens(r.Tokens), r.CostUSD)
+		}
+	}
+
+	return msg.String(), nil
+}
+
 // ExecRollup forces a daily mood rollup. In production the scheduler
 // fires this at 21:00; this command lets sims and manual testing
 // trigger it on demand.
