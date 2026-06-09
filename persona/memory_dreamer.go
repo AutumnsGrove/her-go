@@ -88,22 +88,59 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 		// Non-fatal — we can still review cards without the log.
 	}
 
+	// Build the set of card IDs that changed since the last dream.
+	// A card "changed" if it has memory_log entries OR child memories
+	// created in the last 48 hours.
+	changedCardIDs := make(map[int64]bool)
+	for _, e := range logEntries {
+		changedCardIDs[e.CardID] = true
+	}
+
+	cutoff := time.Now().Add(-48 * time.Hour)
+
 	// Load child memories for each card so the dreamer can see what's inside.
+	// Only include cards that changed or have recent children.
 	childrenByCard := make(map[int64][]memory.Memory)
 	totalMemories := 0
+	var changedCards []memory.MemoryCard
 	for _, c := range cards {
 		children, err := params.Store.MemoriesByCard(c.ID)
 		if err != nil {
 			log.Warn("memory dreamer: failed to load children", "card", c.TopicSlug, "err", err)
 			continue
 		}
+		if len(children) == 0 {
+			continue
+		}
+
+		// Check if any child memory was created recently.
+		if !changedCardIDs[c.ID] {
+			hasRecent := false
+			for _, m := range children {
+				if m.Timestamp.After(cutoff) {
+					hasRecent = true
+					break
+				}
+			}
+			if !hasRecent {
+				continue
+			}
+		}
+
 		childrenByCard[c.ID] = children
 		totalMemories += len(children)
+		changedCards = append(changedCards, c)
 	}
 
-	// Build the transcript.
-	transcript := buildDreamerTranscript(cards, childrenByCard, logEntries)
-	log.Infof("memory dreamer: %d cards, %d memories, %d recent log entries", len(cards), totalMemories, len(logEntries))
+	if len(changedCards) == 0 {
+		log.Info("memory dreamer: no cards changed since last dream — skipping")
+		return result
+	}
+
+	// Build the transcript with only changed cards.
+	transcript := buildDreamerTranscript(changedCards, childrenByCard, logEntries)
+	log.Infof("memory dreamer: %d/%d cards changed, %d memories, %d recent log entries",
+		len(changedCards), len(cards), totalMemories, len(logEntries))
 
 	// Expand prompt template with bot/user names.
 	promptContent := params.Cfg.ExpandPrompt(memoryDreamerPromptTmpl)
@@ -267,9 +304,9 @@ outer:
 func buildDreamerTranscript(cards []memory.MemoryCard, childrenByCard map[int64][]memory.Memory, logEntries []memory.MemoryLogEntry) string {
 	var b strings.Builder
 
-	b.WriteString("# Memory Card Review\n\n")
-	b.WriteString("Review each card's summary and children for quality, staleness, and accuracy.\n")
-	b.WriteString("Use read_card for a closer look at any card. Use update_card to rewrite summaries.\n\n")
+	b.WriteString("# Memory Card Review (changed cards only)\n\n")
+	b.WriteString("These cards have new or modified memories since the last dream.\n")
+	b.WriteString("Unchanged cards are omitted — they don't need attention.\n\n")
 
 	// Build a map of card IDs to slugs for the log section.
 	cardSlugByID := make(map[int64]string)
