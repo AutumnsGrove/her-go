@@ -668,6 +668,9 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// These are handled by the unified command system — same Exec*
 	// methods that Gradio and other adapters use.
 	if result, handled := b.tryGatewayCommand(c.Message().Text, c.Message().Chat.ID); handled {
+		if strings.HasPrefix(result, "<") {
+			return c.Send(result, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		}
 		return c.Send(result)
 	}
 
