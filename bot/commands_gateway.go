@@ -27,6 +27,7 @@ import (
 	"her/persona"
 	"her/scheduler"
 
+	tele "gopkg.in/telebot.v4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -49,10 +50,13 @@ type helpSpec struct {
 }
 
 // GatewayCommand pairs a name with its handler for the in-process
-// command router. Populated by RegisterGatewayCommands.
+// command router. Populated by RegisterGatewayCommands. Description
+// is used by adapters that support command menus (e.g. Telegram's
+// setMyCommands).
 type GatewayCommand struct {
-	Name    string
-	Handler func(ctx context.Context, args string) (string, error)
+	Name        string
+	Description string
+	Handler     func(ctx context.Context, args string) (string, error)
 }
 
 // RegisterGatewayCommands stores command handlers that handleMessage
@@ -60,6 +64,42 @@ type GatewayCommand struct {
 // the Telegram adapter after gateway command registration.
 func (b *Bot) RegisterGatewayCommands(cmds []GatewayCommand) {
 	b.gatewayCmds = cmds
+}
+
+// SyncCommandMenu pushes the command list to Telegram's command menu
+// (the tappable "/" list). Merges gateway commands with Telegram-only
+// commands (/mood, /clear, /compact) so the menu is always complete.
+// No-op when the bot has no Telegram connection (dev/sim mode).
+func (b *Bot) SyncCommandMenu(cmds []GatewayCommand) {
+	if b.tb == nil {
+		return
+	}
+
+	var teleCommands []tele.Command
+	for _, c := range cmds {
+		if c.Description == "" {
+			continue
+		}
+		teleCommands = append(teleCommands, tele.Command{
+			Text:        c.Name,
+			Description: c.Description,
+		})
+	}
+
+	// Telegram-only commands that aren't in the gateway system yet.
+	teleCommands = append(teleCommands,
+		tele.Command{Text: "mood", Description: "Mood check-in / charts (week, month, year)"},
+		tele.Command{Text: "clear", Description: "Reset conversation context"},
+		tele.Command{Text: "compact", Description: "Force conversation compaction"},
+		tele.Command{Text: "update", Description: "Pull latest code and restart"},
+		tele.Command{Text: "restart", Description: "Restart the bot process"},
+	)
+
+	if err := b.tb.SetCommands(teleCommands); err != nil {
+		log.Warn("failed to sync Telegram command menu", "err", err)
+	} else {
+		log.Info("synced Telegram command menu", "commands", len(teleCommands))
+	}
 }
 
 // tryGatewayCommand checks if a message is a registered gateway command

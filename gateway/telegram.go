@@ -125,7 +125,9 @@ func (a *telegramAdapter) Send(msg OutboundMsg) error   { return nil }
 func (a *telegramAdapter) SendStatus(text string) error { return nil }
 func (a *telegramAdapter) StartTyping() func()          { return func() {} }
 func (a *telegramAdapter) RegisterCommands(cmds []CommandDef) {
-	a.bot.RegisterGatewayCommands(toGatewayCmds(cmds))
+	gwCmds := toGatewayCmds(cmds)
+	a.bot.RegisterGatewayCommands(gwCmds)
+	a.bot.SyncCommandMenu(gwCmds)
 }
 
 // Engine returns the underlying bot for scheduler/dreamer wiring.
@@ -135,7 +137,7 @@ func (a *telegramAdapter) Engine() *bot.Bot { return a.bot }
 func toGatewayCmds(cmds []CommandDef) []bot.GatewayCommand {
 	out := make([]bot.GatewayCommand, len(cmds))
 	for i, c := range cmds {
-		out[i] = bot.GatewayCommand{Name: c.Name, Handler: c.Handler}
+		out[i] = bot.GatewayCommand{Name: c.Name, Description: c.Description, Handler: c.Handler}
 	}
 	return out
 }
