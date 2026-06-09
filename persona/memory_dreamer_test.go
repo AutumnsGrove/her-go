@@ -52,7 +52,7 @@ func TestBuildDreamerTranscript_CardsWithChildren(t *testing.T) {
 	}
 }
 
-func TestBuildDreamerTranscript_EmptyCards(t *testing.T) {
+func TestBuildDreamerTranscript_EmptyCardsOmitted(t *testing.T) {
 	cards := []memory.MemoryCard{
 		{ID: 1, TopicSlug: "routines", Name: "Routines", Subject: "user", Protected: true, UpdatedAt: time.Now(), Version: 1},
 	}
@@ -62,11 +62,55 @@ func TestBuildDreamerTranscript_EmptyCards(t *testing.T) {
 
 	result := buildDreamerTranscript(cards, children, nil)
 
-	if !strings.Contains(result, "(empty)") {
-		t.Error("empty card should show (empty)")
+	if strings.Contains(result, "[routines]") {
+		t.Error("empty card should be omitted from transcript")
 	}
 	if strings.Contains(result, "Recent Changes") {
 		t.Error("should have no changelog section with nil log entries")
+	}
+}
+
+func TestBuildDreamerTranscript_SkipsEmptyCards(t *testing.T) {
+	now := time.Now()
+	cards := []memory.MemoryCard{
+		{ID: 1, TopicSlug: "health", Name: "Health", Summary: "Has meds", Subject: "user", UpdatedAt: now, Version: 2},
+		{ID: 2, TopicSlug: "patterns", Name: "Patterns", Summary: "", Subject: "user", UpdatedAt: now, Version: 1},
+		{ID: 3, TopicSlug: "my-identity", Name: "My Identity", Summary: "Who I am", Subject: "self", UpdatedAt: now, Version: 2},
+	}
+	children := map[int64][]memory.Memory{
+		1: {{ID: 10, Content: "Takes lurasidone"}},
+		2: {}, // empty card
+		3: {{ID: 20, Content: "Name means ocean"}},
+	}
+
+	result := buildDreamerTranscript(cards, children, nil)
+
+	if !strings.Contains(result, "[health]") {
+		t.Error("should include non-empty health card")
+	}
+	if !strings.Contains(result, "[my-identity]") {
+		t.Error("should include non-empty self card")
+	}
+	if strings.Contains(result, "[patterns]") {
+		t.Error("should skip empty patterns card")
+	}
+}
+
+func TestBuildDreamerTranscript_ChangedCardsHeader(t *testing.T) {
+	cards := []memory.MemoryCard{
+		{ID: 1, TopicSlug: "health", Name: "Health", Summary: "Meds", Subject: "user", UpdatedAt: time.Now(), Version: 2},
+	}
+	children := map[int64][]memory.Memory{
+		1: {{ID: 10, Content: "Takes lurasidone"}},
+	}
+
+	result := buildDreamerTranscript(cards, children, nil)
+
+	if !strings.Contains(result, "changed cards only") {
+		t.Error("transcript should mention changed cards only")
+	}
+	if !strings.Contains(result, "Unchanged cards are omitted") {
+		t.Error("transcript should explain omission")
 	}
 }
 
@@ -74,7 +118,9 @@ func TestBuildDreamerTranscript_NoSummary(t *testing.T) {
 	cards := []memory.MemoryCard{
 		{ID: 1, TopicSlug: "patterns", Name: "Patterns", Summary: "", Subject: "user", UpdatedAt: time.Now(), Version: 1},
 	}
-	children := map[int64][]memory.Memory{1: {}}
+	children := map[int64][]memory.Memory{
+		1: {{ID: 10, Content: "Some pattern"}},
+	}
 
 	result := buildDreamerTranscript(cards, children, nil)
 

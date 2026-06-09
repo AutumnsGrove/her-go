@@ -282,6 +282,54 @@ func TestGetUsageReport(t *testing.T) {
 	}
 }
 
+func TestGetUsageReport_RoleBreakdown(t *testing.T) {
+	store := newCoreTestStore(t)
+
+	store.SaveMetric("model-a", 100, 50, 150, 0.003, 500, 0, false, "driver")
+	store.SaveMetric("model-a", 200, 100, 300, 0.006, 0, 0, false, "memory")
+	store.SaveMetric("model-b", 50, 25, 75, 0.001, 0, 0, false, "driver")
+	store.SaveMetric("model-a", 80, 40, 120, 0.002, 0, 0, false, "dream")
+
+	report, err := store.GetUsageReport()
+	if err != nil {
+		t.Fatalf("GetUsageReport: %v", err)
+	}
+
+	// Today's role breakdown should have 3 roles.
+	if len(report.ByRoleToday) != 3 {
+		t.Fatalf("got %d roles today, want 3", len(report.ByRoleToday))
+	}
+
+	// Roles should be sorted by cost descending.
+	// driver: 0.003 + 0.001 = 0.004, memory: 0.006, dream: 0.002
+	// → memory (0.006), driver (0.004), dream (0.002)
+	if report.ByRoleToday[0].Role != "memory" {
+		t.Errorf("top role = %q, want memory", report.ByRoleToday[0].Role)
+	}
+	if report.ByRoleToday[0].Calls != 1 {
+		t.Errorf("memory calls = %d, want 1", report.ByRoleToday[0].Calls)
+	}
+
+	// Driver should have 2 calls (two SaveMetric calls with "driver").
+	if report.ByRoleToday[1].Role != "driver" {
+		t.Errorf("second role = %q, want driver", report.ByRoleToday[1].Role)
+	}
+	if report.ByRoleToday[1].Calls != 2 {
+		t.Errorf("driver calls = %d, want 2", report.ByRoleToday[1].Calls)
+	}
+	if report.ByRoleToday[1].Tokens != 225 {
+		t.Errorf("driver tokens = %d, want 225", report.ByRoleToday[1].Tokens)
+	}
+
+	// 7d and 30d should match today (all data is fresh).
+	if len(report.ByRole7Days) != 3 {
+		t.Errorf("got %d roles 7d, want 3", len(report.ByRole7Days))
+	}
+	if len(report.ByRole30Days) != 3 {
+		t.Errorf("got %d roles 30d, want 3", len(report.ByRole30Days))
+	}
+}
+
 func TestCostSince(t *testing.T) {
 	store := newCoreTestStore(t)
 
