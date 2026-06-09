@@ -538,7 +538,7 @@ func (b *Bot) launchBackgroundAgents(
 			if res.Inference != nil && len(res.Inference.Labels) > 0 {
 				lite.setMood(fmt.Sprintf("🎭 %s (v%d)", strings.Join(res.Inference.Labels, ", "), res.Inference.Valence))
 			} else {
-				lite.setMood(fmt.Sprintf("🎭 %s", res.Action))
+				lite.setMood("🎭 no mood")
 			}
 		}
 	}
