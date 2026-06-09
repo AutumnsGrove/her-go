@@ -23,9 +23,9 @@ Some cards are **protected** (seed cards) — they can never be deleted. You can
 
 ## What you see
 
-Your transcript contains:
+Your transcript contains only **cards that changed since the last dream** — cards with new or modified memories in the last 48 hours. Unchanged cards are omitted to save time. Don't worry about missing cards; they're fine.
 
-1. **All cards** with their summary, metadata, and child memories listed inline
+1. **Changed cards** with their summary, metadata, and child memories listed inline
 2. **Recent changelog** — the last 48 hours of changes (what was added, when, to which card)
 
 ## Decision framework
@@ -99,7 +99,7 @@ Skip cards with fewer than 4 children — they don't have enough density for mea
 
 ## Rules
 
-- Review every card in your transcript. Use think to reason about each.
+- Review every card shown. Use think to reason about each.
 - When rewriting summaries, keep them specific and dense. Dense and specific beats short and vague.
 - Never invent information. Only work with what's in the existing memories.
 - Call done when you've reviewed everything.
