@@ -632,13 +632,16 @@ func (b *Bot) ExecUsage() (string, error) {
 	}
 
 	var msg strings.Builder
-	msg.WriteString("== Usage ==\n\n")
+	msg.WriteString("<b>== Usage ==</b>\n\n<pre>")
 
 	// Period totals.
+	fmt.Fprintf(&msg, "%-14s %6s %8s %9s\n", "Period", "Calls", "Tokens", "Cost")
+	fmt.Fprintf(&msg, "%-14s %6s %8s %9s\n", "──────────────", "──────", "────────", "─────────")
 	for _, p := range report.Periods {
-		fmt.Fprintf(&msg, "%-14s %4d calls  %s tokens  $%.4f\n",
-			p.Label, p.Calls, formatTokens(p.Tokens), p.CostUSD)
+		fmt.Fprintf(&msg, "%-14s %6d %8s %9s\n",
+			p.Label, p.Calls, formatTokens(p.Tokens), fmt.Sprintf("$%.4f", p.CostUSD))
 	}
+	msg.WriteString("</pre>")
 
 	// Per-role tables for each window.
 	type roleWindow struct {
@@ -654,12 +657,22 @@ func (b *Bot) ExecUsage() (string, error) {
 		if len(w.roles) == 0 {
 			continue
 		}
-		fmt.Fprintf(&msg, "\n%s by agent:\n", w.label)
-		fmt.Fprintf(&msg, "  %-15s %5s  %8s  %s\n", "Agent", "Calls", "Tokens", "Cost")
+		fmt.Fprintf(&msg, "\n<b>%s by agent</b>\n<pre>", w.label)
+		fmt.Fprintf(&msg, "%-15s %6s %8s %9s\n", "Agent", "Calls", "Tokens", "Cost")
+		fmt.Fprintf(&msg, "%-15s %6s %8s %9s\n", "───────────────", "──────", "────────", "─────────")
+		var totalCalls, totalTokens int
+		var totalCost float64
 		for _, r := range w.roles {
-			fmt.Fprintf(&msg, "  %-15s %5d  %8s  $%.4f\n",
-				r.Role, r.Calls, formatTokens(r.Tokens), r.CostUSD)
+			fmt.Fprintf(&msg, "%-15s %6d %8s %9s\n",
+				r.Role, r.Calls, formatTokens(r.Tokens), fmt.Sprintf("$%.4f", r.CostUSD))
+			totalCalls += r.Calls
+			totalTokens += r.Tokens
+			totalCost += r.CostUSD
 		}
+		fmt.Fprintf(&msg, "%-15s %6s %8s %9s\n", "───────────────", "──────", "────────", "─────────")
+		fmt.Fprintf(&msg, "%-15s %6d %8s %9s\n",
+			"Total", totalCalls, formatTokens(totalTokens), fmt.Sprintf("$%.4f", totalCost))
+		msg.WriteString("</pre>")
 	}
 
 	return msg.String(), nil
