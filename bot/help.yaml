@@ -46,6 +46,8 @@ sections:
     commands:
       - cmd: /stats
         desc: "token usage, cost, and message counts"
+      - cmd: /usage
+        desc: "cost breakdown by agent (today, 7d, 30d)"
       - cmd: /status
         desc: "uptime, models, and service health"
 

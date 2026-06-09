@@ -115,5 +115,12 @@ func buildCommandsFromBot(bot *bot.Bot) []CommandDef {
 				return bot.ExecRollup()
 			},
 		},
+		{
+			Name:        "usage",
+			Description: "Token costs and call counts by agent",
+			Handler: func(_ context.Context, _ string) (string, error) {
+				return bot.ExecUsage()
+			},
+		},
 	}
 }
