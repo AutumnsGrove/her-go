@@ -6,6 +6,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,16 @@ import (
 	tele "gopkg.in/telebot.v4"
 )
 
+// restartFlag is persisted to disk before a restart so the new process
+// can edit the "Restarting..." message to confirm it's back online.
+type restartFlag struct {
+	ChatID    int64  `json:"chat_id"`
+	MessageID int    `json:"message_id"`
+	Extra     string `json:"extra,omitempty"` // e.g. git pull output for /update
+}
+
+const restartFlagFile = "her.restart_pending"
+
 // handleRestart restarts the bot process. If running under a process
 // supervisor (launchd or systemd), uses the supervisor to restart.
 // Otherwise, exits and relies on the user to restart manually.
@@ -25,19 +36,19 @@ func (b *Bot) handleRestart(c tele.Context) error {
 	log.Info("/restart: restart requested via Telegram")
 
 	if mgr := b.processManager(); mgr != nil && mgr.IsManaged() {
-		_ = c.Send(fmt.Sprintf("Restarting via %s... be right back.", mgr.Name()))
+		msg, _ := b.tb.Send(c.Chat(), fmt.Sprintf("🔄 Restarting via %s…", mgr.Name()))
+		b.writeRestartFlag(c.Chat().ID, msg, "")
 
 		go func() {
-			time.Sleep(500 * time.Millisecond) // let the message send
+			time.Sleep(500 * time.Millisecond)
 			if err := mgr.Restart(); err != nil {
 				log.Error("supervisor restart failed, falling back to exit", "err", err)
-				os.Exit(0) // supervisor's Restart=always / KeepAlive will bring us back
+				os.Exit(0)
 			}
 		}()
 		return nil
 	}
 
-	// Not managed by a supervisor. Just exit cleanly.
 	_ = c.Send("Shutting down. Restart me manually with `go run main.go`.")
 	go func() {
 		time.Sleep(500 * time.Millisecond)
@@ -108,57 +119,78 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 		return c.Send(fmt.Sprintf("❌ Swap failed: %v", err))
 	}
 
-	// Step 5: Write the pending flag so the new binary can confirm on startup.
-	flagPath := filepath.Join(repoPath, "her.update_pending")
-	flagContent := fmt.Sprintf("✅ Updated and restarted successfully.\n\n<pre>%s</pre>", truncateForTelegram(pullMsg, 2000))
-	_ = os.WriteFile(flagPath, []byte(flagContent), 0644)
+	// Step 5: Send "Restarting..." and save the flag so the new binary
+	// can edit this message to confirm it's back online.
+	msg, _ := b.tb.Send(c.Chat(), "🔄 Restarting…")
+	extra := fmt.Sprintf("<pre>%s</pre>", truncateForTelegram(pullMsg, 2000))
+	b.writeRestartFlag(c.Chat().ID, msg, extra)
 
 	// Step 6: Restart via supervisor.
-	_ = c.Send("🔄 Restarting...")
-
 	go func() {
-		time.Sleep(500 * time.Millisecond) // let the message send
+		time.Sleep(500 * time.Millisecond)
 		if err := mgr.Restart(); err != nil {
 			log.Error("supervisor restart failed, falling back to exit", "err", err)
-			os.Exit(0) // supervisor will bring us back (KeepAlive / Restart=always)
+			os.Exit(0)
 		}
 	}()
 
 	return nil
 }
 
-// CheckUpdatePending checks for a her.update_pending flag file on startup
-// and sends the stored confirmation message to the owner chat. This bridges
-// across process lifetimes — the old binary writes the flag before dying,
-// the new binary reads it after starting.
-func (b *Bot) CheckUpdatePending() {
+// writeRestartFlag persists the chat/message IDs so the new process can
+// edit the "Restarting..." message to confirm it's back. msg may be nil
+// if the send failed (graceful degradation — restart still happens).
+func (b *Bot) writeRestartFlag(chatID int64, msg *tele.Message, extra string) {
+	if msg == nil {
+		return
+	}
 	repoPath := b.cfg.Update.RepoPath
 	if repoPath == "" {
 		repoPath, _ = os.Getwd()
 	}
-	flagPath := filepath.Join(repoPath, "her.update_pending")
+	flag := restartFlag{ChatID: chatID, MessageID: msg.ID, Extra: extra}
+	data, _ := json.Marshal(flag)
+	_ = os.WriteFile(filepath.Join(repoPath, restartFlagFile), data, 0644)
+}
+
+// CheckRestartPending looks for a restart flag file on startup and edits
+// the original "Restarting..." message to confirm the bot is back online.
+// This bridges across process lifetimes — the old process writes the flag
+// before dying, the new process reads it after booting.
+func (b *Bot) CheckRestartPending() {
+	repoPath := b.cfg.Update.RepoPath
+	if repoPath == "" {
+		repoPath, _ = os.Getwd()
+	}
+	flagPath := filepath.Join(repoPath, restartFlagFile)
 
 	data, err := os.ReadFile(flagPath)
 	if err != nil {
-		return // no pending update — normal startup
+		return
 	}
-
-	// Remove the flag before sending — even if the send fails, we don't
-	// want to re-send on every restart.
 	_ = os.Remove(flagPath)
 
-	msg := strings.TrimSpace(string(data))
-	if msg == "" {
+	// Also clean up the old-style update flag if present.
+	_ = os.Remove(filepath.Join(repoPath, "her.update_pending"))
+
+	var flag restartFlag
+	if err := json.Unmarshal(data, &flag); err != nil || flag.ChatID == 0 || flag.MessageID == 0 {
 		return
 	}
 
-	if b.ownerChat == 0 {
-		log.Warn("update pending but no owner_chat configured — can't send confirmation")
-		return
+	confirmation := "✅ Back online."
+	if flag.Extra != "" {
+		confirmation = "✅ Updated and back online.\n\n" + flag.Extra
 	}
 
-	if err := b.SendToChat(b.ownerChat, msg); err != nil {
-		log.Error("failed to send update confirmation", "err", err)
+	target := &tele.Message{
+		ID:   flag.MessageID,
+		Chat: &tele.Chat{ID: flag.ChatID},
+	}
+	_, err = b.tb.Edit(target, confirmation, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	if err != nil {
+		log.Warn("failed to edit restart confirmation", "err", err)
+		_ = b.SendToChat(flag.ChatID, confirmation)
 	}
 }
 
