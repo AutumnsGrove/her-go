@@ -250,6 +250,10 @@ func (s *SQLiteStore) GetUsageReport() (*UsageReport, error) {
 			}
 			*rw.dest = append(*rw.dest, ru)
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterating role rows: %w", err)
+		}
 		rows.Close()
 	}
 
