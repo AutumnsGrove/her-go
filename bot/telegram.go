@@ -462,11 +462,11 @@ func (b *Bot) Start() {
 	// is configured. No-op otherwise.
 	b.startMoodSweeper()
 
-	// Check for a pending /update confirmation. If the previous binary
-	// wrote a her.update_pending flag before restarting, send the stored
-	// message now. This runs synchronously before Start() so the
-	// confirmation arrives before any user messages are processed.
-	b.CheckUpdatePending()
+	// Check for a pending restart flag. If the previous process wrote a
+	// flag before dying, edit the "Restarting..." message to confirm
+	// we're back. Runs before Start() so the edit arrives before any
+	// user messages are processed.
+	b.CheckRestartPending()
 
 	log.Info("Bot is running. Listening for messages...")
 	b.tb.Start()
