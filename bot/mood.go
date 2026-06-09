@@ -112,7 +112,7 @@ func (b *Bot) initMood() error {
 // The tracker manages the phase lifecycle: Begin is called here
 // (before launching the goroutine to prevent a race) and Done fires
 // inside the goroutine when the mood agent finishes.
-func (b *Bot) launchMoodAgent(convID string, trace tools.TraceCallback, tracker *turn.Tracker, introspectionWG *sync.WaitGroup) {
+func (b *Bot) launchMoodAgent(convID string, trace tools.TraceCallback, tracker *turn.Tracker, introspectionWG *sync.WaitGroup, liteMoodFn func(mood.Result)) {
 	if b.moodRunner == nil || convID == "" {
 		return
 	}
@@ -156,8 +156,18 @@ func (b *Bot) launchMoodAgent(convID string, trace tools.TraceCallback, tracker 
 			)
 		}
 
-		if res.Action == mood.ActionErrored {
+		switch res.Action {
+		case mood.ActionErrored:
 			log.Warn("mood agent errored", "reason", res.Reason)
+		case mood.ActionAutoLogged, mood.ActionSuperseded:
+			// already logged by mood package
+		default:
+			log.Info("mood agent finished",
+				"action", res.Action, "reason", res.Reason)
+		}
+
+		if liteMoodFn != nil {
+			liteMoodFn(res)
 		}
 
 		// Emit a MoodEvent so the TUI/gateway shows what happened.

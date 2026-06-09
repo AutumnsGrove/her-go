@@ -20,7 +20,7 @@ import (
 
 	"her/agent"
 	"her/classifier"
-	"her/memory"
+	"her/mood"
 	"her/scrub"
 	"her/tools"
 	"her/turn"
@@ -530,18 +530,20 @@ func (b *Bot) launchBackgroundAgents(
 	}
 
 	// --- Mood + introspection ---
-	b.launchMoodAgent(latest.ConversationID, moodTrace, tracker, &introWG)
-	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker, lite)
-
-	// In lite mode, emit a mood summary once everything finishes.
+	// Pass a callback so the mood agent's actual result drives the lite
+	// trace — not a stale DB read that shows yesterday's mood.
+	var liteMoodFn func(mood.Result)
 	if lite != nil {
-		go func() {
-			tracker.Wait()
-			if entry, err := b.store.LatestMoodEntry(memory.MoodKindMomentary); err == nil && entry != nil {
-				lite.setMood(fmt.Sprintf("🎭 %s", strings.Join(entry.Labels, ", ")))
+		liteMoodFn = func(res mood.Result) {
+			if res.Inference != nil && len(res.Inference.Labels) > 0 {
+				lite.setMood(fmt.Sprintf("🎭 %s (v%d)", strings.Join(res.Inference.Labels, ", "), res.Inference.Valence))
+			} else {
+				lite.setMood(fmt.Sprintf("🎭 %s", res.Action))
 			}
-		}()
+		}
 	}
+	b.launchMoodAgent(latest.ConversationID, moodTrace, tracker, &introWG, liteMoodFn)
+	b.launchIntrospectionAgent(latestResult, latestParams, &introWG, introspectionTrace, tracker, lite)
 }
 
 // liteTraceState accumulates compact progress data for lite trace mode.
@@ -625,6 +627,28 @@ func (s *liteTraceState) setCost(text string) {
 	defer s.mu.Unlock()
 	s.cost = text
 	s.flush()
+	s.logSummary()
+}
+
+// logSummary writes the final lite trace state to the server log so
+// mood/memory/introspection outcomes are visible in journalctl.
+func (s *liteTraceState) logSummary() {
+	var parts []string
+	if s.substance != "" {
+		parts = append(parts, s.substance)
+	}
+	if s.memResult != "" {
+		parts = append(parts, s.memResult)
+	}
+	if s.mood != "" {
+		parts = append(parts, s.mood)
+	}
+	if s.introspection != "" {
+		parts = append(parts, s.introspection)
+	}
+	if len(parts) > 0 {
+		log.Info("lite trace summary", "detail", strings.Join(parts, " · "))
+	}
 }
 
 // baseRunParams returns a RunParams pre-filled with all the constant fields

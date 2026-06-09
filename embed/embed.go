@@ -105,7 +105,7 @@ func NewClient(baseURL, model, apiKey string, dimension int) *Client {
 		apiKey:    apiKey,
 		Dimension: dimension,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 	}
 }
@@ -150,9 +150,10 @@ func (c *Client) IsAvailable() bool {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
-	// Short-lived client — don't reuse c.httpClient since its 30s timeout
-	// would make a failed health check take a full half-minute to report.
-	probe := &http.Client{Timeout: 2 * time.Second}
+	// Short-lived client with enough time for Ollama's cold-start model
+	// load (~9s for nomic-embed-text). Too short and the health check
+	// fails on the first call after idle, causing "embed server down" all run.
+	probe := &http.Client{Timeout: 15 * time.Second}
 	resp, err := probe.Do(req)
 	if err != nil {
 		return false
