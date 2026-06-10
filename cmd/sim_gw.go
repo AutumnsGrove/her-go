@@ -16,6 +16,7 @@ import (
 	"her/memory"
 	"her/search"
 	"her/tui"
+	"her/workeragent"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -293,6 +294,57 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		log.Infof("sim: FakeBridge created with %d events", len(fakeEvents))
 	}
 
+	// --- Worker agent ---
+	simRootDir, _ := os.Getwd()
+	_ = workeragent.Init(simRootDir)
+
+	simWorkerLLMs := map[string]*llm.Client{}
+	for tier, tcfg := range cfg.WorkerAgent.Tiers {
+		if tcfg.Model == "" {
+			continue
+		}
+		c := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, tcfg.Model, tcfg.Temperature, tcfg.MaxTokens)
+		timeout := tcfg.Timeout
+		if timeout <= 0 {
+			timeout = 120
+		}
+		c.WithTimeout(time.Duration(timeout) * time.Second)
+		simWorkerLLMs[tier] = c
+	}
+
+	simReportsDir := filepath.Join(simRootDir, "reports")
+	if cfg.WorkerAgent.ReportsDir != "" {
+		simReportsDir = filepath.Join(simRootDir, cfg.WorkerAgent.ReportsDir)
+	}
+
+	var simWorkerCB func(taskType, note string)
+	if len(simWorkerLLMs) > 0 {
+		simWorkerCB = func(taskType, note string) {
+			tt := workeragent.Lookup(taskType)
+			if tt == nil {
+				log.Error("sim worker: unknown task type", "type", taskType)
+				return
+			}
+			llmClient := simWorkerLLMs[tt.ModelTier]
+			if llmClient == nil {
+				log.Error("sim worker: no LLM for tier", "tier", tt.ModelTier)
+				return
+			}
+			log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
+			result := workeragent.RunWorker(workeragent.WorkerInput{
+				TaskType:    taskType,
+				Instruction: note,
+			}, workeragent.WorkerParams{
+				LLM:          llmClient,
+				TavilyClient: tavilyClient,
+				Store:        store,
+				Cfg:          cfg,
+				ReportsDir:   simReportsDir,
+			})
+			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
+		}
+	}
+
 	// --- Assemble deps ---
 	deps := gateway.Deps{
 		ChatLLM:          chatLLM,
@@ -307,6 +359,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		TavilyClient:     tavilyClient,
 		CalendarBridge:   fakeBridge,
 		ConfigPath:       cfgFile,
+		WorkerCallback:   simWorkerCB,
 		// VoiceClient and TTSClient intentionally nil — no audio in sim mode.
 	}
 

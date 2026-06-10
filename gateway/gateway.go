@@ -35,8 +35,9 @@ type Deps struct {
 	TavilyClient     *search.TavilyClient
 	VoiceClient      *voice.Client    // STT — nil if voice disabled
 	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
-	CalendarBridge   calendar.Bridge  // nil in prod, FakeBridge in sims
+	CalendarBridge   calendar.Bridge              // nil in prod, FakeBridge in sims
 	ConfigPath       string
+	WorkerCallback   func(taskType, note string) // nil-safe — fires worker agent in background
 }
 
 // Gateway is the top-level orchestrator. It manages adapter lifecycle,

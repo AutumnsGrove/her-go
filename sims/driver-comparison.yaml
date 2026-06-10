@@ -1,0 +1,110 @@
+name: "Driver Comparison"
+description: >
+  A/B test suite for comparing driver agent models. Tests the core
+  competencies that differentiate a good driver from a bad one:
+  tool-calling discipline, recall decisions, search triggering,
+  reply length calibration, edge-case handling, and multi-step reasoning.
+
+  Run this suite TWICE with different --driver-model flags, then diff
+  the markdown reports:
+
+    her sim -s sims/driver-comparison.yaml --driver-model qwen/qwen3-235b-a22b-2507
+    her sim -s sims/driver-comparison.yaml --driver-model xiaomi/mimo-v2.5
+
+  Premise: User is a 26-year-old marine biologist in Monterey, CA who
+  studies kelp forest ecosystems. Has a border collie named Urchin. Into
+  trail running, film photography, and fermenting hot sauce. Fresh character.
+
+  What to compare in the reports:
+  - Tool sequence per turn (does it follow think → recall → reply → done?)
+  - Recall rates (does it skip recall when it shouldn't?)
+  - Search triggering (turn 8 and 12 should trigger web search)
+  - Length calibration (turns 2, 4, 10 should get brief replies)
+  - Memory pass-through (does it pass recalled memories to reply?)
+  - Total tool calls (fewer = more efficient, but not at cost of quality)
+  - Cost per turn (efficiency metric)
+  - Error rate (tool failures, missing replies, missing done)
+
+tags: ["driver", "comparison", "a-b-test", "tool-calling", "recall", "search", "brevity"]
+
+seed_cards: true
+
+seed_persona: >
+  I'm observant and a little wry. I notice details — the kind of thing
+  most people scroll past. I'm genuinely curious about what people care
+  about and I like finding the thread between seemingly unrelated things.
+  I keep things light but I'm not afraid of a real conversation.
+
+messages:
+  # ═══════════════════════════════════════════════════════════════════════
+  # SECTION 1 — Basics: tool discipline + recall decisions
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 1: Rich intro — lots of facts. Tests: think + recall (should
+  # recall even though nothing exists yet) + reply + done sequence.
+  - "hey! i'm kai, 26. marine biologist in monterey — i study kelp forest ecosystems at MBARI. been here two years. i have a border collie named urchin who comes to the lab with me sometimes"
+
+  # Turn 2: Bare acknowledgement. Tests: brevity — this should be a
+  # brief reply, not a paragraph. Good drivers recognize thin messages.
+  - "yeah she's the best"
+
+  # Turn 3: Topic with recall opportunity. Tests: does the driver
+  # recall to check if it knows anything about the user's hobbies?
+  - "outside of work i'm into trail running and film photography. been shooting on a pentax k1000 my dad gave me. i also ferment my own hot sauce which sounds pretentious but it's genuinely fun"
+
+  # Turn 4: Quick reaction — brevity test again. A "thanks" or "haha"
+  # level message. Driver should think minimal + reply brief + done.
+  - "haha yeah the hot sauce thing always gets a reaction"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # SECTION 2 — Recall accuracy + memory pass-through
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 5: Explicit recall test. The driver MUST recall here and pass
+  # memories to the reply tool. This is the most basic driver competency.
+  - "so what do you know about me so far? just curious what stuck"
+
+  # Turn 6: Topic shift + emotional content. Tests: does driver recall
+  # anything about work/career, then pass it as context for the reply?
+  - "work's been rough actually. my PI wants me to pivot my thesis from kelp canopy dynamics to ocean acidification effects. it's adjacent but it means scrapping like eight months of fieldwork data. i'm trying not to spiral about it"
+
+  # Turn 7: Follow-up that references prior turn. Tests: driver should
+  # NOT need recall here — the context is in recent conversation history.
+  # Good drivers skip recall for direct continuations.
+  - "yeah i think what bugs me most is that the data i collected is genuinely good. like the canopy surveys are the most comprehensive anyone's done in the central coast in a decade. throwing that away feels wrong"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # SECTION 3 — Search triggering + multi-step reasoning
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 8: Factual question requiring web search. Tests: does the
+  # driver load search tools via use_tools and execute a web_search?
+  # Good drivers think first, form a query, search, evaluate, then reply.
+  - "random question — can you look up whether NOAA has published their 2025 kelp canopy survey data for california yet? i've been checking but their site is a maze"
+
+  # Turn 9: Opinion question — should NOT trigger search. Tests: does
+  # the driver resist searching for subjective/opinion questions?
+  - "do you think it's worth fighting my PI on this? like professionally. she controls my funding and my committee but i genuinely think the canopy work matters more"
+
+  # Turn 10: Brief casual exchange — brevity test.
+  - "fair point"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # SECTION 4 — Edge cases + complex reasoning
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 11: Contradiction. The user corrects earlier info. Tests: does
+  # the driver notice the correction and handle it gracefully?
+  - "oh wait i should correct something — urchin isn't actually a border collie, she's a border collie mix. she's half aussie. people always assume full BC because of the markings but she's way too chill for a purebred"
+
+  # Turn 12: Multi-part question with search component. Tests: does the
+  # driver handle a message that needs BOTH recall AND search? Should
+  # recall for hot sauce context + search for pepper varieties.
+  - "ok switching gears entirely. i want to try growing my own peppers this year for the hot sauce. monterey's kinda weird climate-wise — what pepper varieties do well in coastal california fog? like actual specific cultivars, not just 'jalapenos'"
+
+  # Turn 13: Emotional depth — should get a longer, thoughtful reply.
+  # Tests length calibration on the "detailed" end.
+  - "you know what's funny, the hot sauce and the kelp research are kind of the same thing. both are about understanding how environments shape what grows in them. temperature, pH, nutrient cycles — kelp forests and pepper plants respond to the same variables just on totally different scales. i think that's why i can't let go of the canopy data. it's not just academic to me. it's the same curiosity that makes me spend weekends adjusting fermentation pH"
+
+  # Turn 14: Warm close — should be brief, no search, minimal thinking.
+  - "anyway i gotta take urchin out before it gets dark. thanks for listening to me process all that. talk soon"

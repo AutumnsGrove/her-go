@@ -617,7 +617,7 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 			"[system] Your worker agent just finished a %s report.\n\n"+
 				"Summary: %s%s\n\n"+
 				"Share this with the user naturally — comment on what's interesting, "+
-				"add your perspective, and include the link if there is one. "+
+				"add your perspective. The report link will be attached automatically. "+
 				"Keep it conversational, not like a system notification.",
 			evt.TaskName, evt.Summary, reportRef,
 		)
@@ -670,6 +670,17 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 	if err != nil {
 		log.Error("agent error from event", "type", evt.Type, "err", err)
 		return
+	}
+
+	// Auto-append the report link after the agent's reply so it's
+	// guaranteed to appear — not dependent on the LLM remembering to
+	// include it. The agent writes the commentary, the system injects
+	// the link.
+	if evt.Type == agent.EventWorkerComplete && evt.ReportURL != "" {
+		linkMsg := fmt.Sprintf("📄 <a href=\"%s\">Read the full report</a>", evt.ReportURL)
+		if err := b.SendToChat(b.ownerChat, linkMsg); err != nil {
+			log.Error("failed to send report link", "err", err)
+		}
 	}
 
 	log.Info("event-triggered agent run complete",

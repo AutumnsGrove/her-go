@@ -602,6 +602,115 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 	}
 
+	// --- Project root ---
+	// Used by the worker agent (task registry, reports/) and the scheduler
+	// (task.yaml paths). Resolved early so both can reference it.
+	rootDir, err := os.Getwd()
+	if err != nil {
+		log.Error("getting project root", "err", err)
+		rootDir = "."
+	}
+
+	// --- Worker agent LLM clients ---
+	// Build one LLM client per configured tier (low/medium/high).
+	// Constructed before the gateway so the WorkerCallback can be passed
+	// into gateway.Deps for adapters that create their own bot.Bot.
+	workerLLMs := map[string]*llm.Client{}
+	for tier, tcfg := range cfg.WorkerAgent.Tiers {
+		if tcfg.Model == "" {
+			continue
+		}
+		c := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, tcfg.Model, tcfg.Temperature, tcfg.MaxTokens)
+		timeout := tcfg.Timeout
+		if timeout <= 0 {
+			timeout = 120
+		}
+		c.WithTimeout(time.Duration(timeout) * time.Second)
+		if tcfg.Provider != nil {
+			c.WithProvider(&llm.ProviderRouting{
+				Order: tcfg.Provider.Order,
+				Only:  tcfg.Provider.Only,
+				Sort:  tcfg.Provider.Sort,
+			})
+		}
+		if tcfg.Fallback != nil {
+			c.WithFallback(tcfg.Fallback.Model, tcfg.Fallback.Temperature, tcfg.Fallback.MaxTokens)
+		}
+		workerLLMs[tier] = c
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "worker_" + tier, Status: "ready", Detail: tcfg.Model})
+	}
+	if len(workerLLMs) > 0 {
+		if err := workeragent.Init(rootDir); err != nil {
+			log.Error("worker task registry failed", "err", err)
+		}
+	}
+
+	// Build a shared WorkerCallback closure for both gateway and legacy bot paths.
+	var workerCallbackFn func(taskType, note string)
+	if len(workerLLMs) > 0 {
+		reportsDir := filepath.Join(rootDir, "reports")
+		if cfg.WorkerAgent.ReportsDir != "" {
+			reportsDir = filepath.Join(rootDir, cfg.WorkerAgent.ReportsDir)
+		}
+		workerCallbackFn = func(taskType, note string) {
+			tt := workeragent.Lookup(taskType)
+			if tt == nil {
+				log.Error("worker callback: unknown task type", "type", taskType)
+				return
+			}
+			llmClient := workerLLMs[tt.ModelTier]
+			if llmClient == nil {
+				log.Error("worker callback: no LLM for tier", "tier", tt.ModelTier)
+				return
+			}
+			go func() {
+				result := workeragent.RunWorker(workeragent.WorkerInput{
+					TaskType:    taskType,
+					Instruction: note,
+				}, workeragent.WorkerParams{
+					LLM:          llmClient,
+					TavilyClient: tavilyClient,
+					Store:        store,
+					Cfg:          cfg,
+					ReportsDir:   reportsDir,
+					EventBus:     bus,
+				})
+
+				if cfg.WorkerAgent.TelegraphToken != "" && result.ReportPath != "" {
+					tc := telegraph.NewClient(cfg.WorkerAgent.TelegraphToken, cfg.Identity.Her)
+					content, err := os.ReadFile(result.ReportPath)
+					if err == nil {
+						url, pubErr := tc.CreatePage(result.Title, string(content))
+						if pubErr != nil {
+							log.Warn("telegraph publish failed", "err", pubErr)
+						} else {
+							result.TelegraphURL = url
+						}
+					}
+				}
+
+				// Emit event — find the bot to get the event channel.
+				// This is set after the bot is created, so we capture
+				// tgBot by reference (it's always non-nil by call time).
+				if tgBot != nil {
+					ch := tgBot.AgentEventChannel()
+					evt := agent.AgentEvent{
+						Type:      agent.EventWorkerComplete,
+						TaskName:  taskType,
+						Summary:   result.Summary,
+						ReportURL: result.TelegraphURL,
+						Timestamp: time.Now(),
+					}
+					select {
+					case ch <- evt:
+					default:
+						log.Warn("agent event channel full, dropping worker event")
+					}
+				}
+			}()
+		}
+	}
+
 	if len(cfg.Gateway.Adapters) > 0 {
 		gwDeps := gateway.Deps{
 			ChatLLM:          llmClient,
@@ -617,6 +726,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			VoiceClient:      voiceClient,
 			TTSClient:        ttsClient,
 			ConfigPath:       cfgFile,
+			WorkerCallback:   workerCallbackFn,
 		}
 		gw = gateway.New(cfg, gwDeps, bus)
 		gw.AdapterFilter = adapterFilter
@@ -644,120 +754,15 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			return
 		}
 		tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
+		if workerCallbackFn != nil {
+			tgBot.SetWorkerCallback(workerCallbackFn)
+		}
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 	} else if skipTelegram {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "skipped"})
 	}
 	// When gatewayOwnsTelegram, the TelegramAdapter emitted its own
 	// startup event inside bot.New().
-
-	// --- Project root ---
-	// Used by the worker agent (task registry, reports/) and the scheduler
-	// (task.yaml paths). Resolved early so both can reference it.
-	rootDir, err := os.Getwd()
-	if err != nil {
-		log.Error("getting project root", "err", err)
-		rootDir = "."
-	}
-
-	// --- Worker agent LLM clients ---
-	// Build one LLM client per configured tier (low/medium/high).
-	// These are passed to the scheduler so briefing/research handlers
-	// can select the right model for their task type.
-	workerLLMs := map[string]*llm.Client{}
-	for tier, tcfg := range cfg.WorkerAgent.Tiers {
-		if tcfg.Model == "" {
-			continue
-		}
-		c := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, tcfg.Model, tcfg.Temperature, tcfg.MaxTokens)
-		timeout := tcfg.Timeout
-		if timeout <= 0 {
-			timeout = 120
-		}
-		c.WithTimeout(time.Duration(timeout) * time.Second)
-		if tcfg.Provider != nil {
-			c.WithProvider(&llm.ProviderRouting{
-				Order: tcfg.Provider.Order,
-				Only:  tcfg.Provider.Only,
-				Sort:  tcfg.Provider.Sort,
-			})
-		}
-		if tcfg.Fallback != nil {
-			c.WithFallback(tcfg.Fallback.Model, tcfg.Fallback.Temperature, tcfg.Fallback.MaxTokens)
-		}
-		workerLLMs[tier] = c
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "worker_" + tier, Status: "ready", Detail: tcfg.Model})
-	}
-	if len(workerLLMs) > 0 {
-		// Initialize the worker task type registry (scans workeragent/tasks/).
-		if err := workeragent.Init(rootDir); err != nil {
-			log.Error("worker task registry failed", "err", err)
-		}
-
-		// Wire the worker callback into the bot so the driver agent can
-		// delegate tasks via send_task(target="worker"). The callback
-		// launches the worker in a goroutine — fire and forget.
-		if tgBot != nil {
-			reportsDir := filepath.Join(rootDir, "reports")
-			if cfg.WorkerAgent.ReportsDir != "" {
-				reportsDir = filepath.Join(rootDir, cfg.WorkerAgent.ReportsDir)
-			}
-			tgBot.SetWorkerCallback(func(taskType, note string) {
-				tt := workeragent.Lookup(taskType)
-				if tt == nil {
-					log.Error("worker callback: unknown task type", "type", taskType)
-					return
-				}
-				llmClient := workerLLMs[tt.ModelTier]
-				if llmClient == nil {
-					log.Error("worker callback: no LLM for tier", "tier", tt.ModelTier)
-					return
-				}
-				go func() {
-					result := workeragent.RunWorker(workeragent.WorkerInput{
-						TaskType:    taskType,
-						Instruction: note,
-					}, workeragent.WorkerParams{
-						LLM:          llmClient,
-						TavilyClient: tavilyClient,
-						Store:        store,
-						Cfg:          cfg,
-						ReportsDir:   reportsDir,
-						EventBus:     bus,
-					})
-
-					// Publish to Telegraph if configured.
-					if cfg.WorkerAgent.TelegraphToken != "" && result.ReportPath != "" {
-						tc := telegraph.NewClient(cfg.WorkerAgent.TelegraphToken, cfg.Identity.Her)
-						content, err := os.ReadFile(result.ReportPath)
-						if err == nil {
-							url, pubErr := tc.CreatePage(result.Title, string(content))
-							if pubErr != nil {
-								log.Warn("telegraph publish failed", "err", pubErr)
-							} else {
-								result.TelegraphURL = url
-							}
-						}
-					}
-
-					// Emit event so Mira comments on the report.
-					ch := tgBot.AgentEventChannel()
-						evt := agent.AgentEvent{
-							Type:      agent.EventWorkerComplete,
-							TaskName:  taskType,
-							Summary:   result.Summary,
-							ReportURL: result.TelegraphURL,
-							Timestamp: time.Now(),
-						}
-						select {
-						case ch <- evt:
-						default:
-							log.Warn("agent event channel full, dropping worker event")
-						}
-				}()
-			})
-		}
-	}
 
 	// --- Scheduler ---
 	// Powers the extension-based task system (mood daily rollup, future

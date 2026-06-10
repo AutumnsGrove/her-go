@@ -940,12 +940,62 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// ------------------------------------------------------------------
-	// 5.5. Worker agent task registry
+	// 5.5. Worker agent setup
 	// ------------------------------------------------------------------
-	// Initialize the worker task type registry so send_task(target=worker)
-	// works in sims. Uses the project root to find workeragent/tasks/.
+	// Initialize the worker task type registry and build a WorkerCallback
+	// so send_task(target=worker) fires the worker inline during sims.
 	simRootDir, _ := os.Getwd()
 	_ = workeragent.Init(simRootDir)
+
+	// Build worker LLM clients from config tiers.
+	simWorkerLLMs := map[string]*llm.Client{}
+	for tier, tcfg := range cfg.WorkerAgent.Tiers {
+		if tcfg.Model == "" {
+			continue
+		}
+		c := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey, tcfg.Model, tcfg.Temperature, tcfg.MaxTokens)
+		timeout := tcfg.Timeout
+		if timeout <= 0 {
+			timeout = 120
+		}
+		c.WithTimeout(time.Duration(timeout) * time.Second)
+		simWorkerLLMs[tier] = c
+	}
+
+	simReportsDir := filepath.Join(simRootDir, "reports")
+	if cfg.WorkerAgent.ReportsDir != "" {
+		simReportsDir = filepath.Join(simRootDir, cfg.WorkerAgent.ReportsDir)
+	}
+
+	// WorkerCallback runs the worker synchronously in sims (not in a
+	// goroutine) so the report is ready before the turn ends.
+	var workerCallback func(taskType, note string)
+	if len(simWorkerLLMs) > 0 {
+		workerCallback = func(taskType, note string) {
+			tt := workeragent.Lookup(taskType)
+			if tt == nil {
+				log.Error("sim worker: unknown task type", "type", taskType)
+				return
+			}
+			llmClient := simWorkerLLMs[tt.ModelTier]
+			if llmClient == nil {
+				log.Error("sim worker: no LLM for tier", "tier", tt.ModelTier)
+				return
+			}
+			log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
+			result := workeragent.RunWorker(workeragent.WorkerInput{
+				TaskType:    taskType,
+				Instruction: note,
+			}, workeragent.WorkerParams{
+				LLM:          llmClient,
+				TavilyClient: tavilyClient,
+				Store:        store,
+				Cfg:          cfg,
+				ReportsDir:   simReportsDir,
+			})
+			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
+		}
+	}
 
 	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
@@ -1302,7 +1352,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TraceCallback:       traceCallback,
 			TTSCallback:         nil, // no TTS in sim
 			ConfigPath:          cfgFile,
-			ReportsDir:          filepath.Join(filepath.Dir(cfgFile), "reports"),
+			ReportsDir:          simReportsDir,
+			WorkerCallback:      workerCallback,
 			AgentEventCB:        agentEventCB,
 			Tracker:             tracker,
 		})

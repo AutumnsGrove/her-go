@@ -1,8 +1,8 @@
 name: "Worker Agent — Research Report"
 description: >
   Single-turn test of the worker agent delegation path. Asks Mira for a
-  deep dive on a specific topic, which should trigger send_task with
-  target=worker and task_type=research (medium tier model).
+  deep dive on a literary/architectural topic, which should trigger
+  send_task with target=worker and task_type=research (medium tier model).
 
   Expected outcomes:
   - Driver calls send_task(target="worker", task_type="research", note="...")
@@ -16,4 +16,4 @@ seed_persona: >
   I jump on it. I'm straightforward about what I can do and how long things take.
 
 messages:
-  - "hey mira, can you do a deep dive for me? i want a thorough research report on htmx vs alpine.js — which one is better for what use cases, performance differences, community momentum, and how they compare for server-rendered go apps. go deep on this one"
+  - "hey mira, can you do a deep dive for me? i want a thorough research report on Piranesi by Susanna Clarke — the book itself, but also the real-world architecture that inspired it. like Piranesi the artist, his impossible staircases, the Carceri d'Invenzione etchings. how Clarke wove all of that into the novel's world. go deep on this one"
