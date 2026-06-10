@@ -1,0 +1,8 @@
+kind: worker_briefing
+cron: "0 7 * * *"
+payload:
+  instruction: "Search for interesting tech news, Go programming updates, and AI agent developments. Focus on what happened in the last 24 hours."
+retry:
+  max_attempts: 2
+  backoff: linear
+  initial_wait: 2m

@@ -25,6 +25,7 @@ import (
 	"her/scrub"
 	"her/search"
 	"her/turn"
+	"her/workeragent"
 
 	// golang-migrate provides forward-only database migrations, same as
 	// memory.Store uses for her.db. The file source reads .up.sql files
@@ -939,6 +940,14 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	// ------------------------------------------------------------------
+	// 5.5. Worker agent task registry
+	// ------------------------------------------------------------------
+	// Initialize the worker task type registry so send_task(target=worker)
+	// works in sims. Uses the project root to find workeragent/tasks/.
+	simRootDir, _ := os.Getwd()
+	_ = workeragent.Init(simRootDir)
+
+	// ------------------------------------------------------------------
 	// 6. Override persona file to a temp empty file
 	// ------------------------------------------------------------------
 
@@ -1293,6 +1302,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			TraceCallback:       traceCallback,
 			TTSCallback:         nil, // no TTS in sim
 			ConfigPath:          cfgFile,
+			ReportsDir:          filepath.Join(filepath.Dir(cfgFile), "reports"),
 			AgentEventCB:        agentEventCB,
 			Tracker:             tracker,
 		})

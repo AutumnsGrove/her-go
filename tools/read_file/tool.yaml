@@ -1,0 +1,17 @@
+name: read_file
+agent: [main, worker]
+description: >-
+  Read a file from the reports directory. Path is relative to reports/.
+  Returns the full file content as text.
+hot: true
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: "File path relative to reports/ (e.g., 'daily/2026-06-10-briefing.md')"
+  required:
+    - path
+trace:
+  emoji: "📖"
+  format: "{{.path | escape}}"

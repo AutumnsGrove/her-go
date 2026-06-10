@@ -36,6 +36,11 @@ voice_cache/
 *.ogg
 *.wav
 
+# Web frontend (SvelteKit generated/deps)
+web/node_modules/
+web/.svelte-kit/
+web/build/
+
 # Claude Code (session state, not shared config)
 .claude/worktrees/
 
@@ -64,6 +69,10 @@ sims/sim.db-journal
 sims/sim.db-wal
 sims/sim.db-shm
 sims/results/
+
+# Worker agent reports (generated artifacts, may contain personal data)
+reports/*
+!reports/.gitkeep
 
 # TTS model files (large, downloaded at setup time)
 scripts/kokoro-v1.0.onnx

@@ -14,6 +14,7 @@ package bot
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -674,6 +675,8 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		Cfg:                 b.cfg,
 		EventBus:            b.eventBus,
 		ConfigPath:          b.configPath,
+		ReportsDir:          b.reportsDir(),
+		WorkerCallback:      b.workerCallback,
 		// Wire the agent event callback so the memory agent's notify_agent
 		// tool can wake up the driver agent for a follow-up message.
 		// Non-blocking send: if the channel is full (16 buffered events),
@@ -696,4 +699,10 @@ func (b *Bot) baseRunParams() agent.RunParams {
 			}
 		},
 	}
+}
+
+// reportsDir returns the absolute path to the reports/ directory,
+// resolved relative to the config file's parent directory (project root).
+func (b *Bot) reportsDir() string {
+	return filepath.Join(filepath.Dir(b.configPath), "reports")
 }

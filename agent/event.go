@@ -40,6 +40,12 @@ const (
 	// up, reads the inbox, and sends a brief follow-up message to the user.
 	// Uses: Summary, DirectMessage (optional).
 	EventInboxReady
+
+	// EventWorkerComplete fires when the background worker agent finishes
+	// a task (briefing, research, etc.). The driver agent wakes up and
+	// comments on the report in Mira's voice.
+	// Uses: TaskName, Summary, ReportURL.
+	EventWorkerComplete
 )
 
 // String implements fmt.Stringer for readable logging.
@@ -55,6 +61,8 @@ func (t AgentEventType) String() string {
 		return "ddl-detected"
 	case EventInboxReady:
 		return "inbox-ready"
+	case EventWorkerComplete:
+		return "worker-complete"
 	default:
 		return "unknown"
 	}
@@ -86,6 +94,9 @@ type AgentEvent struct {
 	// --- EventInboxReady fields ---
 	Summary       string // brief description of what was done
 	DirectMessage string // if set, send this text directly without a full agent loop
+
+	// --- EventWorkerComplete fields ---
+	ReportURL string // Telegraph URL for the published report (empty if unpublished)
 
 	// --- Common ---
 	Timestamp time.Time

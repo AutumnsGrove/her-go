@@ -166,6 +166,8 @@ type RunParams struct {
 	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
 	LiteToolHook              func(toolName string)       // nil-safe — called after each tool execution in lite trace mode
 	IsSimRun                  bool                        // true when running via the sim adapter
+	ReportsDir                string                      // absolute path to reports/ — file tools enforce this boundary
+	WorkerCallback            func(taskType, note string) // nil-safe — fires worker agent in background goroutine
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -408,6 +410,8 @@ func Run(params RunParams) (*RunResult, error) {
 		ActiveTools:               &toolDefs,
 		EventBus:                  params.EventBus,
 		ConfigPath:                params.ConfigPath,
+		ReportsDir:                params.ReportsDir,
+		WorkerCallback:            params.WorkerCallback,
 		IsSimRun:                  params.IsSimRun,
 		PreApprovedRewrites:       make(map[string]bool),
 	}
