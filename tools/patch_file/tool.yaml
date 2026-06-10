@@ -1,0 +1,26 @@
+name: patch_file
+agent: [worker]
+description: >-
+  Edit a file in the reports directory by replacing specific text. Use this
+  instead of write_file when making small changes to an existing file —
+  saves tokens and preserves surrounding content.
+hot: true
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: "File path relative to reports/"
+    old_text:
+      type: string
+      description: "Exact text to find and replace (must be unique in the file)"
+    new_text:
+      type: string
+      description: "Replacement text"
+  required:
+    - path
+    - old_text
+    - new_text
+trace:
+  emoji: "✏️"
+  format: "{{.path | escape}}"

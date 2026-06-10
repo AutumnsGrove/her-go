@@ -52,6 +52,7 @@ type Config struct {
 	Update             UpdateConfig             `yaml:"update"`
 	BackgroundAgents   BackgroundAgentsConfig   `yaml:"background_agents"`
 	Gateway            GatewayConfig            `yaml:"gateway"`
+	WorkerAgent        WorkerAgentConfig        `yaml:"worker_agent"`
 }
 
 // BackgroundAgentsConfig controls when the post-turn background agents
@@ -504,6 +505,40 @@ type IntrospectionAgentConfig struct {
 	// should just skip. Defaults: 5 iterations, 1 continuation (= 10 max).
 	IterationsPerWindow int `yaml:"iterations_per_window"` // 0 = 5
 	MaxContinuations    int `yaml:"max_continuations"`     // 0 = 1
+}
+
+// WorkerAgentConfig controls the background worker agent — a general-purpose
+// task executor that produces file artifacts (briefings, research reports).
+// Model tiers allow different quality/cost tradeoffs per task type.
+type WorkerAgentConfig struct {
+	// Tiers maps tier names ("low", "medium", "high") to model configs.
+	// Each task type's meta.yaml declares which tier it uses.
+	Tiers map[string]WorkerTierConfig `yaml:"tiers"`
+
+	// MaxIterations caps the tool-calling loop per window. Default 20.
+	MaxIterations int `yaml:"max_iterations"`
+
+	// MaxContinuations is how many continuation windows the worker gets
+	// if it exhausts iterations without calling done. Default 2.
+	MaxContinuations int `yaml:"max_continuations"`
+
+	// TelegraphToken is the access token for publishing reports to
+	// telegra.ph. Empty means skip publishing (reports are local-only).
+	TelegraphToken string `yaml:"telegraph_token"`
+
+	// ReportsDir is the directory for report artifacts, relative to
+	// the project root. Default "reports".
+	ReportsDir string `yaml:"reports_dir"`
+}
+
+// WorkerTierConfig maps a model tier to a specific model and parameters.
+type WorkerTierConfig struct {
+	Model       string           `yaml:"model"`
+	Temperature float64          `yaml:"temperature"`
+	MaxTokens   int              `yaml:"max_tokens"`
+	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 120s default)
+	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing
+	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
 }
 
 // MoodConfig holds behavior knobs for the mood agent + sweeper.

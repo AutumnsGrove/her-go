@@ -1,0 +1,22 @@
+name: write_file
+agent: [worker]
+description: >-
+  Write content to a file in the reports directory. Path is relative to
+  reports/ (e.g., "2026-06-10-tech-digest.md"). Creates parent directories
+  if needed. Overwrites if the file already exists.
+hot: true
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: "File path relative to reports/ (e.g., 'daily/2026-06-10-briefing.md')"
+    content:
+      type: string
+      description: "Full file content to write"
+  required:
+    - path
+    - content
+trace:
+  emoji: "📝"
+  format: "{{.path | escape}}"

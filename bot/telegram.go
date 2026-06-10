@@ -134,6 +134,11 @@ type Bot struct {
 	// ownerChat is the Telegram chat ID for the bot owner. Used by
 	// handleAgentEvent to send replies from event-triggered agent runs.
 	ownerChat int64
+
+	// workerCallback fires the worker agent in a background goroutine.
+	// Set by cmd/run.go after bot creation — the bot doesn't import
+	// workeragent directly (avoids import cycle).
+	workerCallback func(taskType, note string)
 }
 
 // PendingTurn stores the data needed to run background agents on a
@@ -156,6 +161,13 @@ type PendingTurn struct {
 // and other non-user-initiated messages get sent.
 func (b *Bot) SetOwnerChat(chatID int64) {
 	b.ownerChat = chatID
+}
+
+// SetWorkerCallback sets the function that fires the worker agent in a
+// background goroutine. Called from cmd/run.go after bot creation to
+// avoid an import cycle (bot doesn't import workeragent).
+func (b *Bot) SetWorkerCallback(cb func(taskType, note string)) {
+	b.workerCallback = cb
 }
 
 // AgentEventChannel returns a write-only channel for emitting agent events.
@@ -594,6 +606,22 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 			evt.SkillName, evt.DDLStatement)
 		conversationID = "ddl-audit"
 		log.Info("handling DDL audit event", "skill", evt.SkillName, "statement", evt.DDLStatement)
+
+	case agent.EventWorkerComplete:
+		log.Info("worker complete event", "task", evt.TaskName, "url", evt.ReportURL)
+		reportRef := ""
+		if evt.ReportURL != "" {
+			reportRef = fmt.Sprintf("\n\nPublished at: %s", evt.ReportURL)
+		}
+		prompt = fmt.Sprintf(
+			"[system] Your worker agent just finished a %s report.\n\n"+
+				"Summary: %s%s\n\n"+
+				"Share this with the user naturally — comment on what's interesting, "+
+				"add your perspective, and include the link if there is one. "+
+				"Keep it conversational, not like a system notification.",
+			evt.TaskName, evt.Summary, reportRef,
+		)
+		conversationID = "worker-report"
 
 	case agent.EventInboxReady:
 		log.Info("inbox-ready event", "summary", evt.Summary)

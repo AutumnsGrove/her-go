@@ -1,5 +1,5 @@
 name: think
-agent: [main, introspection, dream]
+agent: [main, introspection, dream, worker]
 hint: "pause and reason before acting (free, use often)"
 description: >-
   Pause and reason before acting. Use this to evaluate search results,

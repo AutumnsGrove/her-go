@@ -1,0 +1,16 @@
+name: list_files
+agent: [main, worker]
+description: >-
+  List files in the reports directory. Returns file names, sizes, and
+  modification times. Useful for finding existing reports before writing.
+hot: true
+parameters:
+  type: object
+  properties:
+    pattern:
+      type: string
+      description: "Optional glob pattern to filter (e.g., 'daily/*.md'). Default lists all files."
+  required: []
+trace:
+  emoji: "📂"
+  format: "{{.pattern | escape}}"

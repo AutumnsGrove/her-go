@@ -15,6 +15,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 
 	"her/calendar"
@@ -361,6 +363,17 @@ type Context struct {
 	// PersonaFile is the path to persona.md on disk.
 	PersonaFile string
 
+	// ReportsDir is the absolute path to the reports/ directory where
+	// the worker agent writes file artifacts (briefings, research, etc.).
+	// File tools (write_file, read_file, etc.) enforce this as a security
+	// boundary — paths that escape this directory are rejected.
+	ReportsDir string
+
+	// WorkerCallback fires the worker agent in a background goroutine.
+	// Called by send_task when target="worker". Nil-safe — returns an
+	// error message when the worker agent is not configured.
+	WorkerCallback func(taskType, note string)
+
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
 
@@ -392,4 +405,23 @@ type Context struct {
 	// suggests text and then rejects that exact text on retry.
 	// Key: the rewrite text (lowercased for case-insensitive matching).
 	PreApprovedRewrites map[string]bool
+}
+
+// ValidateReportPath resolves a relative path against the reports directory
+// and verifies it doesn't escape the boundary. Returns the absolute path
+// on success. Used by all file tools (write_file, read_file, patch_file)
+// to prevent path traversal attacks from prompt-injected content.
+func ValidateReportPath(reportsDir, relPath string) (string, error) {
+	if reportsDir == "" {
+		return "", fmt.Errorf("reports directory not configured")
+	}
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("path escapes reports directory: %s", relPath)
+	}
+	abs := filepath.Clean(filepath.Join(reportsDir, relPath))
+	if !strings.HasPrefix(abs, filepath.Clean(reportsDir)+string(filepath.Separator)) &&
+		abs != filepath.Clean(reportsDir) {
+		return "", fmt.Errorf("path escapes reports directory: %s", relPath)
+	}
+	return abs, nil
 }

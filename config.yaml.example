@@ -326,3 +326,26 @@ gateway:
       memory: false                # disable memory for quick testing
       port: 7777                   # Go API port — Gradio Python UI runs separately on :7860
       traces: true                 # show agent traces in side panel
+
+# --- Worker Agent ---
+# Background worker that produces file artifacts (briefings, research reports).
+# Model tiers allow different quality/cost tradeoffs per task type.
+# Each task type's meta.yaml declares which tier it uses.
+worker_agent:
+  telegraph_token: ""              # from telegra.ph API — empty = skip publishing
+  reports_dir: "reports"           # relative to project root
+  tiers:
+    low:
+      model: "qwen/qwen3-235b-a22b-2507"
+      temperature: 0.7
+      max_tokens: 8192
+    medium:
+      model: "deepseek/deepseek-v4-flash"
+      temperature: 0.7
+      max_tokens: 16384
+    high:
+      model: "moonshotai/kimi-k2-0905"
+      temperature: 0.7
+      max_tokens: 32768
+      provider:
+        order: ["Groq"]

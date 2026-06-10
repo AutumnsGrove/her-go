@@ -1,30 +1,38 @@
 name: send_task
 agent: [main]
 description: >-
-  Delegate a memory task to the background memory agent. Do your research first
-  (recall_memories to find duplicates or compound memories), then send a task
-  with all the context the memory agent needs to execute without re-querying.
-  The memory agent picks up inbox tasks automatically after the reply is sent.
-hint: "delegate memory work (cleanup, splits) to background agent"
+  Delegate a task to a background agent. Two targets are available:
+
+  - target "memory" (default): send memory work (cleanup, splits) to the
+    background memory agent. Do your research first (recall_memories to find
+    duplicates or compound memories), then send a task with all the context.
+
+  - target "worker": send a research or briefing task to the worker agent.
+    The worker searches the web, writes a report file, and notifies you when
+    done. Use for "deep dive on X" or "research Y and write it up" requests.
+hint: "delegate work to background agents (memory cleanup, research reports)"
 hot: true
 parameters:
   type: object
   properties:
+    target:
+      type: string
+      enum: [memory, worker]
+      description: "Which agent to delegate to. Default: memory."
     task_type:
       type: string
-      enum: [cleanup, split, general]
-      description: "Type of memory task to delegate"
+      description: "Type of task — for memory: cleanup/split/general. For worker: briefing/research."
     note:
       type: string
-      description: "Freeform instructions for the memory agent — be specific about what to do"
+      description: "Freeform instructions for the target agent — be specific about what to do"
     memory_ids:
       type: array
       items:
         type: integer
-      description: "Relevant memory IDs (from recall_memories results)"
+      description: "Relevant memory IDs (memory target only, from recall_memories results)"
   required:
     - task_type
     - note
 trace:
   emoji: "📨"
-  format: "→ memory: {{.task_type}}"
+  format: "→ {{.target | default \"memory\"}}: {{.task_type}}"

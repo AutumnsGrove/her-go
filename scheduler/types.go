@@ -67,6 +67,28 @@ type Deps struct {
 	// ChatID is the owner's Telegram chat ID — the primary user. Almost
 	// every extension that sends proactive messages targets this.
 	ChatID int64
+
+	// --- Worker agent dependencies (used by briefing/research handlers) ---
+
+	// WorkerLLMs maps tier names ("low", "medium", "high") to LLM clients.
+	// Typed as any to avoid scheduler → llm import cycle; the briefing
+	// handler casts to map[string]*llm.Client at the call site.
+	WorkerLLMs any
+
+	// TavilyClient provides web search for worker tasks. Nil if not configured.
+	TavilyClient any
+
+	// Cfg is the full app config — used by the worker for prompt expansion,
+	// telegraph tokens, and report directory resolution.
+	Cfg any
+
+	// RootDir is the project root — used for resolving reports/ and task
+	// prompt paths.
+	RootDir string
+
+	// AgentEventCh receives completion events from workers. The bot's
+	// event consumer handles them to trigger driver agent follow-ups.
+	AgentEventCh any
 }
 
 // RetryConfig governs what happens when a handler returns an error.
