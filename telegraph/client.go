@@ -95,9 +95,14 @@ func (c *Client) CreatePage(title, markdownContent string) (string, error) {
 		return "", fmt.Errorf("marshaling nodes: %w", err)
 	}
 
+	// Add a short timestamp suffix to the title to ensure unique URLs.
+	// Telegraph generates URL slugs from the title — without this,
+	// two reports with similar titles on the same day would collide.
+	uniqueTitle := fmt.Sprintf("%s — %s", title, time.Now().Format("Jan 2 15:04"))
+
 	payload := map[string]string{
 		"access_token": c.accessToken,
-		"title":        title,
+		"title":        uniqueTitle,
 		"author_name":  c.authorName,
 		"content":      string(nodesJSON),
 	}

@@ -42,6 +42,9 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 	if deps.CalendarBridge != nil {
 		b.SetCalendarBridge(deps.CalendarBridge)
 	}
+	if deps.WorkerCallback != nil {
+		b.SetWorkerCallback(deps.WorkerCallback)
+	}
 
 	return &Pipeline{
 		bot:   b,

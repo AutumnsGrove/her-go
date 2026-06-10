@@ -56,6 +56,9 @@ func newTelegramAdapter(acfg config.AdapterConfig, gcfg *config.Config, deps Dep
 		return nil, err
 	}
 	tgBot.SetOwnerChat(gcfg.Telegram.OwnerChat)
+	if deps.WorkerCallback != nil {
+		tgBot.SetWorkerCallback(deps.WorkerCallback)
+	}
 
 	return &telegramAdapter{
 		cfg:   acfg,
