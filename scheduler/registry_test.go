@@ -106,15 +106,15 @@ func TestRegisteredKinds_SortedAndComplete(t *testing.T) {
 	Register(&fakeHandler{kind: "alpha"})
 	Register(&fakeHandler{kind: "mango"})
 
-	got := registeredKinds()
+	got := RegisteredKinds()
 	want := []string{"alpha", "mango", "zebra"}
 
 	if len(got) != len(want) {
-		t.Fatalf("registeredKinds() len = %d, want %d", len(got), len(want))
+		t.Fatalf("RegisteredKinds() len = %d, want %d", len(got), len(want))
 	}
 	for i := range got {
 		if got[i] != want[i] {
-			t.Errorf("registeredKinds()[%d] = %q, want %q", i, got[i], want[i])
+			t.Errorf("RegisteredKinds()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 }

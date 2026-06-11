@@ -64,9 +64,9 @@ func lookup(kind string) Handler {
 	return registry[kind]
 }
 
-// registeredKinds returns the sorted list of every registered kind.
+// RegisteredKinds returns the sorted list of every registered kind.
 // Used by the loader to walk each handler once at startup.
-func registeredKinds() []string {
+func RegisteredKinds() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 

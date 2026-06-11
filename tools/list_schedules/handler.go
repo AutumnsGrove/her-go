@@ -43,8 +43,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Resolve timezone for display.
 	loc := time.UTC
-	if ctx.Cfg != nil && ctx.Cfg.Calendar.DefaultTimezone != "" {
-		if parsed, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone); err == nil {
+	if ctx.Cfg != nil && ctx.Cfg.Timezone() != "" {
+		if parsed, err := time.LoadLocation(ctx.Cfg.Timezone()); err == nil {
 			loc = parsed
 		}
 	}

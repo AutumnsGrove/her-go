@@ -56,14 +56,14 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Validate payload shape per task type.
-	if err := validatePayload(a.TaskType, a.Payload); err != nil {
+	if err := scheduler.ValidatePayload(a.TaskType, a.Payload); err != nil {
 		return fmt.Sprintf("error: %s", err)
 	}
 
 	// Resolve timezone for cron evaluation.
 	loc := time.UTC
-	if ctx.Cfg != nil && ctx.Cfg.Calendar.DefaultTimezone != "" {
-		if parsed, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone); err == nil {
+	if ctx.Cfg != nil && ctx.Cfg.Timezone() != "" {
+		if parsed, err := time.LoadLocation(ctx.Cfg.Timezone()); err == nil {
 			loc = parsed
 		}
 	}
@@ -114,37 +114,3 @@ func hashName(name string) string {
 	return fmt.Sprintf("%x-%s", h[:3], name)
 }
 
-func validatePayload(taskType string, payload json.RawMessage) error {
-	if len(payload) == 0 || string(payload) == "{}" || string(payload) == "null" {
-		if taskType == "send_message" {
-			return fmt.Errorf("send_message requires payload with 'message' field")
-		}
-		if taskType == "send_prompt" {
-			return fmt.Errorf("send_prompt requires payload with 'prompt' field")
-		}
-		return nil
-	}
-
-	var p map[string]any
-	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("payload must be a JSON object")
-	}
-
-	switch taskType {
-	case "send_message":
-		if _, ok := p["message"]; !ok {
-			return fmt.Errorf("send_message payload requires 'message' field")
-		}
-	case "send_prompt":
-		if _, ok := p["prompt"]; !ok {
-			return fmt.Errorf("send_prompt payload requires 'prompt' field")
-		}
-	case "worker_briefing":
-		if depth, ok := p["depth"]; ok {
-			if d, ok := depth.(string); ok && d != "brief" && d != "deep" {
-				return fmt.Errorf("worker_briefing depth must be 'brief' or 'deep'")
-			}
-		}
-	}
-	return nil
-}
