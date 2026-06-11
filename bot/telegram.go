@@ -163,6 +163,12 @@ func (b *Bot) SetOwnerChat(chatID int64) {
 	b.ownerChat = chatID
 }
 
+// SetTTSClient sets the TTS client for voice synthesis. Called from
+// gateway/pipeline.go to wire TTS into dev-mode bots (sims, Gradio).
+func (b *Bot) SetTTSClient(c *voice.TTSClient) {
+	b.ttsClient = c
+}
+
 // SetWorkerCallback sets the function that fires the worker agent in a
 // background goroutine. Called from cmd/run.go after bot creation to
 // avoid an import cycle (bot doesn't import workeragent).
