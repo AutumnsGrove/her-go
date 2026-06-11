@@ -18,8 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -117,12 +117,6 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) MemoryAgen
 	// the snippet shows "user asked about cortisol research" from the next turn).
 	contextSnippet, _ := params.Store.RecentMessages(input.ConversationID, 2)
 
-	// Load the memory agent prompt (hot-reloadable like other prompt files).
-	promptContent := loadMemoryAgentPrompt(params.Cfg)
-
-	// Build the turn transcript the model will review.
-	transcript := buildMemoryTranscript(input, params.Store)
-
 	// Pre-approved rewrites: shared between ClassifyWriteFunc (which populates it)
 	// and the tool handlers (which check it). Same pattern as the driver agent.
 	preApproved := make(map[string]bool)
@@ -146,153 +140,45 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) MemoryAgen
 		AgentEventCB:        params.AgentEventCB,
 	}
 
-	// Tool definitions for the memory agent — driven by tool.yaml agent fields.
-	memToolDefs := tools.ToolDefsForAgent("memory", params.Cfg)
+	// Load the memory agent prompt (hot-reloadable like other prompt files).
+	promptContent := loadMemoryAgentPrompt(params.Cfg)
+	transcript := buildMemoryTranscript(input, params.Store)
 
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: promptContent},
-		{Role: "user", Content: transcript},
+	// Run the tool-calling loop via the shared engine.
+	loopResult, err := engine.RunLoop(engine.EngineConfig{
+		Name:                "memory",
+		MetricRole:          memory.RoleMemory,
+		LLM:                 params.LLM,
+		Store:               params.Store,
+		ToolDefs:            tools.ToolDefsForAgent("memory", params.Cfg),
+		ToolCtx:             tctx,
+		TriggerMsgID:        input.TriggerMsgID,
+		IterationsPerWindow: params.Cfg.MemoryAgent.IterationsPerWindow,
+		MaxContinuations:    params.Cfg.MemoryAgent.MaxContinuations,
+		TraceCallback:       params.TraceCallback,
+		EventBus:            params.EventBus,
+		Phase:               params.Phase,
+		Messages: []llm.ChatMessage{
+			{Role: "system", Content: promptContent},
+			{Role: "user", Content: transcript},
+		},
+
+		ContinuationMsg: func(window, maxWindows int, summary string) string {
+			return fmt.Sprintf(
+				"You have used all iterations in the previous window without calling done. "+
+					"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
+					"Continue your work and call done (or notify_agent) when finished.",
+				window, maxWindows, summary,
+			)
+		},
+	})
+	if err != nil {
+		log.Error("memory agent: engine error", "err", err)
 	}
 
-	var totalCost float64
-
-	// Memory agent loop limits — read from config with sensible defaults.
-	// Same continuation window pattern as the driver agent. If the memory
-	// agent exhausts its iterations without calling done (e.g. during a
-	// bulk cleanup), it gets a fresh window with a progress summary
-	// injected.
-	iterationsPerWindow := params.Cfg.MemoryAgent.IterationsPerWindow
-	if iterationsPerWindow <= 0 {
-		iterationsPerWindow = 15
-	}
-	maxContinuations := params.Cfg.MemoryAgent.MaxContinuations
-	if maxContinuations <= 0 {
-		maxContinuations = 2
-	}
-
-	// tracing tracks whether we have a live trace callback and accumulates
-	// the formatted trace lines for the memory agent's slot.
-	// The slot header (🧩 memory) is owned by the trace registry —
-	// callers prepend it at render time — so we only send body
-	// content here.
-	tracing := params.TraceCallback != nil
-	var traceLines []string
-
-	emitMemTrace := func() {
-		if !tracing || len(traceLines) == 0 {
-			return
-		}
-		_ = params.TraceCallback(strings.Join(traceLines, "\n"))
-	}
-
-outer:
-	for window := 0; window <= maxContinuations; window++ {
-		if window > 0 {
-			// Exhausted the previous window without a done signal.
-			// Inject a continuation context so the model knows where it
-			// left off. Reuses the same summary builder as the driver agent.
-			summary := buildContinuationSummary(traceLines)
-			messages = append(messages, llm.ChatMessage{
-				Role: "system",
-				Content: fmt.Sprintf(
-					"You have used all %d iterations in the previous window without calling done. "+
-						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
-						"Continue your work and call done (or notify_agent) when finished.",
-					iterationsPerWindow, window, maxContinuations, summary,
-				),
-			})
-			log.Infof("  [memory] continuation window %d/%d", window, maxContinuations)
-			if tracing {
-				traceLines = append(traceLines, fmt.Sprintf(
-					"🔄 <i>continuation window %d/%d</i>", window, maxContinuations))
-				emitMemTrace()
-			}
-		}
-
-		for i := 0; i < iterationsPerWindow; i++ {
-			resp, err := params.LLM.ChatCompletionWithTools(messages, memToolDefs)
-			if err != nil {
-				log.Error("memory agent: LLM error — memories from this turn may be lost",
-					"err", err,
-					"iteration", i,
-					"window", window,
-					"memories_saved_so_far", len(tctx.SavedMemories),
-					"trigger_msg", input.TriggerMsgID,
-				)
-				break outer
-			}
-
-			// Log cost and metrics — same as driver agent.
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, input.TriggerMsgID, resp.UsedFallback, memory.RoleMemory)
-			totalCost += resp.CostUSD
-			log.Infof("  [memory] tokens: %d prompt + %d completion | $%.6f | finish=%s",
-				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-			if len(resp.ToolCalls) == 0 {
-				// Model returned text or an empty response — stop the loop.
-				break outer
-			}
-
-			// Append the assistant turn before executing tools.
-			messages = append(messages, llm.ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			// Execute each tool call, emit trace lines, and emit TUI events.
-			for _, tc := range resp.ToolCalls {
-				result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-				isError := strings.HasPrefix(result, "error:") || strings.HasPrefix(result, "rejected:")
-				log.Infof("    [memory] %s → %s", tc.Function.Name, truncateLog(result, 150))
-				messages = append(messages, llm.ChatMessage{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-				})
-
-				if params.Phase != nil {
-					params.Phase.EmitToolCall(
-						tc.Function.Name,
-						truncateLog(tc.Function.Arguments, 200),
-						truncateLog(result, 200),
-						isError,
-					)
-				} else if params.EventBus != nil {
-					// Fallback for callers that don't use the turn tracker yet.
-					params.EventBus.Emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						TurnID:   input.TriggerMsgID,
-						Source:   "memory",
-						ToolName: tc.Function.Name,
-						Args:     truncateLog(tc.Function.Arguments, 200),
-						Result:   truncateLog(result, 200),
-						IsError:  isError,
-					})
-				}
-
-				if tracing {
-					line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
-					traceLines = append(traceLines, line)
-					emitMemTrace()
-				}
-			}
-
-			if tctx.DoneCalled {
-				break outer
-			}
-		}
-
-		// Inner loop exhausted without done. If at the hard cap, give up.
-		if window == maxContinuations {
-			log.Warn("[memory] hit max continuations without done signal",
-				"total_calls", iterationsPerWindow*(window+1))
-			if tracing {
-				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
-				emitMemTrace()
-			}
-			break outer
-		}
+	totalCost := 0.0
+	if loopResult != nil {
+		totalCost = loopResult.TotalCost
 	}
 
 	log.Infof("  memory agent: %d memories saved | $%.6f", len(tctx.SavedMemories), totalCost)
