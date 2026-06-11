@@ -295,6 +295,7 @@ func RunLoop(cfg EngineConfig) (*LoopResult, error) {
 
 	// >> HOOK: OnLoopStart (fires once before first LLM call)
 	if cfg.OnLoopStart != nil {
+		log.Debug("hook fired", "agent", cfg.Name, "hook", "OnLoopStart")
 		cfg.OnLoopStart(messages)
 	}
 
@@ -333,6 +334,7 @@ outer:
 
 			// >> HOOK: PreIteration
 			if cfg.PreIteration != nil {
+				log.Debug("hook fired", "agent", cfg.Name, "hook", "PreIteration", "iter", i, "window", window)
 				cfg.PreIteration(i, window)
 			}
 
@@ -355,6 +357,7 @@ outer:
 
 				// >> HOOK: OnError (can suppress the default break)
 				if cfg.OnError != nil {
+					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnError", "err", err)
 					if cfg.OnError(err, i, window) {
 						continue // hook suppressed — retry or recover
 					}
@@ -397,7 +400,9 @@ outer:
 
 			// >> HOOK: PostIteration (before tool execution)
 			if cfg.PostIteration != nil {
+				log.Debug("hook fired", "agent", cfg.Name, "hook", "PostIteration", "iter", i, "window", window)
 				if cfg.PostIteration(i, window, resp) {
+					log.Info("hook break", "agent", cfg.Name, "hook", "PostIteration")
 					exitReason = ExitHookBreak
 					break outer
 				}
@@ -406,6 +411,7 @@ outer:
 			// -- No tool calls → exit (unless hook handles it) --
 			if len(resp.ToolCalls) == 0 {
 				if cfg.OnNoToolCalls != nil {
+					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnNoToolCalls")
 					if cfg.OnNoToolCalls(resp) {
 						continue
 					}
@@ -434,6 +440,7 @@ outer:
 				// >> HOOK: ActiveToolGuard
 				if cfg.ActiveToolGuard != nil {
 					if errResult, reject := cfg.ActiveToolGuard(tc); reject {
+						log.Debug("hook rejected tool", "agent", cfg.Name, "hook", "ActiveToolGuard", "tool", tc.Function.Name)
 						messages = append(messages, llm.ChatMessage{
 							Role:       "tool",
 							Content:    errResult,
@@ -447,6 +454,7 @@ outer:
 				var result string
 				if cfg.PreTool != nil {
 					if skipResult, skip := cfg.PreTool(tc, cfg.ToolCtx); skip {
+						log.Debug("hook skipped tool", "agent", cfg.Name, "hook", "PreTool", "tool", tc.Function.Name)
 						result = skipResult
 					} else {
 						result = tools.Execute(tc.Function.Name, tc.Function.Arguments, cfg.ToolCtx)
@@ -496,6 +504,7 @@ outer:
 				// This is the only hook that can change what goes into
 				// the message history. Fires before message append.
 				if cfg.PostToolResult != nil {
+					log.Debug("hook fired", "agent", cfg.Name, "hook", "PostToolResult", "tool", tc.Function.Name)
 					result = cfg.PostToolResult(tc, result, isError)
 					// Re-check error status since the transform may have changed it.
 					isError = strings.HasPrefix(result, "error:") ||
@@ -504,6 +513,7 @@ outer:
 
 				// >> HOOK: PostTool (observe-only: SaveAgentTurn, think capture, etc.)
 				if cfg.PostTool != nil {
+					log.Debug("hook fired", "agent", cfg.Name, "hook", "PostTool", "tool", tc.Function.Name)
 					cfg.PostTool(tc, result, isError)
 				}
 
@@ -519,6 +529,7 @@ outer:
 			if cfg.ToolCtx.DoneCalled {
 				// >> HOOK: OnDone (fires specifically on done signal)
 				if cfg.OnDone != nil {
+					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnDone")
 					cfg.OnDone(messages)
 				}
 				exitReason = ExitDone
@@ -549,6 +560,7 @@ outer:
 
 	// >> HOOK: OnLoopExit
 	if cfg.OnLoopExit != nil {
+		log.Debug("hook fired", "agent", cfg.Name, "hook", "OnLoopExit", "reason", exitReason)
 		cfg.OnLoopExit(exitReason, messages)
 	}
 
