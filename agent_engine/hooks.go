@@ -202,6 +202,9 @@ func (h *TurnHooks) FireTurnStart(ctx TurnStartContext) (bool, string) {
 		return false, ""
 	}
 	for _, hook := range h.OnTurnStart {
+		if hook == nil {
+			continue
+		}
 		if skip, reason := hook(ctx); skip {
 			return true, reason
 		}
@@ -215,6 +218,9 @@ func (h *TurnHooks) FireTurnEnd(ctx TurnEndContext) {
 		return
 	}
 	for _, hook := range h.OnTurnEnd {
+		if hook == nil {
+			continue
+		}
 		hook(ctx)
 	}
 }
@@ -225,6 +231,9 @@ func (h *TurnHooks) FireMessageSend(ctx MessageSendContext) {
 		return
 	}
 	for _, hook := range h.OnMessageSend {
+		if hook == nil {
+			continue
+		}
 		hook(ctx)
 	}
 }
@@ -236,6 +245,9 @@ func (h *TurnHooks) FireAgentStart(ctx AgentStartContext) (bool, string) {
 		return false, ""
 	}
 	for _, hook := range h.OnAgentStart {
+		if hook == nil {
+			continue
+		}
 		if skip, reason := hook(ctx); skip {
 			return true, reason
 		}
@@ -249,6 +261,9 @@ func (h *TurnHooks) FireAgentEnd(ctx AgentEndContext) {
 		return
 	}
 	for _, hook := range h.OnAgentEnd {
+		if hook == nil {
+			continue
+		}
 		hook(ctx)
 	}
 }
@@ -259,6 +274,9 @@ func (h *TurnHooks) FireBackgroundStart(ctx BackgroundStartContext) (bool, strin
 		return false, ""
 	}
 	for _, hook := range h.OnBackgroundStart {
+		if hook == nil {
+			continue
+		}
 		if skip, reason := hook(ctx); skip {
 			return true, reason
 		}
@@ -272,6 +290,9 @@ func (h *TurnHooks) FireBackgroundEnd(ctx BackgroundEndContext) {
 		return
 	}
 	for _, hook := range h.OnBackgroundEnd {
+		if hook == nil {
+			continue
+		}
 		hook(ctx)
 	}
 }

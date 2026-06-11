@@ -257,6 +257,13 @@ func RunLoop(cfg EngineConfig) (*LoopResult, error) {
 	iterationsPerWindow := coerce(cfg.IterationsPerWindow, defaultIterationsPerWindow, maxIterationsPerWindowCap)
 	maxContinuations := coerce(cfg.MaxContinuations, defaultMaxContinuations, maxContinuationsCap)
 
+	if cfg.LLM == nil {
+		return nil, fmt.Errorf("engine: LLM client is required")
+	}
+	if cfg.ToolCtx == nil {
+		return nil, fmt.Errorf("engine: ToolCtx is required")
+	}
+
 	messages := cfg.Messages
 	var totalCost float64
 	var totalTools int
