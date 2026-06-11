@@ -26,10 +26,12 @@ func (briefingHandler) Kind() string       { return "worker_briefing" }
 func (briefingHandler) ConfigPath() string { return "workeragent/tasks/briefing/task.yaml" }
 
 func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, deps *scheduler.Deps) error {
-	// Parse optional payload (briefing topics, etc.).
+	// Parse optional payload (briefing topics, depth, tier override).
 	var p struct {
 		Topics      string `json:"topics"`
 		Instruction string `json:"instruction"`
+		Depth       string `json:"depth"`      // "brief" or "deep" — maps to model tier
+		ModelTier   string `json:"model_tier"` // explicit tier override (wins over depth)
 	}
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &p); err != nil {
@@ -57,14 +59,22 @@ func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, d
 		return fmt.Errorf("worker briefing: task type 'briefing' not registered")
 	}
 
-	// Select the LLM client for this task type's tier.
+	// Select the LLM client — tier override chain:
+	// meta.yaml default → depth mapping → explicit model_tier.
 	workerLLMs, _ := deps.WorkerLLMs.(map[string]*llm.Client)
 	if workerLLMs == nil {
 		return fmt.Errorf("worker briefing: no worker LLMs configured")
 	}
-	llmClient := workerLLMs[taskType.ModelTier]
+	tier := taskType.ModelTier
+	if p.Depth == "deep" {
+		tier = "medium"
+	}
+	if p.ModelTier != "" {
+		tier = p.ModelTier
+	}
+	llmClient := workerLLMs[tier]
 	if llmClient == nil {
-		return fmt.Errorf("worker briefing: no LLM for tier %q", taskType.ModelTier)
+		return fmt.Errorf("worker briefing: no LLM for tier %q", tier)
 	}
 
 	tavilyClient, _ := deps.TavilyClient.(*search.TavilyClient)

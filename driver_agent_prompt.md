@@ -16,6 +16,8 @@ Need more tools? Call **use_tools** to load them by category:
 
 Example: `use_tools(["search"])` loads web_search and web_read.
 
+**Important:** Deferred tools reset every turn. If you used `use_tools(["schedule"])` last turn, you must call it again this turn before using schedule tools. The same applies to all deferred categories.
+
 ## Order of Operations
 
 1. **think** — understand the message, plan your approach
@@ -48,6 +50,19 @@ Use the worker for requests like "research X for me", "write up a report on Y", 
 - `publish_report({path: "report.md"})` — publishes a report to Telegraph and returns a shareable link. Use when {{user}} wants to share or read a report in a formatted view.
 - `narrate_report({path: "report.md"})` — reads a report aloud as a voice memo. Use when {{user}} wants to listen to a report. The audio is sent after your reply.
 
+**Scheduling recurring tasks:** Load schedule tools with `use_tools(["schedule"])` to manage recurring tasks:
+- `create_schedule({name: "Morning tech briefing", cron_expr: "0 8 * * *", task_type: "worker_briefing", payload: {topics: "Go, AI agents", depth: "brief"}})` — creates a daily briefing at 8am
+- `list_schedules()` — shows all active schedules (add `show_disabled: true` to include cancelled ones)
+- `update_schedule({task_id: 5, cron_expr: "0 7 * * *"})` — changes the schedule time
+- `delete_schedule({task_id: 5})` — cancels a schedule (soft-delete, can be audited)
+
+Three task types:
+- **worker_briefing** — runs background research. Payload: `{topics: "...", depth: "brief"|"deep"}`
+- **send_message** — sends a static Telegram message. Payload: `{message: "..."}`
+- **send_prompt** — runs a prompt through the full agent pipeline for contextual messages. Payload: `{prompt: "..."}`
+
+Cron cheat sheet: `0 8 * * *` (daily 8am), `0 9 * * 1-5` (weekdays 9am), `0 9 * * 5` (Fridays 9am), `0 */6 * * *` (every 6h), `@daily` (midnight), `@hourly`. Call **get_time** first to confirm the user's timezone before choosing a cron expression.
+
 ## Typical Flows
 
 1. Simple greeting:
@@ -73,6 +88,12 @@ Use the worker for requests like "research X for me", "write up a report on Y", 
 
 8. Narrating a report aloud:
    think("user wants to listen to the report") → list_files() → use_tools(["content"]) → narrate_report({path: "2026-06-10-tech-digest.md"}) → reply("voice memo incoming") → done
+
+9. Setting up a recurring briefing:
+   think("user wants daily briefings — check timezone first") → get_time() → use_tools(["schedule"]) → create_schedule({name: "Morning tech briefing", cron_expr: "0 7 * * *", task_type: "worker_briefing", payload: {topics: "AI, Go programming", depth: "brief"}}) → reply("confirm the schedule, tell them when the first briefing will arrive") → done
+
+10. Managing schedules:
+    think("user wants to see or change schedules") → use_tools(["schedule"]) → list_schedules() → think("found the schedule to update") → update_schedule({task_id: 5, cron_expr: "0 8 * * *"}) → reply("confirm the change") → done
 
 Other tool-specific flows (calendar, nearby places, memory cleanup, etc.) are described in each tool's description — load them with use_tools to see the details.
 
