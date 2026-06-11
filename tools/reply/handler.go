@@ -559,7 +559,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
+		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, ctx.TriggerMsgID, resp.UsedFallback, memory.RoleChat)
 	}
 
 	// Consume tomorrow's preload after successful delivery. The preload
