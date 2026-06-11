@@ -55,6 +55,14 @@ func (s *Scheduler) loadAndUpsertAll(rootDir string) error {
 			)
 		}
 
+		// Empty cron means "on-demand only" — don't insert a scheduler row.
+		// The handler is still registered for programmatic use (e.g., via
+		// send_task delegation), but the scheduler won't fire it on a timer.
+		if cfg.Cron == "" {
+			s.log.Debug("no cron expression; skipping scheduler row", "kind", kind)
+			continue
+		}
+
 		nextFire, err := computeNextFire(parser, cfg.Cron, time.Now())
 		if err != nil {
 			return fmt.Errorf("scheduler: computing next_fire for %s: %w", kind, err)
