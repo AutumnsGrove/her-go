@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	engine "her/agent_engine"
 	"her/calendar"
 	"her/layers"
 	"her/compact"
@@ -157,7 +158,8 @@ type RunParams struct {
 	TriggerMsgID              int64
 	StatusCallback            tools.StatusCallback
 	SendCallback              tools.SendCallback
-	TTSCallback               tools.TTSCallback
+	TTSCallback               tools.TTSCallback           // DEPRECATED: use OnMessageSend
+	OnMessageSend             tools.MessageSendCallback   // fires after each reply delivery — replaces TTSCallback
 	TraceCallback             tools.TraceCallback             // nil if traces disabled
 	MemoryTraceCallback       tools.TraceCallback             // nil if memory agent tracing disabled; separate message from TraceCallback
 	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
@@ -397,6 +399,7 @@ func Run(params RunParams) (*RunResult, error) {
 		StatusCallback:            params.StatusCallback,
 		SendCallback:              params.SendCallback,
 		TTSCallback:               params.TTSCallback,
+		OnMessageSend:             params.OnMessageSend,
 		TraceCallback:             params.TraceCallback,
 		StageResetCallback:        params.StageResetCallback,
 		DeletePlaceholderCallback: params.DeletePlaceholderCallback,
@@ -433,200 +436,61 @@ func Run(params RunParams) (*RunResult, error) {
 		tctx.Phase = mainPhase
 	}
 
-	// Tool-calling loop. The model may return multiple tool calls,
-	// or it may return tool calls that require a follow-up turn.
-	// Track turn index for agent_turns logging.
+	// --- Driver-specific state ---
 	turnIndex := 0
-
-	// We loop up to 10 iterations to allow for think + search + refine cycles.
-	// With the think tool, a typical complex flow might use 6-7 iterations:
-	// think → search → think(evaluate) → search(refine) → think → reply → save_memory
-	// --- Agent tool-calling loop ---
-	// Modeled after Crush (charmbracelet/fantasy): loop while the model
-	// keeps returning tool calls (finish_reason == "tool_calls"). When the
-	// model stops calling tools (finish_reason == "stop"), the loop ends.
-	// First iteration uses tool_choice="required" to nudge the model
-	// into the tool-calling flow. After that, "auto" lets it drive.
-	// The fallback handler still exists for resilience.
-	//
-	// Loop detection: track think content to catch the agent repeating
-	// itself. Crush uses SHA-256 signatures; we keep it simpler since
-	// our tool set is smaller and think loops are the main failure mode.
 	var lastThinkContent string
 	var repeatCount int
-	// agentFinalText captures any text the agent outputs when it stops
-	// calling tools. Used as fallback instruction if reply wasn't called.
 	var agentFinalText string
-
-	// --- Metrics accumulators ---
-	// Track cost and tool calls across the entire agent run so we can
-	// return them in RunResult for the TUI's TurnEndEvent.
-	var totalCost float64
-	var totalToolCalls int
-
-	// --- Think trace collector ---
-	// Captures the raw content of every think() call for the memory agent.
-	// Separate from traceLines (which is formatted HTML for Telegram) —
-	// the memory agent needs the raw thought text, not the Telegram markup.
 	var thinkTraces []string
 	var toolSeq []string
 
-	// --- Trace builder ---
-	// Accumulates formatted trace lines as the agent executes. If tracing
-	// is enabled, the trace message gets sent/updated after each tool call
-	// so the user can watch the agent think in real time.
-	var traceLines []string
-	tracing := tctx.TraceCallback != nil
-
-	// sendTrace pushes the current trace to Telegram (sends or edits).
-	sendTrace := func() {
-		if !tracing || len(traceLines) == 0 {
-			return
-		}
-		text := strings.Join(traceLines, "\n")
-		if err := tctx.TraceCallback(text); err != nil {
-			log.Warn("trace: failed to send/update", "err", err)
-		}
+	// ToolChoiceFirst — conditional on config.
+	var toolChoiceFirst interface{}
+	requireToolChoice := true
+	if params.Cfg.Driver.RequireToolChoice != nil {
+		requireToolChoice = *params.Cfg.Driver.RequireToolChoice
+	}
+	if requireToolChoice {
+		toolChoiceFirst = "required"
 	}
 
-	// Agent loop limits — read from config with sensible defaults.
-	// The outer loop provides continuation windows: if the agent runs out
-	// of iterations without calling done, it gets a fresh window with a
-	// summary of progress injected as context.
-	iterationsPerWindow := params.Cfg.Driver.IterationsPerWindow
-	if iterationsPerWindow <= 0 {
-		iterationsPerWindow = 15
-	}
-	if iterationsPerWindow > maxIterationsPerWindowCap {
-		log.Warn("capping iterationsPerWindow", "requested", iterationsPerWindow, "max", maxIterationsPerWindowCap)
-		iterationsPerWindow = maxIterationsPerWindowCap
-	}
-	maxContinuations := params.Cfg.Driver.MaxContinuations
-	if maxContinuations <= 0 {
-		maxContinuations = 3
-	}
-	if maxContinuations > maxContinuationsCap {
-		log.Warn("capping maxContinuations", "requested", maxContinuations, "max", maxContinuationsCap)
-		maxContinuations = maxContinuationsCap
-	}
+	// Run the tool-calling loop via the shared engine.
+	loopResult, err := engine.RunLoop(engine.EngineConfig{
+		Name:                "driver",
+		MetricRole:          memory.RoleDriver,
+		LLM:                 params.DriverLLM,
+		Store:               params.Store,
+		ToolDefs:            toolDefs,
+		ToolCtx:             tctx,
+		TriggerMsgID:        params.TriggerMsgID,
+		IterationsPerWindow: params.Cfg.Driver.IterationsPerWindow,
+		MaxContinuations:    params.Cfg.Driver.MaxContinuations,
+		TraceCallback:       params.TraceCallback,
+		LiteToolHook:        params.LiteToolHook,
+		EventBus:            params.EventBus,
+		Phase:               mainPhase,
+		Messages:            messages,
+		ToolChoiceFirst:     toolChoiceFirst,
 
-outer:
-	for window := 0; window <= maxContinuations; window++ {
-		if window > 0 {
-			// We exhausted the previous window without a done signal.
-			// Inject a continuation context so the agent knows where it
-			// left off and is prompted to update the user immediately.
-			summary := buildContinuationSummary(traceLines)
-			messages = append(messages, llm.ChatMessage{
-				Role: "system",
-				Content: fmt.Sprintf(
-					"You have used all %d iterations in the previous window without calling done. "+
-						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
-						"IMPORTANT: Call reply immediately to update the user on your progress, "+
-						"then continue your work and call done when finished.",
-					iterationsPerWindow, window, maxContinuations, summary,
-				),
-			})
-			log.Infof("  continuation window %d/%d", window, maxContinuations)
-			if tracing {
-				traceLines = append(traceLines, fmt.Sprintf(
-					"🔄 <i>continuation window %d/%d</i>", window, maxContinuations))
-				sendTrace()
-			}
-		}
+		// Driver continuation message urges reply before continuing.
+		ContinuationMsg: func(window, maxWindows int, summary string) string {
+			return fmt.Sprintf(
+				"You have used all iterations in the previous window without calling done. "+
+					"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
+					"IMPORTANT: Call reply immediately to update the user on your progress, "+
+					"then continue your work and call done when finished.",
+				window, maxWindows, summary,
+			)
+		},
 
-		for i := 0; i < iterationsPerWindow; i++ {
-			// Nudge on the first iteration only: tool_choice="required"
-			// forces the model into the tool-calling flow. Without this,
-			// unreliable driver models occasionally skip tools entirely and
-			// output plain text on iter 0. After the first call, "auto" lets
-			// the model drive naturally (it exits via the done tool).
-			//
-			// This is optional via config.driver.require_tool_choice. Some models
-			// (or some OpenRouter providers) don't support tool_choice, returning
-			// 404 errors. Modern instruct models should handle "auto" mode fine
-			// based on the system prompt alone.
-			var toolChoice interface{}
-			requireToolChoice := true // default to true for backwards compat
-			if params.Cfg.Driver.RequireToolChoice != nil {
-				requireToolChoice = *params.Cfg.Driver.RequireToolChoice
-			}
-			if i == 0 && window == 0 && requireToolChoice {
-				toolChoice = "required"
-			}
-			resp, err := params.DriverLLM.ChatCompletionWithTools(messages, toolDefs, toolChoice)
-			if err != nil {
-				// The LLM client handles fallback automatically on retriable
-				// errors (429, 500-503, timeout). If we still get an error here,
-				// both primary and fallback failed — bail out of the agent loop.
-				log.Error("LLM error (primary + fallback both failed)", "err", err)
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
-					sendTrace()
-				}
-				break outer
-			}
-
-			// Log agent metrics and accumulate cost for RunResult.
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, params.TriggerMsgID, resp.UsedFallback, memory.RoleDriver)
-			totalCost += resp.CostUSD
-			log.Infof("  tokens: %d prompt + %d completion | $%.6f | finish=%s",
-				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-			// Surface model fallback in traces so it's visible in Telegram.
-			if tracing && resp.UsedFallback {
-				traceLines = append(traceLines, fmt.Sprintf("⚡ <i>agent fallback: %s</i>", resp.Model))
-				sendTrace()
-			}
-			if mainPhase != nil {
-				mainPhase.Emit(tui.AgentIterEvent{
-					Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
-					PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
-					CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
-				})
-			} else {
-				emit(tui.AgentIterEvent{
-					Time: time.Now(), TurnID: params.TriggerMsgID, Iteration: i + window*iterationsPerWindow,
-					PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
-					CostUSD: resp.CostUSD, FinishReason: resp.FinishReason,
-				})
-			}
-
-			// --- Check finish_reason to decide how to proceed ---
-			hasToolCalls := len(resp.ToolCalls) > 0
-
-			if !hasToolCalls {
-				if resp.Content != "" {
-					trimmed := strings.TrimSpace(strings.ToLower(resp.Content))
-					// If the agent just typed "done" as text instead of calling
-					// the done tool, treat it as a done signal. Some models do this.
-					if trimmed == "done" || trimmed == "done." {
-						log.Info("  agent typed 'done' as text (treating as done signal)")
-						break outer
-					}
-					// Model returned plain text instead of a tool call. The
-					// tool-calling models we use are "thinking" ones — if they skip tool calls it's
-					// a prompting problem, not a model capability problem. Save the
-					// text as a fallback instruction and exit gracefully.
-					log.Warnf("  agent returned text instead of tool calls: %s", truncateLog(resp.Content, 200))
-					agentFinalText = resp.Content
-					break outer
-				}
-				log.Info("  done (no actions)")
-				break outer
-			}
-
-			// --- Loop detection ---
+		// PostIteration: loop detection — catch repeated identical think calls.
+		PostIteration: func(iteration, window int, resp *llm.ChatResponse) bool {
 			if len(resp.ToolCalls) == 1 && resp.ToolCalls[0].Function.Name == "think" {
 				if resp.ToolCalls[0].Function.Arguments == lastThinkContent {
 					repeatCount++
 					if repeatCount >= 2 {
 						log.Warn("think loop detected, forcing exit", "repeats", repeatCount+1)
-						if tracing {
-							traceLines = append(traceLines, "⚠️ <i>loop detected — forcing exit</i>")
-							sendTrace()
-						}
-						break outer
+						return true
 					}
 				} else {
 					lastThinkContent = resp.ToolCalls[0].Function.Arguments
@@ -636,198 +500,123 @@ outer:
 				lastThinkContent = ""
 				repeatCount = 0
 			}
+			return false
+		},
 
-			log.Infof("  %d tool call(s):", len(resp.ToolCalls))
-
-			// Append the assistant message with tool calls to the conversation.
-			messages = append(messages, llm.ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			// Execute each tool call, feed results back to the model,
-			// and build trace lines for observability.
-			for _, tc := range resp.ToolCalls {
-				// Guard: skip tool calls with empty names. Some models
-				// (notably via OpenRouter) occasionally emit a tool call
-				// delta with no function name — the streaming parser
-				// filters these, but the non-streaming path may not.
-				if tc.Function.Name == "" {
-					log.Warn("skipping tool call with empty name", "id", tc.ID)
-					continue
+		// OnNoToolCalls: detect "done" typed as text, capture fallback text.
+		OnNoToolCalls: func(resp *llm.ChatResponse) bool {
+			if resp.Content != "" {
+				trimmed := strings.TrimSpace(strings.ToLower(resp.Content))
+				if trimmed == "done" || trimmed == "done." {
+					log.Info("  agent typed 'done' as text (treating as done signal)")
+					tctx.DoneCalled = true
+					return false // let the engine break normally via DoneCalled
 				}
-				totalToolCalls++
-				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
-				turnIndex++
+				log.Warnf("  agent returned text instead of tool calls: %s",
+					engine.TruncateLog(resp.Content, 200))
+				agentFinalText = resp.Content
+			}
+			return false // let the engine break
+		},
 
-				// Capture think() content for the memory agent's transcript.
-				// The memory agent uses raw thought text (not the Telegram-formatted
-				// trace lines) to understand the agent's reasoning this turn.
-				if tc.Function.Name == "think" {
-					var thinkArgs struct {
-						Thought string `json:"thought"`
+		// ActiveToolGuard: only allow tools in the current ActiveTools set.
+		ActiveToolGuard: func(tc llm.ToolCall) (string, bool) {
+			if tc.Function.Arguments != "" && !json.Valid([]byte(tc.Function.Arguments)) {
+				return fmt.Sprintf("error: malformed JSON in arguments (likely truncated by token limit). Please retry with shorter arguments. Got: %s",
+					engine.TruncateLog(tc.Function.Arguments, 100)), true
+			}
+			for _, t := range *tctx.ActiveTools {
+				if t.Function.Name == tc.Function.Name {
+					return "", false
+				}
+			}
+			return fmt.Sprintf("error: tool '%s' is not available. Use use_tools to load additional categories if needed.", tc.Function.Name), true
+		},
+
+		// PostTool: SaveAgentTurn, think trace capture, tool sequence, reply fallback annotation.
+		PostTool: func(tc llm.ToolCall, result string, isError bool) {
+			// Save agent turn log (assistant call).
+			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "assistant", tc.Function.Name, tc.Function.Arguments, "")
+			turnIndex++
+
+			// Capture think() content for the memory agent.
+			if tc.Function.Name == "think" {
+				var thinkArgs struct {
+					Thought string `json:"thought"`
+				}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &thinkArgs); err == nil && thinkArgs.Thought != "" {
+					thinkTraces = append(thinkTraces, thinkArgs.Thought)
+					tctx.ThinkTraces = thinkTraces
+				}
+			}
+
+			toolSeq = append(toolSeq, tc.Function.Name)
+
+			// Save agent turn log (tool result).
+			params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
+			turnIndex++
+		},
+
+		// OnLoopExit: auto-done, fallback reply, orphan placeholder cleanup.
+		OnLoopExit: func(reason string, msgs []llm.ChatMessage) {
+			// Auto-done for diffusion models that omit the done call.
+			if tctx.ReplyCount > 0 && !tctx.DoneCalled {
+				log.Info("auto-done: reply was called but done was not — treating as complete")
+				tctx.DoneCalled = true
+			}
+
+			// Fallback: ensure the user always gets a response.
+			if tctx.ReplyCount == 0 {
+				if agentFinalText != "" {
+					log.Warn("reply was never called, using agent text as instruction")
+					if params.LiteToolHook != nil {
+						params.LiteToolHook("reply")
 					}
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &thinkArgs); err == nil && thinkArgs.Thought != "" {
-						thinkTraces = append(thinkTraces, thinkArgs.Thought)
-						tctx.ThinkTraces = thinkTraces
-					}
-				}
-
-				result := executeTool(tc, tctx)
-				toolSeq = append(toolSeq, tc.Function.Name)
-				if params.LiteToolHook != nil {
-					params.LiteToolHook(tc.Function.Name)
-				}
-				isError := strings.HasPrefix(result, "error:")
-				if isError {
-					log.Warn("tool call failed", "tool", tc.Function.Name, "result", truncateLog(result, 200))
-				}
-				log.Infof("    → %s: %s", tc.Function.Name, truncateLog(result, 200))
-				if mainPhase != nil {
-					mainPhase.EmitToolCall(
-						tc.Function.Name,
-						truncateLog(tc.Function.Arguments, 200),
-						truncateLog(result, 200),
-						isError,
-					)
+					instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
+					toolSeq = append(toolSeq, "reply")
+					tools.Execute("reply", instruction, tctx)
 				} else {
-					emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						TurnID:   params.TriggerMsgID,
-						ToolName: tc.Function.Name,
-						Args:     truncateLog(tc.Function.Arguments, 200),
-						Result:   truncateLog(result, 200),
-						IsError:  isError,
-					})
-				}
-
-				// Build the trace line for this tool call.
-				if tracing {
-					line := formatTraceLine(tc.Function.Name, tc.Function.Arguments, result)
-					// If the chat model fell back during a reply, annotate the trace
-					// so it's obvious which model generated the user-facing response.
-					if tc.Function.Name == "reply" && tctx.ReplyUsedFallback {
-						var rArgs struct {
-							Instruction string `json:"instruction"`
-						}
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &rArgs); err != nil {
-							rArgs.Instruction = truncateLog(tc.Function.Arguments, 100)
-						}
-						line = fmt.Sprintf("⚡ <b>reply(fallback → %s):</b> <i>%s</i>",
-							tctx.ReplyModel, escapeHTML(truncateLog(rArgs.Instruction, 200)))
+					log.Warn("reply was never called, generating generic fallback")
+					if params.LiteToolHook != nil {
+						params.LiteToolHook("reply")
 					}
-					traceLines = append(traceLines, line)
-					sendTrace()
+					toolSeq = append(toolSeq, "reply")
+					tools.Execute("reply", `{"instruction":"The driver agent loop failed — NO tools were called and NO actions were taken. Do NOT claim you did something. Acknowledge the user's request and offer to try again. Be honest that nothing happened."}`, tctx)
 				}
-
-				params.Store.SaveAgentTurn(params.TriggerMsgID, turnIndex, "tool", tc.Function.Name, "", result)
-				turnIndex++
-
-				messages = append(messages, llm.ChatMessage{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-				})
 			}
 
-			// Exit when the agent explicitly signals it's done.
-			// (The "done" trace line is already added by formatTraceLine above.)
-			if tctx.DoneCalled {
-				log.Info("  done signal received")
-				break outer
+			// Delete orphan placeholder from the last stage reset.
+			if !tctx.ReplyCalled && tctx.ReplyCount > 0 && tctx.DeletePlaceholderCallback != nil {
+				if err := tctx.DeletePlaceholderCallback(); err != nil {
+					log.Warn("cleanup: failed to delete orphan placeholder", "err", err)
+				}
 			}
+		},
+	})
 
-			// Also exit if finish_reason was "stop" even though tools were
-			// present — some providers do this (the OpenCode #14972 bug).
-			if resp.FinishReason == "stop" {
-				log.Info("  finish_reason=stop after tool execution")
-				break outer
-			}
-		}
-
-		// Inner loop exhausted without a done signal. If we're at the hard
-		// cap, give up. Otherwise the outer loop increments and injects
-		// a continuation context for the next window.
-		if window == maxContinuations {
-			log.Warn("hit max continuations without done signal",
-				"total_calls", iterationsPerWindow*(window+1))
-			if tracing {
-				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
-				sendTrace()
-			}
-			break outer
-		}
+	// Build result from loop output + tool context state.
+	var totalCost float64
+	var totalToolCalls int
+	if loopResult != nil {
+		totalCost = loopResult.TotalCost
+		totalToolCalls = loopResult.ToolCalls
 	}
 
-	// --- Auto-done for diffusion models ---
-	// Diffusion LLMs (like Mercury 2) generate output in parallel and
-	// sometimes omit the done tool call even after completing all work.
-	// If reply was called and the loop ended naturally (not via done),
-	// treat it as a clean completion rather than an error.
-	if tctx.ReplyCount > 0 && !tctx.DoneCalled {
-		log.Info("auto-done: reply was called but done was not — treating as complete")
-		tctx.DoneCalled = true
-	}
-
-	// --- Fallback: ensure the user always gets a response ---
-	// If the agent never called the reply tool, we still need to respond.
-	// We use replyCount (not replyCalled) because replyCalled gets reset
-	// after each stage reset — but replyCount tracks lifetime replies.
-	if tctx.ReplyCount == 0 {
-		if tracing {
-			traceLines = append(traceLines, "⚠️ <i>agent never called reply — using fallback</i>")
-			sendTrace()
-		}
-		if agentFinalText != "" {
-			log.Warn("reply was never called, using agent text as instruction")
-			if params.LiteToolHook != nil {
-				params.LiteToolHook("reply")
-			}
-			instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
-			toolSeq = append(toolSeq, "reply")
-			fallbackResult := tools.Execute("reply", instruction, tctx)
-			if tctx.ReplyCount == 0 {
-				log.Error("fallback reply failed", "result", fallbackResult)
-				return nil, fmt.Errorf("agent failed to generate a reply")
-			}
-		} else {
-			log.Warn("reply was never called, generating generic fallback")
-			if params.LiteToolHook != nil {
-				params.LiteToolHook("reply")
-			}
-			toolSeq = append(toolSeq, "reply")
-			fallbackResult := tools.Execute("reply", `{"instruction":"The driver agent loop failed — NO tools were called and NO actions were taken. Do NOT claim you did something. Acknowledge the user's request and offer to try again. Be honest that nothing happened."}`, tctx)
-			if tctx.ReplyCount == 0 {
-				log.Error("fallback reply also failed", "result", fallbackResult)
-				return nil, fmt.Errorf("agent failed to generate a reply")
-			}
-		}
-	}
-
-	// --- Cleanup: delete orphan placeholder ---
-	// The last stage reset (after the final reply) sends a new 💭
-	// placeholder that never gets used. If replyCalled is false but
-	// we DID reply at least once, the current placeholder is orphaned.
-	if !tctx.ReplyCalled && tctx.ReplyCount > 0 && tctx.DeletePlaceholderCallback != nil {
-		if err := tctx.DeletePlaceholderCallback(); err != nil {
-			log.Warn("cleanup: failed to delete orphan placeholder", "err", err)
-		}
+	if err != nil && tctx.ReplyCount == 0 {
+		return nil, fmt.Errorf("agent failed to generate a reply: %w", err)
 	}
 
 	result := &RunResult{
-		ReplyText:        tctx.ReplyText,
-		ThinkTraces:      thinkTraces,
-		ToolSequence:     toolSeq,
-		TotalCost:        totalCost + tctx.ReplyCost,
-		ToolCalls:        totalToolCalls,
-		MemoriesSaved:    len(tctx.SavedMemories),
+		ReplyText:          tctx.ReplyText,
+		ThinkTraces:        thinkTraces,
+		ToolSequence:       toolSeq,
+		TotalCost:          totalCost + tctx.ReplyCost,
+		ToolCalls:          totalToolCalls,
+		MemoriesSaved:      len(tctx.SavedMemories),
 		PendingNarration:   tctx.PendingNarration,
 		PublishedReportURL: tctx.PublishedReportURL,
 	}
 
-	// Signal main phase completion — its cost gets accumulated into
-	// the Tracker's metrics. Done before launching background work.
 	if mainPhase != nil {
 		mainPhase.Done(turn.PhaseMetrics{
 			Cost:          result.TotalCost,
@@ -836,105 +625,13 @@ outer:
 		})
 	}
 
-	// Memory agent launch has been moved to the caller (bot/run_agent.go).
-	// The caller controls batching: a substance gate skips casual turns,
-	// and a counter forces a batch after a threshold. This avoids wasting
-	// LLM calls on "lol" / "ok" / "brb" messages.
-
 	return result, nil
 }
 
-// executeTool runs a single tool call and returns a result string.
-// If the tool call has truncated/malformed JSON arguments (usually from
-// hitting max_tokens mid-generation), we return an error message that
-// tells the model what happened so it can retry with shorter arguments.
-func executeTool(tc llm.ToolCall, tctx *tools.Context) string {
-	// Validate JSON before dispatching. Truncated tool calls happen when
-	// the model hits max_tokens while generating the arguments JSON.
-	// Rather than letting each tool fail with a confusing parse error,
-	// give the model clear feedback so it can self-correct.
-	if tc.Function.Arguments != "" && !json.Valid([]byte(tc.Function.Arguments)) {
-		return fmt.Sprintf("error: malformed JSON in arguments (likely truncated by token limit). Please retry with shorter arguments. Got: %s", truncateLog(tc.Function.Arguments, 100))
-	}
-
-	switch tc.Function.Name {
-	default:
-		// Guard: only dispatch tools that are in the current active tool set.
-		//
-		// Because memory_agent.go imports save_memory/save_self_memory/etc. in the
-		// same package, those handlers are registered in the global tools.Execute
-		// registry. Without this check, the driver agent can call them by
-		// hallucinating tool calls for tools not in its schema — the handlers exist
-		// so Execute succeeds, but the action is wrong (memory writes belong to the memory agent).
-		//
-		// ActiveTools is the authoritative list of what's available this turn.
-		// It starts as the hot tools and grows when use_tools loads a category.
-		for _, t := range *tctx.ActiveTools {
-			if t.Function.Name == tc.Function.Name {
-				return tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-			}
-		}
-		return fmt.Sprintf("error: tool '%s' is not available. Use use_tools to load additional categories if needed.", tc.Function.Name)
-	}
-}
-
-
-// truncateLog shortens a string for log output, adding "..." if it was cut.
 // mustJSON marshals a string to a JSON string literal (with quotes and
 // escaping). Used to safely embed agent text into a JSON object without
 // risking broken JSON from quotes or newlines in the content.
 func mustJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
-}
-
-func truncateLog(s string, maxLen int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// buildContinuationSummary converts trace lines into a plain-text summary
-// for injection into the continuation window context. Strips the HTML tags
-// used for Telegram formatting so the model sees clean readable text.
-// Capped at ~500 chars so it doesn't consume much of the agent's context.
-func buildContinuationSummary(traceLines []string) string {
-	// Strip HTML tags used for Telegram (b, i, and their closing forms).
-	htmlReplacer := strings.NewReplacer(
-		"<b>", "", "</b>", "",
-		"<i>", "", "</i>", "",
-		"&amp;", "&", "&lt;", "<", "&gt;", ">",
-	)
-
-	var parts []string
-	for _, line := range traceLines {
-		clean := htmlReplacer.Replace(line)
-		clean = strings.TrimSpace(clean)
-		if clean != "" {
-			parts = append(parts, clean)
-		}
-	}
-
-	summary := strings.Join(parts, "\n")
-	const maxSummaryLen = 500
-	if len(summary) > maxSummaryLen {
-		summary = summary[:maxSummaryLen] + "..."
-	}
-	return summary
-}
-
-// formatTraceLine builds an HTML-formatted trace line for a single tool call.
-// Delegates to tools.FormatTrace which uses YAML-defined trace specs.
-func formatTraceLine(toolName, argsJSON, result string) string {
-	return tools.FormatTrace(toolName, argsJSON, result)
-}
-
-// escapeHTML escapes special characters for Telegram's HTML parse mode.
-func escapeHTML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
 }
