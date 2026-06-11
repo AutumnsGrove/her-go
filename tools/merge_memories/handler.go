@@ -2,12 +2,12 @@
 // multiple redundant memories into a single, richer memory. Used exclusively
 // by the memory dreamer during the nightly dream cycle.
 //
-// The merge runs through the same quality gates as normal memory saves:
-// style blocklist, length limit, and classifier (LOW_VALUE check). Dedup
-// is skipped because merged text is intentionally similar to the sources.
+// The merge runs through the memgate quality pipeline (style, length,
+// classifier, self-safety). Dedup is skipped because merged text is
+// intentionally similar to the sources.
 //
-// Flow: validate → style gate → length gate → deactivate sources →
-// classifier → save → supersede chains → auto-link → audit log.
+// Flow: validate → memgate pipeline → deactivate sources → save →
+// supersede chains → auto-link → audit log.
 package merge_memories
 
 import (
@@ -15,10 +15,9 @@ import (
 	"fmt"
 	"strings"
 
-	"her/classifier"
 	"her/logger"
-	"her/memory"
 	"her/tools"
+	"her/tools/memgate"
 )
 
 var log = logger.WithPrefix("tools/merge_memories")
@@ -50,27 +49,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: category is required"
 	}
 
-	// --- Style gate (same blocklist as normal memory saves) ---
-	trimmed := strings.TrimSpace(args.MergedText)
-	if strings.HasSuffix(trimmed, "—") || strings.HasSuffix(trimmed, "–") {
-		return "rejected: merged text ends with a trailing em dash. Complete the sentence and retry."
-	}
-	lower := strings.ToLower(args.MergedText)
-	for _, blocked := range tools.StyleBlocklist() {
-		if strings.Contains(lower, blocked) {
-			return fmt.Sprintf("rejected: merged text contains AI writing tic %q. Rewrite in plain, concise language and retry.", blocked)
-		}
-	}
-
-	// --- Length gate ---
-	limit := ctx.MaxMemoryLength
-	if limit <= 0 {
-		limit = tools.MaxMemoryLength()
-	}
-	if len(args.MergedText) > limit {
-		return fmt.Sprintf("rejected: merged text is %d characters (max %d). Condense and retry.", len(args.MergedText), limit)
-	}
-
 	// Verify all source memories exist and are active.
 	var beforeParts []string
 	subject := "user"
@@ -98,48 +76,35 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			len(args.MemoryIDs), truncate(args.MergedText, 100), args.Reason)
 	}
 
-	// --- Deactivate sources BEFORE classifier/save ---
-	// This ensures the dedup check (if it ever runs) won't see the originals.
-	// Sources are soft-deleted and recoverable if something fails downstream.
+	// Run the consolidated quality pipeline (style → length → classifier → safety).
+	// Dedup is skipped — merged text is intentionally similar to sources.
+	verdict := memgate.RunPipeline(memgate.PipelineInput{
+		Text:    args.MergedText,
+		Subject: subject,
+		Tags:    args.Tags,
+	}, memgate.PipelineDeps{
+		Store:          ctx.Store,
+		ClassifierLLM:  ctx.ClassifierLLM,
+		MaxLength:      ctx.MaxMemoryLength,
+		ConversationID: ctx.ConversationID,
+		TriggerMsgID:   ctx.TriggerMsgID,
+		SkipDedup:      true,
+	})
+
+	if !verdict.Allowed {
+		log.Warn("merge_memories: pipeline rejected", "reason", verdict.Reason)
+		_ = ctx.Store.SaveDreamAudit("merge", args.MemoryIDs, 0, beforeText, args.MergedText,
+			fmt.Sprintf("REJECTED: %s", verdict.Reason), false)
+		return fmt.Sprintf("rejected: %s", verdict.Reason)
+	}
+
+	// --- Deactivate sources AFTER validation passes ---
+	// Sources are soft-deleted only after the pipeline confirms the merged
+	// text is acceptable. This prevents the old bug where rejected merges
+	// left source memories orphaned.
 	for _, id := range args.MemoryIDs {
 		if err := ctx.Store.DeactivateMemory(id); err != nil {
 			log.Warn("merge_memories: deactivate failed", "source_id", id, "err", err)
-		}
-	}
-
-	// --- Classifier gate (LOW_VALUE check) ---
-	// Merged content was already approved on initial save, but consolidation
-	// could produce something too vague. Skip for self-memories that need the
-	// self_memory classifier instead.
-	if ctx.ClassifierLLM != nil {
-		writeType := "memory"
-		if subject == "self" {
-			writeType = "self_memory"
-		}
-		verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.MergedText, nil)
-		if verdict.Model != "" && ctx.Store != nil {
-			ctx.Store.SaveMetric(verdict.Model, verdict.PromptTokens, verdict.CompletionTokens, verdict.TotalTokens, verdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
-		}
-		if !verdict.Allowed {
-			// Re-activate sources since we're rejecting the merge.
-			// Note: DeactivateMemory is a soft-delete, but there's no
-			// ReactivateMemory. We log the rejection — the dreamer can retry.
-			log.Warn("merge_memories: classifier rejected", "verdict", verdict.Type, "reason", verdict.Reason)
-			_ = ctx.Store.SaveDreamAudit("merge", args.MemoryIDs, 0, beforeText, args.MergedText,
-				fmt.Sprintf("REJECTED by classifier: %s — %s", verdict.Type, verdict.Reason), false)
-			return fmt.Sprintf("rejected by classifier: %s. Rewrite the merged text and retry.", classifier.RejectionMessage(verdict))
-		}
-
-		// Self-memory safety gate (catches sycophancy loops in merged self-observations).
-		if subject == "self" {
-			safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.MergedText, nil)
-			if safetyVerdict.Model != "" && ctx.Store != nil {
-				ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
-			}
-			if !safetyVerdict.Allowed {
-				log.Warn("merge_memories: self-memory safety rejected", "verdict", safetyVerdict.Type)
-				return fmt.Sprintf("rejected: %s. Do not merge self-memories that encode agreement as effective strategy.", safetyVerdict.Reason)
-			}
 		}
 	}
 

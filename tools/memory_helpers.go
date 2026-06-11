@@ -5,9 +5,9 @@
 // the shared ExecSaveMemory function so the two thin wrapper handlers don't
 // duplicate logic.
 //
-// The blocklists and constants are also here — they used to live in agent.go
-// but they belong with the logic that uses them. In Go, package-level vars
-// declared in any file in a package are visible to all files in that package.
+// Quality gates (style, length, dedup, classifier, self-safety) are handled
+// by the consolidated memgate pipeline — this file just wires inputs and
+// handles the post-validation save.
 package tools
 
 import (
@@ -15,85 +15,29 @@ import (
 	"fmt"
 	"strings"
 
-	"her/classifier"
-	"her/embed"
 	"her/logger"
-	"her/memory"
+	"her/tools/memgate"
 )
 
 // memoryLog is a logger for memory-saving operations.
 var memoryLog = logger.WithPrefix("tools/memory")
 
-// styleBlocklist catches AI writing tics that poison the voice over time.
-// Memories with these patterns get rejected so they don't leak into the
-// system prompt and infect the conversational model's tone.
-//
-// Note: em dashes mid-sentence are fine (normal prose). The tic we're
-// catching is a trailing em dash — where a sentence just hangs off "—"
-// at the end with nothing after it. That's checked separately in
-// ExecSaveMemory using a suffix check, not a Contains check.
-//
-// "hold space" / "holding space" are intentionally absent — the bot uses
-// these phrases genuinely in self memories and the classifier handles quality.
-var styleBlocklist = []string{
-	// "Not just X, it's Y" and variants
-	"not just",
-	"it's not just",
-	"not merely",
-
-	// Grandiose/hollow language
-	"significant moment",
-	"significant trust",
-	"deeply personal",
-	"genuinely incredible",
-	"a testament to",
-	"speaks volumes",
-
-	// Corporate AI speak
-	"actively investing",
-	"building a bridge",
-	"creating a richer",
-	"meta-level",
-
-	// Hollow filler
-	"it's worth noting",
-	"it's important to",
-	"fundamentally",
-	"remarkably",
-	"transformative",
-	"delve",
-	"foster",
-	"leverage",
-	"tapestry",
-	"realm",
-	"embark",
-	"harness",
-	"utilize",
-}
-
-// maxMemoryLength is the hard limit on memory text length. Memories are supposed
-// to be 1-2 sentences. Multi-paragraph reflections belong in the
-// persona evolution system, not in individual memories.
-// The SPLIT classifier is the primary gate for packed memories — this hard
-// limit is a last resort for genuinely run-on sentences.
-const maxMemoryLength = 1000
-
-// StyleBlocklist returns the style blocklist so tools/update_memory can apply
-// the same gates without importing agent (which would create a circular import).
+// StyleBlocklist returns the style blocklist for callers that need direct
+// access (e.g. rejection messages). Delegates to memgate.
 func StyleBlocklist() []string {
-	return styleBlocklist
+	return memgate.StyleBlocklist()
 }
 
 // MaxMemoryLength returns the maximum allowed memory character count.
 func MaxMemoryLength() int {
-	return maxMemoryLength
+	return memgate.MaxLength()
 }
 
 // ExecSaveMemory is the shared implementation behind save_memory and save_self_memory.
 //
 // The subject parameter distinguishes the two tools: "user" for save_memory,
 // "self" for save_self_memory. Everything else is identical — same quality
-// gates, same embedding strategy, same classifier check.
+// pipeline, same embedding strategy.
 func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	var args struct {
 		CardSlug   string `json:"card_slug"`
@@ -120,148 +64,35 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		cardID = card.ID
 	}
 
-	// Style gate for ALL memories: reject AI writing tics.
-	// Em dashes mid-sentence are fine (normal prose punctuation). The tic
-	// we catch is a TRAILING em dash — a sentence that hangs with "—" at
-	// the end and nothing after it. That's the specific hallmark of AI slop.
-	trimmed := strings.TrimSpace(args.Memory)
-	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
-		memoryLog.Warn("blocked memory (trailing em dash)", "memory", args.Memory)
-		return "rejected: rewrite this memory — it ends with a trailing em dash. Complete the sentence."
-	}
-	lower := strings.ToLower(args.Memory)
-	for _, blocked := range styleBlocklist {
-		if strings.Contains(lower, blocked) {
-			memoryLog.Warn("blocked memory (style)", "pattern", blocked, "memory", args.Memory)
-			return fmt.Sprintf("rejected: rewrite this memory in plain, concise language. Avoid 'not just X it's Y' and grandiose phrasing. Keep it under 2 sentences. The blocked pattern was: %q", blocked)
-		}
-	}
+	// Run the consolidated quality pipeline (style → length → dedup → classifier → safety).
+	verdict := memgate.RunPipeline(memgate.PipelineInput{
+		Text:     args.Memory,
+		Subject:  subject,
+		Tags:     args.Tags,
+		Category: args.Category,
+		Context:  args.Context,
+	}, memgate.PipelineDeps{
+		Store:               ctx.Store,
+		EmbedClient:         ctx.EmbedClient,
+		ClassifierLLM:       ctx.ClassifierLLM,
+		SimilarityThreshold: ctx.SimilarityThreshold,
+		MaxLength:           ctx.MaxMemoryLength,
+		ConversationID:      ctx.ConversationID,
+		TriggerMsgID:        ctx.TriggerMsgID,
+		Snippet:             ctx.ClassifierSnippet,
+		PreApproved:         ctx.PreApprovedRewrites,
+	})
 
-	// Length gate: memories should be 1-2 sentences, not paragraphs.
-	// Use config value if set, otherwise fall back to the package default.
-	limit := ctx.MaxMemoryLength
-	if limit <= 0 {
-		limit = maxMemoryLength
+	if verdict.IsSplit && len(verdict.Splits) >= 2 {
+		return ExecSplitMemories(verdict.Splits, args.Category, subject, cardID, ctx)
 	}
-	if len(args.Memory) > limit {
-		memoryLog.Warn("blocked memory (too long)", "len", len(args.Memory), "memory", args.Memory[:min(len(args.Memory), 100)])
-		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Memory), limit)
+	if !verdict.Allowed {
+		return verdict.Reason
 	}
 
-	// Embed by TAGS (not by memory text) so the vector space organizes by
-	// topic. "mental health, burnout, coping" lands far from "programming,
-	// go, backend" — which is what we want for retrieval. Fall back to
-	// memory text if the agent didn't provide tags.
-	embedText := args.Tags
-	if embedText == "" {
-		embedText = args.Memory
-	}
-
-	var newVec []float32
-	var textVec []float32
-	if ctx.EmbedClient != nil {
-		var err error
-		newVec, err = ctx.EmbedClient.Embed(embedText)
-		if err != nil {
-			memoryLog.Warn("embedding failed, skipping duplicate check", "err", err)
-		} else {
-			// Also embed the raw memory text for a second similarity check.
-			// Tags catch topical duplicates but miss situational duplicates
-			// where the same event is described from different tag angles.
-			// When context is provided, include it in the text embedding so
-			// semantic search is aware of the "why", not just the "what".
-			if args.Tags != "" {
-				memTextForEmbed := args.Memory
-				if args.Context != "" {
-					memTextForEmbed = args.Memory + " " + args.Context
-				}
-				textVec, err = ctx.EmbedClient.Embed(memTextForEmbed)
-				if err != nil {
-					memoryLog.Warn("text embedding failed, using tag-only dedup", "err", err)
-				}
-			}
-
-			// Same-day context memories use a tighter threshold.
-			threshold := ctx.SimilarityThreshold
-			if args.Category == "context" {
-				threshold = embed.ContextMemorySimilarityThreshold
-			}
-
-			if duplicate, existingID, existingContent, sim, source := checkMemoryDuplicate(newVec, textVec, subject, threshold, ctx); duplicate {
-				memoryLog.Info("blocked duplicate memory", "similarity_pct", sim*100, "existing_id", existingID, "source", source, "memory", args.Memory)
-				return fmt.Sprintf("rejected: too similar (%.0f%%) to existing memory ID=%d (%q) [matched on %s]. Use update_memory to refine it instead.",
-					sim*100, existingID, existingContent, source)
-			}
-		}
-	}
-
-	// --- Classifier gate ---
-	// Runs AFTER style/length/dedup gates — no point classifying something
-	// that would be rejected anyway. Fail-open if classifier is nil.
-	//
-	// Pre-approved bypass: if the classifier previously suggested this exact
-	// text as a rewrite, skip re-classification. This prevents the self-
-	// contradiction bug where the classifier rejects its own suggestion.
-	if ctx.ClassifierLLM != nil {
-		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Memory)] {
-			log.Info("classifier bypass: memory matches pre-approved rewrite", "memory", args.Memory)
-		} else {
-			writeType := "memory"
-			if subject == "self" {
-				writeType = "self_memory"
-			}
-			// Use pre-captured snippet when available (memory agent sets this to
-			// avoid the timing bug where later turns pollute the DB before the
-			// goroutine reaches the classifier). Fall back to lazy query otherwise.
-			snippet := ctx.ClassifierSnippet
-			if snippet == nil {
-				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
-			}
-			verdict := classifier.Check(ctx.ClassifierLLM, writeType, args.Memory, snippet)
-			if verdict.Model != "" {
-				ctx.Store.SaveMetric(verdict.Model, verdict.PromptTokens, verdict.CompletionTokens, verdict.TotalTokens, verdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
-			}
-			_ = ctx.Store.SaveClassifierLog(
-				ctx.ConversationID, writeType, verdict.Type, args.Memory, verdict.Reason, verdict.Rewrite,
-			)
-			if verdict.Rewrite != "" && ctx.PreApprovedRewrites != nil {
-				ctx.PreApprovedRewrites[strings.ToLower(verdict.Rewrite)] = true
-			}
-
-			// SPLIT: classifier says this memory packs multiple distinct ideas.
-			// Save each sub-memory directly — they're already classifier-approved
-			// so we don't re-classify them (avoids latency and infinite loops).
-			// If split parsing failed (fewer than 2 items), fall through to save
-			// the original unchanged.
-			if verdict.Type == "SPLIT" && len(verdict.Splits) >= 2 {
-				memoryLog.Info("classifier: SPLIT verdict", "count", len(verdict.Splits), "reason", verdict.Reason)
-				return ExecSplitMemories(verdict.Splits, args.Category, subject, cardID, ctx)
-			}
-
-			if !verdict.Allowed {
-				return classifier.RejectionMessage(verdict)
-			}
-
-			// Self-memory safety gate — separate focused check that
-			// catches feedback-loop patterns ("validation works" →
-			// sycophancy spiral). Only runs for self-memories. Independent
-			// LLM call with its own prompt.
-			if subject == "self" {
-				safetyVerdict := classifier.Check(ctx.ClassifierLLM, "self_memory_safety", args.Memory, snippet)
-				if safetyVerdict.Model != "" {
-					ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
-				}
-				_ = ctx.Store.SaveClassifierLog(
-					ctx.ConversationID, "self_memory_safety", safetyVerdict.Type, args.Memory, safetyVerdict.Reason, "",
-				)
-				if !safetyVerdict.Allowed {
-					memoryLog.Warn("self-memory safety gate rejected", "verdict", safetyVerdict.Type, "reason", safetyVerdict.Reason)
-					return fmt.Sprintf("rejected: %s. Do not save self-memories that encode agreement or validation as effective strategies.",
-						safetyVerdict.Reason)
-				}
-			}
-		}
-	}
+	// Reuse embeddings computed by the dedup gate (avoids double-embedding).
+	newVec := verdict.TagVec
+	textVec := verdict.TextVec
 
 	if ctx.Store == nil {
 		return "error: no store configured"
@@ -338,107 +169,4 @@ func ExecSplitMemories(splits []string, category, subject string, cardID int64, 
 		return "split failed: no sub-memories could be saved"
 	}
 	return fmt.Sprintf("split into %d memories:\n%s", len(results), strings.Join(results, "\n"))
-}
-
-// checkMemoryDuplicate compares a new memory against all existing memories using two
-// embedding strategies: tag-based (topical) and text-based (semantic).
-// If either similarity exceeds the threshold, the memory is a duplicate.
-//
-// The returned "source" string indicates which check caught the duplicate
-// ("tags" or "text") for logging/debugging.
-func checkMemoryDuplicate(newTagVec, newTextVec []float32, subject string, threshold float64, ctx *Context) (isDuplicate bool, existingID int64, existingContent string, similarity float64, source string) {
-	existingMemories, err := ctx.Store.AllActiveMemories()
-	if err != nil {
-		memoryLog.Warn("couldn't load memories for duplicate check", "err", err)
-		return false, 0, "", 0, ""
-	}
-
-	// Build candidate maps with backfill.
-	// Backfill side effects (computing and persisting missing embeddings) happen
-	// in this loop, preserving the original behavior where embeddings are populated
-	// on first duplicate check.
-	tagCandidates := make(map[int64][]float32)
-	textCandidates := make(map[int64][]float32)
-
-	for _, existing := range existingMemories {
-		if existing.Subject != subject {
-			continue
-		}
-
-		// --- Tag vector backfill ---
-		existTagVec := existing.Embedding
-		if len(existTagVec) == 0 {
-			embedText := existing.Tags
-			if embedText == "" {
-				embedText = existing.Content
-			}
-			existTagVec, err = ctx.EmbedClient.Embed(embedText)
-			if err != nil {
-				continue
-			}
-			// Backfill: persist the computed tag embedding.
-			_ = ctx.Store.UpdateMemoryEmbedding(existing.ID, existTagVec, existing.EmbeddingText)
-			memoryLog.Debug("backfilled tag embedding for memory", "memory_id", existing.ID)
-		}
-		tagCandidates[existing.ID] = existTagVec
-
-		// --- Text vector backfill (only if we have a new text vector to compare) ---
-		if len(newTextVec) > 0 {
-			existTextVec := existing.EmbeddingText
-			if len(existTextVec) == 0 {
-				existTextVec, err = ctx.EmbedClient.Embed(existing.Content)
-				if err != nil {
-					continue
-				}
-				_ = ctx.Store.UpdateMemoryEmbedding(existing.ID, existing.Embedding, existTextVec)
-				memoryLog.Debug("backfilled text embedding for memory", "memory_id", existing.ID)
-			}
-			textCandidates[existing.ID] = existTextVec
-		}
-	}
-
-	// Find best matches using helper.
-	// Note: We don't pass threshold here because we need to compare tag vs text
-	// and return the overall best. The threshold check happens at the end.
-	// earlyExit=false: we need the true best match for accurate logging/debugging.
-	tagID, tagSim, _ := embed.FindBestMatch(newTagVec, tagCandidates, 0, false)
-	textID, textSim, _ := embed.FindBestMatch(newTextVec, textCandidates, 0, false)
-
-	// Determine overall best match.
-	var bestID int64
-	var bestSim float64
-	var bestSource string
-
-	if textSim > tagSim {
-		bestID = textID
-		bestSim = textSim
-		bestSource = "text"
-	} else if tagSim > 0 {
-		bestID = tagID
-		bestSim = tagSim
-		bestSource = "tags"
-	}
-
-	// Return duplicate if best similarity exceeds threshold.
-	if bestSim >= threshold {
-		bestContent, found := lookupMemoryContent(existingMemories, bestID)
-		if !found {
-			memoryLog.Warn("best match memory not found in list", "memory_id", bestID)
-			return false, 0, "", 0, ""
-		}
-		return true, bestID, bestContent, bestSim, bestSource
-	}
-
-	return false, 0, "", 0, ""
-}
-
-// lookupMemoryContent finds a memory's content by ID from the loaded memory slice.
-// This avoids an N² lookup when we only have the ID from FindBestMatch.
-func lookupMemoryContent(memories []memory.Memory, id int64) (string, bool) {
-	for _, m := range memories {
-		if m.ID == id {
-			return m.Content, true
-		}
-	}
-	return "", false
 }
