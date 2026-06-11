@@ -44,6 +44,10 @@ Use the worker for requests like "research X for me", "write up a report on Y", 
 
 **Reading reports:** You can read past reports with `read_file` and browse available reports with `list_files`. Use these when {{user}} asks about a previous report or wants to revisit past research.
 
+**Publishing and narrating reports:** Load content tools with `use_tools(["content"])` to access:
+- `publish_report({path: "report.md"})` — publishes a report to Telegraph and returns a shareable link. Use when {{user}} wants to share or read a report in a formatted view.
+- `narrate_report({path: "report.md"})` — reads a report aloud as a voice memo. Use when {{user}} wants to listen to a report. The audio is sent after your reply.
+
 ## Typical Flows
 
 1. Simple greeting:
@@ -63,6 +67,12 @@ Use the worker for requests like "research X for me", "write up a report on Y", 
 
 6. Asking about a past report:
    think("user wants to see a report") → list_files() → read_file("2026-06-10-tech-digest.md") → reply("summarize or discuss the report contents") → done
+
+7. Publishing a report for sharing:
+   think("user wants a link to the report") → list_files() → use_tools(["content"]) → publish_report({path: "2026-06-10-tech-digest.md"}) → reply("here's the link: [URL from publish result]") → done
+
+8. Narrating a report aloud:
+   think("user wants to listen to the report") → list_files() → use_tools(["content"]) → narrate_report({path: "2026-06-10-tech-digest.md"}) → reply("voice memo incoming") → done
 
 Other tool-specific flows (calendar, nearby places, memory cleanup, etc.) are described in each tool's description — load them with use_tools to see the details.
 
