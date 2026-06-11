@@ -298,12 +298,8 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 				go func() {
 					tracker.Wait()
 					elapsed := tracker.Elapsed().Round(time.Millisecond)
-					// Query the metrics table for authoritative cost — this
-					// includes driver, chat, classifier, vision, and all
-					// background agent costs. Struct-accumulated costs miss
-					// LLM calls made inside tool handlers.
-					totalCost := tracker.Metrics().TotalCost
-					if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil && dbCost > 0 {
+					totalCost := 0.0
+					if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil {
 						totalCost = dbCost
 					}
 					costLine := fmt.Sprintf("💰 $%.4f · %s", totalCost, elapsed)
@@ -492,22 +488,46 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 			"pending", count, "threshold", threshold)
 	}
 
-	// Emit total cost after all phases complete, then finalize the trace.
-	// The small sleep before finalize ensures async board edits from
-	// setCost have time to propagate to Telegram.
+	// Live cost updates: refresh the cost trace slot every 2 seconds while
+	// background agents run, then finalize after all phases complete. This
+	// way the user sees cost climbing in real time instead of waiting until
+	// the entire turn finishes.
 	if traceFinalize != nil || lite != nil {
 		go func() {
-			tracker.Wait()
-			elapsed := tracker.Elapsed().Round(time.Millisecond)
-			// Query the metrics table for authoritative cost — includes
-			// all agent roles (driver, chat, memory, introspection, mood,
-			// classifier, vision, compaction). Falls back to tracker if
-			// the DB query fails.
-			totalCost := tracker.Metrics().TotalCost
-			if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil && dbCost > 0 {
-				totalCost = dbCost
+			// Helper to query and render the current cost.
+			renderCost := func() string {
+				elapsed := tracker.Elapsed().Round(time.Millisecond)
+				totalCost := 0.0
+				if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil {
+					totalCost = dbCost
+				}
+				return fmt.Sprintf("💰 $%.4f · %s", totalCost, elapsed)
 			}
-			costLine := fmt.Sprintf("💰 $%.4f · %s", totalCost, elapsed)
+
+			// Emit live cost updates while background agents are running.
+			done := make(chan struct{})
+			go func() { tracker.Wait(); close(done) }()
+
+			tick := time.NewTicker(2 * time.Second)
+			defer tick.Stop()
+		poll:
+			for {
+				select {
+				case <-done:
+					break poll
+				case <-tick.C:
+					costLine := renderCost()
+					if lite != nil {
+						lite.setCost(costLine)
+					}
+					if tp, ok := fe.(TraceProvider); ok && b.cfg.Driver.Trace {
+						tp.TraceCallback("cost")(costLine)
+					}
+				}
+			}
+
+			// Final authoritative cost after all agents complete.
+			costLine := renderCost()
 			log.Info("turn complete", "cost", costLine)
 			if lite != nil {
 				lite.setCost(costLine)
