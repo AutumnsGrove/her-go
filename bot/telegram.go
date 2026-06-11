@@ -20,6 +20,7 @@ import (
 	"her/memory"
 	"her/mood"
 	"her/retry"
+	"her/scrub"
 	"her/search"
 	"her/tui"
 	"her/voice"
@@ -665,6 +666,7 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 
 	params := b.baseRunParams()
 	params.ScrubbedUserMessage = prompt
+	params.ScrubVault = &scrub.Vault{} // empty vault — event prompts have no PII tokens
 	params.ConversationID = conversationID
 	params.StatusCallback = sendFn
 	params.SendCallback = sendFn
