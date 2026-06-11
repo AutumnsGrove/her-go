@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -130,17 +131,7 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 		Phase:               params.Phase,
 	}
 
-	// Tool set for the introspection agent — driven by tool.yaml agent fields.
-	introToolDefs := tools.ToolDefsForAgent("introspection", params.Cfg)
-
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: promptContent},
-		{Role: "user", Content: transcript},
-	}
-
-	var totalCost float64
-
-	// Loop limits — smaller than other agents since most turns should skip.
+	// Clamp loop limits — introspection is smaller than other agents.
 	iterationsPerWindow := params.Cfg.IntrospectionAgent.IterationsPerWindow
 	if iterationsPerWindow <= 0 {
 		iterationsPerWindow = 5
@@ -156,112 +147,58 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 		maxContinuations = 5
 	}
 
-	tracing := params.TraceCallback != nil
-	var traceLines []string
+	// Latency tracking per iteration.
+	var iterStart time.Time
 
-	emitTrace := func() {
-		if !tracing || len(traceLines) == 0 {
-			return
-		}
-		_ = params.TraceCallback(strings.Join(traceLines, "\n"))
+	// Run the tool-calling loop via the shared engine.
+	loopResult, err := engine.RunLoop(engine.EngineConfig{
+		Name:                "introspection",
+		MetricRole:          memory.RoleIntrospection,
+		LLM:                 params.LLM,
+		Store:               params.Store,
+		ToolDefs:            tools.ToolDefsForAgent("introspection", params.Cfg),
+		ToolCtx:             tctx,
+		TriggerMsgID:        input.TriggerMsgID,
+		IterationsPerWindow: iterationsPerWindow,
+		MaxContinuations:    maxContinuations,
+		TraceCallback:       params.TraceCallback,
+		EventBus:            params.EventBus,
+		Phase:               params.Phase,
+		Messages: []llm.ChatMessage{
+			{Role: "system", Content: promptContent},
+			{Role: "user", Content: transcript},
+		},
+
+		ContinuationMsg: func(window, maxWindows int, summary string) string {
+			return fmt.Sprintf(
+				"You have used all %d iterations in the previous window without finishing. "+
+					"Continuation window %d of %d. Progress:\n%s\n\n"+
+					"Call skip or done now.",
+				iterationsPerWindow, window, maxWindows, summary,
+			)
+		},
+
+		PreIteration: func(iteration, window int) {
+			iterStart = time.Now()
+		},
+
+		PostIteration: func(iteration, window int, resp *llm.ChatResponse) bool {
+			latencyMs := time.Since(iterStart).Milliseconds()
+			log.Infof("  [introspection] latency: %dms", latencyMs)
+			return false
+		},
+	})
+	if err != nil {
+		log.Error("introspection agent: engine error", "err", err)
 	}
 
-outer:
-	for window := 0; window <= maxContinuations; window++ {
-		if window > 0 {
-			summary := buildContinuationSummary(traceLines)
-			messages = append(messages, llm.ChatMessage{
-				Role: "system",
-				Content: fmt.Sprintf(
-					"You have used all %d iterations in the previous window without finishing. "+
-						"Continuation window %d of %d. Progress:\n%s\n\n"+
-						"Call skip or done now.",
-					iterationsPerWindow, window, maxContinuations, summary,
-				),
-			})
-			log.Infof("  [introspection] continuation window %d/%d", window, maxContinuations)
-		}
-
-		for i := 0; i < iterationsPerWindow; i++ {
-			start := time.Now()
-			resp, err := params.LLM.ChatCompletionWithTools(messages, introToolDefs)
-			latencyMs := int(time.Since(start).Milliseconds())
-
-			if err != nil {
-				log.Error("introspection agent: LLM error", "err", err)
-				break outer
-			}
-
-			totalCost += resp.CostUSD
-			log.Infof("  [introspection] tokens: %d prompt + %d completion | $%.6f | %dms",
-				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, latencyMs)
-
-			params.Store.SaveMetric(
-				resp.Model,
-				resp.PromptTokens,
-				resp.CompletionTokens,
-				resp.TotalTokens,
-				resp.CostUSD,
-				latencyMs,
-				input.TriggerMsgID,
-				resp.UsedFallback,
-				memory.RoleIntrospection,
-			)
-
-			// No tool calls = model finished without calling done/skip.
-			if len(resp.ToolCalls) == 0 {
-				log.Warn("[introspection] no tool calls in response, finishing")
-				break outer
-			}
-
-			// Execute each tool call and build trace/message history.
-			for _, tc := range resp.ToolCalls {
-				result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-
-				// Trace line for observability.
-				traceLine := fmt.Sprintf("    [introspection] %s → %s", tc.Function.Name, truncateLog(result, 80))
-				log.Info(traceLine)
-				traceLines = append(traceLines, fmt.Sprintf("%s → %s", tc.Function.Name, truncateLog(result, 60)))
-
-				// Emit TUI event.
-				if params.Phase != nil {
-					params.Phase.EmitToolCall(tc.Function.Name, tc.Function.Arguments, truncateLog(result, 120), false)
-				}
-
-				// Append assistant + tool result to message history (for
-				// the next LLM call in the loop).
-				messages = append(messages,
-					llm.ChatMessage{
-						Role:      "assistant",
-						Content:   "",
-						ToolCalls: []llm.ToolCall{tc},
-					},
-					llm.ChatMessage{
-						Role:       "tool",
-						Content:    result,
-						ToolCallID: tc.ID,
-					},
-				)
-			}
-
-			emitTrace()
-
-			if tctx.DoneCalled {
-				break outer
-			}
-		}
-
-		if window == maxContinuations {
-			log.Warn("[introspection] hit max continuations without done/skip signal")
-			break outer
-		}
+	totalCost := 0.0
+	if loopResult != nil {
+		totalCost = loopResult.TotalCost
 	}
 
 	memoriesSaved := len(tctx.SavedMemories)
 	log.Infof("  introspection agent: %d self-memories saved | $%.6f", memoriesSaved, totalCost)
-
-	// Final trace update.
-	emitTrace()
 
 	return IntrospectionAgentResult{
 		SelfMemoriesSaved: memoriesSaved,
