@@ -1,0 +1,18 @@
+name: list_schedules
+agent: [main]
+description: >-
+  List all user-created scheduled tasks with their next run times,
+  task types, and payload summaries. By default shows only active
+  schedules; set show_disabled to include paused/cancelled ones.
+hot: false
+category: schedule
+parameters:
+  type: object
+  properties:
+    show_disabled:
+      type: boolean
+      description: "Include disabled/cancelled schedules for auditing (default: false)"
+  required: []
+trace:
+  emoji: "📋"
+  format: "{{if .show_disabled}}(including disabled) {{end}}→ {{.Result | truncate 80 | escape}}"

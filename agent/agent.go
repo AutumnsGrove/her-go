@@ -30,11 +30,14 @@ import (
 	_ "her/tools/calendar_delete"
 	_ "her/tools/calendar_list"
 	_ "her/tools/calendar_update"
+	_ "her/tools/create_schedule"
+	_ "her/tools/delete_schedule"
 	_ "her/tools/done"
 	_ "her/tools/get_time"
 	_ "her/tools/get_weather"
 	_ "her/tools/list_calendars"
 	_ "her/tools/list_files"
+	_ "her/tools/list_schedules"
 	_ "her/tools/narrate_report"
 	_ "her/tools/nearby_search"
 	_ "her/tools/publish_report"
@@ -48,6 +51,7 @@ import (
 	_ "her/tools/shift_hours"
 	_ "her/tools/think"
 	_ "her/tools/update_persona"
+	_ "her/tools/update_schedule"
 	_ "her/tools/use_tools"
 	_ "her/tools/view_image"
 	_ "her/tools/web_read"
@@ -793,7 +797,7 @@ outer:
 				params.LiteToolHook("reply")
 			}
 			toolSeq = append(toolSeq, "reply")
-			fallbackResult := tools.Execute("reply", `{"instruction":"The user sent a message. Respond naturally. Do not reference any interruption or claim you were cut off."}`, tctx)
+			fallbackResult := tools.Execute("reply", `{"instruction":"The driver agent loop failed — NO tools were called and NO actions were taken. Do NOT claim you did something. Acknowledge the user's request and offer to try again. Be honest that nothing happened."}`, tctx)
 			if tctx.ReplyCount == 0 {
 				log.Error("fallback reply also failed", "result", fallbackResult)
 				return nil, fmt.Errorf("agent failed to generate a reply")

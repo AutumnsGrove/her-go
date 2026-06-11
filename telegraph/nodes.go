@@ -116,12 +116,19 @@ func convertBlock(node ast.Node, source []byte) interface{} {
 			if li, ok := child.(*ast.ListItem); ok {
 				var liChildren []interface{}
 				for liChild := li.FirstChild(); liChild != nil; liChild = liChild.NextSibling() {
-					if p, ok := liChild.(*ast.Paragraph); ok {
-						// Unwrap paragraph inside list items — Telegraph
-						// expects inline content directly inside <li>.
+					switch p := liChild.(type) {
+					case *ast.Paragraph:
+						// Loose list items wrap content in Paragraph.
 						liChildren = append(liChildren, convertInlineChildren(p, source)...)
-					} else if c := convertBlock(liChild, source); c != nil {
-						liChildren = append(liChildren, c)
+					case *ast.TextBlock:
+						// Tight list items (no blank lines between) use
+						// TextBlock instead of Paragraph — same inline
+						// extraction logic applies.
+						liChildren = append(liChildren, convertInlineChildren(p, source)...)
+					default:
+						if c := convertBlock(liChild, source); c != nil {
+							liChildren = append(liChildren, c)
+						}
 					}
 				}
 				items = append(items, &Node{Tag: "li", Children: liChildren})

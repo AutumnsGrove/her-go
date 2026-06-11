@@ -155,10 +155,18 @@ type Store interface {
 	// Scheduler
 	UpsertSchedulerTask(t *SchedulerTask) error
 	DueSchedulerTasks(now time.Time) ([]SchedulerTask, error)
+	ListAllSchedulerTasks() ([]SchedulerTask, error)
 	SchedulerTaskByKind(kind string) (*SchedulerTask, error)
+	SchedulerTaskByKindAndSource(kind, source string) (*SchedulerTask, error)
 	MarkSchedulerSuccess(id int64, nextFire time.Time) error
 	MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error
 	DeleteSchedulerTask(id int64) error
+
+	// User-created schedules
+	CreateUserSchedulerTask(t *SchedulerTask) (int64, error)
+	GetUserSchedulerTask(id int64) (*SchedulerTask, error)
+	ListUserSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error)
+	UpdateUserSchedulerTask(id int64, updates map[string]any) error
 
 	// Calendar
 	InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error)

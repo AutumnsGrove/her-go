@@ -1,0 +1,33 @@
+name: create_schedule
+agent: [main]
+description: >-
+  Create a recurring scheduled task. Supported task types:
+  - worker_briefing: runs a background research briefing (payload: topics, depth)
+  - send_message: sends a static Telegram message (payload: message)
+  - send_prompt: runs a prompt through the full agent pipeline (payload: prompt)
+  Use get_time first to confirm the user's timezone before choosing a cron expression.
+hot: false
+category: schedule
+parameters:
+  type: object
+  properties:
+    name:
+      type: string
+      description: "Human-readable label for this schedule (e.g., 'Morning tech briefing')"
+    cron_expr:
+      type: string
+      description: "5-field cron expression. Examples: '0 8 * * *' (daily 8am), '0 9 * * 1-5' (weekday 9am), '0 9 * * 5' (Fridays 9am)"
+    task_type:
+      type: string
+      description: "Which handler to run"
+      enum: [worker_briefing, send_message, send_prompt]
+    payload:
+      type: object
+      description: "Task-specific config. worker_briefing: {topics, depth (brief|deep)}. send_message: {message}. send_prompt: {prompt}"
+    description:
+      type: string
+      description: "Optional plain-English explanation of the schedule"
+  required: [name, cron_expr, task_type]
+trace:
+  emoji: "📅"
+  format: "{{.name}} ({{.task_type}}) → {{.cron_expr}}"

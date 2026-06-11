@@ -26,6 +26,7 @@ type SimTriggers struct {
 	DreamAfter   []int // run dream cycle after these turns
 	RunDream     bool  // run dream after all messages complete
 	RunRollup    bool  // force the daily mood rollup after all messages complete
+	FireSchedules bool // force-fire all user-created schedules after all messages
 }
 
 // SimOptions holds runtime options for sim execution.
@@ -73,6 +74,10 @@ type simAdapter struct {
 	// compactHandler is set by the gateway after pipeline creation.
 	compactHandler func(ctx context.Context, convID string) (string, error)
 
+	// fireSchedulesFn force-fires all user-created schedules. Set by
+	// cmd/sim_gw.go where scheduler deps are available.
+	fireSchedulesFn func(ctx context.Context) []string
+
 	// workerResultCh receives worker completion data for follow-up turns.
 	workerResultCh chan WorkerResult
 
@@ -91,6 +96,12 @@ type simAdapter struct {
 
 	// Done is closed when all messages have been processed.
 	Done chan struct{}
+}
+
+// SetFireSchedulesFn sets the callback for force-firing user schedules.
+// Called from cmd/sim_gw.go where scheduler deps are available.
+func (a *simAdapter) SetFireSchedulesFn(fn func(ctx context.Context) []string) {
+	a.fireSchedulesFn = fn
 }
 
 // turnCapture accumulates bus events for a single turn.
@@ -276,6 +287,14 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		// Delay between turns to avoid rate limits on free-tier models.
 		if a.options.DelaySeconds > 0 && i < len(a.messages)-1 {
 			time.Sleep(time.Duration(a.options.DelaySeconds) * time.Second)
+		}
+	}
+
+	// Post-run: force-fire all user-created schedules.
+	if a.triggers.FireSchedules && a.fireSchedulesFn != nil {
+		results := a.fireSchedulesFn(ctx)
+		for _, r := range results {
+			log.Info("sim: fire-schedule result: " + r)
 		}
 	}
 

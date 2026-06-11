@@ -22,6 +22,7 @@ func newCtx(t *testing.T, tz string) *tools.Context {
 	t.Helper()
 	return &tools.Context{
 		Cfg: &config.Config{
+			DefaultTimezone: tz,
 			Calendar: config.CalendarConfig{
 				DefaultTimezone: tz,
 			},

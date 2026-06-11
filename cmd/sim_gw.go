@@ -14,6 +14,7 @@ import (
 	"her/gateway"
 	"her/llm"
 	"her/memory"
+	"her/scheduler"
 	"her/search"
 	"her/tui"
 	"her/voice"
@@ -406,10 +407,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	gw.RegisterStore(tmpDBPath, store)
 	gw.SimMessages = gwMessages
 	gw.SimTriggers = gateway.SimTriggers{
-		CompactAfter: s.CompactAfter,
-		DreamAfter:   s.DreamAfter,
-		RunDream:     s.RunDream,
-		RunRollup:    s.RunRollup,
+		CompactAfter:  s.CompactAfter,
+		DreamAfter:    s.DreamAfter,
+		RunDream:      s.RunDream,
+		RunRollup:     s.RunRollup,
+		FireSchedules: s.FireSchedules,
 	}
 	gw.SimOptions = gateway.SimOptions{
 		DelaySeconds: delayFlag,
@@ -435,6 +437,36 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if sa == nil {
 		cancel()
 		return fmt.Errorf("sim adapter not found after gateway start")
+	}
+
+	// Wire fire-schedules callback — needs scheduler deps built from
+	// sim-local clients. Safe to set here: fire_schedules only runs
+	// after all messages complete.
+	if s.FireSchedules {
+		sa.SetFireSchedulesFn(func(ctx context.Context) []string {
+			schedDeps := &scheduler.Deps{
+				Store:        store,
+				Send:         func(chatID int64, text string) (int, error) {
+					log.Infof("sim: [send_message] %s", text)
+					return 0, nil
+				},
+				ChatID:       0,
+				WorkerLLMs:   simWorkerLLMs,
+				TavilyClient: tavilyClient,
+				Cfg:          cfg,
+				RootDir:      simRootDir,
+			}
+			results := scheduler.FireAllUserTasks(ctx, store, schedDeps)
+			var lines []string
+			for _, r := range results {
+				if r.Err != nil {
+					lines = append(lines, fmt.Sprintf("#%d %s (%s): FAILED — %v", r.TaskID, r.Name, r.Kind, r.Err))
+				} else {
+					lines = append(lines, fmt.Sprintf("#%d %s (%s): OK", r.TaskID, r.Name, r.Kind))
+				}
+			}
+			return lines
+		})
 	}
 
 	// Block until all messages are processed or the gateway exits early.

@@ -16,14 +16,13 @@ func init() {
 // No parameters required — just returns the current time with multiple formats
 // for the agent to use in calculations and scheduling.
 func Handle(argsJSON string, ctx *tools.Context) string {
-	// Load timezone from config (Calendar.DefaultTimezone)
-	// Fall back to system timezone if not configured
+	// Load timezone from config, fall back to system timezone if not configured.
 	loc := time.Local
-	if ctx.Cfg.Calendar.DefaultTimezone != "" {
-		loadedLoc, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone)
+	if ctx.Cfg.Timezone() != "" {
+		loadedLoc, err := time.LoadLocation(ctx.Cfg.Timezone())
 		if err != nil {
 			// Invalid timezone in config — warn but continue with system timezone
-			return fmt.Sprintf("error: invalid timezone %q in config: %v", ctx.Cfg.Calendar.DefaultTimezone, err)
+			return fmt.Sprintf("error: invalid timezone %q in config: %v", ctx.Cfg.Timezone(), err)
 		}
 		loc = loadedLoc
 	}

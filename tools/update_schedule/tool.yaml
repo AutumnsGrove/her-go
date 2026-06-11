@@ -1,0 +1,30 @@
+name: update_schedule
+agent: [main]
+description: >-
+  Update an existing user-created schedule. Can change the name, cron
+  expression, enabled status, or payload. Use list_schedules first to
+  find the task_id.
+hot: false
+category: schedule
+parameters:
+  type: object
+  properties:
+    task_id:
+      type: integer
+      description: "ID of the schedule to update (from list_schedules)"
+    name:
+      type: string
+      description: "New human-readable label"
+    cron_expr:
+      type: string
+      description: "New cron expression (recomputes next fire time)"
+    enabled:
+      type: boolean
+      description: "true to resume, false to pause"
+    payload:
+      type: object
+      description: "New task-specific config (replaces entire payload)"
+  required: [task_id]
+trace:
+  emoji: "✏️"
+  format: "schedule #{{.task_id}}"
