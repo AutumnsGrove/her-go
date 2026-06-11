@@ -297,9 +297,16 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 			if traceFinalize != nil || lite != nil {
 				go func() {
 					tracker.Wait()
-					m := tracker.Metrics()
 					elapsed := tracker.Elapsed().Round(time.Millisecond)
-					costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed)
+					// Query the metrics table for authoritative cost — this
+					// includes driver, chat, classifier, vision, and all
+					// background agent costs. Struct-accumulated costs miss
+					// LLM calls made inside tool handlers.
+					totalCost := tracker.Metrics().TotalCost
+					if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil && dbCost > 0 {
+						totalCost = dbCost
+					}
+					costLine := fmt.Sprintf("💰 $%.4f · %s", totalCost, elapsed)
 					if lite != nil {
 						lite.setCost(costLine)
 					}
@@ -491,9 +498,16 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	if traceFinalize != nil || lite != nil {
 		go func() {
 			tracker.Wait()
-			m := tracker.Metrics()
 			elapsed := tracker.Elapsed().Round(time.Millisecond)
-			costLine := fmt.Sprintf("💰 $%.4f · %s", m.TotalCost, elapsed)
+			// Query the metrics table for authoritative cost — includes
+			// all agent roles (driver, chat, memory, introspection, mood,
+			// classifier, vision, compaction). Falls back to tracker if
+			// the DB query fails.
+			totalCost := tracker.Metrics().TotalCost
+			if dbCost, err := b.store.CostForMessage(input.TriggerMsgID); err == nil && dbCost > 0 {
+				totalCost = dbCost
+			}
+			costLine := fmt.Sprintf("💰 $%.4f · %s", totalCost, elapsed)
 			log.Info("turn complete", "cost", costLine)
 			if lite != nil {
 				lite.setCost(costLine)
