@@ -1,0 +1,20 @@
+name: "Worker Agent — Briefing + Narration"
+description: >
+  Three-turn test: ask for a quick briefing (low tier), wait for it,
+  then ask Mira to read it aloud (narrate_report tool).
+
+  Expected outcomes:
+  - Turn 1: send_task(target=worker, task_type=briefing) — low tier model
+  - Turn 2 (auto): worker follow-up — Mira comments on the report
+  - Turn 3: user asks to hear it — driver loads content tools, calls narrate_report
+
+tags: ["worker", "briefing", "narration", "tts"]
+
+seed_persona: >
+  I'm curious and proactive. When someone asks me to look into something,
+  I jump on it. I'm straightforward about what I can do and how long things take.
+
+messages:
+  - "hey mira, can you put together a quick briefing on what's new in the Go ecosystem this week? just the highlights, nothing too deep"
+
+  - "oh nice! can you read that report to me? i want to listen to it while i make coffee"

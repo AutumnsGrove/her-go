@@ -14,6 +14,7 @@ package bot
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -355,16 +356,33 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
-	// If narrate_report queued a report for voice narration, send it
-	// as a separate voice memo after the reply's own TTS finishes.
+	// If narrate_report queued a report for voice narration, synthesize
+	// and deliver it. Two paths:
+	//   - Telegram: send as a voice memo via SendVoice
+	//   - Sim/dev: save as an OGG file next to the reports
 	// The small delay lets the reply TTS (which runs in a goroutine
 	// from the reply tool) get a head start so messages arrive in order.
 	if result.PendingNarration != "" && b.ttsClient != nil {
 		go func() {
 			time.Sleep(2 * time.Second)
 			log.Info("narrating report", "chars", len(result.PendingNarration))
+
 			if tp, ok := fe.(interface{ SendVoice(string) }); ok {
+				// Telegram path — send as voice memo.
 				tp.SendVoice(result.PendingNarration)
+			} else {
+				// Sim/dev path — synthesize and save to file.
+				oggBytes, err := b.ttsClient.Synthesize(result.PendingNarration)
+				if err != nil {
+					log.Error("narration synthesis failed", "err", err)
+					return
+				}
+				narrationPath := filepath.Join(b.reportsDir(), "narration.ogg")
+				if err := os.WriteFile(narrationPath, oggBytes, 0644); err != nil {
+					log.Error("saving narration file", "err", err)
+					return
+				}
+				log.Info("narration saved", "path", narrationPath, "bytes", len(oggBytes))
 			}
 		}()
 	}

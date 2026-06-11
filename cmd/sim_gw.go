@@ -16,6 +16,7 @@ import (
 	"her/memory"
 	"her/search"
 	"her/tui"
+	"her/voice"
 	"her/workeragent"
 
 	"github.com/spf13/cobra"
@@ -355,6 +356,12 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// --- TTS client (optional, for narrate_report support in sims) ---
+	var simTTSClient *voice.TTSClient
+	if cfg.Voice.TTS.Enabled {
+		simTTSClient = voice.NewTTSClient(&cfg.Voice.TTS)
+	}
+
 	// --- Assemble deps ---
 	deps := gateway.Deps{
 		ChatLLM:          chatLLM,
@@ -371,7 +378,8 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		ConfigPath:       cfgFile,
 		WorkerCallback:   simWorkerCB,
 		WorkerResultCh:   workerResultCh,
-		// VoiceClient and TTSClient intentionally nil — no audio in sim mode.
+		TTSClient:        simTTSClient,
+		// VoiceClient intentionally nil — no STT in sim mode.
 	}
 
 	// --- Convert suite messages to gateway.SimMessage ---

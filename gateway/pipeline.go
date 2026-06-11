@@ -45,6 +45,9 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 	if deps.WorkerCallback != nil {
 		b.SetWorkerCallback(deps.WorkerCallback)
 	}
+	if deps.TTSClient != nil {
+		b.SetTTSClient(deps.TTSClient)
+	}
 
 	return &Pipeline{
 		bot:   b,
