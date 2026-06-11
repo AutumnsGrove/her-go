@@ -379,6 +379,11 @@ type Context struct {
 	// consumed by the bot layer after the reply's own TTS finishes.
 	PendingNarration string
 
+	// PublishedReportURL stores a Telegraph URL from publish_report.
+	// The bot layer auto-appends this as a clickable link after the
+	// reply — guarantees the URL appears even if the LLM forgets it.
+	PublishedReportURL string
+
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
 
