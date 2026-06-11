@@ -808,6 +808,28 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 		b.WriteString("\n")
 	}
 
+	// --- Generated Artifacts ---
+	// List any reports or narrations the worker agent produced.
+	artifactRoot, _ := os.Getwd()
+	reportFiles, _ := filepath.Glob(filepath.Join(artifactRoot, "reports", "*.md"))
+	narrationFiles, _ := filepath.Glob(filepath.Join(artifactRoot, "reports", "*.ogg"))
+	if len(reportFiles) > 0 || len(narrationFiles) > 0 {
+		b.WriteString("## Generated Artifacts\n\n")
+		for _, f := range reportFiles {
+			info, _ := os.Stat(f)
+			if info != nil {
+				fmt.Fprintf(&b, "- 📄 `%s` (%s)\n", filepath.Base(f), humanSize(info.Size()))
+			}
+		}
+		for _, f := range narrationFiles {
+			info, _ := os.Stat(f)
+			if info != nil {
+				fmt.Fprintf(&b, "- 🔊 `%s` (%s)\n", filepath.Base(f), humanSize(info.Size()))
+			}
+		}
+		b.WriteString("\n")
+	}
+
 	// --- Cost Summary ---
 	b.WriteString("## Cost Summary\n\n")
 	fmt.Fprintf(&b, "| Metric | Value |\n|--------|-------|\n")
@@ -832,6 +854,17 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 	}
 
 	return filename, nil
+}
+
+func humanSize(bytes int64) string {
+	switch {
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 // --- Report section writers (query store via SQLiteStore.DB() escape hatch) ---
