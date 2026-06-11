@@ -362,6 +362,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	}
 
 	if err != nil {
+		tracker.Release()
 		tracker.StopTyping()
 		log.Error("agent error", "err", err)
 		_ = fe.SendError("Sorry, I'm having trouble thinking right now. Try again in a moment?")
