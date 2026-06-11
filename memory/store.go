@@ -155,6 +155,7 @@ type Store interface {
 	// Scheduler
 	UpsertSchedulerTask(t *SchedulerTask) error
 	DueSchedulerTasks(now time.Time) ([]SchedulerTask, error)
+	ListAllSchedulerTasks() ([]SchedulerTask, error)
 	SchedulerTaskByKind(kind string) (*SchedulerTask, error)
 	SchedulerTaskByKindAndSource(kind, source string) (*SchedulerTask, error)
 	MarkSchedulerSuccess(id int64, nextFire time.Time) error

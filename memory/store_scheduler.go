@@ -125,6 +125,26 @@ func (s *SQLiteStore) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) 
 	return scanSchedulerTasks(rows)
 }
 
+// ListAllSchedulerTasks returns every scheduler task (both yaml and user,
+// enabled and disabled). Used by the /schedule command to show a
+// complete overview.
+func (s *SQLiteStore) ListAllSchedulerTasks() ([]SchedulerTask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, kind, cron_expr, next_fire, payload_json,
+		        retry_max_attempts, retry_backoff, retry_initial_wait,
+		        last_run_at, last_error, attempt_count, created_at,
+		        source, name, enabled
+		 FROM scheduler_tasks
+		 ORDER BY enabled DESC, next_fire ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing all scheduler tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSchedulerTasks(rows)
+}
+
 // SchedulerTaskByKind looks up a row for a given kind. With multiple
 // rows per kind now possible, this returns the first match — prefer
 // SchedulerTaskByKindAndSource when you need a specific source.

@@ -122,5 +122,12 @@ func buildCommandsFromBot(bot *bot.Bot) []CommandDef {
 				return bot.ExecUsage()
 			},
 		},
+		{
+			Name:        "schedule",
+			Description: "Show all scheduled tasks and next fire times",
+			Handler: func(_ context.Context, _ string) (string, error) {
+				return bot.ExecSchedule()
+			},
+		},
 	}
 }
