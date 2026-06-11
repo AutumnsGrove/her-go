@@ -1,0 +1,38 @@
+name: "Schedule CRUD — create, list, update, delete recurring tasks"
+description: >
+  Tests the full scheduling tool lifecycle: creating recurring schedules,
+  listing them, updating cron/payload, and soft-deleting (disabling).
+
+  Exercises all three task types: worker_briefing (daily news),
+  send_message (static reminder), and schedule management (list/update/delete).
+
+  What to look for in the report:
+  - Agent loads schedule tools via use_tools(["schedule"])
+  - create_schedule validates cron, computes next fire time
+  - Names get 6-char hash prefix for collision avoidance
+  - list_schedules shows all active schedules with human-readable cron
+  - update_schedule changes cron and recomputes next fire
+  - delete_schedule soft-disables (enabled=0, not hard-deleted)
+  - list_schedules with show_disabled reveals cancelled schedules
+  - No errors or panics from store operations
+tags: ["schedule", "crud", "tools", "reference"]
+fire_schedules: true
+
+messages:
+  # 1. Create a recurring briefing
+  - "hey, can you set up a daily briefing about Go and AI news? every morning at 8am"
+
+  # 2. Create a static reminder
+  - "also remind me to water the plants every evening at 6pm"
+
+  # 3. List all schedules
+  - "what schedules do I have set up?"
+
+  # 4. Update the briefing time
+  - "actually, change the morning briefing to 7am instead"
+
+  # 5. Cancel the plant reminder
+  - "cancel the plant watering reminder"
+
+  # 6. Verify the deletion was soft
+  - "show me all my schedules, including the cancelled ones"

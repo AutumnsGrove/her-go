@@ -704,3 +704,67 @@ func (b *Bot) ExecRollup() (string, error) {
 	}
 	return "Rollup ran — no new daily entry (already exists or insufficient data).", nil
 }
+
+// ExecSchedule shows all upcoming scheduled tasks — both system (yaml)
+// and user-created. Groups by status and shows next fire times in the
+// user's configured timezone.
+func (b *Bot) ExecSchedule() (string, error) {
+	loc := time.UTC
+	if tz := b.cfg.Timezone(); tz != "" {
+		if parsed, err := time.LoadLocation(tz); err == nil {
+			loc = parsed
+		}
+	}
+
+	tasks, err := b.store.ListAllSchedulerTasks()
+	if err != nil {
+		return "", fmt.Errorf("listing schedules: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		return "No scheduled tasks.", nil
+	}
+
+	// Split into user and system tasks.
+	var userTasks, systemTasks []memory.SchedulerTask
+	for _, t := range tasks {
+		if t.Source == "user" {
+			userTasks = append(userTasks, t)
+		} else {
+			systemTasks = append(systemTasks, t)
+		}
+	}
+
+	var msg strings.Builder
+	msg.WriteString("== Scheduled Tasks ==\n\n")
+
+	if len(userTasks) > 0 {
+		msg.WriteString("User Schedules\n")
+		for _, t := range userTasks {
+			status := "on"
+			if !t.Enabled {
+				status = "off"
+			}
+			name := t.Name
+			if name == "" {
+				name = t.Kind
+			}
+			humanCron := scheduler.DescribeCron(t.CronExpr)
+			nextStr := t.NextFire.In(loc).Format("Mon Jan 2, 3:04 PM")
+			fmt.Fprintf(&msg, " [%s] #%d %s\n   %s (%s) | next: %s\n",
+				status, t.ID, name, humanCron, t.Kind, nextStr)
+		}
+		msg.WriteString("\n")
+	}
+
+	if len(systemTasks) > 0 {
+		msg.WriteString("System Tasks\n")
+		for _, t := range systemTasks {
+			humanCron := scheduler.DescribeCron(t.CronExpr)
+			nextStr := t.NextFire.In(loc).Format("Mon Jan 2, 3:04 PM")
+			fmt.Fprintf(&msg, " %s — %s | next: %s\n", t.Kind, humanCron, nextStr)
+		}
+	}
+
+	return msg.String(), nil
+}

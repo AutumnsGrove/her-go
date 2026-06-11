@@ -169,15 +169,25 @@ func (s stubStore) LatestSummary(conversationID, stream string) (string, int64, 
 	return "", 0, nil
 }
 func (s stubStore) UpsertSchedulerTask(t *memory.SchedulerTask) error { return nil }
+func (s stubStore) ListAllSchedulerTasks() ([]memory.SchedulerTask, error) { return nil, nil }
 func (s stubStore) DueSchedulerTasks(now time.Time) ([]memory.SchedulerTask, error) {
 	return nil, nil
 }
 func (s stubStore) SchedulerTaskByKind(kind string) (*memory.SchedulerTask, error) { return nil, nil }
-func (s stubStore) MarkSchedulerSuccess(id int64, nextFire time.Time) error         { return nil }
+func (s stubStore) SchedulerTaskByKindAndSource(kind, source string) (*memory.SchedulerTask, error) {
+	return nil, nil
+}
+func (s stubStore) MarkSchedulerSuccess(id int64, nextFire time.Time) error { return nil }
 func (s stubStore) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error {
 	return nil
 }
 func (s stubStore) DeleteSchedulerTask(id int64) error { return nil }
+func (s stubStore) CreateUserSchedulerTask(t *memory.SchedulerTask) (int64, error) { return 0, nil }
+func (s stubStore) GetUserSchedulerTask(id int64) (*memory.SchedulerTask, error)   { return nil, nil }
+func (s stubStore) ListUserSchedulerTasks(includeDisabled bool) ([]memory.SchedulerTask, error) {
+	return nil, nil
+}
+func (s stubStore) UpdateUserSchedulerTask(id int64, updates map[string]any) error { return nil }
 func (s stubStore) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error) {
 	return 0, nil
 }

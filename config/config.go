@@ -46,6 +46,7 @@ type Config struct {
 	Dream              DreamConfig              `yaml:"dream"`
 	Voice              VoiceConfig              `yaml:"voice"`
 	Location           LocationConfig           `yaml:"location,omitempty"`
+	DefaultTimezone    string                   `yaml:"default_timezone,omitempty"` // e.g. "America/New_York", applies to schedules, weather, mood rollups, and get_time
 	Calendar           CalendarConfig           `yaml:"calendar"`
 	Tunnel             TunnelConfig             `yaml:"tunnel"`
 	Cloudflare         CloudflareConfig         `yaml:"cloudflare"`
@@ -234,6 +235,63 @@ func (c *Config) ExpandPrompt(content string) string {
 	content = strings.ReplaceAll(content, "{{her}}", c.Identity.Her)
 	content = strings.ReplaceAll(content, "{{user}}", c.Identity.User)
 	return content
+}
+
+// Timezone returns the effective timezone string. Checks the top-level
+// DefaultTimezone first, falls back to Calendar.DefaultTimezone for
+// backward compatibility.
+func (c *Config) Timezone() string {
+	if c.DefaultTimezone != "" {
+		return c.DefaultTimezone
+	}
+	return c.Calendar.DefaultTimezone
+}
+
+// SetTimezone writes the timezone string into both the in-memory config and
+// config.yaml on disk. It does a surgical line-level edit — finds or creates
+// the top-level default_timezone: key and updates it, preserving all comments
+// and formatting.
+func (c *Config) SetTimezone(configPath, tz string) error {
+	c.DefaultTimezone = tz
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// Find existing top-level default_timezone line (no leading whitespace).
+	tzIdx := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "default_timezone:") && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			tzIdx = i
+			break
+		}
+	}
+
+	newLine := fmt.Sprintf("default_timezone: %q", tz)
+
+	if tzIdx >= 0 {
+		lines[tzIdx] = newLine
+	} else {
+		// Insert before the location: or calendar: section so it sits with
+		// the other top-level settings. Fall back to prepending.
+		inserted := false
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "location:") || strings.HasPrefix(trimmed, "calendar:") {
+				lines = insertAfter(lines, i-1, newLine)
+				inserted = true
+				break
+			}
+		}
+		if !inserted {
+			lines = append([]string{newLine}, lines...)
+		}
+	}
+
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 // TelegramConfig holds Telegram bot settings.

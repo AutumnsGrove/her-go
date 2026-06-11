@@ -217,6 +217,7 @@ type suite struct {
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
 	RunRollup          bool                `yaml:"run_rollup"`           // force the daily mood rollup after all messages complete
+	FireSchedules      bool                `yaml:"fire_schedules"`       // force-fire all user-created schedules after all messages
 }
 
 // seedMemory supports both plain strings and structured objects in YAML.

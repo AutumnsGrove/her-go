@@ -1,0 +1,18 @@
+name: delete_schedule
+agent: [main]
+description: >-
+  Cancel a user-created schedule by disabling it. The schedule is
+  soft-deleted (disabled, not removed) so it can be audited later.
+  Use list_schedules with show_disabled to see cancelled schedules.
+hot: false
+category: schedule
+parameters:
+  type: object
+  properties:
+    task_id:
+      type: integer
+      description: "ID of the schedule to cancel (from list_schedules)"
+  required: [task_id]
+trace:
+  emoji: "🗑️"
+  format: "schedule #{{.task_id}}"

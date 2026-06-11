@@ -1,0 +1,33 @@
+package scheduler
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+)
+
+// sendMessageHandler sends a static Telegram message on a cron schedule.
+// This is the simplest scheduled action — no LLM, no agent loop, just
+// a direct message. Think of it as a basic reminder.
+type sendMessageHandler struct{}
+
+func (sendMessageHandler) Kind() string       { return "send_message" }
+func (sendMessageHandler) ConfigPath() string { return "" }
+
+func (h sendMessageHandler) Execute(_ context.Context, payload json.RawMessage, deps *Deps) error {
+	var p struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return fmt.Errorf("send_message: bad payload: %w", err)
+	}
+	if p.Message == "" {
+		return fmt.Errorf("send_message: empty message")
+	}
+	_, err := deps.Send(deps.ChatID, p.Message)
+	return err
+}
+
+func init() {
+	Register(sendMessageHandler{})
+}

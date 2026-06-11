@@ -38,7 +38,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Resolve period to start/end timestamps. Uses the configured timezone
 	// so "this week" means the user's local week, not UTC.
-	start, end, periodLabel, err := resolvePeriod(args.Period, args.Start, args.End, ctx.Cfg.Calendar.DefaultTimezone)
+	start, end, periodLabel, err := resolvePeriod(args.Period, args.Start, args.End, ctx.Cfg.Timezone())
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}

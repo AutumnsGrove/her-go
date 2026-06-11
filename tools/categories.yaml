@@ -14,3 +14,6 @@ calendar:
 
 content:
   hint: "User wants a report read aloud, narrated, or converted to audio"
+
+schedule:
+  hint: "User wants to create, view, update, or cancel a recurring schedule like daily briefings or reminders"

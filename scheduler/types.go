@@ -89,6 +89,12 @@ type Deps struct {
 	// AgentEventCh receives completion events from workers. The bot's
 	// event consumer handles them to trigger driver agent follow-ups.
 	AgentEventCh any
+
+	// ScheduledPromptFn fires a prompt through the full driver agent
+	// loop. Set by cmd/run.go — the callback constructs an AgentEvent
+	// and emits it on the event channel. This avoids a scheduler → agent
+	// import cycle while still triggering contextual agent runs.
+	ScheduledPromptFn func(prompt string) error
 }
 
 // RetryConfig governs what happens when a handler returns an error.

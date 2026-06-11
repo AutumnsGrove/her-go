@@ -91,7 +91,7 @@ func New(store memory.Store, deps *Deps, rootDir string) (*Scheduler, error) {
 	}
 
 	s.log.Info("scheduler initialized",
-		"registered_kinds", len(registeredKinds()),
+		"registered_kinds", len(RegisteredKinds()),
 		"tick_interval", TickInterval,
 	)
 	return s, nil

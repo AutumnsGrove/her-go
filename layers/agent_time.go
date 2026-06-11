@@ -21,8 +21,8 @@ func init() {
 func buildAgentTime(ctx *LayerContext) LayerResult {
 	// Use configured timezone if available, otherwise fall back to system timezone
 	loc := time.Local
-	if ctx.Cfg.Calendar.DefaultTimezone != "" {
-		if loadedLoc, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone); err == nil {
+	if ctx.Cfg.Timezone() != "" {
+		if loadedLoc, err := time.LoadLocation(ctx.Cfg.Timezone()); err == nil {
 			loc = loadedLoc
 		}
 		// If LoadLocation fails, silently fall back to time.Local
