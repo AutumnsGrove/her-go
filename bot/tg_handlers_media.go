@@ -309,3 +309,27 @@ func (b *Bot) sendVoiceReply(c tele.Context, text string) {
 		log.Error("sending voice reply", "err", err)
 	}
 }
+
+// sendVoiceReply2 is like sendVoiceReply but sends to a chat ID instead
+// of a telebot context. Used by event-triggered turns (handleAgentEvent)
+// where there's no tele.Context available.
+func (b *Bot) sendVoiceReply2(chatID int64, text string) {
+	if b.ttsClient == nil || b.tb == nil {
+		return
+	}
+	oggBytes, err := b.ttsClient.Synthesize(text)
+	if err != nil {
+		log.Error("TTS synthesis failed", "err", err)
+		return
+	}
+
+	voiceMsg := &tele.Voice{
+		File: tele.FromReader(bytes.NewReader(oggBytes)),
+		MIME: "audio/ogg",
+	}
+
+	chat := &tele.Chat{ID: chatID}
+	if _, err := b.tb.Send(chat, voiceMsg); err != nil {
+		log.Error("sending voice reply to chat", "err", err, "chat", chatID)
+	}
+}

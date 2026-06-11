@@ -1,0 +1,20 @@
+name: publish_report
+agent: [main]
+description: >-
+  Publish a report from the reports directory to Telegraph for rich
+  rendering with Instant View. Returns the Telegraph URL. Use when the
+  user asks to share or publish a report, or wants a readable link.
+hint: "publish a report to Telegraph for a shareable link"
+hot: false
+category: content
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: "File path relative to reports/ (e.g., '2026-06-10-piranesi-deep-dive.md')"
+  required:
+    - path
+trace:
+  emoji: "📤"
+  format: "publish {{.path | escape}}"

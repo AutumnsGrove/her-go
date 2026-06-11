@@ -37,6 +37,7 @@ import (
 	_ "her/tools/list_files"
 	_ "her/tools/narrate_report"
 	_ "her/tools/nearby_search"
+	_ "her/tools/publish_report"
 	_ "her/tools/read_file"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"

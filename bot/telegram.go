@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -671,6 +672,13 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 	params.StatusCallback = sendFn
 	params.SendCallback = sendFn
 
+	// Wire TTS so event-triggered replies get narrated like regular turns.
+	if b.ttsClient != nil {
+		params.TTSCallback = func(text string) {
+			b.sendVoiceReply2(ownerChat, text)
+		}
+	}
+
 	b.agentBusy.Store(true)
 	result, err := agent.Run(params)
 	b.agentBusy.Store(false)
@@ -680,14 +688,20 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 		return
 	}
 
-	// Auto-append the report link after the agent's reply so it's
-	// guaranteed to appear — not dependent on the LLM remembering to
-	// include it. The agent writes the commentary, the system injects
-	// the link.
-	if evt.Type == agent.EventWorkerComplete && evt.ReportURL != "" {
-		linkMsg := fmt.Sprintf("📄 <a href=\"%s\">Read the full report</a>", evt.ReportURL)
-		if err := b.SendToChat(b.ownerChat, linkMsg); err != nil {
-			log.Error("failed to send report link", "err", err)
+	// Auto-append the report link or filename after the agent's reply.
+	if evt.Type == agent.EventWorkerComplete {
+		if evt.ReportURL != "" {
+			linkMsg := fmt.Sprintf("📄 <a href=\"%s\">Read the full report</a>", evt.ReportURL)
+			if err := b.SendToChat(b.ownerChat, linkMsg); err != nil {
+				log.Error("failed to send report link", "err", err)
+			}
+		} else if result.ReplyText != "" {
+			// No Telegraph URL — mention the local file so the user knows it exists.
+			if reports, _ := filepath.Glob(filepath.Join(b.reportsDir(), "*.md")); len(reports) > 0 {
+				latest := reports[len(reports)-1]
+				fileMsg := fmt.Sprintf("📄 Report saved: <code>%s</code>", filepath.Base(latest))
+				_ = b.SendToChat(b.ownerChat, fileMsg)
+			}
 		}
 	}
 

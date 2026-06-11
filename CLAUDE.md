@@ -29,6 +29,24 @@ go run main.go run
 go build -o her && ./her run
 ```
 
+## Telegraph Setup (for Worker Agent reports)
+
+The worker agent publishes reports to [Telegraph](https://telegra.ph) for rich rendering in Telegram. One-time setup:
+
+```bash
+# Create a Telegraph account (returns an access token)
+curl -s https://api.telegra.ph/createAccount \
+  -H "Content-Type: application/json" \
+  -d '{"short_name":"mira","author_name":"Mira"}' | python3 -m json.tool
+```
+
+Copy the `access_token` from the response into `config.yaml`:
+
+```yaml
+worker_agent:
+  telegraph_token: "your-access-token-here"
+```
+
 ## Database Migrations
 
 **Forward-only migrations** using golang-migrate. Files in `migrations/*.up.sql`, numbered sequentially (Wrangler D1 style).
