@@ -11,3 +11,6 @@ context:
 
 calendar:
   hint: "User mentions a work shift, schedule, calendar event, or asks about hours worked"
+
+content:
+  hint: "User wants a report read aloud, narrated, or converted to audio"

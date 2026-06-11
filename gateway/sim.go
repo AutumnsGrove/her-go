@@ -73,6 +73,9 @@ type simAdapter struct {
 	// compactHandler is set by the gateway after pipeline creation.
 	compactHandler func(ctx context.Context, convID string) (string, error)
 
+	// workerResultCh receives worker completion data for follow-up turns.
+	workerResultCh chan WorkerResult
+
 	// Synchronous request/reply — same pattern as Gradio.
 	pendingMu sync.Mutex
 	pending   chan OutboundMsg
@@ -106,16 +109,17 @@ type turnCapture struct {
 	followUpReply      string
 }
 
-func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus) (Adapter, error) {
+func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus, workerResultCh chan WorkerResult) (Adapter, error) {
 	return &simAdapter{
-		cfg:          acfg,
-		messages:     messages,
-		triggers:     triggers,
-		options:      opts,
-		bus:          bus,
-		msgCh:        make(chan InboundMsg, 1),
-		finishedTurn: make(chan *turnCapture, 1),
-		Done:         make(chan struct{}),
+		cfg:            acfg,
+		messages:       messages,
+		triggers:       triggers,
+		options:        opts,
+		bus:            bus,
+		msgCh:          make(chan InboundMsg, 1),
+		finishedTurn:   make(chan *turnCapture, 1),
+		Done:           make(chan struct{}),
+		workerResultCh: workerResultCh,
 	}, nil
 }
 
@@ -203,6 +207,71 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		// Fire lifecycle triggers after this turn.
 		turnNum := i + 1
 		a.fireTriggers(ctx, turnNum, convID)
+
+		// Check if the worker agent produced a result during this turn.
+		// If so, inject a follow-up system turn so the driver can comment
+		// on the finished report — same as EventWorkerComplete in production.
+		if a.workerResultCh != nil {
+			select {
+			case wr := <-a.workerResultCh:
+				log.Infof("sim: worker completed — injecting follow-up turn for %s", wr.TaskName)
+
+				followUpStart := time.Now()
+				systemPrompt := fmt.Sprintf(
+					"[system] Your worker agent just finished a %s report.\n\n"+
+						"Summary: %s\n\n"+
+						"Share this with the user naturally — comment on what's interesting, "+
+						"add your perspective. The report link will be attached automatically. "+
+						"Keep it conversational, not like a system notification.",
+					wr.TaskName, wr.Summary,
+				)
+
+				followUp := InboundMsg{
+					Text:           systemPrompt,
+					ConversationID: convID,
+					AdapterName:    a.Name(),
+					Timestamp:      time.Now(),
+				}
+
+				followUpReplyCh := make(chan OutboundMsg, 1)
+				a.pendingMu.Lock()
+				a.pending = followUpReplyCh
+				a.pendingMu.Unlock()
+
+				a.msgCh <- followUp
+
+				var followUpResult SimResult
+				followUpResult.Input = fmt.Sprintf("[worker:%s complete]", wr.TaskName)
+				select {
+				case reply := <-followUpReplyCh:
+					followUpResult.Reply = reply.Text
+					followUpResult.Duration = time.Since(followUpStart)
+				case <-ctx.Done():
+					followUpResult.Error = ctx.Err()
+				case <-time.After(2 * time.Minute):
+					followUpResult.Error = fmt.Errorf("worker follow-up timeout")
+				}
+
+				if a.bus != nil && followUpResult.Error == nil {
+					followUpResult = a.enrichFromCapture(followUpResult)
+				}
+
+				a.mu.Lock()
+				a.results = append(a.results, followUpResult)
+				a.mu.Unlock()
+
+				if followUpResult.Error != nil {
+					log.Errorf("sim: worker follow-up error: %v", followUpResult.Error)
+				} else {
+					log.Infof("sim: worker follow-up (%s, $%.4f): %s",
+						followUpResult.Duration.Round(time.Millisecond),
+						followUpResult.Cost,
+						truncateSimText(followUpResult.Reply, 100))
+				}
+			default:
+				// No worker result — continue normally.
+			}
+		}
 
 		// Delay between turns to avoid rate limits on free-tier models.
 		if a.options.DelaySeconds > 0 && i < len(a.messages)-1 {

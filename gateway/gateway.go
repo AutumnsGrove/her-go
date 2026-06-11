@@ -38,6 +38,18 @@ type Deps struct {
 	CalendarBridge   calendar.Bridge              // nil in prod, FakeBridge in sims
 	ConfigPath       string
 	WorkerCallback   func(taskType, note string) // nil-safe — fires worker agent in background
+
+	// WorkerResultCh receives worker completion data in sim mode.
+	// The sim adapter reads it after each turn to inject follow-up turns.
+	// Nil in production (events go through the bot's event channel).
+	WorkerResultCh chan WorkerResult
+}
+
+// WorkerResult carries worker completion data for sim follow-up turns.
+type WorkerResult struct {
+	TaskName  string
+	Summary   string
+	ReportURL string
 }
 
 // Gateway is the top-level orchestrator. It manages adapter lifecycle,
@@ -334,7 +346,7 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 	case "gradio":
 		return newGradioAdapter(acfg, g.bus)
 	case "sim":
-		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus)
+		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus, g.deps.WorkerResultCh)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}

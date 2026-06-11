@@ -34,7 +34,10 @@ import (
 	_ "her/tools/get_time"
 	_ "her/tools/get_weather"
 	_ "her/tools/list_calendars"
+	_ "her/tools/list_files"
+	_ "her/tools/narrate_report"
 	_ "her/tools/nearby_search"
+	_ "her/tools/read_file"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
 	_ "her/tools/reply_direct"
@@ -175,12 +178,13 @@ type RunParams struct {
 // (it's just a struct return), and avoids the bot having to query the
 // DB or re-derive data the agent already has in memory.
 type RunResult struct {
-	ReplyText     string
-	ThinkTraces   []string // driver agent's think() calls — used by introspection agent
-	ToolSequence  []string // ordered tool names called this turn (e.g. ["think", "recall_memories", "reply", "done"])
-	TotalCost     float64  // accumulated cost across all LLM calls (agent + chat)
-	ToolCalls     int      // number of tool calls the agent made
-	MemoriesSaved int      // number of memories saved/updated during this turn
+	ReplyText        string
+	ThinkTraces      []string // driver agent's think() calls — used by introspection agent
+	ToolSequence     []string // ordered tool names called this turn (e.g. ["think", "recall_memories", "reply", "done"])
+	TotalCost        float64  // accumulated cost across all LLM calls (agent + chat)
+	ToolCalls        int      // number of tool calls the agent made
+	MemoriesSaved    int      // number of memories saved/updated during this turn
+	PendingNarration string   // cleaned report text queued by narrate_report tool — bot sends as voice memo
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -806,12 +810,13 @@ outer:
 	}
 
 	result := &RunResult{
-		ReplyText:     tctx.ReplyText,
-		ThinkTraces:   thinkTraces,
-		ToolSequence:  toolSeq,
-		TotalCost:     totalCost + tctx.ReplyCost,
-		ToolCalls:     totalToolCalls,
-		MemoriesSaved: len(tctx.SavedMemories),
+		ReplyText:        tctx.ReplyText,
+		ThinkTraces:      thinkTraces,
+		ToolSequence:     toolSeq,
+		TotalCost:        totalCost + tctx.ReplyCost,
+		ToolCalls:        totalToolCalls,
+		MemoriesSaved:    len(tctx.SavedMemories),
+		PendingNarration: tctx.PendingNarration,
 	}
 
 	// Signal main phase completion — its cost gets accumulated into

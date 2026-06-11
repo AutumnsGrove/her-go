@@ -51,7 +51,7 @@ PARAGRAPH_PAUSE_MS = 500
 LINE_PAUSE_MS = 250
 SENTENCE_PAUSE_MS = 75
 COMMA_PAUSE_MS = 50
-SEMI_PAUSE_MS = 30
+SEMI_PAUSE_MS = 150
 
 
 class PauseConfig(BaseModel):
@@ -85,12 +85,12 @@ def clean_for_tts(text: str) -> str:
 
     Handles characters and words that Piper struggles with.
     """
-    # All dash-like punctuation -> comma (which triggers a pause in the splitter).
+    # All dash-like punctuation -> semicolon (triggers a longer pause than comma).
     # Covers: em dash (—), en dash (–), double hyphen (--), spaced hyphen ( - ).
-    # Without this, Piper blows right past dashes with no breath.
-    text = re.sub(r"\s*[—–]\s*", ", ", text)
-    text = re.sub(r"\s*--+\s*", ", ", text)
-    text = re.sub(r"\s+-\s+", ", ", text)
+    # Dashes in speech are breath-length pauses — semicolons at 150ms feel right.
+    text = re.sub(r"\s*[—–]\s*", "; ", text)
+    text = re.sub(r"\s*--+\s*", "; ", text)
+    text = re.sub(r"\s+-\s+", "; ", text)
 
     # "Huh" sounds robotic in Piper -- replace with a more natural filler.
     text = re.sub(r"\bhuh\b", "hmm", text, flags=re.IGNORECASE)

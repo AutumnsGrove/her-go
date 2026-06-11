@@ -374,6 +374,11 @@ type Context struct {
 	// error message when the worker agent is not configured.
 	WorkerCallback func(taskType, note string)
 
+	// PendingNarration stores cleaned report text that should be sent
+	// as a voice memo after the turn completes. Set by narrate_report,
+	// consumed by the bot layer after the reply's own TTS finishes.
+	PendingNarration string
+
 	// EventBus emits typed events for the TUI. Nil-safe.
 	EventBus *tui.Bus
 

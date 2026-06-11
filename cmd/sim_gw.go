@@ -318,6 +318,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 
 	var simWorkerCB func(taskType, note string)
+	workerResultCh := make(chan gateway.WorkerResult, 1)
 	if len(simWorkerLLMs) > 0 {
 		simWorkerCB = func(taskType, note string) {
 			tt := workeragent.Lookup(taskType)
@@ -342,6 +343,15 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 				ReportsDir:   simReportsDir,
 			})
 			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
+
+			// Emit result so the sim adapter can inject a follow-up turn.
+			select {
+			case workerResultCh <- gateway.WorkerResult{
+				TaskName: taskType,
+				Summary:  result.Summary,
+			}:
+			default:
+			}
 		}
 	}
 
@@ -360,6 +370,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		CalendarBridge:   fakeBridge,
 		ConfigPath:       cfgFile,
 		WorkerCallback:   simWorkerCB,
+		WorkerResultCh:   workerResultCh,
 		// VoiceClient and TTSClient intentionally nil — no audio in sim mode.
 	}
 
