@@ -26,12 +26,12 @@ func (briefingHandler) Kind() string       { return "worker_briefing" }
 func (briefingHandler) ConfigPath() string { return "workeragent/tasks/briefing/task.yaml" }
 
 func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, deps *scheduler.Deps) error {
-	// Parse optional payload (briefing topics, depth, tier override).
 	var p struct {
 		Topics      string `json:"topics"`
 		Instruction string `json:"instruction"`
 		Depth       string `json:"depth"`      // "brief" or "deep" — maps to model tier
 		ModelTier   string `json:"model_tier"` // explicit tier override (wins over depth)
+		Detail      string `json:"detail"`     // "brief", "default", or "detailed" — report verbosity
 	}
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &p); err != nil {
@@ -46,6 +46,15 @@ func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, d
 	if instruction == "" {
 		instruction = "Complete the briefing task as described in your system prompt."
 	}
+
+	// Append detail-level directive to shape report verbosity.
+	switch p.Detail {
+	case "brief":
+		instruction += "\n\nIMPORTANT: Keep it concise. Bullet points only, 5-8 bullets max. No lengthy paragraphs or deep analysis — just the key headlines and takeaways."
+	case "detailed":
+		instruction += "\n\nWrite a comprehensive, detailed report with full analysis. Include context, implications, and connections between developments. Aim for depth over brevity."
+	}
+	// "default" or empty = no modifier, normal report length
 
 	// Resolve dependencies from the scheduler's Deps. These are typed as
 	// `any` in Deps to avoid import cycles — we cast here.
