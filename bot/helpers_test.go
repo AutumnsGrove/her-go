@@ -260,6 +260,7 @@ func (s stubStore) SemanticSearchBySubject(queryVec []float32, subject string, t
 	return nil, nil
 }
 func (s stubStore) CostSince(role string, since time.Time) (float64, error) { return 0, nil }
+func (s stubStore) CostForMessage(messageID int64) (float64, error)          { return 0, nil }
 
 // Ensure stubStore satisfies the full Store interface at compile time.
 // This blank-identifier assignment is a Go idiom: if stubStore is

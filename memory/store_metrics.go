@@ -54,6 +54,22 @@ func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, t
 	return nil
 }
 
+// CostForMessage returns the total cost across ALL agent roles for a given
+// trigger message ID. This is the authoritative cost for a turn — it includes
+// driver, chat, memory, introspection, mood, classifier, vision, and compaction.
+// Used by TurnEnd cost reporting instead of summing partial struct fields.
+func (s *SQLiteStore) CostForMessage(messageID int64) (float64, error) {
+	var cost float64
+	err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(cost_usd), 0) FROM metrics WHERE message_id = ?`,
+		messageID,
+	).Scan(&cost)
+	if err != nil {
+		return 0, fmt.Errorf("querying cost for message: %w", err)
+	}
+	return cost, nil
+}
+
 // CostSince returns the total cost_usd for a given agent role since the
 // given timestamp. Used by the dream cycle to sum costs across all steps
 // without threading cost return values through every nested function.
