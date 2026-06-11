@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -29,7 +30,7 @@ import (
 // as the rest of the codebase).
 type SchedulerTask struct {
 	ID               int64
-	Kind             string          // unique; matches the Handler.Kind() string
+	Kind             string          // matches the Handler.Kind() string
 	CronExpr         string          // empty when task is one-shot (next_fire only)
 	NextFire         time.Time       // absolute UTC time the task should execute next
 	Payload          json.RawMessage // free-form JSON blob; shape known only by the handler
@@ -40,31 +41,55 @@ type SchedulerTask struct {
 	LastError        string          // empty after a successful run
 	AttemptCount     int             // current failing-run count; reset after success
 	CreatedAt        time.Time
+	Source           string // "yaml" (loader-managed) or "user" (created via tools)
+	Name             string // human-readable label; empty for system tasks
+	Enabled          bool   // false = paused / soft-deleted
 }
 
-// UpsertSchedulerTask inserts a new scheduler task or updates the existing
-// one keyed by kind. Kind has a UNIQUE index, so each kind maps to exactly
-// one row — this matches how scheduler extensions register themselves at
-// startup (one handler → one kind → one scheduled entry).
+// UpsertSchedulerTask inserts or updates a YAML-managed scheduler task.
+// This method is used exclusively by the loader at startup — it hard-codes
+// source='yaml' so user-created rows are never touched.
 //
-// When updating, we only change the scheduling config (cron, next_fire,
-// payload, retry) — we leave last_run_at, last_error, and attempt_count
-// alone so historical state isn't lost when task.yaml is edited.
+// Uses explicit check-then-update instead of ON CONFLICT because the
+// kind column is no longer UNIQUE (multiple user rows can share a kind).
+// When updating, scheduling config changes but historical state
+// (last_run_at, last_error, attempt_count) is preserved.
 func (s *SQLiteStore) UpsertSchedulerTask(t *SchedulerTask) error {
 	cron := nullableString(t.CronExpr)
 
-	_, err := s.db.Exec(
+	// Try updating the existing yaml-source row first.
+	res, err := s.db.Exec(
+		`UPDATE scheduler_tasks
+		   SET cron_expr          = ?,
+		       next_fire          = ?,
+		       payload_json       = ?,
+		       retry_max_attempts = ?,
+		       retry_backoff      = ?,
+		       retry_initial_wait = ?
+		 WHERE kind = ? AND source = 'yaml'`,
+		cron,
+		t.NextFire.UTC(),
+		string(t.Payload),
+		t.RetryMaxAttempts,
+		t.RetryBackoff,
+		int64(t.RetryInitialWait),
+		t.Kind,
+	)
+	if err != nil {
+		return fmt.Errorf("upserting scheduler task %q: %w", t.Kind, err)
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows > 0 {
+		return nil
+	}
+
+	// No existing yaml row — insert one.
+	_, err = s.db.Exec(
 		`INSERT INTO scheduler_tasks
 		   (kind, cron_expr, next_fire, payload_json,
-		    retry_max_attempts, retry_backoff, retry_initial_wait)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(kind) DO UPDATE SET
-		   cron_expr          = excluded.cron_expr,
-		   next_fire          = excluded.next_fire,
-		   payload_json       = excluded.payload_json,
-		   retry_max_attempts = excluded.retry_max_attempts,
-		   retry_backoff      = excluded.retry_backoff,
-		   retry_initial_wait = excluded.retry_initial_wait`,
+		    retry_max_attempts, retry_backoff, retry_initial_wait, source)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'yaml')`,
 		t.Kind,
 		cron,
 		t.NextFire.UTC(),
@@ -74,20 +99,21 @@ func (s *SQLiteStore) UpsertSchedulerTask(t *SchedulerTask) error {
 		int64(t.RetryInitialWait),
 	)
 	if err != nil {
-		return fmt.Errorf("upserting scheduler task %q: %w", t.Kind, err)
+		return fmt.Errorf("inserting scheduler task %q: %w", t.Kind, err)
 	}
 	return nil
 }
 
-// DueSchedulerTasks returns every task whose next_fire is at or before
-// `now`. The runner calls this on every tick.
+// DueSchedulerTasks returns every enabled task whose next_fire is at or
+// before `now`. The runner calls this on every tick.
 func (s *SQLiteStore) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, kind, cron_expr, next_fire, payload_json,
 		        retry_max_attempts, retry_backoff, retry_initial_wait,
-		        last_run_at, last_error, attempt_count, created_at
+		        last_run_at, last_error, attempt_count, created_at,
+		        source, name, enabled
 		 FROM scheduler_tasks
-		 WHERE next_fire <= ?
+		 WHERE next_fire <= ? AND enabled = 1
 		 ORDER BY next_fire ASC`,
 		now.UTC(),
 	)
@@ -99,13 +125,15 @@ func (s *SQLiteStore) DueSchedulerTasks(now time.Time) ([]SchedulerTask, error) 
 	return scanSchedulerTasks(rows)
 }
 
-// SchedulerTaskByKind looks up the row for a given kind. Returns
-// (nil, nil) when no row exists.
+// SchedulerTaskByKind looks up a row for a given kind. With multiple
+// rows per kind now possible, this returns the first match — prefer
+// SchedulerTaskByKindAndSource when you need a specific source.
 func (s *SQLiteStore) SchedulerTaskByKind(kind string) (*SchedulerTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, kind, cron_expr, next_fire, payload_json,
 		        retry_max_attempts, retry_backoff, retry_initial_wait,
-		        last_run_at, last_error, attempt_count, created_at
+		        last_run_at, last_error, attempt_count, created_at,
+		        source, name, enabled
 		 FROM scheduler_tasks
 		 WHERE kind = ?
 		 LIMIT 1`,
@@ -113,6 +141,35 @@ func (s *SQLiteStore) SchedulerTaskByKind(kind string) (*SchedulerTask, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying scheduler task %q: %w", kind, err)
+	}
+	defer rows.Close()
+
+	tasks, err := scanSchedulerTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return &tasks[0], nil
+}
+
+// SchedulerTaskByKindAndSource looks up the row for a given kind and
+// source. Used by the loader to find only yaml-managed rows without
+// accidentally matching user-created ones.
+func (s *SQLiteStore) SchedulerTaskByKindAndSource(kind, source string) (*SchedulerTask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, kind, cron_expr, next_fire, payload_json,
+		        retry_max_attempts, retry_backoff, retry_initial_wait,
+		        last_run_at, last_error, attempt_count, created_at,
+		        source, name, enabled
+		 FROM scheduler_tasks
+		 WHERE kind = ? AND source = ?
+		 LIMIT 1`,
+		kind, source,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying scheduler task %q (source=%s): %w", kind, source, err)
 	}
 	defer rows.Close()
 
@@ -181,7 +238,9 @@ func (s *SQLiteStore) DeleteSchedulerTask(id int64) error {
 }
 
 // scanSchedulerTasks reads rows from a SELECT into SchedulerTask structs.
-// Kept private — callers use the typed helpers above.
+// Kept private — callers use the typed helpers above. Column order must
+// match every SELECT in this file: the 12 original columns followed by
+// source, name, enabled (added by migration 000019).
 func scanSchedulerTasks(rows *sql.Rows) ([]SchedulerTask, error) {
 	var tasks []SchedulerTask
 	for rows.Next() {
@@ -191,11 +250,14 @@ func scanSchedulerTasks(rows *sql.Rows) ([]SchedulerTask, error) {
 			payload  string
 			initWait int64
 			lastErr  sql.NullString
+			name     sql.NullString
+			enabled  int
 		)
 		err := rows.Scan(
 			&t.ID, &t.Kind, &cron, &t.NextFire, &payload,
 			&t.RetryMaxAttempts, &t.RetryBackoff, &initWait,
 			&t.LastRunAt, &lastErr, &t.AttemptCount, &t.CreatedAt,
+			&t.Source, &name, &enabled,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning scheduler task: %w", err)
@@ -206,11 +268,155 @@ func scanSchedulerTasks(rows *sql.Rows) ([]SchedulerTask, error) {
 		if lastErr.Valid {
 			t.LastError = lastErr.String
 		}
+		if name.Valid {
+			t.Name = name.String
+		}
 		t.Payload = json.RawMessage(payload)
 		t.RetryInitialWait = time.Duration(initWait)
+		t.Enabled = enabled == 1
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
+}
+
+// ─── User-Created Schedule CRUD ────────────────────────────────────
+//
+// These methods manage schedules created by the driver agent via tools
+// (create_schedule, list_schedules, etc.). All rows have source='user'.
+// Deletion is soft — set enabled=0 via UpdateUserSchedulerTask.
+
+// CreateUserSchedulerTask inserts a new user-created scheduler task.
+// The Source field is forced to "user" regardless of what the caller sets.
+func (s *SQLiteStore) CreateUserSchedulerTask(t *SchedulerTask) (int64, error) {
+	cron := nullableString(t.CronExpr)
+	name := nullableString(t.Name)
+
+	res, err := s.db.Exec(
+		`INSERT INTO scheduler_tasks
+		   (kind, cron_expr, next_fire, payload_json,
+		    retry_max_attempts, retry_backoff, retry_initial_wait,
+		    source, name, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, 1)`,
+		t.Kind,
+		cron,
+		t.NextFire.UTC(),
+		string(t.Payload),
+		t.RetryMaxAttempts,
+		t.RetryBackoff,
+		int64(t.RetryInitialWait),
+		name,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("creating user scheduler task %q: %w", t.Kind, err)
+	}
+	return res.LastInsertId()
+}
+
+// GetUserSchedulerTask fetches a single user-created task by ID.
+// Returns (nil, nil) when not found.
+func (s *SQLiteStore) GetUserSchedulerTask(id int64) (*SchedulerTask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, kind, cron_expr, next_fire, payload_json,
+		        retry_max_attempts, retry_backoff, retry_initial_wait,
+		        last_run_at, last_error, attempt_count, created_at,
+		        source, name, enabled
+		 FROM scheduler_tasks
+		 WHERE id = ? AND source = 'user'`,
+		id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying user scheduler task %d: %w", id, err)
+	}
+	defer rows.Close()
+
+	tasks, err := scanSchedulerTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return &tasks[0], nil
+}
+
+// ListUserSchedulerTasks returns all user-created scheduler tasks. When
+// includeDisabled is false, only enabled tasks are returned. Set it to
+// true for auditing soft-deleted/paused schedules.
+func (s *SQLiteStore) ListUserSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error) {
+	query := `SELECT id, kind, cron_expr, next_fire, payload_json,
+	                 retry_max_attempts, retry_backoff, retry_initial_wait,
+	                 last_run_at, last_error, attempt_count, created_at,
+	                 source, name, enabled
+	          FROM scheduler_tasks
+	          WHERE source = 'user'`
+	if !includeDisabled {
+		query += ` AND enabled = 1`
+	}
+	query += ` ORDER BY next_fire ASC`
+
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("listing user scheduler tasks: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSchedulerTasks(rows)
+}
+
+// UpdateUserSchedulerTask applies partial updates to a user-created task.
+// Only keys present in updates are changed. Supported keys: "name" (string),
+// "cron_expr" (string), "next_fire" (time.Time), "enabled" (bool),
+// "payload_json" (string). Returns an error if the task doesn't exist or
+// isn't user-created.
+func (s *SQLiteStore) UpdateUserSchedulerTask(id int64, updates map[string]any) error {
+	if len(updates) == 0 {
+		return fmt.Errorf("no updates provided for scheduler task %d", id)
+	}
+
+	setClauses := make([]string, 0, len(updates))
+	args := make([]any, 0, len(updates)+1)
+
+	for key, val := range updates {
+		switch key {
+		case "name", "cron_expr", "payload_json":
+			setClauses = append(setClauses, key+" = ?")
+			args = append(args, val)
+		case "next_fire":
+			setClauses = append(setClauses, "next_fire = ?")
+			if t, ok := val.(time.Time); ok {
+				args = append(args, t.UTC())
+			} else {
+				args = append(args, val)
+			}
+		case "enabled":
+			setClauses = append(setClauses, "enabled = ?")
+			if b, ok := val.(bool); ok {
+				if b {
+					args = append(args, 1)
+				} else {
+					args = append(args, 0)
+				}
+			} else {
+				args = append(args, val)
+			}
+		default:
+			return fmt.Errorf("unsupported update key %q for scheduler task", key)
+		}
+	}
+
+	query := "UPDATE scheduler_tasks SET " + strings.Join(setClauses, ", ") +
+		" WHERE id = ? AND source = 'user'"
+	args = append(args, id)
+
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("updating user scheduler task %d: %w", id, err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("user scheduler task %d not found", id)
+	}
+	return nil
 }
 
 // nullableString returns a sql.NullString that's NULL when s == "".

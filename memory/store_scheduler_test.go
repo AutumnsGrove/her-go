@@ -3,7 +3,6 @@ package memory
 import (
 	"encoding/json"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -307,24 +306,44 @@ func TestDeleteSchedulerTask(t *testing.T) {
 // TestUpsertSchedulerTask_EnforcesKindUnique double-checks the UNIQUE
 // index on kind is what lets the ON CONFLICT clause work. A direct
 // INSERT (bypassing the upsert) should fail on the second write.
-func TestUpsertSchedulerTask_EnforcesKindUnique(t *testing.T) {
+func TestUpsertSchedulerTask_AllowsMultipleKinds(t *testing.T) {
 	store := newSchedulerTestStore(t)
 
-	task := newTestTask("unit_unique")
+	// Upsert a yaml-source task.
+	task := newTestTask("unit_multi")
 	if err := store.UpsertSchedulerTask(task); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Raw INSERT bypasses the ON CONFLICT path — should bounce off the
-	// UNIQUE index, proving the index is doing its job.
-	_, err := store.db.Exec(
-		`INSERT INTO scheduler_tasks (kind, next_fire, payload_json, retry_backoff) VALUES (?, ?, '{}', 'none')`,
-		"unit_unique", time.Now(),
-	)
-	if err == nil {
-		t.Fatal("raw INSERT with duplicate kind succeeded; UNIQUE index missing")
+	// A user-created task with the same kind should succeed — the UNIQUE
+	// constraint on kind was dropped in migration 000019.
+	userTask := newTestTask("unit_multi")
+	userTask.Name = "user schedule"
+	id, err := store.CreateUserSchedulerTask(userTask)
+	if err != nil {
+		t.Fatalf("creating user task with same kind: %v", err)
 	}
-	if !strings.Contains(err.Error(), "UNIQUE") {
-		t.Errorf("error = %v, want UNIQUE constraint violation", err)
+	if id == 0 {
+		t.Fatal("expected non-zero ID for user task")
+	}
+
+	// Verify both rows exist.
+	yamlRow, err := store.SchedulerTaskByKindAndSource("unit_multi", "yaml")
+	if err != nil {
+		t.Fatalf("looking up yaml row: %v", err)
+	}
+	if yamlRow == nil {
+		t.Fatal("yaml row not found")
+	}
+
+	userRow, err := store.GetUserSchedulerTask(id)
+	if err != nil {
+		t.Fatalf("looking up user row: %v", err)
+	}
+	if userRow == nil {
+		t.Fatal("user row not found")
+	}
+	if userRow.Source != "user" {
+		t.Errorf("user row source = %q, want 'user'", userRow.Source)
 	}
 }

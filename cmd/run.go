@@ -799,6 +799,22 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		Cfg:          cfg,
 		RootDir:      rootDir,
 		AgentEventCh: agentEventCh,
+		ScheduledPromptFn: func(prompt string) error {
+			if agentEventCh == nil {
+				return fmt.Errorf("send_prompt: no agent event channel")
+			}
+			evt := agent.AgentEvent{
+				Type:     agent.EventSchedulerFired,
+				Prompt:   prompt,
+				TaskName: "send_prompt",
+			}
+			select {
+			case agentEventCh <- evt:
+				return nil
+			default:
+				return fmt.Errorf("send_prompt: agent event channel full")
+			}
+		},
 	}
 	sched, err := scheduler.New(store, schedDeps, rootDir)
 	if err != nil {

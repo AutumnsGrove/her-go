@@ -68,10 +68,12 @@ func (s *Scheduler) loadAndUpsertAll(rootDir string) error {
 			return fmt.Errorf("scheduler: computing next_fire for %s: %w", kind, err)
 		}
 
-		// If a row already exists, preserve its next_fire — otherwise
-		// every restart would skip to "one cron tick from now" and the
-		// task could miss fires that were due during downtime.
-		existing, err := s.store.SchedulerTaskByKind(kind)
+		// If a yaml-source row already exists, preserve its next_fire —
+		// otherwise every restart would skip to "one cron tick from now"
+		// and the task could miss fires that were due during downtime.
+		// We scope to source='yaml' so user-created rows with the same
+		// kind don't interfere.
+		existing, err := s.store.SchedulerTaskByKindAndSource(kind, "yaml")
 		if err != nil {
 			return fmt.Errorf("scheduler: looking up existing %s: %w", kind, err)
 		}
