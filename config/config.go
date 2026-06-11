@@ -866,15 +866,11 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// SetTrace toggles the agent.trace field in both the in-memory config
+// SetTrace toggles the driver.trace field in both the in-memory config
 // and the config.yaml file on disk. This does a surgical text edit —
-// finds the "trace:" line under the "agent:" section and flips the value,
+// finds the "trace:" line under the "driver:" section and flips the value,
 // preserving all comments and formatting. If the line doesn't exist yet,
 // it gets inserted after max_tokens.
-//
-// This is intentionally narrow — a general-purpose YAML updater would
-// be complex and fragile. Since we only need to toggle one boolean,
-// a line-level edit is the pragmatic choice.
 func (c *Config) SetTrace(configPath string, enabled bool) error {
 	c.Driver.Trace = enabled
 
@@ -884,29 +880,27 @@ func (c *Config) SetTrace(configPath string, enabled bool) error {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	inAgent := false
+	inDriver := false
 	traceFound := false
-	insertAfter := -1 // line index to insert after if trace: not found
+	insertAfter := -1
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
 		// Detect top-level YAML sections (no leading whitespace).
 		if len(trimmed) > 0 && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(trimmed, "#") {
-			if strings.HasPrefix(trimmed, "agent:") {
-				inAgent = true
-			} else if inAgent {
-				// We've left the agent section without finding trace:.
+			if strings.HasPrefix(trimmed, "driver:") {
+				inDriver = true
+			} else if inDriver {
 				break
 			}
 		}
 
-		if inAgent {
+		if inDriver {
 			if strings.Contains(trimmed, "max_tokens:") {
 				insertAfter = i
 			}
 			if strings.Contains(trimmed, "trace:") {
-				// Found it — replace the value, preserving indent and comment.
 				prefix := line[:strings.Index(line, "trace:")]
 				val := "false"
 				if enabled {
@@ -919,16 +913,18 @@ func (c *Config) SetTrace(configPath string, enabled bool) error {
 		}
 	}
 
-	// If trace: wasn't found, insert it after max_tokens (or at end of agent section).
 	if !traceFound && insertAfter >= 0 {
-		indent := "  " // match agent section indentation
+		indent := "  "
 		val := "false"
 		if enabled {
 			val = "true"
 		}
 		newLine := indent + "trace: " + val
-		// Insert after insertAfter index.
 		lines = append(lines[:insertAfter+1], append([]string{newLine}, lines[insertAfter+1:]...)...)
+	}
+
+	if !traceFound && insertAfter < 0 {
+		return fmt.Errorf("driver: section not found in config — trace not persisted")
 	}
 
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
