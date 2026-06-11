@@ -363,8 +363,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	// The small delay lets the reply TTS (which runs in a goroutine
 	// from the reply tool) get a head start so messages arrive in order.
 	if result.PendingNarration != "" && b.ttsClient != nil {
-		go func() {
-			time.Sleep(2 * time.Second)
+		narrate := func() {
 			log.Info("narrating report", "chars", len(result.PendingNarration))
 
 			if tp, ok := fe.(interface{ SendVoice(string) }); ok {
@@ -384,7 +383,20 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 				}
 				log.Info("narration saved", "path", narrationPath, "bytes", len(oggBytes))
 			}
-		}()
+		}
+
+		if b.isSimRun {
+			// Sim: run synchronously so the process doesn't exit before
+			// TTS finishes.
+			narrate()
+		} else {
+			// Production: run in a goroutine with a delay so the reply's
+			// own TTS gets a head start (messages arrive in order).
+			go func() {
+				time.Sleep(2 * time.Second)
+				narrate()
+			}()
+		}
 	}
 
 	// In lite mode, the driver tool sequence was already rendered
