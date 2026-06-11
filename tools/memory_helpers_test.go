@@ -60,16 +60,16 @@ func TestStyleGate(t *testing.T) {
 	})
 }
 
-// TestLengthGate verifies that memories exceeding maxMemoryLength are rejected.
+// TestLengthGate verifies that memories exceeding MaxMemoryLength() are rejected.
 func TestLengthGate(t *testing.T) {
 	t.Run("over_limit_rejected", func(t *testing.T) {
 		ctx := minimalCtx()
-		// Build a memory that's exactly maxMemoryLength+1 characters.
-		longMem := strings.Repeat("x", maxMemoryLength+1)
+		// Build a memory that's exactly MaxMemoryLength()+1 characters.
+		longMem := strings.Repeat("x", MaxMemoryLength()+1)
 		argsJSON := `{"memory":"` + longMem + `","category":"other","tags":"test"}`
 		result := ExecSaveMemory(argsJSON, "user", ctx)
 		if !strings.HasPrefix(result, "rejected:") {
-			t.Errorf("expected rejection for %d-char memory, got: %s", maxMemoryLength+1, result)
+			t.Errorf("expected rejection for %d-char memory, got: %s", MaxMemoryLength()+1, result)
 		}
 		if !strings.Contains(result, "characters") {
 			t.Errorf("rejection message should mention character count, got: %s", result)
@@ -78,19 +78,19 @@ func TestLengthGate(t *testing.T) {
 
 	t.Run("at_limit_passes_style_gate", func(t *testing.T) {
 		ctx := minimalCtx()
-		// Exactly maxMemoryLength characters — clean content, should pass style+length.
+		// Exactly MaxMemoryLength() characters — clean content, should pass style+length.
 		// Uses only simple alphanumeric content to avoid triggering style gate.
 		exactMem := "User studies Go programming and finds " + strings.Repeat("the language clean", 1)
-		// Pad to exactly maxMemoryLength with safe characters.
-		for len(exactMem) < maxMemoryLength {
+		// Pad to exactly MaxMemoryLength() with safe characters.
+		for len(exactMem) < MaxMemoryLength() {
 			exactMem += "a"
 		}
-		exactMem = exactMem[:maxMemoryLength] // trim to exact limit
+		exactMem = exactMem[:MaxMemoryLength()] // trim to exact limit
 		argsJSON := `{"memory":"` + exactMem + `","category":"other","tags":"test"}`
 		result := ExecSaveMemory(argsJSON, "user", ctx)
 		// Should NOT be rejected by style or length gate.
 		if strings.Contains(result, "characters (max") {
-			t.Errorf("memory at exactly maxMemoryLength should not be rejected by length gate, got: %s", result)
+			t.Errorf("memory at exactly MaxMemoryLength() should not be rejected by length gate, got: %s", result)
 		}
 	})
 }

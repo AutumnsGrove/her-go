@@ -55,6 +55,15 @@ type Verdict struct {
 	// DuplicateID is the ID of the existing memory that matched during
 	// dedup (0 if no duplicate found or dedup was skipped).
 	DuplicateID int64
+
+	// TagVec is the tag embedding computed during dedup. Callers can
+	// reuse it for SaveMemory instead of re-embedding. nil if dedup
+	// was skipped or embedding failed.
+	TagVec []float32
+
+	// TextVec is the text embedding computed during dedup. nil if no
+	// separate text vector was needed (no tags provided) or dedup skipped.
+	TextVec []float32
 }
 
 // PipelineInput describes the memory text being validated.
@@ -202,8 +211,12 @@ func RunPipeline(input PipelineInput, deps PipelineDeps) Verdict {
 	}
 
 	// -- Gate 3: Embedding dedup --
+	var tagVec, textVec []float32
 	if !deps.SkipDedup && deps.EmbedClient != nil {
-		if v := runDedupGate(input, deps); !v.Allowed {
+		v := runDedupGate(input, deps)
+		tagVec = v.TagVec
+		textVec = v.TextVec
+		if !v.Allowed {
 			return v
 		}
 	}
@@ -215,7 +228,7 @@ func RunPipeline(input PipelineInput, deps PipelineDeps) Verdict {
 		}
 	}
 
-	return Verdict{Allowed: true}
+	return Verdict{Allowed: true, TagVec: tagVec, TextVec: textVec}
 }
 
 // ---------------------------------------------------------------------------
@@ -264,10 +277,12 @@ func runDedupGate(input PipelineInput, deps PipelineDeps) Verdict {
 			Reason: fmt.Sprintf("rejected: too similar (%.0f%%) to existing memory ID=%d (%q) [matched on %s]. Use update_memory to refine it instead.",
 				sim*100, existingID, existingContent, source),
 			DuplicateID: existingID,
+			TagVec:      newTagVec,
+			TextVec:     newTextVec,
 		}
 	}
 
-	return Verdict{Allowed: true}
+	return Verdict{Allowed: true, TagVec: newTagVec, TextVec: newTextVec}
 }
 
 // checkDuplicate compares a new memory against all existing memories using

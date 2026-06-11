@@ -5,19 +5,18 @@
 // NEW memory and supersedes the old one. The supersession chain lets the agent
 // trace knowledge evolution: "you used to work at X, now at Y."
 //
-// The new memory gets full SaveMemory treatment — embedding, auto-linking,
-// classifier gate — for free. The old memory is marked inactive with a
-// superseded_by pointer to the new one.
+// Quality gates (style, length, classifier) are handled by the memgate
+// pipeline. Dedup is skipped because the new text intentionally replaces
+// the old — similarity is expected.
 package update_memory
 
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"her/classifier"
 	"her/logger"
 	"her/tools"
+	"her/tools/memgate"
 )
 
 var log = logger.WithPrefix("tools/update_memory")
@@ -28,7 +27,6 @@ func init() {
 
 // Handle creates a new memory that supersedes an existing one. The old memory
 // is soft-deleted with a supersession chain pointing to the new version.
-// Applies the same style/length/classifier gates as save_memory.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
 		MemoryID int64  `json:"memory_id"`
@@ -39,26 +37,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
-	}
-
-	// Apply the same style and length gates as save_memory.
-	// Trailing em dash check: catches the AI tic of sentences that hang with
-	// "—" at the end. Mid-sentence em dashes are fine — only trailing ones blocked.
-	trimmed := strings.TrimSpace(args.Memory)
-	if strings.HasSuffix(trimmed, "\u2014") || strings.HasSuffix(trimmed, "\u2013") {
-		log.Warn("blocked memory update (trailing em dash)", "memory", args.Memory)
-		return "rejected: rewrite this memory — it ends with a trailing em dash. Complete the sentence."
-	}
-	lower := strings.ToLower(args.Memory)
-	for _, blocked := range tools.StyleBlocklist() {
-		if strings.Contains(lower, blocked) {
-			log.Warn("blocked memory update (style)", "pattern", blocked, "memory", args.Memory)
-			return fmt.Sprintf("rejected: rewrite in plain, concise language. Blocked pattern: %q", blocked)
-		}
-	}
-	if len(args.Memory) > tools.MaxMemoryLength() {
-		log.Warn("blocked memory update (too long)", "len", len(args.Memory))
-		return fmt.Sprintf("rejected: memory is %d characters (max %d). Condense to 1-2 short sentences.", len(args.Memory), tools.MaxMemoryLength())
 	}
 
 	// --- Read old memory ---
@@ -77,32 +55,29 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("rejected: memory ID=%d is a %s memory, not a self-memory", args.MemoryID, oldMemory.Subject)
 	}
 
-	// --- Classifier gate ---
-	// Show the classifier BOTH old and new text so it can evaluate the
-	// delta — without this, it can't tell that an addition was inferred.
-	//
-	// Pre-approved bypass: if the classifier previously suggested this exact
-	// text as a rewrite, skip re-classification.
-	if ctx.ClassifierLLM != nil {
-		if ctx.PreApprovedRewrites != nil && ctx.PreApprovedRewrites[strings.ToLower(args.Memory)] {
-			log.Info("classifier bypass: update matches pre-approved rewrite", "memory", args.Memory)
-		} else {
-			snippet := ctx.ClassifierSnippet
-			if snippet == nil {
-				snippet, _ = ctx.Store.RecentMessages(ctx.ConversationID, 1)
-			}
-			classifyContent := fmt.Sprintf("Original memory: %s\nUpdated memory: %s", oldMemory.Content, args.Memory)
-			verdict := classifier.Check(ctx.ClassifierLLM, "memory", classifyContent, snippet)
-			_ = ctx.Store.SaveClassifierLog(
-				ctx.ConversationID, "memory", verdict.Type, classifyContent, verdict.Reason, verdict.Rewrite,
-			)
-			if verdict.Rewrite != "" && ctx.PreApprovedRewrites != nil {
-				ctx.PreApprovedRewrites[strings.ToLower(verdict.Rewrite)] = true
-			}
-			if !verdict.Allowed {
-				return classifier.RejectionMessage(verdict)
-			}
-		}
+	// Run the consolidated quality pipeline (style → length → classifier).
+	// Dedup is skipped — updates intentionally produce similar text.
+	// OldText shows the classifier both versions for delta evaluation.
+	verdict := memgate.RunPipeline(memgate.PipelineInput{
+		Text:    args.Memory,
+		Subject: oldMemory.Subject,
+		Tags:    args.Tags,
+		Context: args.Context,
+		OldText: oldMemory.Content,
+	}, memgate.PipelineDeps{
+		Store:          ctx.Store,
+		EmbedClient:    ctx.EmbedClient,
+		ClassifierLLM:  ctx.ClassifierLLM,
+		MaxLength:      ctx.MaxMemoryLength,
+		ConversationID: ctx.ConversationID,
+		TriggerMsgID:   ctx.TriggerMsgID,
+		Snippet:        ctx.ClassifierSnippet,
+		PreApproved:    ctx.PreApprovedRewrites,
+		SkipDedup:      true,
+	})
+
+	if !verdict.Allowed {
+		return verdict.Reason
 	}
 
 	// --- Embed the new memory ---
@@ -123,7 +98,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// --- Save new memory + supersede old ---
-	// SaveMemory handles embedding storage, vec_memories index, and auto-linking.
 	newID, err := ctx.Store.SaveMemory(
 		args.Memory, args.Category, oldMemory.Subject,
 		oldMemory.SourceMessageID, 5,
@@ -135,8 +109,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Mark the old memory as superseded by the new one.
 	if err := ctx.Store.SupersedeMemory(args.MemoryID, newID, "updated"); err != nil {
-		// The new memory was saved but the chain failed — log but don't fail
-		// the whole operation. The new memory is still valid.
 		log.Warnf("failed to create supersession chain %d → %d: %v", args.MemoryID, newID, err)
 	}
 
