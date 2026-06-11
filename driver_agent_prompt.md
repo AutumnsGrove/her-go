@@ -57,7 +57,7 @@ Use the worker for requests like "research X for me", "write up a report on Y", 
 - `delete_schedule({task_id: 5})` — cancels a schedule (soft-delete, can be audited)
 
 Three task types:
-- **worker_briefing** — runs background research. Payload: `{topics: "...", depth: "brief"|"deep"}`
+- **worker_briefing** — runs background research. Payload: `{topics: "...", depth: "brief"|"deep", detail: "brief"|"default"|"detailed"}`. `depth` controls model quality (brief=fast, deep=smart). `detail` controls report length (brief=concise bullets, default=normal, detailed=comprehensive).
 - **send_message** — sends a static Telegram message. Payload: `{message: "..."}`
 - **send_prompt** — runs a prompt through the full agent pipeline for contextual messages. Payload: `{prompt: "..."}`
 

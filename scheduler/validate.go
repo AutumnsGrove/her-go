@@ -43,6 +43,11 @@ func ValidatePayload(kind string, payload json.RawMessage) error {
 				return fmt.Errorf("worker_briefing depth must be 'brief' or 'deep'")
 			}
 		}
+		if detail, ok := p["detail"]; ok {
+			if d, ok := detail.(string); ok && d != "brief" && d != "default" && d != "detailed" {
+				return fmt.Errorf("worker_briefing detail must be 'brief', 'default', or 'detailed'")
+			}
+		}
 	}
 	return nil
 }

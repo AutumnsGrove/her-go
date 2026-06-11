@@ -23,7 +23,7 @@ parameters:
       enum: [worker_briefing, send_message, send_prompt]
     payload:
       type: object
-      description: "Task-specific config. worker_briefing: {topics, depth (brief|deep)}. send_message: {message}. send_prompt: {prompt}"
+      description: "Task-specific config. worker_briefing: {topics, depth (brief|deep), detail (brief|default|detailed)}. send_message: {message}. send_prompt: {prompt}. For worker_briefing: depth controls model quality (brief=fast, deep=smart), detail controls report length (brief=bullets only, default=normal, detailed=comprehensive)."
     description:
       type: string
       description: "Optional plain-English explanation of the schedule"
