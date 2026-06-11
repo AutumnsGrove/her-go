@@ -23,7 +23,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		ShowDisabled bool `json:"show_disabled"`
 	}
 	if argsJSON != "" {
-		json.Unmarshal([]byte(argsJSON), &a)
+		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+			return "error: invalid arguments"
+		}
 	}
 
 	tasks, err := ctx.Store.ListUserSchedulerTasks(a.ShowDisabled)
