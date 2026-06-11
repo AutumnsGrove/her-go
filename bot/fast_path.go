@@ -134,7 +134,7 @@ func (b *Bot) runFastPath(
 	tracker *turn.Tracker,
 	statusCallback func(string) error,
 	streamCallback tools.StreamCallback,
-	ttsCallback tools.TTSCallback,
+	onMessageSend tools.MessageSendCallback,
 ) (*fastPathResult, error) {
 	start := time.Now()
 
@@ -306,8 +306,14 @@ func (b *Bot) runFastPath(
 			resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
 	}
 
-	if ttsCallback != nil {
-		go ttsCallback(replyText)
+	if onMessageSend != nil {
+		go onMessageSend(tools.MessageSendInfo{
+			Text:         replyText,
+			IsFirstReply: true,
+			Model:        resp.Model,
+			UsedFallback: resp.UsedFallback,
+			CostUSD:      resp.CostUSD,
+		})
 	}
 
 	log.Infof("  fast-path complete in %dms", latencyMs)
