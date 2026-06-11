@@ -144,6 +144,13 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) MemoryAgen
 	promptContent := loadMemoryAgentPrompt(params.Cfg)
 	transcript := buildMemoryTranscript(input, params.Store)
 
+	// Track consecutive rejections to prevent the agent from burning
+	// iterations retrying the same memory save. After 5 consecutive
+	// rejections, the hook rewrites the result to tell the agent to
+	// move on. Resets when a tool call succeeds or a different tool runs.
+	const maxConsecutiveRejections = 5
+	consecutiveRejections := 0
+
 	// Run the tool-calling loop via the shared engine.
 	loopResult, err := engine.RunLoop(engine.EngineConfig{
 		Name:                "memory",
@@ -170,6 +177,35 @@ func RunMemoryAgent(input MemoryAgentInput, params MemoryAgentParams) MemoryAgen
 					"Continue your work and call done (or notify_agent) when finished.",
 				window, maxWindows, summary,
 			)
+		},
+
+		// PostToolResult: enforce a rejection limit so the agent doesn't
+		// spiral trying to rewrite the same memory 15 times.
+		PostToolResult: func(tc llm.ToolCall, result string, isError bool) string {
+			isMemoryWrite := tc.Function.Name == "save_memory" ||
+				tc.Function.Name == "save_self_memory" ||
+				tc.Function.Name == "update_memory"
+
+			if !isMemoryWrite {
+				consecutiveRejections = 0
+				return result
+			}
+
+			if strings.HasPrefix(result, "rejected:") {
+				consecutiveRejections++
+				if consecutiveRejections >= maxConsecutiveRejections {
+					log.Warn("memory agent: rejection limit reached, forcing move-on",
+						"consecutive", consecutiveRejections, "tool", tc.Function.Name)
+					return fmt.Sprintf(
+						"rejected: you have been rejected %d times in a row for this memory. "+
+							"STOP trying to save this particular observation — the classifier "+
+							"will not accept it. Move on to other memories or call done.",
+						consecutiveRejections)
+				}
+			} else {
+				consecutiveRejections = 0
+			}
+			return result
 		},
 	})
 	if err != nil {

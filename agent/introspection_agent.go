@@ -150,6 +150,10 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 	// Latency tracking per iteration.
 	var iterStart time.Time
 
+	// Rejection limit — same guard as memory agent.
+	const maxConsecutiveRejections = 5
+	consecutiveRejections := 0
+
 	// Run the tool-calling loop via the shared engine.
 	loopResult, err := engine.RunLoop(engine.EngineConfig{
 		Name:                "introspection",
@@ -186,6 +190,32 @@ func RunIntrospectionAgent(input IntrospectionAgentInput, params IntrospectionAg
 			latencyMs := time.Since(iterStart).Milliseconds()
 			log.Infof("  [introspection] latency: %dms", latencyMs)
 			return false
+		},
+
+		PostToolResult: func(tc llm.ToolCall, result string, isError bool) string {
+			isMemoryWrite := tc.Function.Name == "save_self_memory" ||
+				tc.Function.Name == "update_memory"
+
+			if !isMemoryWrite {
+				consecutiveRejections = 0
+				return result
+			}
+
+			if strings.HasPrefix(result, "rejected:") {
+				consecutiveRejections++
+				if consecutiveRejections >= maxConsecutiveRejections {
+					log.Warn("introspection agent: rejection limit reached",
+						"consecutive", consecutiveRejections)
+					return fmt.Sprintf(
+						"rejected: you have been rejected %d times in a row. "+
+							"STOP trying to save this observation — the classifier "+
+							"will not accept it. Call skip or done.",
+						consecutiveRejections)
+				}
+			} else {
+				consecutiveRejections = 0
+			}
+			return result
 		},
 	})
 	if err != nil {
