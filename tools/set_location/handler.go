@@ -68,8 +68,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Step 3: persist to config.yaml. This also mutates ctx.Cfg in
 	// memory, so subsequent tool calls in this turn see the new coords.
-	// Failure here means the lat/lon won't survive restart — surface
-	// that to the agent so it can tell the user.
 	configSaved := true
 	if ctx.ConfigPath != "" && ctx.Cfg != nil {
 		if err := ctx.Cfg.SetLocation(ctx.ConfigPath, loc.Latitude, loc.Longitude, loc.DisplayName); err != nil {
@@ -78,11 +76,30 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
+	// Step 4: auto-detect timezone from coordinates. This makes cron
+	// schedules, mood rollups, and get_time all use the right local
+	// time without manual config editing.
+	tzName := ""
+	tz, err := integrate.TimezoneFromCoords(loc.Latitude, loc.Longitude)
+	if err != nil {
+		log.Warn("timezone auto-detect failed", "err", err)
+	} else {
+		tzName = tz
+		if ctx.ConfigPath != "" && ctx.Cfg != nil {
+			if err := ctx.Cfg.SetTimezone(ctx.ConfigPath, tz); err != nil {
+				log.Warn("failed to persist timezone to config", "err", err)
+			} else {
+				log.Info("timezone auto-detected", "tz", tz)
+			}
+		}
+	}
+
 	log.Info("set_location",
 		"query", args.Query,
 		"name", loc.DisplayName,
 		"lat", loc.Latitude,
-		"lon", loc.Longitude)
+		"lon", loc.Longitude,
+		"tz", tzName)
 
 	if !configSaved {
 		return fmt.Sprintf(
@@ -91,8 +108,12 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		)
 	}
 
-	return fmt.Sprintf(
-		"Home location set to %s (%.4f, %.4f). Saved to config and location_history. get_weather will now use this.",
+	result := fmt.Sprintf(
+		"Home location set to %s (%.4f, %.4f). Saved to config and location_history.",
 		loc.DisplayName, loc.Latitude, loc.Longitude,
 	)
+	if tzName != "" {
+		result += fmt.Sprintf(" Timezone auto-detected: %s.", tzName)
+	}
+	return result
 }
