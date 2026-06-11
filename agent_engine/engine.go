@@ -96,32 +96,34 @@ type EngineConfig struct {
 	// When nil, events go directly to EventBus with Source set to Name.
 	Phase *turn.PhaseHandle
 
-	// -- Level 1 Hooks (all nil-safe) --
+	// -- Loop Lifecycle Hooks (all nil-safe) --
 
-	// ToolChoiceFirst is passed as tool_choice on iteration 0 of window 0.
-	// Typically "required" for the driver agent to force the model into the
-	// tool-calling flow. nil = "auto" on every iteration.
-	ToolChoiceFirst interface{}
+	// OnLoopStart fires once before the first LLM call. Use for setup,
+	// logging "agent starting", injecting initial context, or starting
+	// timers. Receives the initial messages slice.
+	OnLoopStart func(messages []llm.ChatMessage)
 
-	// ContinuationMsg builds the system message injected when a continuation
-	// window opens. Receives window index (1-based), max windows, and a
-	// plain-text summary of progress so far. nil = engine uses a sensible
-	// default message.
-	ContinuationMsg func(window, maxWindows int, summary string) string
+	// OnLoopExit fires when the loop ends for any reason. Receives the exit
+	// reason string and the final message history.
+	// Use case: driver fallback reply path, placeholder cleanup.
+	OnLoopExit func(reason string, messages []llm.ChatMessage)
 
-	// PreTool fires before each tool execution. Return skip=true to prevent
-	// execution — the engine appends skipResult as the tool response instead.
-	// Use case: dream agent dry-run interception, maxOps safety cap.
-	PreTool func(tc llm.ToolCall, tctx *tools.Context) (skipResult string, skip bool)
+	// OnDone fires specifically when the done tool sets DoneCalled=true,
+	// before the loop breaks. Receives the final message history. Distinct
+	// from OnLoopExit which fires for ALL exit reasons.
+	// Use case: capture done summary, validate completion, final bookkeeping.
+	OnDone func(messages []llm.ChatMessage)
 
-	// PostTool fires after each tool execution, AFTER the engine has already
-	// handled tracing, lite trace, and TUI events. This hook is only for
-	// agent-specific concerns: SaveAgentTurn, think trace capture, operation
-	// counting, etc.
-	PostTool func(tc llm.ToolCall, result string, isError bool)
+	// OnError fires when the LLM returns an error (both primary and fallback
+	// failed). Return true to suppress the default "break outer" behavior
+	// (e.g., to retry with different parameters or inject a recovery message).
+	// Use case: custom error recovery, alerting, retry logic.
+	OnError func(err error, iteration, window int) (suppress bool)
+
+	// -- Iteration Hooks (all nil-safe) --
 
 	// PreIteration fires before each LLM call.
-	// Use case: introspection agent latency tracking.
+	// Use case: introspection agent latency tracking, token budget checks.
 	PreIteration func(iteration, window int)
 
 	// PostIteration fires after each LLM response, before tool execution.
@@ -135,16 +137,46 @@ type EngineConfig struct {
 	// Use case: driver "done" text detection, agentFinalText capture.
 	OnNoToolCalls func(resp *llm.ChatResponse) (handled bool)
 
-	// OnLoopExit fires when the loop ends for any reason. Receives the exit
-	// reason string and the final message history.
-	// Use case: driver fallback reply path, placeholder cleanup.
-	OnLoopExit func(reason string, messages []llm.ChatMessage)
+	// -- Tool Hooks (all nil-safe) --
+
+	// ToolChoiceFirst is passed as tool_choice on iteration 0 of window 0.
+	// Typically "required" for the driver agent to force the model into the
+	// tool-calling flow. nil = "auto" on every iteration.
+	ToolChoiceFirst interface{}
 
 	// ActiveToolGuard validates a tool call before execution. Return errResult
 	// to reject — the engine appends it as an error response. nil = all
 	// registered tools are allowed.
 	// Use case: driver ActiveTools whitelist enforcement.
 	ActiveToolGuard func(tc llm.ToolCall) (errResult string, reject bool)
+
+	// PreTool fires before each tool execution. Return skip=true to prevent
+	// execution — the engine appends skipResult as the tool response instead.
+	// Use case: dream agent dry-run interception, maxOps safety cap.
+	PreTool func(tc llm.ToolCall, tctx *tools.Context) (skipResult string, skip bool)
+
+	// PostToolResult fires after tool execution but BEFORE the result is
+	// appended to the message history. The returned string replaces the
+	// result in the messages. Return the original result unchanged to pass
+	// through. This is the only hook that can MUTATE the conversation.
+	// Use case: PII redaction from tool output, metadata injection, error
+	// rewriting, result transformation.
+	PostToolResult func(tc llm.ToolCall, result string, isError bool) string
+
+	// PostTool fires after each tool execution and after the result has been
+	// appended to messages. AFTER the engine has already handled tracing,
+	// lite trace, TUI events, and PostToolResult. This hook is observe-only
+	// for agent-specific concerns: SaveAgentTurn, think trace capture,
+	// operation counting, etc.
+	PostTool func(tc llm.ToolCall, result string, isError bool)
+
+	// -- Continuation Hooks (all nil-safe) --
+
+	// ContinuationMsg builds the system message injected when a continuation
+	// window opens. Receives window index (1-based), max windows, and a
+	// plain-text summary of progress so far. nil = engine uses a sensible
+	// default message.
+	ContinuationMsg func(window, maxWindows int, summary string) string
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +286,11 @@ func RunLoop(cfg EngineConfig) (*LoopResult, error) {
 
 	exitReason := ExitMaxContinuations
 
+	// >> HOOK: OnLoopStart (fires once before first LLM call)
+	if cfg.OnLoopStart != nil {
+		cfg.OnLoopStart(messages)
+	}
+
 outer:
 	for window := 0; window <= maxContinuations; window++ {
 
@@ -308,6 +345,14 @@ outer:
 						"❌ <b>error:</b> %s", TruncateLog(err.Error(), 100)))
 					sendTrace()
 				}
+
+				// >> HOOK: OnError (can suppress the default break)
+				if cfg.OnError != nil {
+					if cfg.OnError(err, i, window) {
+						continue // hook suppressed — retry or recover
+					}
+				}
+
 				exitReason = ExitError
 				break outer
 			}
@@ -440,7 +485,17 @@ outer:
 					})
 				}
 
-				// >> HOOK: PostTool (agent-specific: SaveAgentTurn, think capture, etc.)
+				// >> HOOK: PostToolResult (MUTABLE — can transform the result)
+				// This is the only hook that can change what goes into
+				// the message history. Fires before message append.
+				if cfg.PostToolResult != nil {
+					result = cfg.PostToolResult(tc, result, isError)
+					// Re-check error status since the transform may have changed it.
+					isError = strings.HasPrefix(result, "error:") ||
+						strings.HasPrefix(result, "rejected:")
+				}
+
+				// >> HOOK: PostTool (observe-only: SaveAgentTurn, think capture, etc.)
 				if cfg.PostTool != nil {
 					cfg.PostTool(tc, result, isError)
 				}
@@ -455,6 +510,10 @@ outer:
 
 			// Exit when the agent explicitly signals done.
 			if cfg.ToolCtx.DoneCalled {
+				// >> HOOK: OnDone (fires specifically on done signal)
+				if cfg.OnDone != nil {
+					cfg.OnDone(messages)
+				}
 				exitReason = ExitDone
 				break outer
 			}
