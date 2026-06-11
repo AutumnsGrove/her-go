@@ -266,6 +266,10 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 				threshold = 3
 			}
 
+			// Hold the tracker so Wait() doesn't return prematurely
+			// (or block forever if no phases register).
+			tracker.Hold()
+
 			if count >= threshold {
 				b.pendingMu.Lock()
 				turns := b.pendingTurns
@@ -282,6 +286,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 
 				b.launchBackgroundAgents(turns, nil, b.baseRunParams(), tracker,
 					memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, lite)
+				tracker.Release()
 			} else {
 				if substanceTrace != nil {
 					substanceTrace(fmt.Sprintf("⚡ fast-path: deferred (%d/%d)", count, threshold))
@@ -291,6 +296,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 				}
 				log.Info("fast-path turn batched — background agents deferred",
 					"pending", count, "threshold", threshold)
+				tracker.Release()
 			}
 
 			// Finalize traces (cost + timing).
@@ -342,6 +348,10 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	params.OCRText = input.OCRText
 	params.LiteToolHook = liteToolHook
 	params.IsSimRun = b.isSimRun
+
+	// Hold the tracker open so the "main" phase completing doesn't close
+	// the done channel before background agents register their phases.
+	tracker.Hold()
 
 	b.agentBusy.Store(true)
 	result, err := agent.Run(params)
@@ -477,6 +487,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 
 		b.launchBackgroundAgents(turns, result, params, tracker,
 			memoryTraceCallback, moodTraceCallback, introspectionTraceCallback, lite)
+		tracker.Release() // background phases registered, safe to release hold
 	} else {
 		if substanceTrace != nil {
 			substanceTrace(fmt.Sprintf("⚡ substance: SKIP — deferred (%d/%d)", count, threshold))
@@ -486,6 +497,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		}
 		log.Info("turn batched — background agents deferred",
 			"pending", count, "threshold", threshold)
+		tracker.Release() // no background agents this turn, release hold
 	}
 
 	// Live cost updates: refresh the cost trace slot every 2 seconds while
