@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -155,14 +156,6 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 		Cfg:                 params.Cfg,
 	}
 
-	// Tool definitions for the dream agent — driven by tool.yaml agent fields.
-	dreamerToolDefs := tools.ToolDefsForAgent("dream", params.Cfg)
-
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: promptContent},
-		{Role: "user", Content: transcript},
-	}
-
 	// Operation counter for safety cap.
 	maxOps := params.Cfg.Dream.MaxOperations
 	if maxOps == 0 {
@@ -170,131 +163,87 @@ func RunMemoryDreamer(params MemoryDreamerParams) MemoryDreamerResult {
 	}
 	opCount := 0
 
-	// Tool-calling loop — same continuation window pattern as memory agent.
-	iterationsPerWindow := params.Cfg.DreamAgent.IterationsPerWindow
-	if iterationsPerWindow <= 0 {
-		iterationsPerWindow = 15
-	}
-	maxContinuations := params.Cfg.DreamAgent.MaxContinuations
-	if maxContinuations <= 0 {
-		maxContinuations = 2
+	// isMutation returns true for tools that modify state (not read-only or control flow).
+	isMutation := func(name string) bool {
+		return name != "think" && name != "read_card" && name != "list_cards" && name != "done"
 	}
 
-outer:
-	for window := 0; window <= maxContinuations; window++ {
-		if window > 0 {
-			messages = append(messages, llm.ChatMessage{
-				Role: "system",
-				Content: fmt.Sprintf(
-					"Continuation window %d of %d. You've performed %d operations so far. "+
-						"Continue reviewing remaining cards and call done when finished.",
-					window, maxContinuations, opCount,
-				),
-			})
-			log.Infof("  [dreamer] continuation window %d/%d", window, maxContinuations)
-		}
+	// Run the tool-calling loop via the shared engine.
+	loopResult, err := engine.RunLoop(engine.EngineConfig{
+		Name:       "dreamer",
+		MetricRole: memory.RoleDream,
+		LLM:        params.LLM,
+		Store:      params.Store,
+		ToolDefs:   tools.ToolDefsForAgent("dream", params.Cfg),
+		ToolCtx:    tctx,
+		Messages: []llm.ChatMessage{
+			{Role: "system", Content: promptContent},
+			{Role: "user", Content: transcript},
+		},
+		IterationsPerWindow: params.Cfg.DreamAgent.IterationsPerWindow,
+		MaxContinuations:    params.Cfg.DreamAgent.MaxContinuations,
+		EventBus:            params.EventBus,
 
-		for i := 0; i < iterationsPerWindow; i++ {
-			resp, err := params.LLM.ChatCompletionWithTools(messages, dreamerToolDefs)
-			if err != nil {
-				log.Error("memory dreamer: LLM error", "err", err)
-				result.Error = err
-				break outer
+		// Custom continuation message includes the operation count.
+		ContinuationMsg: func(window, maxWindows int, summary string) string {
+			return fmt.Sprintf(
+				"Continuation window %d of %d. You've performed %d operations so far. "+
+					"Continue reviewing remaining cards and call done when finished.",
+				window, maxWindows, opCount,
+			)
+		},
+
+		// PreTool: dry-run interception + maxOps safety cap.
+		PreTool: func(tc llm.ToolCall, tctx *tools.Context) (string, bool) {
+			if !isMutation(tc.Function.Name) {
+				return "", false
 			}
-
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleDream)
-			result.Cost += resp.CostUSD
-			log.Infof("  [dreamer] tokens: %d prompt + %d completion | $%.6f | finish=%s",
-				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-			if len(resp.ToolCalls) == 0 {
-				break outer
+			if opCount >= maxOps {
+				log.Warn("memory dreamer: max operations reached", "max", maxOps)
+				return fmt.Sprintf("error: max operations reached (%d). Call done to finish.", maxOps), true
 			}
-
-			messages = append(messages, llm.ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			for _, tc := range resp.ToolCalls {
-				// Safety cap — stop executing mutation tools if we hit the limit.
-				isMutation := tc.Function.Name != "think" && tc.Function.Name != "read_card" && tc.Function.Name != "list_cards" && tc.Function.Name != "done"
-				if isMutation && opCount >= maxOps {
-					toolResult := fmt.Sprintf("error: max operations reached (%d). Call done to finish.", maxOps)
-					messages = append(messages, llm.ChatMessage{
-						Role:       "tool",
-						Content:    toolResult,
-						ToolCallID: tc.ID,
-					})
-					log.Warn("memory dreamer: max operations reached", "max", maxOps)
-					continue
-				}
-
-				// Dry-run: intercept mutation tools BEFORE execution.
-				var toolResult string
-				if dryRun && isMutation {
-					toolResult = fmt.Sprintf("[DRY RUN] would execute %s with args: %s",
-						tc.Function.Name, truncateLog(tc.Function.Arguments, 200))
-				} else {
-					toolResult = tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-				}
-				log.Infof("    [dreamer] %s → %s", tc.Function.Name, truncateLog(toolResult, 150))
-				messages = append(messages, llm.ChatMessage{
-					Role:       "tool",
-					Content:    toolResult,
-					ToolCallID: tc.ID,
-				})
-
-				if isMutation {
-					opCount++
-					switch tc.Function.Name {
-					case "update_card":
-						result.Rewrites++
-						logDreamerAudit(params.Store, "rewrite", tc.Function.Arguments, toolResult, dryRun)
-					case "create_card":
-						result.Creates++
-						logDreamerAudit(params.Store, "create", tc.Function.Arguments, toolResult, dryRun)
-					case "remove_memory":
-						result.Expires++
-						logDreamerAudit(params.Store, "expire_memory", tc.Function.Arguments, toolResult, dryRun)
-					case "merge_memories":
-						result.Merges++
-						logDreamerAudit(params.Store, "merge_memory", tc.Function.Arguments, toolResult, dryRun)
-					}
-				}
-
-				// Emit TUI event.
-				if params.EventBus != nil {
-					params.EventBus.Emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						Source:   "dreamer",
-						ToolName: tc.Function.Name,
-						Args:     truncateLog(tc.Function.Arguments, 200),
-						Result:   truncateLog(toolResult, 200),
-						IsError:  strings.HasPrefix(toolResult, "error:"),
-					})
-				}
+			if dryRun {
+				return fmt.Sprintf("[DRY RUN] would execute %s with args: %s",
+					tc.Function.Name, engine.TruncateLog(tc.Function.Arguments, 200)), true
 			}
+			return "", false
+		},
 
-			if tctx.DoneCalled {
-				break outer
+		// PostTool: operation counting + audit logging.
+		PostTool: func(tc llm.ToolCall, toolResult string, isError bool) {
+			if !isMutation(tc.Function.Name) {
+				return
 			}
-		}
-
-		if window == maxContinuations {
-			log.Warn("[dreamer] hit max continuations without done signal")
-			break outer
-		}
+			opCount++
+			switch tc.Function.Name {
+			case "update_card":
+				result.Rewrites++
+				logDreamerAudit(params.Store, "rewrite", tc.Function.Arguments, toolResult, dryRun)
+			case "create_card":
+				result.Creates++
+				logDreamerAudit(params.Store, "create", tc.Function.Arguments, toolResult, dryRun)
+			case "remove_memory":
+				result.Expires++
+				logDreamerAudit(params.Store, "expire_memory", tc.Function.Arguments, toolResult, dryRun)
+			case "merge_memories":
+				result.Merges++
+				logDreamerAudit(params.Store, "merge_memory", tc.Function.Arguments, toolResult, dryRun)
+			}
+		},
+	})
+	if err != nil {
+		result.Error = err
+		return result
 	}
 
+	result.Cost = loopResult.TotalCost
+
+	label := "memory dreamer"
 	if dryRun {
-		log.Infof("memory dreamer [DRY RUN]: %d rewrites, %d merges, %d expires, %d creates | $%.6f",
-			result.Rewrites, result.Merges, result.Expires, result.Creates, result.Cost)
-	} else {
-		log.Infof("memory dreamer: %d rewrites, %d merges, %d expires, %d creates | $%.6f",
-			result.Rewrites, result.Merges, result.Expires, result.Creates, result.Cost)
+		label = "memory dreamer [DRY RUN]"
 	}
+	log.Infof("%s: %d rewrites, %d merges, %d expires, %d creates | $%.6f",
+		label, result.Rewrites, result.Merges, result.Expires, result.Creates, result.Cost)
 
 	return result
 }
@@ -378,13 +327,6 @@ func writeCardEntry(b *strings.Builder, c memory.MemoryCard, children []memory.M
 		fmt.Fprintf(b, "- [#%d] %s\n", m.ID, m.Content)
 	}
 	b.WriteString("\n")
-}
-
-func truncateLog(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }
 
 // logDreamerAudit writes an audit entry for dreamer operations.
