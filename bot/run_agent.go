@@ -355,6 +355,20 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
+	// If narrate_report queued a report for voice narration, send it
+	// as a separate voice memo after the reply's own TTS finishes.
+	// The small delay lets the reply TTS (which runs in a goroutine
+	// from the reply tool) get a head start so messages arrive in order.
+	if result.PendingNarration != "" && b.ttsClient != nil {
+		go func() {
+			time.Sleep(2 * time.Second)
+			log.Info("narrating report", "chars", len(result.PendingNarration))
+			if tp, ok := fe.(interface{ SendVoice(string) }); ok {
+				tp.SendVoice(result.PendingNarration)
+			}
+		}()
+	}
+
 	// In lite mode, the driver tool sequence was already rendered
 	// progressively by liteToolHook during agent.Run().
 

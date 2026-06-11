@@ -1,0 +1,21 @@
+name: narrate_report
+agent: [main]
+description: >-
+  Read a report from the reports directory and narrate it aloud as a voice
+  message. The report is sanitized for natural speech — URLs, markdown
+  formatting, and code blocks are cleaned so the narration sounds natural.
+  Use when the user asks you to read a report aloud or wants an audio version.
+hint: "read a report aloud as a voice memo"
+hot: false
+category: content
+parameters:
+  type: object
+  properties:
+    path:
+      type: string
+      description: "File path relative to reports/ (e.g., '2026-06-10-piranesi-deep-dive.md')"
+  required:
+    - path
+trace:
+  emoji: "🔊"
+  format: "narrate {{.path | escape}}"
