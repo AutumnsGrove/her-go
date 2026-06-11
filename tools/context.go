@@ -94,6 +94,25 @@ type StreamCallback func(chunk string) error
 // into an agent.AgentEvent and writes it to the agent event channel.
 type AgentEventCallback func(summary, directMessage string)
 
+// MessageSendCallback fires when a reply is delivered to the user. The reply
+// tool calls this after confirmed delivery — it replaces the old TTSCallback
+// with a richer context that allows multiple post-delivery actions (TTS,
+// analytics, message logging, etc.) via a single hook point.
+//
+// Defined here (not in agent_engine/) to avoid circular imports between
+// tools/ and agent_engine/. The bot layer wires this from TurnHooks.
+type MessageSendCallback func(info MessageSendInfo)
+
+// MessageSendInfo carries the details of a delivered reply.
+type MessageSendInfo struct {
+	Text           string  // the reply text
+	IsFirstReply   bool    // true for the first reply in this turn (edits placeholder)
+	IsContinuation bool    // true for follow-up replies after the first
+	Model          string  // which model generated this reply
+	UsedFallback   bool    // true if the chat model fell back
+	CostUSD        float64 // cost of the chat completion
+}
+
 // SendPaginatedCallback sends a message split into pages with ◀/▶ navigation
 // buttons when it exceeds Telegram's 4096-char limit. The reply tool calls
 // this when the combined response (chat text + place cards) is too long for
@@ -238,7 +257,7 @@ type Context struct {
 
 	StatusCallback            StatusCallback
 	SendCallback              SendCallback
-	TTSCallback               TTSCallback
+	TTSCallback               TTSCallback // DEPRECATED: use OnMessageSend instead. Kept for backward compat during migration.
 	TraceCallback             TraceCallback
 	StageResetCallback        StageResetCallback
 	DeletePlaceholderCallback DeletePlaceholderCallback
@@ -247,6 +266,11 @@ type Context struct {
 	// Nil means streaming is disabled for this turn — reply falls back to
 	// the existing non-streaming path automatically.
 	StreamCallback StreamCallback
+
+	// OnMessageSend fires after a reply is delivered to the user. Replaces
+	// TTSCallback with a richer hook that carries model info and cost. The
+	// bot layer wires this from the TurnHooks registry.
+	OnMessageSend MessageSendCallback
 
 	// SendPaginatedCallback sends a message split into pages with inline
 	// navigation buttons. Used by the reply tool when the combined response

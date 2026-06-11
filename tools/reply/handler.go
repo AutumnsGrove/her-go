@@ -571,9 +571,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// TTS fires only for delivered messages — no point synthesizing audio
-	// for a reply the user never received.
-	if ctx.TTSCallback != nil {
+	// Fire the message-send hook for post-delivery actions (TTS, analytics, etc.).
+	// This replaces the old TTSCallback — the hook carries richer context.
+	if ctx.OnMessageSend != nil {
+		go ctx.OnMessageSend(tools.MessageSendInfo{
+			Text:           replyText,
+			IsFirstReply:   !ctx.ReplyCalled,
+			IsContinuation: ctx.ReplyCalled,
+			Model:          resp.Model,
+			UsedFallback:   resp.UsedFallback,
+			CostUSD:        resp.CostUSD,
+		})
+	} else if ctx.TTSCallback != nil {
+		// Fallback for callers that haven't migrated to OnMessageSend yet.
 		go ctx.TTSCallback(replyText)
 	}
 

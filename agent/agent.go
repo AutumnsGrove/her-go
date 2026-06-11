@@ -158,7 +158,8 @@ type RunParams struct {
 	TriggerMsgID              int64
 	StatusCallback            tools.StatusCallback
 	SendCallback              tools.SendCallback
-	TTSCallback               tools.TTSCallback
+	TTSCallback               tools.TTSCallback           // DEPRECATED: use OnMessageSend
+	OnMessageSend             tools.MessageSendCallback   // fires after each reply delivery — replaces TTSCallback
 	TraceCallback             tools.TraceCallback             // nil if traces disabled
 	MemoryTraceCallback       tools.TraceCallback             // nil if memory agent tracing disabled; separate message from TraceCallback
 	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
@@ -398,6 +399,7 @@ func Run(params RunParams) (*RunResult, error) {
 		StatusCallback:            params.StatusCallback,
 		SendCallback:              params.SendCallback,
 		TTSCallback:               params.TTSCallback,
+		OnMessageSend:             params.OnMessageSend,
 		TraceCallback:             params.TraceCallback,
 		StageResetCallback:        params.StageResetCallback,
 		DeletePlaceholderCallback: params.DeletePlaceholderCallback,
