@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
 	"her/llm"
@@ -116,6 +117,7 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 	}
 
 	// Build a minimal tools.Context — only the fields worker tools need.
+	workerToolDefs := tools.ToolDefsForAgent("worker", params.Cfg)
 	tctx := &tools.Context{
 		AgentName:    "worker",
 		Store:        params.Store,
@@ -123,21 +125,8 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		TavilyClient: params.TavilyClient,
 		Cfg:          params.Cfg,
 		ReportsDir:   params.ReportsDir,
-		ActiveTools:  nil, // worker uses all its tools as hot
+		ActiveTools:  &workerToolDefs,
 	}
-
-	// Tool definitions for the worker agent.
-	workerToolDefs := tools.ToolDefsForAgent("worker", params.Cfg)
-	tctx.ActiveTools = &workerToolDefs
-
-	// Build the initial message list.
-	messages := []llm.ChatMessage{
-		{Role: "system", Content: promptContent},
-		{Role: "user", Content: buildWorkerInstruction(input)},
-	}
-
-	var totalCost float64
-	var totalToolCalls int
 
 	// Loop limits from config with sensible defaults.
 	iterLimit := defaultMaxIterations
@@ -151,150 +140,59 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		}
 	}
 
-	// Trace setup — same dual-mode pattern as the memory agent.
-	tracing := params.TraceCallback != nil
-	var traceLines []string
+	// Run the tool-calling loop via the shared engine.
+	loopResult, err := engine.RunLoop(engine.EngineConfig{
+		Name:                "worker",
+		MetricRole:          "worker",
+		LLM:                 params.LLM,
+		Store:               params.Store,
+		ToolDefs:            workerToolDefs,
+		ToolCtx:             tctx,
+		IterationsPerWindow: iterLimit,
+		MaxContinuations:    contLimit,
+		TraceCallback:       params.TraceCallback,
+		LiteToolHook:        params.LiteToolHook,
+		EventBus:            params.EventBus,
+		Messages: []llm.ChatMessage{
+			{Role: "system", Content: promptContent},
+			{Role: "user", Content: buildWorkerInstruction(input)},
+		},
 
-	sendTrace := func() {
-		if !tracing || len(traceLines) == 0 {
-			return
-		}
-		_ = params.TraceCallback(strings.Join(traceLines, "\n"))
-	}
-
-outer:
-	for window := 0; window <= contLimit; window++ {
-		if window > 0 {
-			summary := buildWorkerContinuationSummary(traceLines)
-			messages = append(messages, llm.ChatMessage{
-				Role: "system",
-				Content: fmt.Sprintf(
-					"You have used all %d iterations in the previous window without calling done. "+
-						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
-						"Finish up and call done with a summary of your work.",
-					iterLimit, window, contLimit, summary,
-				),
-			})
-			log.Infof("  [worker] continuation window %d/%d", window, contLimit)
-			if tracing {
-				traceLines = append(traceLines, fmt.Sprintf(
-					"🔄 <i>continuation window %d/%d</i>", window, contLimit))
-				sendTrace()
-			}
-		}
-
-		for i := 0; i < iterLimit; i++ {
-			resp, err := params.LLM.ChatCompletionWithTools(messages, workerToolDefs)
-			if err != nil {
-				log.Error("worker agent: LLM error", "err", err, "iteration", i)
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf("❌ <b>error:</b> %s", truncateLog(err.Error(), 100)))
-					sendTrace()
-				}
-				break outer
-			}
-
-			params.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, "worker")
-			totalCost += resp.CostUSD
-			log.Infof("  [worker] tokens: %d prompt + %d completion | $%.6f | finish=%s",
-				resp.PromptTokens, resp.CompletionTokens, resp.CostUSD, resp.FinishReason)
-
-			if len(resp.ToolCalls) == 0 {
-				if resp.Content != "" {
-					log.Infof("  [worker] text response (no tool calls): %s", truncateLog(resp.Content, 200))
-				}
-				break outer
-			}
-
-			messages = append(messages, llm.ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			for _, tc := range resp.ToolCalls {
-				if tc.Function.Name == "" {
-					continue
-				}
-				totalToolCalls++
-
-				result := tools.Execute(tc.Function.Name, tc.Function.Arguments, tctx)
-				isError := strings.HasPrefix(result, "error:")
-
-				log.Infof("    [worker] %s → %s", tc.Function.Name, truncateLog(result, 150))
-
-				if params.LiteToolHook != nil {
-					params.LiteToolHook(tc.Function.Name)
-				}
-
-				if params.EventBus != nil {
-					params.EventBus.Emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						Source:   "worker",
-						ToolName: tc.Function.Name,
-						Args:     truncateLog(tc.Function.Arguments, 200),
-						Result:   truncateLog(result, 200),
-						IsError:  isError,
-					})
-				}
-
-				if tracing {
-					line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
-					traceLines = append(traceLines, line)
-					sendTrace()
-				}
-
-				messages = append(messages, llm.ChatMessage{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-				})
-			}
-
-			if tctx.DoneCalled {
-				log.Info("  [worker] done signal received")
-				break outer
-			}
-
-			if resp.FinishReason == "stop" {
-				log.Info("  [worker] finish_reason=stop after tool execution")
-				break outer
-			}
-		}
-
-		if window == contLimit {
-			log.Warn("[worker] hit max continuations without done signal")
-			if tracing {
-				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
-				sendTrace()
-			}
-			break outer
-		}
+		ContinuationMsg: func(window, maxWindows int, summary string) string {
+			return fmt.Sprintf(
+				"You have used all %d iterations in the previous window without calling done. "+
+					"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
+					"Finish up and call done with a summary of your work.",
+				iterLimit, window, maxWindows, summary,
+			)
+		},
+	})
+	if err != nil {
+		log.Error("worker agent: engine error", "err", err)
+		return WorkerResult{Summary: fmt.Sprintf("engine error: %v", err)}
 	}
 
 	// Extract results — find the report file(s) written and the done summary.
-	result := WorkerResult{
-		CostUSD:   totalCost,
-		ToolCalls: totalToolCalls,
+	workerResult := WorkerResult{
+		CostUSD:   loopResult.TotalCost,
+		ToolCalls: loopResult.ToolCalls,
 		Success:   tctx.DoneCalled,
 	}
 
-	// Find the most recently written report file.
-	result.ReportPath = findLatestReport(params.ReportsDir)
-	if result.ReportPath != "" {
-		result.Title = extractTitle(result.ReportPath)
+	workerResult.ReportPath = findLatestReport(params.ReportsDir)
+	if workerResult.ReportPath != "" {
+		workerResult.Title = extractTitle(workerResult.ReportPath)
 	}
-	if result.Title == "" {
-		result.Title = input.TaskType
+	if workerResult.Title == "" {
+		workerResult.Title = input.TaskType
 	}
 
-	// Extract the summary from the done tool call (last message with done args).
-	result.Summary = extractDoneSummary(messages)
+	workerResult.Summary = extractDoneSummary(loopResult.Messages)
 
 	log.Infof("  worker agent: task=%s | report=%s | $%.6f | %d tools",
-		input.TaskType, filepath.Base(result.ReportPath), totalCost, totalToolCalls)
+		input.TaskType, filepath.Base(workerResult.ReportPath), loopResult.TotalCost, loopResult.ToolCalls)
 
-	return result
+	return workerResult
 }
 
 // buildWorkerInstruction creates the user message for the worker agent.
@@ -314,14 +212,6 @@ func buildWorkerInstruction(input WorkerInput) string {
 	return sb.String()
 }
 
-// buildWorkerContinuationSummary extracts tool names from trace lines for
-// the continuation context injection.
-func buildWorkerContinuationSummary(traceLines []string) string {
-	if len(traceLines) == 0 {
-		return "(no progress recorded)"
-	}
-	return strings.Join(traceLines, "\n")
-}
 
 // findLatestReport finds the most recently modified file in the reports dir.
 func findLatestReport(dir string) string {
@@ -382,10 +272,3 @@ func extractDoneSummary(messages []llm.ChatMessage) string {
 	return ""
 }
 
-func truncateLog(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

@@ -197,12 +197,14 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	deletePlaceholderCallback := func() error { return fe.DeletePlaceholder() }
 	sendPaginatedCallback := func(text string) error { return fe.SendPaginated(text) }
 
-	// TTS callback — any frontend implementing TTSProvider gets voice replies.
-	var ttsCallback tools.TTSCallback
+	// OnMessageSend hook — fires after each reply is delivered. Replaces the
+	// old TTSCallback with a richer hook that carries model info. TTS is now
+	// one action among potentially many (analytics, logging, etc.).
+	var onMessageSend tools.MessageSendCallback
 	if tp, ok := fe.(TTSProvider); ok {
 		if b.ttsClient != nil && (input.ForceTTS || b.ttsClient.ReplyMode() == "voice") {
-			ttsCallback = func(text string) {
-				tp.SendVoice(text)
+			onMessageSend = func(info tools.MessageSendInfo) {
+				tp.SendVoice(info.Text)
 			}
 		}
 	}
@@ -226,7 +228,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 		if verdict := b.classifyRoute(scrubbedText, input.ConversationID); verdict == "SKIP" {
 			b.agentBusy.Store(true)
 			fpResult, fpErr := b.runFastPath(fe, input, scrubbedText, vault, tracker,
-				statusCallback, streamCallback, ttsCallback)
+				statusCallback, streamCallback, onMessageSend)
 			b.agentBusy.Store(false)
 
 			if stopStream != nil {
@@ -327,7 +329,7 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	params.StageResetCallback = stageResetCallback
 	params.DeletePlaceholderCallback = deletePlaceholderCallback
 	params.SendConfirmCallback = sendConfirmCallback
-	params.TTSCallback = ttsCallback
+	params.OnMessageSend = onMessageSend
 	params.StreamCallback = streamCallback
 	params.SendPaginatedCallback = sendPaginatedCallback
 	params.TraceCallback = traceCallback
