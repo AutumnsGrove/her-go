@@ -40,10 +40,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: path is required"
 	}
 
-	if ctx.TTSCallback == nil {
-		return "error: voice is not available right now"
-	}
-
 	absPath, err := tools.ValidateReportPath(ctx.ReportsDir, args.Path)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
