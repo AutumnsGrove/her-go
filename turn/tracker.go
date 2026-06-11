@@ -76,6 +76,24 @@ func NewTracker(turnID int64, bus *tui.Bus, stopTypingFn func(), userMessage, co
 	return t
 }
 
+// Hold increments the pending count without registering a named phase.
+// Use this to prevent premature completion when you know more phases
+// will register later but can't register them yet (e.g., background
+// agents that register after the driver finishes).
+//
+// Call Release() once all expected phases have called Begin().
+func (t *Tracker) Hold() {
+	t.mu.Lock()
+	t.pending++
+	t.mu.Unlock()
+}
+
+// Release decrements the hold added by Hold(). If this was the last
+// pending item, the turn completes normally.
+func (t *Tracker) Release() {
+	t.phaseDone("hold", PhaseMetrics{})
+}
+
 // Begin registers an active phase by name and returns a PhaseHandle
 // the agent uses for event emission and signaling completion.
 // Increments the pending ref count.
