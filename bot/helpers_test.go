@@ -169,6 +169,7 @@ func (s stubStore) LatestSummary(conversationID, stream string) (string, int64, 
 	return "", 0, nil
 }
 func (s stubStore) UpsertSchedulerTask(t *memory.SchedulerTask) error { return nil }
+func (s stubStore) ListAllSchedulerTasks() ([]memory.SchedulerTask, error) { return nil, nil }
 func (s stubStore) DueSchedulerTasks(now time.Time) ([]memory.SchedulerTask, error) {
 	return nil, nil
 }
