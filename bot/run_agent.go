@@ -356,6 +356,12 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 	log.Infof("  %s: %s", strings.ToLower(b.cfg.Identity.Her), truncate(result.ReplyText, 100))
 	log.Info("─── reply sent ───")
 
+	// Auto-append the Telegraph link if publish_report was called.
+	if result.PublishedReportURL != "" {
+		linkMsg := fmt.Sprintf("📄 <a href=\"%s\">Read the full report</a>", result.PublishedReportURL)
+		_ = fe.SendReply(linkMsg)
+	}
+
 	// If narrate_report queued a report for voice narration, synthesize
 	// and deliver it. Two paths:
 	//   - Telegram: send as a voice memo via SendVoice

@@ -185,7 +185,8 @@ type RunResult struct {
 	TotalCost        float64  // accumulated cost across all LLM calls (agent + chat)
 	ToolCalls        int      // number of tool calls the agent made
 	MemoriesSaved    int      // number of memories saved/updated during this turn
-	PendingNarration string   // cleaned report text queued by narrate_report tool — bot sends as voice memo
+	PendingNarration   string // cleaned report text queued by narrate_report tool — bot sends as voice memo
+	PublishedReportURL string // Telegraph URL from publish_report — bot auto-appends as clickable link
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -817,7 +818,8 @@ outer:
 		TotalCost:        totalCost + tctx.ReplyCost,
 		ToolCalls:        totalToolCalls,
 		MemoriesSaved:    len(tctx.SavedMemories),
-		PendingNarration: tctx.PendingNarration,
+		PendingNarration:   tctx.PendingNarration,
+		PublishedReportURL: tctx.PublishedReportURL,
 	}
 
 	// Signal main phase completion — its cost gets accumulated into

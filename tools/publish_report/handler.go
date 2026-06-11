@@ -75,6 +75,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error publishing to Telegraph: %v", err)
 	}
 
+	// Store the URL so the bot layer auto-appends it after the reply.
+	ctx.PublishedReportURL = url
+
 	log.Infof("  publish_report: %s → %s", args.Path, url)
 	return fmt.Sprintf("published: %s", url)
 }
