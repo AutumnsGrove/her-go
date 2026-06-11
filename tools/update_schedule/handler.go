@@ -53,7 +53,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		updates["enabled"] = *a.Enabled
 	}
 	if len(a.Payload) > 0 && string(a.Payload) != "null" {
-		if err := validatePayload(existing.Kind, a.Payload); err != nil {
+		if err := scheduler.ValidatePayload(existing.Kind, a.Payload); err != nil {
 			return fmt.Sprintf("error: %s", err)
 		}
 		updates["payload_json"] = string(a.Payload)
@@ -65,8 +65,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 		// Recompute next fire time from the new cron.
 		loc := time.UTC
-		if ctx.Cfg != nil && ctx.Cfg.Calendar.DefaultTimezone != "" {
-			if parsed, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone); err == nil {
+		if ctx.Cfg != nil && ctx.Cfg.Timezone() != "" {
+			if parsed, err := time.LoadLocation(ctx.Cfg.Timezone()); err == nil {
 				loc = parsed
 			}
 		}
@@ -96,8 +96,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	loc := time.UTC
-	if ctx.Cfg != nil && ctx.Cfg.Calendar.DefaultTimezone != "" {
-		if parsed, err := time.LoadLocation(ctx.Cfg.Calendar.DefaultTimezone); err == nil {
+	if ctx.Cfg != nil && ctx.Cfg.Timezone() != "" {
+		if parsed, err := time.LoadLocation(ctx.Cfg.Timezone()); err == nil {
 			loc = parsed
 		}
 	}
@@ -118,29 +118,3 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	)
 }
 
-func validatePayload(kind string, payload json.RawMessage) error {
-	if len(payload) == 0 || string(payload) == "{}" || string(payload) == "null" {
-		return nil
-	}
-	var p map[string]any
-	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("payload must be a JSON object")
-	}
-	switch kind {
-	case "send_message":
-		if _, ok := p["message"]; !ok {
-			return fmt.Errorf("send_message payload requires 'message' field")
-		}
-	case "send_prompt":
-		if _, ok := p["prompt"]; !ok {
-			return fmt.Errorf("send_prompt payload requires 'prompt' field")
-		}
-	case "worker_briefing":
-		if depth, ok := p["depth"]; ok {
-			if d, ok := depth.(string); ok && d != "brief" && d != "deep" {
-				return fmt.Errorf("worker_briefing depth must be 'brief' or 'deep'")
-			}
-		}
-	}
-	return nil
-}

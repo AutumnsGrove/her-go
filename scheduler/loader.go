@@ -28,7 +28,7 @@ func (s *Scheduler) loadAndUpsertAll(rootDir string) error {
 		cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 	)
 
-	for _, kind := range registeredKinds() {
+	for _, kind := range RegisteredKinds() {
 		h := lookup(kind)
 		path := h.ConfigPath()
 		if path == "" {
