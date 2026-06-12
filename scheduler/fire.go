@@ -16,12 +16,11 @@ type FireResult struct {
 	Err    error
 }
 
-// FireTask dispatches a user-created scheduler task by ID regardless of
-// its next_fire time. Used for testing and manual triggering (sim, CLI).
-// Does NOT update next_fire or attempt counts — this is a one-off
-// forced execution, not a cron tick.
+// FireTask dispatches a scheduler task by ID regardless of its next_fire time.
+// Used for testing and manual triggering (sim, CLI). Does NOT update next_fire
+// or attempt counts — this is a one-off forced execution, not a cron tick.
 func FireTask(ctx context.Context, taskID int64, store memory.Store, deps *Deps) error {
-	task, err := store.GetUserSchedulerTask(taskID)
+	task, err := store.GetSchedulerTaskByID(taskID)
 	if err != nil {
 		return fmt.Errorf("fire task %d: %w", taskID, err)
 	}
@@ -50,13 +49,13 @@ func FireTaskByKind(ctx context.Context, kind string, payload json.RawMessage, d
 	return runHandler(ctx, h, payload, deps)
 }
 
-// FireAllUserTasks dispatches every enabled user-created task. Used by
-// the sim to exercise the full handler pipeline after schedule tools
-// have created rows. Returns one result per task.
+// FireAllUserTasks dispatches every enabled named task. Used by the sim to
+// exercise the full handler pipeline after schedule tools have created rows.
+// Returns one result per task.
 func FireAllUserTasks(ctx context.Context, store memory.Store, deps *Deps) []FireResult {
-	tasks, err := store.ListUserSchedulerTasks(false)
+	tasks, err := store.ListManagedSchedulerTasks(false)
 	if err != nil {
-		return []FireResult{{Err: fmt.Errorf("listing user tasks: %w", err)}}
+		return []FireResult{{Err: fmt.Errorf("listing managed tasks: %w", err)}}
 	}
 
 	var results []FireResult

@@ -29,19 +29,22 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Verify it exists before disabling.
-	existing, err := ctx.Store.GetUserSchedulerTask(a.TaskID)
+	existing, err := ctx.Store.GetSchedulerTaskByID(a.TaskID)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}
 	if existing == nil {
-		return fmt.Sprintf("error: schedule #%d not found (or not user-created)", a.TaskID)
+		return fmt.Sprintf("error: schedule #%d not found", a.TaskID)
+	}
+	if existing.Name == "" {
+		return fmt.Sprintf("error: schedule #%d is a system task and cannot be modified", a.TaskID)
 	}
 	if !existing.Enabled {
 		return fmt.Sprintf("Schedule #%d (%q) is already disabled.", a.TaskID, existing.Name)
 	}
 
 	updates := map[string]any{"enabled": false}
-	if err := ctx.Store.UpdateUserSchedulerTask(a.TaskID, updates); err != nil {
+	if err := ctx.Store.UpdateSchedulerTask(a.TaskID, updates); err != nil {
 		log.Error("delete_schedule failed", "err", err)
 		return fmt.Sprintf("error: %v", err)
 	}

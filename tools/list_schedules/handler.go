@@ -28,7 +28,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	tasks, err := ctx.Store.ListUserSchedulerTasks(a.ShowDisabled)
+	tasks, err := ctx.Store.ListManagedSchedulerTasks(a.ShowDisabled)
 	if err != nil {
 		log.Error("list_schedules failed", "err", err)
 		return fmt.Sprintf("error: %v", err)

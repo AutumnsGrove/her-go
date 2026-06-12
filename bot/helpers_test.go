@@ -183,11 +183,11 @@ func (s stubStore) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg str
 }
 func (s stubStore) DeleteSchedulerTask(id int64) error { return nil }
 func (s stubStore) CreateUserSchedulerTask(t *memory.SchedulerTask) (int64, error) { return 0, nil }
-func (s stubStore) GetUserSchedulerTask(id int64) (*memory.SchedulerTask, error)   { return nil, nil }
-func (s stubStore) ListUserSchedulerTasks(includeDisabled bool) ([]memory.SchedulerTask, error) {
+func (s stubStore) GetSchedulerTaskByID(id int64) (*memory.SchedulerTask, error)   { return nil, nil }
+func (s stubStore) ListManagedSchedulerTasks(includeDisabled bool) ([]memory.SchedulerTask, error) {
 	return nil, nil
 }
-func (s stubStore) UpdateUserSchedulerTask(id int64, updates map[string]any) error { return nil }
+func (s stubStore) UpdateSchedulerTask(id int64, updates map[string]any) error { return nil }
 func (s stubStore) InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error) {
 	return 0, nil
 }
