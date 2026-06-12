@@ -179,6 +179,9 @@ func (g *Gateway) Run(ctx context.Context) error {
 				ga.compactHandler = func(ctx context.Context, convID string) (string, error) {
 					return b.ExecCompact(convID)
 				}
+				ga.contextHandler = func(ctx context.Context, convID string) (string, error) {
+					return b.ExecContext(convID)
+				}
 				pipelineStore := pipeline.Store()
 				ga.logCommand = func(command, conversationID, args string) {
 					pipelineStore.LogCommand(command, 0, conversationID, args)

@@ -285,10 +285,10 @@ type AgentCompactResult struct {
 	TokensAfter  int               // estimated tokens after
 }
 
-// estimateActionTokens estimates the token count for a set of agent actions
+// EstimateActionTokens estimates the token count for a set of agent actions
 // plus an existing summary. Verbose tool results are counted at their
 // truncated size since that's what actually goes into the prompt.
-func estimateActionTokens(summary string, actions []memory.AgentAction) int {
+func EstimateActionTokens(summary string, actions []memory.AgentAction) int {
 	total := estimateTokens(summary)
 	for _, a := range actions {
 		total += estimateTokens(a.ToolName) + 5 // tool name + formatting
@@ -350,7 +350,7 @@ func MaybeCompactAgent(
 	}
 
 	// Check if we need to compact.
-	estTokens := estimateActionTokens(existingSummary, actions)
+	estTokens := EstimateActionTokens(existingSummary, actions)
 	threshold := int(float64(agentContextBudget) * compactionThreshold)
 	log.Infof("  driver compaction check: %d actions, ~%d tokens (threshold: %d, budget: %d)",
 		len(actions), estTokens, threshold, agentContextBudget)
@@ -419,7 +419,7 @@ func MaybeCompactAgent(
 		}, nil
 	}
 
-	newTokens := estimateActionTokens(newSummary, toKeep)
+	newTokens := EstimateActionTokens(newSummary, toKeep)
 	log.Infof("  agent compacted %d actions (%d→%d tokens, saved %d)",
 		len(toSummarize), tokensBefore, newTokens, tokensBefore-newTokens)
 	log.Infof("  agent summary: %s", truncate(newSummary, 200))
