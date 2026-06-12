@@ -36,7 +36,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if existing == nil {
 		return fmt.Sprintf("error: schedule #%d not found", a.TaskID)
 	}
-	if existing.Name == "" {
+	if !isManagedKind(existing.Kind) {
 		return fmt.Sprintf("error: schedule #%d is a system task and cannot be modified", a.TaskID)
 	}
 	if !existing.Enabled {
@@ -52,3 +52,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	log.Infof("disabled schedule #%d: %s", a.TaskID, existing.Name)
 	return fmt.Sprintf("Schedule #%d (%q) has been disabled. It will no longer fire.", a.TaskID, existing.Name)
 }
+
+var managedKinds = map[string]bool{
+	"worker_briefing": true,
+	"send_message":    true,
+	"send_prompt":     true,
+}
+
+func isManagedKind(kind string) bool { return managedKinds[kind] }
