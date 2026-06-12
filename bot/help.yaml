@@ -12,6 +12,8 @@ sections:
         desc: start a fresh conversation
       - cmd: /compact
         desc: summarize older messages to free up context
+      - cmd: /context
+        desc: show token usage for both context windows
 
   - title: Memory
     commands:

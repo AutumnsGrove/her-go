@@ -38,6 +38,9 @@ type gradioAdapter struct {
 	// It needs the conversation ID, which only the adapter knows.
 	compactHandler func(ctx context.Context, convID string) (string, error)
 
+	// contextHandler shows token usage for both compaction streams.
+	contextHandler func(ctx context.Context, convID string) (string, error)
+
 	// logCommand logs slash command usage for analytics parity with
 	// Telegram. Set by the gateway after pipeline creation.
 	logCommand func(command string, conversationID, args string)
@@ -273,6 +276,19 @@ func (a *gradioAdapter) tryCommand(ctx context.Context, message, convID string) 
 			return result, true
 		}
 		return "Compact not available.", true
+	}
+
+	// /context needs the conversation ID to query both compaction streams.
+	if cmdName == "context" {
+		a.logCmd("/context", convID, args)
+		if a.contextHandler != nil {
+			result, err := a.contextHandler(ctx, convID)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err), true
+			}
+			return result, true
+		}
+		return "Context not available.", true
 	}
 
 	for _, cmd := range a.commands {

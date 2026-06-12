@@ -136,6 +136,16 @@ func (b *Bot) tryGatewayCommand(text string, chatID int64) (string, bool) {
 		return result, true
 	}
 
+	// /context needs the conversation ID to query both compaction streams.
+	if cmdName == "context" {
+		b.store.LogCommand("/context", chatID, convID, args)
+		result, err := b.ExecContext(convID)
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err), true
+		}
+		return result, true
+	}
+
 	for _, cmd := range b.gatewayCmds {
 		if cmd.Name == cmdName {
 			b.store.LogCommand("/"+cmdName, chatID, convID, args)
@@ -610,6 +620,84 @@ func (b *Bot) ExecCompact(convID string) (string, error) {
 		tokensBefore, tokensAfter, saved,
 		cr.Summary,
 	), nil
+}
+
+// ExecContext shows token usage for both compaction streams (chat and driver)
+// so the user can see how full the context window is at a glance.
+func (b *Bot) ExecContext(convID string) (string, error) {
+	chatBudget := b.cfg.Memory.MaxHistoryTokens
+	if chatBudget <= 0 {
+		chatBudget = 8000
+	}
+	driverBudget := b.cfg.Memory.DriverContextBudget
+	if driverBudget <= 0 {
+		driverBudget = 16000
+	}
+	chatThreshold := int(float64(chatBudget) * 0.75)
+	driverThreshold := int(float64(driverBudget) * 0.75)
+
+	// Chat stream: messages + summary.
+	recent, err := b.store.RecentMessages(convID, b.cfg.Memory.RecentMessages)
+	if err != nil {
+		return "", fmt.Errorf("loading messages: %w", err)
+	}
+	chatSummary, summaryEndID, err := b.store.LatestSummary(convID, "chat")
+	if err != nil {
+		return "", fmt.Errorf("loading chat summary: %w", err)
+	}
+	unsummarized := recent
+	if summaryEndID > 0 {
+		filtered := recent[:0:0]
+		for _, msg := range recent {
+			if msg.ID > summaryEndID {
+				filtered = append(filtered, msg)
+			}
+		}
+		unsummarized = filtered
+	}
+	chatTokens := compact.EstimateHistoryTokens(chatSummary, unsummarized)
+
+	// Driver stream: agent actions + summary.
+	actions, err := b.store.RecentAgentActions(convID, 30)
+	if err != nil {
+		return "", fmt.Errorf("loading agent actions: %w", err)
+	}
+	driverSummary, _, err := b.store.LatestSummary(convID, "driver")
+	if err != nil {
+		return "", fmt.Errorf("loading driver summary: %w", err)
+	}
+	driverTokens := compact.EstimateActionTokens(driverSummary, actions)
+
+	var sb strings.Builder
+	sb.WriteString("== Context Usage ==\n\n")
+
+	sb.WriteString(fmt.Sprintf("Chat (reply model)\n"))
+	sb.WriteString(fmt.Sprintf("  %s  ~%d / %d tokens\n", bar(chatTokens, chatBudget), chatTokens, chatBudget))
+	sb.WriteString(fmt.Sprintf("  %d messages in window", len(unsummarized)))
+	if chatSummary != "" {
+		sb.WriteString(fmt.Sprintf(" + summary (~%d tok)", len(chatSummary)/4))
+	}
+	sb.WriteString(fmt.Sprintf("\n  compacts at %d tokens\n\n", chatThreshold))
+
+	sb.WriteString(fmt.Sprintf("Driver (agent actions)\n"))
+	sb.WriteString(fmt.Sprintf("  %s  ~%d / %d tokens\n", bar(driverTokens, driverBudget), driverTokens, driverBudget))
+	sb.WriteString(fmt.Sprintf("  %d actions in window", len(actions)))
+	if driverSummary != "" {
+		sb.WriteString(fmt.Sprintf(" + summary (~%d tok)", len(driverSummary)/4))
+	}
+	sb.WriteString(fmt.Sprintf("\n  compacts at %d tokens\n", driverThreshold))
+
+	return sb.String(), nil
+}
+
+// bar renders a simple ASCII progress bar for token usage.
+func bar(used, budget int) string {
+	width := 20
+	filled := used * width / budget
+	if filled > width {
+		filled = width
+	}
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
 // ExecLastTrace returns the last turn's full trace snapshot.
