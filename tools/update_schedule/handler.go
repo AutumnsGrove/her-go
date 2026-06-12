@@ -36,12 +36,15 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Verify the task exists before updating.
-	existing, err := ctx.Store.GetUserSchedulerTask(a.TaskID)
+	existing, err := ctx.Store.GetSchedulerTaskByID(a.TaskID)
 	if err != nil {
 		return fmt.Sprintf("error: %v", err)
 	}
 	if existing == nil {
-		return fmt.Sprintf("error: schedule #%d not found (or not user-created)", a.TaskID)
+		return fmt.Sprintf("error: schedule #%d not found", a.TaskID)
+	}
+	if existing.Name == "" {
+		return fmt.Sprintf("error: schedule #%d is a system task and cannot be modified", a.TaskID)
 	}
 
 	updates := make(map[string]any)
@@ -84,13 +87,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: at least one field (name, cron_expr, enabled, payload) must be provided"
 	}
 
-	if err := ctx.Store.UpdateUserSchedulerTask(a.TaskID, updates); err != nil {
+	if err := ctx.Store.UpdateSchedulerTask(a.TaskID, updates); err != nil {
 		log.Error("update_schedule failed", "err", err)
 		return fmt.Sprintf("error: %v", err)
 	}
 
 	// Re-fetch to show the updated state.
-	updated, err := ctx.Store.GetUserSchedulerTask(a.TaskID)
+	updated, err := ctx.Store.GetSchedulerTaskByID(a.TaskID)
 	if err != nil || updated == nil {
 		return fmt.Sprintf("Schedule #%d updated.", a.TaskID)
 	}

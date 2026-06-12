@@ -336,7 +336,7 @@ func TestUpsertSchedulerTask_AllowsMultipleKinds(t *testing.T) {
 		t.Fatal("yaml row not found")
 	}
 
-	userRow, err := store.GetUserSchedulerTask(id)
+	userRow, err := store.GetSchedulerTaskByID(id)
 	if err != nil {
 		t.Fatalf("looking up user row: %v", err)
 	}

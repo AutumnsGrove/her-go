@@ -75,8 +75,13 @@ func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, d
 		return fmt.Errorf("worker briefing: no worker LLMs configured")
 	}
 	tier := taskType.ModelTier
-	if p.Depth == "deep" {
+	switch p.Depth {
+	case "low", "medium", "high":
+		tier = p.Depth
+	case "deep":
 		tier = "medium"
+	case "brief":
+		tier = "low"
 	}
 	if p.ModelTier != "" {
 		tier = p.ModelTier

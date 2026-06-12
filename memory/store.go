@@ -163,11 +163,11 @@ type Store interface {
 	MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error
 	DeleteSchedulerTask(id int64) error
 
-	// User-created schedules
+	// Agent-managed schedules
 	CreateUserSchedulerTask(t *SchedulerTask) (int64, error)
-	GetUserSchedulerTask(id int64) (*SchedulerTask, error)
-	ListUserSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error)
-	UpdateUserSchedulerTask(id int64, updates map[string]any) error
+	GetSchedulerTaskByID(id int64) (*SchedulerTask, error)
+	ListManagedSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error)
+	UpdateSchedulerTask(id int64, updates map[string]any) error
 
 	// Calendar
 	InsertCalendarEvent(title, start, end, location, notes, calendar, eventID, job string) (int64, error)

@@ -299,11 +299,11 @@ func scanSchedulerTasks(rows *sql.Rows) ([]SchedulerTask, error) {
 	return tasks, rows.Err()
 }
 
-// ─── User-Created Schedule CRUD ────────────────────────────────────
+// ─── Agent-Managed Schedule CRUD ───────────────────────────────────
 //
-// These methods manage schedules created by the driver agent via tools
-// (create_schedule, list_schedules, etc.). All rows have source='user'.
-// Deletion is soft — set enabled=0 via UpdateUserSchedulerTask.
+// These methods manage named scheduler tasks — both user-created rows
+// (source='user') and yaml-loaded tasks that have a user-facing name.
+// Deletion is soft — set enabled=0 via UpdateSchedulerTask.
 
 // CreateUserSchedulerTask inserts a new user-created scheduler task.
 // The Source field is forced to "user" regardless of what the caller sets.
@@ -332,20 +332,20 @@ func (s *SQLiteStore) CreateUserSchedulerTask(t *SchedulerTask) (int64, error) {
 	return res.LastInsertId()
 }
 
-// GetUserSchedulerTask fetches a single user-created task by ID.
+// GetSchedulerTaskByID fetches any scheduler task by ID, regardless of source.
 // Returns (nil, nil) when not found.
-func (s *SQLiteStore) GetUserSchedulerTask(id int64) (*SchedulerTask, error) {
+func (s *SQLiteStore) GetSchedulerTaskByID(id int64) (*SchedulerTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, kind, cron_expr, next_fire, payload_json,
 		        retry_max_attempts, retry_backoff, retry_initial_wait,
 		        last_run_at, last_error, attempt_count, created_at,
 		        source, name, enabled
 		 FROM scheduler_tasks
-		 WHERE id = ? AND source = 'user'`,
+		 WHERE id = ?`,
 		id,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("querying user scheduler task %d: %w", id, err)
+		return nil, fmt.Errorf("querying scheduler task %d: %w", id, err)
 	}
 	defer rows.Close()
 
@@ -359,16 +359,17 @@ func (s *SQLiteStore) GetUserSchedulerTask(id int64) (*SchedulerTask, error) {
 	return &tasks[0], nil
 }
 
-// ListUserSchedulerTasks returns all user-created scheduler tasks. When
-// includeDisabled is false, only enabled tasks are returned. Set it to
-// true for auditing soft-deleted/paused schedules.
-func (s *SQLiteStore) ListUserSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error) {
+// ListManagedSchedulerTasks returns all named scheduler tasks — both user-created
+// and yaml-loaded ones that have a user-facing name. Unnamed internal tasks (like
+// mood_daily_rollup) are excluded. When includeDisabled is false, only enabled
+// tasks are returned. Set it to true for auditing soft-deleted/paused schedules.
+func (s *SQLiteStore) ListManagedSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error) {
 	query := `SELECT id, kind, cron_expr, next_fire, payload_json,
 	                 retry_max_attempts, retry_backoff, retry_initial_wait,
 	                 last_run_at, last_error, attempt_count, created_at,
 	                 source, name, enabled
 	          FROM scheduler_tasks
-	          WHERE source = 'user'`
+	          WHERE name IS NOT NULL AND name != ''`
 	if !includeDisabled {
 		query += ` AND enabled = 1`
 	}
@@ -376,19 +377,18 @@ func (s *SQLiteStore) ListUserSchedulerTasks(includeDisabled bool) ([]SchedulerT
 
 	rows, err := s.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("listing user scheduler tasks: %w", err)
+		return nil, fmt.Errorf("listing managed scheduler tasks: %w", err)
 	}
 	defer rows.Close()
 
 	return scanSchedulerTasks(rows)
 }
 
-// UpdateUserSchedulerTask applies partial updates to a user-created task.
+// UpdateSchedulerTask applies partial updates to any scheduler task by ID.
 // Only keys present in updates are changed. Supported keys: "name" (string),
 // "cron_expr" (string), "next_fire" (time.Time), "enabled" (bool),
-// "payload_json" (string). Returns an error if the task doesn't exist or
-// isn't user-created.
-func (s *SQLiteStore) UpdateUserSchedulerTask(id int64, updates map[string]any) error {
+// "payload_json" (string). Returns an error if the task doesn't exist.
+func (s *SQLiteStore) UpdateSchedulerTask(id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return fmt.Errorf("no updates provided for scheduler task %d", id)
 	}
@@ -425,16 +425,16 @@ func (s *SQLiteStore) UpdateUserSchedulerTask(id int64, updates map[string]any) 
 	}
 
 	query := "UPDATE scheduler_tasks SET " + strings.Join(setClauses, ", ") +
-		" WHERE id = ? AND source = 'user'"
+		" WHERE id = ?"
 	args = append(args, id)
 
 	res, err := s.db.Exec(query, args...)
 	if err != nil {
-		return fmt.Errorf("updating user scheduler task %d: %w", id, err)
+		return fmt.Errorf("updating scheduler task %d: %w", id, err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("user scheduler task %d not found", id)
+		return fmt.Errorf("scheduler task %d not found", id)
 	}
 	return nil
 }
