@@ -359,17 +359,17 @@ func (s *SQLiteStore) GetSchedulerTaskByID(id int64) (*SchedulerTask, error) {
 	return &tasks[0], nil
 }
 
-// ListManagedSchedulerTasks returns all named scheduler tasks — both user-created
-// and yaml-loaded ones that have a user-facing name. Unnamed internal tasks (like
-// mood_daily_rollup) are excluded. When includeDisabled is false, only enabled
-// tasks are returned. Set it to true for auditing soft-deleted/paused schedules.
+// ListManagedSchedulerTasks returns scheduler tasks the agent can manage:
+// worker_briefing, send_message, and send_prompt. Internal system tasks
+// (mood_daily_rollup, etc.) are excluded. When includeDisabled is false,
+// only enabled tasks are returned.
 func (s *SQLiteStore) ListManagedSchedulerTasks(includeDisabled bool) ([]SchedulerTask, error) {
 	query := `SELECT id, kind, cron_expr, next_fire, payload_json,
 	                 retry_max_attempts, retry_backoff, retry_initial_wait,
 	                 last_run_at, last_error, attempt_count, created_at,
 	                 source, name, enabled
 	          FROM scheduler_tasks
-	          WHERE name IS NOT NULL AND name != ''`
+	          WHERE kind IN ('worker_briefing', 'send_message', 'send_prompt')`
 	if !includeDisabled {
 		query += ` AND enabled = 1`
 	}
