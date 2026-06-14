@@ -331,6 +331,17 @@ gateway:
 # Background worker that produces file artifacts (briefings, research reports).
 # Model tiers allow different quality/cost tradeoffs per task type.
 # Each task type's meta.yaml declares which tier it uses.
+# Gmail integration — read-only API access for email triage.
+# One-time setup: create OAuth credentials in Google Cloud Console,
+# enable Gmail API, get tokens from OAuth Playground (developers.google.com/oauthplayground).
+# Push Cloud Console app to "Production" so refresh tokens don't expire after 7 days.
+gmail:
+  client_id: ""                    # from Google Cloud Console (Desktop app type)
+  client_secret: ""                # from Google Cloud Console
+  refresh_token: ""                # from OAuth Playground (gmail.readonly scope)
+  account: ""                      # display label, e.g. "triage@gmail.com"
+  max_results: 20                  # emails per page in search results
+
 worker_agent:
   telegraph_token: ""              # from telegra.ph API — empty = skip publishing
   reports_dir: "reports"           # relative to project root
