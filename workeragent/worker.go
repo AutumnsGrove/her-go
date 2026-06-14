@@ -39,6 +39,7 @@ import (
 	_ "her/tools/read_email"
 	_ "her/tools/read_file"
 	_ "her/tools/search_emails"
+	_ "her/tools/summary"
 	_ "her/tools/think"
 	_ "her/tools/web_read"
 	_ "her/tools/web_search"
@@ -220,12 +221,15 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		workerResult.Title = input.TaskType
 	}
 
-	// Extract summary: prefer done(summary=...) if present, fall back
-	// to the last think() trace. Models reliably produce good summaries
-	// in think() but often struggle with serializing them into done()'s
-	// JSON args — truncated args, skipped done calls, etc. The think
-	// fallback ensures we never lose a good summary to a protocol hiccup.
-	workerResult.Summary = extractDoneSummary(loopResult.Messages)
+	// Extract summary in priority order:
+	// 1. summary tool (dedicated "here's my report" call)
+	// 2. done(summary=...) for backward compat with older task prompts
+	// 3. last think() as final fallback — models produce good analysis
+	//    there even when they fail at the protocol layer
+	workerResult.Summary = tctx.WorkerSummary
+	if workerResult.Summary == "" {
+		workerResult.Summary = extractDoneSummary(loopResult.Messages)
+	}
 	if workerResult.Summary == "" {
 		workerResult.Summary = extractLastThink(loopResult.Messages)
 	}

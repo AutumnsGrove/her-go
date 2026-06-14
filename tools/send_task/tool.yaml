@@ -33,7 +33,11 @@ parameters:
       description: "Type of task — for memory: cleanup/split/general. For worker: briefing/research/email_check."
     note:
       type: string
-      description: "Freeform instructions for the target agent — be specific about what to do"
+      description: >-
+        Freeform instructions for the target agent — be specific about what
+        to do. For email_check: describe what to search for, e.g. "check for
+        anything urgent", "find the email from mom and quote it", "search for
+        emails about the dentist appointment".
     memory_ids:
       type: array
       items:
