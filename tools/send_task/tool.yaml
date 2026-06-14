@@ -7,9 +7,15 @@ description: >-
     background memory agent. Do your research first (recall_memories to find
     duplicates or compound memories), then send a task with all the context.
 
-  - target "worker": send a research or briefing task to the worker agent.
-    The worker searches the web, writes a report file, and notifies you when
-    done. Use for "deep dive on X" or "research Y and write it up" requests.
+  - target "worker": send a research, briefing, or email task to the worker agent.
+    The worker searches the web/email, writes a report file, and notifies you
+    when done. Use for "deep dive on X", "research Y", or "check email" requests.
+
+  Use wait=true when you need the result before replying to the user — the
+  worker runs synchronously and its summary is returned as this tool's result.
+  Always use wait=true for email_check tasks so you can share the findings
+  immediately. Use wait=false (default) for background research where the
+  user doesn't need the result right now.
 hint: "delegate work to background agents (memory cleanup, research reports)"
 hot: true
 parameters:
@@ -19,12 +25,19 @@ parameters:
       type: string
       enum: [memory, worker]
       description: "Which agent to delegate to. Default: memory."
+    wait:
+      type: boolean
+      description: "Worker only. When true, block until the worker finishes and return its summary as the tool result. Default: false (fire-and-forget)."
     task_type:
       type: string
-      description: "Type of task — for memory: cleanup/split/general. For worker: briefing/research."
+      description: "Type of task — for memory: cleanup/split/general. For worker: briefing/research/email_check."
     note:
       type: string
-      description: "Freeform instructions for the target agent — be specific about what to do"
+      description: >-
+        Freeform instructions for the target agent — be specific about what
+        to do. For email_check: describe what to search for, e.g. "check for
+        anything urgent", "find the email from mom and quote it", "search for
+        emails about the dentist appointment".
     memory_ids:
       type: array
       items:
@@ -35,4 +48,4 @@ parameters:
     - note
 trace:
   emoji: "📨"
-  format: "→ {{.target | default \"memory\"}}: {{.task_type}}"
+  format: "→ {{.target | default \"memory\"}}: {{.task_type}}{{if .wait}} (wait){{end}}"

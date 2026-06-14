@@ -776,6 +776,8 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		ConfigPath:          b.configPath,
 		ReportsDir:          b.reportsDir(),
 		WorkerCallback:      b.workerCallback,
+		WorkerCallbackSync:  b.workerCallbackSync,
+		GmailBridge:         b.gmailBridge,
 		// Wire the agent event callback so the memory agent's notify_agent
 		// tool can wake up the driver agent for a follow-up message.
 		// Non-blocking send: if the channel is full (16 buffered events),

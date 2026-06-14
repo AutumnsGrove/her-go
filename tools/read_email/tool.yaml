@@ -1,0 +1,19 @@
+name: read_email
+agent: [worker]
+description: >-
+  Read the full content of a single email by message ID. Returns the complete
+  headers (from, to, subject, date) and the plain text body. Use search_emails
+  first to find the ID of the email you want to read.
+hot: false
+category: email
+parameters:
+  type: object
+  properties:
+    id:
+      type: string
+      description: "Message ID from search_emails results"
+  required:
+    - id
+trace:
+  emoji: "📨"
+  format: "{{.id}} → {{.Result | truncate 80 | escape}}"

@@ -12,6 +12,7 @@ import (
 	"her/config"
 	"her/embed"
 	"her/gateway"
+	"her/gmail"
 	"her/llm"
 	"her/memory"
 	"her/scheduler"
@@ -296,6 +297,36 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		log.Infof("sim: FakeBridge created with %d events", len(fakeEvents))
 	}
 
+	// --- Gmail FakeBridge ---
+	var gmailFakeBridge *gmail.FakeBridge
+	if len(s.SeedEmails) > 0 {
+		gmailFakeBridge = gmail.NewFakeBridge(0)
+		var msgs []gmail.Message
+		for _, seed := range s.SeedEmails {
+			d, err := time.Parse(time.RFC3339, seed.Date)
+			if err != nil {
+				log.Error("seed email: invalid date", "err", err, "id", seed.ID)
+				continue
+			}
+			snippet := seed.Snippet
+			if snippet == "" && len(seed.Body) > 100 {
+				snippet = seed.Body[:100] + "..."
+			} else if snippet == "" {
+				snippet = seed.Body
+			}
+			msgs = append(msgs, gmail.Message{
+				MessageSummary: gmail.MessageSummary{
+					ID: seed.ID, From: seed.From, To: seed.To,
+					Subject: seed.Subject, Snippet: snippet,
+					Date: d, Unread: seed.Unread,
+				},
+				Body: seed.Body,
+			})
+		}
+		gmailFakeBridge.Seed(msgs)
+		log.Infof("sim: gmail FakeBridge seeded with %d emails", len(msgs))
+	}
+
 	// --- Worker agent ---
 	simRootDir, _ := os.Getwd()
 	_ = workeragent.Init(simRootDir)
@@ -319,10 +350,10 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		simReportsDir = filepath.Join(simRootDir, cfg.WorkerAgent.ReportsDir)
 	}
 
-	var simWorkerCB func(taskType, note string)
+	var simWorkerCB func(taskType, note string, triggerMsgID int64)
 	workerResultCh := make(chan gateway.WorkerResult, 1)
 	if len(simWorkerLLMs) > 0 {
-		simWorkerCB = func(taskType, note string) {
+		simWorkerCB = func(taskType, note string, triggerMsgID int64) {
 			tt := workeragent.Lookup(taskType)
 			if tt == nil {
 				log.Error("sim worker: unknown task type", "type", taskType)
@@ -335,14 +366,16 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			}
 			log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
 			result := workeragent.RunWorker(workeragent.WorkerInput{
-				TaskType:    taskType,
-				Instruction: note,
+				TaskType:     taskType,
+				Instruction:  note,
+				TriggerMsgID: triggerMsgID,
 			}, workeragent.WorkerParams{
 				LLM:          llmClient,
 				TavilyClient: tavilyClient,
 				Store:        store,
 				Cfg:          cfg,
 				ReportsDir:   simReportsDir,
+				GmailBridge:  gmailFakeBridge,
 			})
 			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
 
@@ -354,6 +387,39 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			}:
 			default:
 			}
+		}
+	}
+
+	// Sync worker callback — for send_task(wait=true).
+	var simWorkerSyncCB func(taskType, note string, triggerMsgID int64) string
+	if len(simWorkerLLMs) > 0 {
+		simWorkerSyncCB = func(taskType, note string, triggerMsgID int64) string {
+			tt := workeragent.Lookup(taskType)
+			if tt == nil {
+				return "error: unknown task type: " + taskType
+			}
+			llmClient := simWorkerLLMs[tt.ModelTier]
+			if llmClient == nil {
+				return "error: no LLM configured for tier: " + tt.ModelTier
+			}
+			log.Info("sim worker (sync): running", "task", taskType, "tier", tt.ModelTier)
+			result := workeragent.RunWorker(workeragent.WorkerInput{
+				TaskType:     taskType,
+				Instruction:  note,
+				TriggerMsgID: triggerMsgID,
+			}, workeragent.WorkerParams{
+				LLM:          llmClient,
+				TavilyClient: tavilyClient,
+				Store:        store,
+				Cfg:          cfg,
+				ReportsDir:   simReportsDir,
+				GmailBridge:  gmailFakeBridge,
+			})
+			log.Info("sim worker (sync): done", "success", result.Success)
+			if result.Summary == "" {
+				return "worker completed but produced no summary"
+			}
+			return result.Summary
 		}
 	}
 
@@ -375,11 +441,13 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		IntrospectionLLM: introspectionLLM,
 		EmbedClient:      embedClient,
 		TavilyClient:     tavilyClient,
-		CalendarBridge:   fakeBridge,
-		ConfigPath:       cfgFile,
-		WorkerCallback:   simWorkerCB,
-		WorkerResultCh:   workerResultCh,
-		TTSClient:        simTTSClient,
+		CalendarBridge:     fakeBridge,
+		ConfigPath:         cfgFile,
+		WorkerCallback:     simWorkerCB,
+		WorkerCallbackSync: simWorkerSyncCB,
+		GmailBridge:        gmailFakeBridge,
+		WorkerResultCh:     workerResultCh,
+		TTSClient:          simTTSClient,
 		// VoiceClient intentionally nil — no STT in sim mode.
 	}
 

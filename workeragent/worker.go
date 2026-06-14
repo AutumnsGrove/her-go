@@ -24,6 +24,7 @@ import (
 	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -35,7 +36,10 @@ import (
 	_ "her/tools/done"
 	_ "her/tools/list_files"
 	_ "her/tools/patch_file"
+	_ "her/tools/read_email"
 	_ "her/tools/read_file"
+	_ "her/tools/search_emails"
+	_ "her/tools/summary"
 	_ "her/tools/think"
 	_ "her/tools/web_read"
 	_ "her/tools/web_search"
@@ -56,6 +60,11 @@ type WorkerInput struct {
 	// Payload carries structured key-value data from the scheduler or
 	// driver. Available in the prompt as {{payload.<key>}}.
 	Payload map[string]string
+
+	// TriggerMsgID links this worker run to the parent conversation turn.
+	// Used to save agent_turns so the worker's tool calls appear in sim
+	// reports alongside the driver's trace.
+	TriggerMsgID int64
 }
 
 // WorkerParams bundles the dependencies the worker agent needs.
@@ -66,6 +75,10 @@ type WorkerParams struct {
 	Store        memory.Store
 	Cfg          *config.Config
 	ReportsDir   string // absolute path to reports/
+
+	// GmailBridge provides email access for email-related task types.
+	// Nil means email tools return "not configured".
+	GmailBridge gmail.Bridge
 
 	// Trace callbacks — same pattern as memory agent.
 	TraceCallback tools.TraceCallback // nil = full tracing disabled
@@ -123,6 +136,7 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		Store:        params.Store,
 		EmbedClient:  params.EmbedClient,
 		TavilyClient: params.TavilyClient,
+		GmailBridge:  params.GmailBridge,
 		Cfg:          params.Cfg,
 		ReportsDir:   params.ReportsDir,
 		ActiveTools:  &workerToolDefs,
@@ -140,6 +154,11 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		}
 	}
 
+	// Track turn index for agent_turns recording — same pattern as the
+	// driver agent's PostTool in agent/agent.go.
+	var turnIndex int
+	msgID := input.TriggerMsgID
+
 	// Run the tool-calling loop via the shared engine.
 	loopResult, err := engine.RunLoop(engine.EngineConfig{
 		Name:                "worker",
@@ -156,6 +175,21 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		Messages: []llm.ChatMessage{
 			{Role: "system", Content: promptContent},
 			{Role: "user", Content: buildWorkerInstruction(input)},
+		},
+
+		// Record every tool call to agent_turns so worker activity is
+		// visible in sim reports and traces — same as the driver does.
+		PostTool: func(tc llm.ToolCall, result string, isError bool) {
+			if params.Store == nil || msgID == 0 {
+				return
+			}
+			// Prefix tool names with [worker] so traces distinguish
+			// worker calls from driver calls on the same turn.
+			prefixed := "[worker] " + tc.Function.Name
+			params.Store.SaveAgentTurn(msgID, turnIndex, "assistant", prefixed, tc.Function.Arguments, "")
+			turnIndex++
+			params.Store.SaveAgentTurn(msgID, turnIndex, "tool", prefixed, "", result)
+			turnIndex++
 		},
 
 		ContinuationMsg: func(window, maxWindows int, summary string) string {
@@ -187,7 +221,18 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		workerResult.Title = input.TaskType
 	}
 
-	workerResult.Summary = extractDoneSummary(loopResult.Messages)
+	// Extract summary in priority order:
+	// 1. summary tool (dedicated "here's my report" call)
+	// 2. done(summary=...) for backward compat with older task prompts
+	// 3. last think() as final fallback — models produce good analysis
+	//    there even when they fail at the protocol layer
+	workerResult.Summary = tctx.WorkerSummary
+	if workerResult.Summary == "" {
+		workerResult.Summary = extractDoneSummary(loopResult.Messages)
+	}
+	if workerResult.Summary == "" {
+		workerResult.Summary = extractLastThink(loopResult.Messages)
+	}
 
 	log.Infof("  worker agent: task=%s | report=%s | $%.6f | %d tools",
 		input.TaskType, filepath.Base(workerResult.ReportPath), loopResult.TotalCost, loopResult.ToolCalls)
@@ -245,6 +290,31 @@ func extractTitle(path string) string {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# ") {
 			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+	return ""
+}
+
+// extractLastThink returns the content of the last think() call in the
+// message history. Used as a fallback summary when done() wasn't called
+// or its args were truncated — the think trace usually contains the
+// worker's complete analysis.
+func extractLastThink(messages []llm.ChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for j := len(msg.ToolCalls) - 1; j >= 0; j-- {
+			tc := msg.ToolCalls[j]
+			if tc.Function.Name == "think" {
+				var args struct {
+					Thought string `json:"thought"`
+				}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err == nil && args.Thought != "" {
+					return args.Thought
+				}
+			}
 		}
 	}
 	return ""

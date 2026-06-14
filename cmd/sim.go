@@ -14,6 +14,7 @@ import (
 
 	"her/agent"
 	"her/calendar"
+	"her/gmail"
 	"her/compact"
 	"her/config"
 	"her/embed"
@@ -212,6 +213,7 @@ type suite struct {
 	SeedMemories       []seedMemory        `yaml:"seed_memories"`        // pre-populated before message loop (with embeddings)
 	SeedSelfMemories   []seedMemory        `yaml:"seed_self_memories"`   // self-knowledge memories (subject="self")
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
+	SeedEmails         []SeedEmail         `yaml:"seed_emails"`          // emails (gmail FakeBridge)
 	SeedPersona        string              `yaml:"seed_persona"`         // initial persona.md content (blank = empty slate)
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
@@ -260,6 +262,20 @@ type SeedCalendarEvent struct {
 	Notes    string `yaml:"notes,omitempty"`    // Can include shift metadata like "position: Bake\ntrainer: Mike\n..."
 	Calendar string `yaml:"calendar,omitempty"` // defaults to config.Calendar.DefaultCalendar
 	Job      string `yaml:"job,omitempty"`      // Job name (e.g., "Panera") — marks this as a shift event
+}
+
+// SeedEmail represents an email to populate in the gmail FakeBridge for sims.
+// Unlike calendar events, emails are not stored in the DB — they only exist
+// in the FakeBridge's in-memory inbox.
+type SeedEmail struct {
+	ID      string `yaml:"id"`
+	From    string `yaml:"from"`
+	To      string `yaml:"to,omitempty"`
+	Subject string `yaml:"subject"`
+	Snippet string `yaml:"snippet,omitempty"` // short preview text (auto-derived from body if empty)
+	Body    string `yaml:"body"`
+	Date    string `yaml:"date"` // ISO8601 with timezone
+	Unread  bool   `yaml:"unread"`
 }
 
 // simMessage represents a single message in a sim suite. It can be either
@@ -970,31 +986,53 @@ func runSim(cmd *cobra.Command, args []string) error {
 
 	// WorkerCallback runs the worker synchronously in sims (not in a
 	// goroutine) so the report is ready before the turn ends.
-	var workerCallback func(taskType, note string)
+	//
+	// gmailFakeBridge is declared here (before the closure) so the closure
+	// captures the variable by reference. It gets populated in section 6.6
+	// but the closure only runs during the message loop (section 7), by
+	// which time the bridge is ready. This is Go's closure semantics —
+	// closures capture variables, not values. Same idea as Python closures.
+	var gmailFakeBridge *gmail.FakeBridge
+
+	var workerCallback func(taskType, note string, triggerMsgID int64)
+	var workerCallbackSync func(taskType, note string, triggerMsgID int64) string
+
+	// runWorkerSync is the shared implementation for both callbacks.
+	runWorkerSync := func(taskType, note string, triggerMsgID int64) workeragent.WorkerResult {
+		tt := workeragent.Lookup(taskType)
+		if tt == nil {
+			log.Error("sim worker: unknown task type", "type", taskType)
+			return workeragent.WorkerResult{Summary: "unknown task type: " + taskType}
+		}
+		llmClient := simWorkerLLMs[tt.ModelTier]
+		if llmClient == nil {
+			log.Error("sim worker: no LLM for tier", "tier", tt.ModelTier)
+			return workeragent.WorkerResult{Summary: "no LLM configured for tier: " + tt.ModelTier}
+		}
+		log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
+		return workeragent.RunWorker(workeragent.WorkerInput{
+			TaskType:     taskType,
+			Instruction:  note,
+			TriggerMsgID: triggerMsgID,
+		}, workeragent.WorkerParams{
+			LLM:          llmClient,
+			TavilyClient: tavilyClient,
+			Store:        store,
+			Cfg:          cfg,
+			ReportsDir:   simReportsDir,
+			GmailBridge:  gmailFakeBridge,
+		})
+	}
+
 	if len(simWorkerLLMs) > 0 {
-		workerCallback = func(taskType, note string) {
-			tt := workeragent.Lookup(taskType)
-			if tt == nil {
-				log.Error("sim worker: unknown task type", "type", taskType)
-				return
-			}
-			llmClient := simWorkerLLMs[tt.ModelTier]
-			if llmClient == nil {
-				log.Error("sim worker: no LLM for tier", "tier", tt.ModelTier)
-				return
-			}
-			log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
-			result := workeragent.RunWorker(workeragent.WorkerInput{
-				TaskType:    taskType,
-				Instruction: note,
-			}, workeragent.WorkerParams{
-				LLM:          llmClient,
-				TavilyClient: tavilyClient,
-				Store:        store,
-				Cfg:          cfg,
-				ReportsDir:   simReportsDir,
-			})
+		workerCallback = func(taskType, note string, triggerMsgID int64) {
+			result := runWorkerSync(taskType, note, triggerMsgID)
 			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
+		}
+		workerCallbackSync = func(taskType, note string, triggerMsgID int64) string {
+			result := runWorkerSync(taskType, note, triggerMsgID)
+			log.Info("sim worker (sync): done", "success", result.Success)
+			return result.Summary
 		}
 	}
 
@@ -1031,6 +1069,42 @@ func runSim(cmd *cobra.Command, args []string) error {
 	if len(cfg.Calendar.Calendars) > 0 {
 		fakeBridge = calendar.NewFakeBridge(cfg.Calendar.Calendars)
 		log.Info("created FakeBridge for calendar operations", "calendars", cfg.Calendar.Calendars)
+	}
+
+	// ------------------------------------------------------------------
+	// 6.6. Create FakeBridge for Gmail in sim mode
+	// ------------------------------------------------------------------
+
+	if len(s.SeedEmails) > 0 {
+		gmailFakeBridge = gmail.NewFakeBridge(0) // 0 = default page size (20)
+		var msgs []gmail.Message
+		for _, seed := range s.SeedEmails {
+			d, err := time.Parse(time.RFC3339, seed.Date)
+			if err != nil {
+				log.Error("seed email: invalid date", "err", err, "id", seed.ID)
+				continue
+			}
+			snippet := seed.Snippet
+			if snippet == "" && len(seed.Body) > 100 {
+				snippet = seed.Body[:100] + "..."
+			} else if snippet == "" {
+				snippet = seed.Body
+			}
+			msgs = append(msgs, gmail.Message{
+				MessageSummary: gmail.MessageSummary{
+					ID:      seed.ID,
+					From:    seed.From,
+					To:      seed.To,
+					Subject: seed.Subject,
+					Snippet: snippet,
+					Date:    d,
+					Unread:  seed.Unread,
+				},
+				Body: seed.Body,
+			})
+		}
+		gmailFakeBridge.Seed(msgs)
+		log.Infof("  seeded %d emails into gmail FakeBridge", len(msgs))
 	}
 
 	// ------------------------------------------------------------------
@@ -1355,6 +1429,8 @@ func runSim(cmd *cobra.Command, args []string) error {
 			ConfigPath:          cfgFile,
 			ReportsDir:          simReportsDir,
 			WorkerCallback:      workerCallback,
+			WorkerCallbackSync:  workerCallbackSync,
+			GmailBridge:         gmailFakeBridge,
 			AgentEventCB:        agentEventCB,
 			Tracker:             tracker,
 		})

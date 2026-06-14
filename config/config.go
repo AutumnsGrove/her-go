@@ -54,6 +54,7 @@ type Config struct {
 	BackgroundAgents   BackgroundAgentsConfig   `yaml:"background_agents"`
 	Gateway            GatewayConfig            `yaml:"gateway"`
 	WorkerAgent        WorkerAgentConfig        `yaml:"worker_agent"`
+	Gmail              GmailConfig              `yaml:"gmail"`
 }
 
 // BackgroundAgentsConfig controls when the post-turn background agents
@@ -597,6 +598,23 @@ type WorkerTierConfig struct {
 	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 120s default)
 	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing
 	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
+}
+
+// GmailConfig holds OAuth2 credentials for read-only Gmail API access.
+// Tokens come from Google's OAuth Playground — no browser auth flow needed
+// at runtime. The refresh token is long-lived (auto-renewed by the Go
+// oauth2 package), so this is a one-time setup.
+type GmailConfig struct {
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	RefreshToken string `yaml:"refresh_token"`
+	Account      string `yaml:"account"`     // display-only label for prompt context (e.g. "triage@gmail.com")
+	MaxResults   int    `yaml:"max_results"` // page size for list/search (default 20)
+}
+
+// Enabled returns true when all required OAuth2 credentials are set.
+func (g GmailConfig) Enabled() bool {
+	return g.ClientID != "" && g.ClientSecret != "" && g.RefreshToken != ""
 }
 
 // MoodConfig holds behavior knobs for the mood agent + sweeper.

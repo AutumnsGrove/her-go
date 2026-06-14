@@ -21,6 +21,7 @@ import (
 
 	"her/calendar"
 	"her/config"
+	"her/gmail"
 	"her/embed"
 	"her/llm"
 	"her/memory"
@@ -253,6 +254,12 @@ type Context struct {
 	// a CLIBridge on demand (backward-compatible with existing code).
 	CalendarBridge calendar.Bridge
 
+	// GmailBridge provides read-only email access. In production this is
+	// an APIBridge (Gmail API via OAuth2). In sims it's a FakeBridge
+	// (in-memory, seeded from YAML). Nil means email tools return a
+	// "not configured" error.
+	GmailBridge gmail.Bridge
+
 	// --- Callbacks (all nil-safe) ---
 
 	StatusCallback            StatusCallback
@@ -394,9 +401,16 @@ type Context struct {
 	ReportsDir string
 
 	// WorkerCallback fires the worker agent in a background goroutine.
-	// Called by send_task when target="worker". Nil-safe — returns an
-	// error message when the worker agent is not configured.
-	WorkerCallback func(taskType, note string)
+	// Called by send_task when target="worker" and wait=false. Nil-safe —
+	// returns an error message when the worker agent is not configured.
+	// triggerMsgID links the worker's agent_turns to the parent message.
+	WorkerCallback func(taskType, note string, triggerMsgID int64)
+
+	// WorkerCallbackSync runs the worker agent synchronously and returns
+	// its result summary. Called by send_task when wait=true — the driver
+	// agent blocks until the worker finishes, then gets the summary as
+	// a tool response inline. Nil-safe.
+	WorkerCallbackSync func(taskType, note string, triggerMsgID int64) string
 
 	// PendingNarration stores cleaned report text that should be sent
 	// as a voice memo after the turn completes. Set by narrate_report,
@@ -432,6 +446,11 @@ type Context struct {
 	// agent loop. Used by the auto-inject chat layer to build a semantic
 	// query for self-memory search.
 	ThinkTraces []string
+
+	// WorkerSummary stores the text from the summary tool. The worker
+	// agent calls summary(text="...") to record its findings before
+	// calling done. RunWorker reads this after the loop.
+	WorkerSummary string
 
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
