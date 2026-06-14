@@ -769,20 +769,22 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 
 	if len(cfg.Gateway.Adapters) > 0 {
 		gwDeps := gateway.Deps{
-			ChatLLM:          llmClient,
-			DriverLLM:        driverClient,
-			MemoryAgentLLM:   memoryAgentClient,
-			MoodAgentLLM:     moodAgentClient,
-			VisionLLM:        visionClient,
-			ClassifierLLM:    classifierClient,
-			DreamAgentLLM:    dreamAgentClient,
-			IntrospectionLLM: introspectionClient,
-			EmbedClient:      embedClient,
-			TavilyClient:     tavilyClient,
-			VoiceClient:      voiceClient,
-			TTSClient:        ttsClient,
-			ConfigPath:       cfgFile,
-			WorkerCallback:   workerCallbackFn,
+			ChatLLM:            llmClient,
+			DriverLLM:          driverClient,
+			MemoryAgentLLM:     memoryAgentClient,
+			MoodAgentLLM:       moodAgentClient,
+			VisionLLM:          visionClient,
+			ClassifierLLM:      classifierClient,
+			DreamAgentLLM:      dreamAgentClient,
+			IntrospectionLLM:   introspectionClient,
+			EmbedClient:        embedClient,
+			TavilyClient:       tavilyClient,
+			VoiceClient:        voiceClient,
+			TTSClient:          ttsClient,
+			ConfigPath:         cfgFile,
+			WorkerCallback:     workerCallbackFn,
+			WorkerCallbackSync: workerCallbackSyncFn,
+			GmailBridge:        gmailBridge,
 		}
 		gw = gateway.New(cfg, gwDeps, bus)
 		gw.AdapterFilter = adapterFilter
