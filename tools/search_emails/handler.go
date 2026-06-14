@@ -5,6 +5,7 @@
 package search_emails
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -41,7 +42,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	log.Infof("  search_emails: %s page %d", label, args.Page)
 
-	result, err := ctx.GmailBridge.Search(args.Query, args.Page)
+	result, err := ctx.GmailBridge.Search(context.Background(), args.Query, args.Page)
 	if err != nil {
 		log.Warn("email search failed", "query", args.Query, "err", err)
 		return "error: " + err.Error()
