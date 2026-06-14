@@ -1,0 +1,20 @@
+name: summary
+agent: [worker]
+description: >-
+  Record your findings as a summary to report back. Call this BEFORE done
+  to capture the result of your work. The text you provide here is what
+  gets returned to the agent that dispatched you. Every worker task should
+  call summary exactly once with a concise, conversational result.
+hot: false
+category: meta
+parameters:
+  type: object
+  properties:
+    text:
+      type: string
+      description: "Your findings — concise, conversational, no formatting. This is what the driver agent sees."
+  required:
+    - text
+trace:
+  emoji: "📋"
+  format: "{{.text | truncate 100 | escape}}"

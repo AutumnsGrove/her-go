@@ -447,6 +447,11 @@ type Context struct {
 	// query for self-memory search.
 	ThinkTraces []string
 
+	// WorkerSummary stores the text from the summary tool. The worker
+	// agent calls summary(text="...") to record its findings before
+	// calling done. RunWorker reads this after the loop.
+	WorkerSummary string
+
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
 	// This prevents the self-contradiction bug where the classifier
