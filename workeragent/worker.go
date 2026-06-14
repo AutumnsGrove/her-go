@@ -24,6 +24,7 @@ import (
 	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -68,6 +69,10 @@ type WorkerParams struct {
 	Store        memory.Store
 	Cfg          *config.Config
 	ReportsDir   string // absolute path to reports/
+
+	// GmailBridge provides email access for email-related task types.
+	// Nil means email tools return "not configured".
+	GmailBridge gmail.Bridge
 
 	// Trace callbacks — same pattern as memory agent.
 	TraceCallback tools.TraceCallback // nil = full tracing disabled
@@ -125,6 +130,7 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		Store:        params.Store,
 		EmbedClient:  params.EmbedClient,
 		TavilyClient: params.TavilyClient,
+		GmailBridge:  params.GmailBridge,
 		Cfg:          params.Cfg,
 		ReportsDir:   params.ReportsDir,
 		ActiveTools:  &workerToolDefs,

@@ -31,6 +31,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Target    string  `json:"target"`
 		TaskType  string  `json:"task_type"`
 		Note      string  `json:"note"`
+		Wait      bool    `json:"wait"`
 		MemoryIDs []int64 `json:"memory_ids"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -46,7 +47,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	case "memory":
 		return handleMemory(args.TaskType, args.Note, args.MemoryIDs, ctx)
 	case "worker":
-		return handleWorker(args.TaskType, args.Note, ctx)
+		return handleWorker(args.TaskType, args.Note, args.Wait, ctx)
 	default:
 		return fmt.Sprintf("error: unknown target %q (expected 'memory' or 'worker')", target)
 	}
@@ -72,11 +73,10 @@ func handleMemory(taskType, note string, memoryIDs []int64, ctx *tools.Context) 
 	return fmt.Sprintf("queued %s task for memory agent (inbox #%d)", taskType, id)
 }
 
-// handleWorker fires the worker agent in a background goroutine.
-func handleWorker(taskType, note string, ctx *tools.Context) string {
-	if ctx.WorkerCallback == nil {
-		return "error: worker agent not configured"
-	}
+// handleWorker dispatches to the worker agent. When wait=true, runs
+// synchronously and returns the worker's summary as the tool result.
+// When wait=false (default), fires in a background goroutine.
+func handleWorker(taskType, note string, wait bool, ctx *tools.Context) string {
 	if taskType == "" {
 		return "error: task_type is required for worker tasks"
 	}
@@ -84,6 +84,21 @@ func handleWorker(taskType, note string, ctx *tools.Context) string {
 		return "error: note is required for worker tasks (describe what to research/build)"
 	}
 
+	// Synchronous mode: block until the worker finishes, return its summary.
+	if wait {
+		if ctx.WorkerCallbackSync == nil {
+			return "error: synchronous worker dispatch not configured"
+		}
+		log.Infof("  send_task: running %s task synchronously (wait=true)", taskType)
+		summary := ctx.WorkerCallbackSync(taskType, note)
+		log.Infof("  send_task: %s task complete", taskType)
+		return summary
+	}
+
+	// Async mode: fire-and-forget (existing behavior).
+	if ctx.WorkerCallback == nil {
+		return "error: worker agent not configured"
+	}
 	ctx.WorkerCallback(taskType, note)
 	log.Infof("  send_task: dispatched %s task to worker agent", taskType)
 	return fmt.Sprintf("dispatched %s task to worker agent — it will run in the background and notify you when done", taskType)
