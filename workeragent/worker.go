@@ -220,7 +220,15 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		workerResult.Title = input.TaskType
 	}
 
+	// Extract summary: prefer done(summary=...) if present, fall back
+	// to the last think() trace. Models reliably produce good summaries
+	// in think() but often struggle with serializing them into done()'s
+	// JSON args — truncated args, skipped done calls, etc. The think
+	// fallback ensures we never lose a good summary to a protocol hiccup.
 	workerResult.Summary = extractDoneSummary(loopResult.Messages)
+	if workerResult.Summary == "" {
+		workerResult.Summary = extractLastThink(loopResult.Messages)
+	}
 
 	log.Infof("  worker agent: task=%s | report=%s | $%.6f | %d tools",
 		input.TaskType, filepath.Base(workerResult.ReportPath), loopResult.TotalCost, loopResult.ToolCalls)
@@ -278,6 +286,31 @@ func extractTitle(path string) string {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# ") {
 			return strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+		}
+	}
+	return ""
+}
+
+// extractLastThink returns the content of the last think() call in the
+// message history. Used as a fallback summary when done() wasn't called
+// or its args were truncated — the think trace usually contains the
+// worker's complete analysis.
+func extractLastThink(messages []llm.ChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		for j := len(msg.ToolCalls) - 1; j >= 0; j-- {
+			tc := msg.ToolCalls[j]
+			if tc.Function.Name == "think" {
+				var args struct {
+					Thought string `json:"thought"`
+				}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err == nil && args.Thought != "" {
+					return args.Thought
+				}
+			}
 		}
 	}
 	return ""
