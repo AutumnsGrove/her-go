@@ -10,8 +10,12 @@ description: >-
   - target "worker": send a research, briefing, or email task to the worker agent.
     The worker searches the web/email, writes a report file, and notifies you
     when done. Use for "deep dive on X", "research Y", or "check email" requests.
-    Set wait=true to block until the worker finishes and get the summary inline
-    (useful when you need the result before replying).
+
+  Use wait=true when you need the result before replying to the user — the
+  worker runs synchronously and its summary is returned as this tool's result.
+  Always use wait=true for email_check tasks so you can share the findings
+  immediately. Use wait=false (default) for background research where the
+  user doesn't need the result right now.
 hint: "delegate work to background agents (memory cleanup, research reports)"
 hot: true
 parameters:

@@ -994,11 +994,11 @@ func runSim(cmd *cobra.Command, args []string) error {
 	// closures capture variables, not values. Same idea as Python closures.
 	var gmailFakeBridge *gmail.FakeBridge
 
-	var workerCallback func(taskType, note string)
-	var workerCallbackSync func(taskType, note string) string
+	var workerCallback func(taskType, note string, triggerMsgID int64)
+	var workerCallbackSync func(taskType, note string, triggerMsgID int64) string
 
 	// runWorkerSync is the shared implementation for both callbacks.
-	runWorkerSync := func(taskType, note string) workeragent.WorkerResult {
+	runWorkerSync := func(taskType, note string, triggerMsgID int64) workeragent.WorkerResult {
 		tt := workeragent.Lookup(taskType)
 		if tt == nil {
 			log.Error("sim worker: unknown task type", "type", taskType)
@@ -1011,8 +1011,9 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 		log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
 		return workeragent.RunWorker(workeragent.WorkerInput{
-			TaskType:    taskType,
-			Instruction: note,
+			TaskType:     taskType,
+			Instruction:  note,
+			TriggerMsgID: triggerMsgID,
 		}, workeragent.WorkerParams{
 			LLM:          llmClient,
 			TavilyClient: tavilyClient,
@@ -1024,12 +1025,12 @@ func runSim(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(simWorkerLLMs) > 0 {
-		workerCallback = func(taskType, note string) {
-			result := runWorkerSync(taskType, note)
+		workerCallback = func(taskType, note string, triggerMsgID int64) {
+			result := runWorkerSync(taskType, note, triggerMsgID)
 			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
 		}
-		workerCallbackSync = func(taskType, note string) string {
-			result := runWorkerSync(taskType, note)
+		workerCallbackSync = func(taskType, note string, triggerMsgID int64) string {
+			result := runWorkerSync(taskType, note, triggerMsgID)
 			log.Info("sim worker (sync): done", "success", result.Success)
 			return result.Summary
 		}
