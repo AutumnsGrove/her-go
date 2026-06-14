@@ -1,0 +1,113 @@
+name: "Email triage — search, read, and summarize"
+description: >
+  Tests the Gmail integration via worker agent email_check task type.
+  Seeds a realistic inbox with a mix of personal, transactional, and
+  noise emails to exercise the triage workflow:
+
+  1. User asks to check email (driver dispatches to worker via send_task)
+  2. Worker searches inbox, scans snippets, reads important ones
+  3. Worker returns conversational summary grouped by urgency
+  4. Follow-up: user asks about a specific email
+
+  What to look for in the report:
+  - Driver correctly uses send_task(target=worker, task_type=email_check, wait=true)
+  - Worker calls search_emails and read_email tools appropriately
+  - Worker prioritizes unread/personal emails over noise
+  - Summary is conversational, not a formatted report
+  - Follow-up turn triggers another email_check or search with specific query
+  - No crashes or bridge errors
+
+tags: ["email", "worker", "triage", "reference"]
+
+seed_emails:
+  # Personal — urgent tier
+  - id: "msg-001"
+    from: "Sarah Brown <mom@example.com>"
+    to: "autumn@example.com"
+    subject: "Dinner Sunday?"
+    body: >
+      Hey sweetie, are you free for dinner this Sunday? Dad's grilling and
+      your sister is coming too. Let me know so I can plan. Love you!
+    date: "2026-06-14T10:30:00-04:00"
+    unread: true
+
+  # Transactional — worth knowing
+  - id: "msg-002"
+    from: "Amazon <shipment-tracking@amazon.com>"
+    to: "autumn@example.com"
+    subject: "Your package has shipped"
+    body: >
+      Your order #112-4567890 has shipped and is expected to arrive by
+      Tuesday, June 16. Items: USB-C Hub (x1), Cat Toy (x2).
+      Track your package: https://example.com/track/ABC123
+    date: "2026-06-14T09:15:00-04:00"
+    unread: true
+
+  # Personal — urgent tier
+  - id: "msg-003"
+    from: "Dr. Kim's Office <appointments@drkim.example.com>"
+    to: "autumn@example.com"
+    subject: "Appointment confirmation: Thursday June 18 at 2:00 PM"
+    body: >
+      This is a confirmation of your appointment with Dr. Kim on
+      Thursday, June 18 at 2:00 PM. Please arrive 15 minutes early.
+      If you need to reschedule, call us at 555-0123.
+    date: "2026-06-13T16:00:00-04:00"
+    unread: true
+
+  # Noise — GitHub notification
+  - id: "msg-004"
+    from: "GitHub <notifications@github.com>"
+    to: "autumn@example.com"
+    subject: "[her-go] PR #87 merged: Gmail integration"
+    body: >
+      Merged #87 into main. 8 files changed, 676 insertions(+).
+    date: "2026-06-14T08:45:00-04:00"
+    unread: false
+
+  # Noise — newsletter
+  - id: "msg-005"
+    from: "Hacker Newsletter <newsletter@hackernewsletter.com>"
+    to: "autumn@example.com"
+    subject: "Hacker Newsletter #678"
+    body: >
+      This week: Rust in the Linux kernel, a new SQLite extension for
+      vector search, and why Postgres is eating the database world.
+      Read more at hackernewsletter.com/678
+    date: "2026-06-13T12:00:00-04:00"
+    unread: false
+
+  # Noise — social
+  - id: "msg-006"
+    from: "Discord <noreply@discord.com>"
+    to: "autumn@example.com"
+    subject: "5 new messages in Go Developers"
+    body: "You have 5 unread messages in #general on Go Developers."
+    date: "2026-06-13T11:00:00-04:00"
+    unread: false
+
+  # Personal — worth knowing
+  - id: "msg-007"
+    from: "Jess <jess.chen@example.com>"
+    to: "autumn@example.com"
+    subject: "Re: coffee next week?"
+    body: >
+      Tuesday works for me! How about that new place on 5th street,
+      around 3pm? I've been wanting to try their cold brew.
+    date: "2026-06-12T18:30:00-04:00"
+    unread: true
+
+  # Transactional — noise
+  - id: "msg-008"
+    from: "Spotify <no-reply@spotify.com>"
+    to: "autumn@example.com"
+    subject: "Your Weekly Discovery is ready"
+    body: "30 songs picked just for you. Listen now on Spotify."
+    date: "2026-06-12T10:00:00-04:00"
+    unread: false
+
+seed_cards: true
+
+messages:
+  - "hey can you check my email? anything important?"
+  - "what did mom say exactly?"
