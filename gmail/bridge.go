@@ -8,6 +8,7 @@
 package gmail
 
 import (
+	"context"
 	"time"
 )
 
@@ -17,10 +18,10 @@ import (
 type Bridge interface {
 	// Search returns email summaries matching a Gmail search query.
 	// An empty query returns recent messages. Page is 1-indexed.
-	Search(query string, page int) (SearchResult, error)
+	Search(ctx context.Context, query string, page int) (SearchResult, error)
 
 	// Read returns the full content of a single email by message ID.
-	Read(id string) (*Message, error)
+	Read(ctx context.Context, id string) (*Message, error)
 }
 
 // SearchResult wraps a page of email summaries with pagination info.

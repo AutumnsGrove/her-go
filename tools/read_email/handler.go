@@ -4,6 +4,7 @@
 package read_email
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,6 +14,10 @@ import (
 )
 
 var log = logger.WithPrefix("tools/read_email")
+
+// maxBodyLen caps the email body returned to the agent to avoid
+// blowing the tool response token budget.
+const maxBodyLen = 8000
 
 func init() {
 	tools.Register("read_email", Handle)
@@ -35,7 +40,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	log.Infof("  read_email: %s", args.ID)
 
-	msg, err := ctx.GmailBridge.Read(args.ID)
+	msg, err := ctx.GmailBridge.Read(context.Background(), args.ID)
 	if err != nil {
 		log.Warn("email read failed", "id", args.ID, "err", err)
 		return "error: " + err.Error()
@@ -58,8 +63,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	sb.WriteString("\n")
 	body := msg.Body
-	if len(body) > 8000 {
-		body = body[:8000] + "\n\n[truncated — email body exceeds 8000 characters]"
+	if len(body) > maxBodyLen {
+		body = body[:maxBodyLen] + "\n\n[truncated — email body exceeds limit]"
 	}
 	sb.WriteString(body)
 

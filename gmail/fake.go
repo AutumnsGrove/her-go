@@ -1,9 +1,12 @@
 package gmail
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // FakeBridge is an in-memory email store for sims. Seeded from YAML via
@@ -43,7 +46,7 @@ func (f *FakeBridge) Seed(msgs []Message) {
 //   - bare words — matches if From, Subject, or Body contains the word
 //
 // Multiple terms are AND-ed together. Page is 1-indexed.
-func (f *FakeBridge) Search(query string, page int) (SearchResult, error) {
+func (f *FakeBridge) Search(_ context.Context, query string, page int) (SearchResult, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -73,7 +76,7 @@ func (f *FakeBridge) Search(query string, page int) (SearchResult, error) {
 }
 
 // Read returns the full message by ID. Returns an error if not found.
-func (f *FakeBridge) Read(id string) (*Message, error) {
+func (f *FakeBridge) Read(_ context.Context, id string) (*Message, error) {
 	for _, msg := range f.messages {
 		if msg.ID == id {
 			cp := msg
@@ -101,12 +104,12 @@ func (f *FakeBridge) filter(query string) []Message {
 }
 
 type queryTerm struct {
-	operator string // "from", "subject", "is", or "" for bare words
+	operator string // "from", "subject", "is", "newer_than", or "" for bare words
 	value    string
 }
 
 // parseQuery splits a Gmail-style query into structured terms.
-// Handles from:X, subject:X, is:unread, and bare words.
+// Handles from:X, subject:X, is:unread, newer_than:Nd, and bare words.
 func parseQuery(query string) []queryTerm {
 	var terms []queryTerm
 	for _, token := range strings.Fields(query) {
@@ -115,6 +118,8 @@ func parseQuery(query string) []queryTerm {
 			terms = append(terms, queryTerm{"from", lower[5:]})
 		} else if strings.HasPrefix(lower, "subject:") {
 			terms = append(terms, queryTerm{"subject", lower[8:]})
+		} else if strings.HasPrefix(lower, "newer_than:") {
+			terms = append(terms, queryTerm{"newer_than", lower[11:]})
 		} else if lower == "is:unread" {
 			terms = append(terms, queryTerm{"is", "unread"})
 		} else if lower == "is:read" {
@@ -142,6 +147,12 @@ func matchesTerm(msg Message, t queryTerm) bool {
 		return strings.Contains(strings.ToLower(msg.From), t.value)
 	case "subject":
 		return strings.Contains(strings.ToLower(msg.Subject), t.value)
+	case "newer_than":
+		dur := parseNewerThan(t.value)
+		if dur == 0 {
+			return true
+		}
+		return time.Since(msg.Date) <= dur
 	case "is":
 		if t.value == "unread" {
 			return msg.Unread
@@ -157,5 +168,29 @@ func matchesTerm(msg Message, t queryTerm) bool {
 			strings.Contains(strings.ToLower(msg.Subject), lower) ||
 			strings.Contains(strings.ToLower(msg.Snippet), lower) ||
 			strings.Contains(strings.ToLower(msg.Body), lower)
+	}
+}
+
+// parseNewerThan converts Gmail's newer_than duration format (e.g. "7d",
+// "1h", "30m") to a time.Duration. Returns 0 if unparseable.
+func parseNewerThan(s string) time.Duration {
+	if len(s) < 2 {
+		return 0
+	}
+	numStr := s[:len(s)-1]
+	unit := s[len(s)-1]
+	n, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0
+	}
+	switch unit {
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour
+	case 'h':
+		return time.Duration(n) * time.Hour
+	case 'm':
+		return time.Duration(n) * time.Minute
+	default:
+		return 0
 	}
 }

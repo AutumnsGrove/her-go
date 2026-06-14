@@ -72,9 +72,13 @@ func NewAPIBridge(cfg *config.GmailConfig) (*APIBridge, error) {
 // Search queries Gmail and returns message summaries. Uses Gmail's native
 // search syntax (from:, subject:, is:unread, before:, after:, label:, etc.).
 // Page is 1-indexed; pagination uses Gmail's pageToken internally.
-func (a *APIBridge) Search(query string, page int) (SearchResult, error) {
+func (a *APIBridge) Search(ctx context.Context, query string, page int) (SearchResult, error) {
 	if page < 1 {
 		page = 1
+	}
+	const maxPage = 10
+	if page > maxPage {
+		return SearchResult{}, fmt.Errorf("gmail search: page %d exceeds maximum (%d)", page, maxPage)
 	}
 
 	// Gmail API uses page tokens, not page numbers. For page 1 we
@@ -132,7 +136,7 @@ func (a *APIBridge) Search(query string, page int) (SearchResult, error) {
 
 // Read fetches the full content of a single email by message ID.
 // Returns headers, plain text body, and attachment filenames.
-func (a *APIBridge) Read(id string) (*Message, error) {
+func (a *APIBridge) Read(ctx context.Context, id string) (*Message, error) {
 	msg, err := a.svc.Users.Messages.Get("me", id).
 		Format("full").
 		Do()

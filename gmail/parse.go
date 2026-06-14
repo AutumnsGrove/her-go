@@ -62,15 +62,16 @@ func walkParts(part *gm.MessagePart, plain, html *string, attachments *[]string)
 func decodeBase64URL(s string) string {
 	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
+		log.Warn("base64 decode failed — email part may appear empty", "err", err)
 		return ""
 	}
 	return string(b)
 }
 
 var (
-	reHTMLTag     = regexp.MustCompile(`<[^>]*>`)
-	reWhitespace  = regexp.MustCompile(`\s{3,}`)
-	reHTMLEntity  = regexp.MustCompile(`&[a-zA-Z]+;|&#[0-9]+;`)
+	reHTMLTag    = regexp.MustCompile(`<[^>]*>`)
+	reWhitespace = regexp.MustCompile(`\s{3,}`)
+	reHTMLEntity = regexp.MustCompile(`&[a-zA-Z]+;|&#[0-9]+;`)
 )
 
 // stripHTML removes tags and collapses whitespace. Good enough for
