@@ -45,6 +45,12 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 	if deps.WorkerCallback != nil {
 		b.SetWorkerCallback(deps.WorkerCallback)
 	}
+	if deps.WorkerCallbackSync != nil {
+		b.SetWorkerCallbackSync(deps.WorkerCallbackSync)
+	}
+	if deps.GmailBridge != nil {
+		b.SetGmailBridge(deps.GmailBridge)
+	}
 	if deps.TTSClient != nil {
 		b.SetTTSClient(deps.TTSClient)
 	}
