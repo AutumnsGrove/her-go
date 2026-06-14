@@ -15,6 +15,7 @@ import (
 	"her/agent"
 	"her/calendar"
 	"her/config"
+	"her/gmail"
 	"her/embed"
 	"her/llm"
 	"her/logger"
@@ -141,6 +142,15 @@ type Bot struct {
 	// Set by cmd/run.go after bot creation — the bot doesn't import
 	// workeragent directly (avoids import cycle).
 	workerCallback func(taskType, note string)
+
+	// workerCallbackSync runs the worker synchronously and returns its
+	// summary. Used by send_task(wait=true) so the driver can block
+	// until the worker finishes.
+	workerCallbackSync func(taskType, note string) string
+
+	// gmailBridge provides read-only Gmail access. Nil when Gmail is
+	// not configured (no credentials in config). Set by cmd/run.go.
+	gmailBridge gmail.Bridge
 }
 
 // PendingTurn stores the data needed to run background agents on a
@@ -176,6 +186,18 @@ func (b *Bot) SetTTSClient(c *voice.TTSClient) {
 // avoid an import cycle (bot doesn't import workeragent).
 func (b *Bot) SetWorkerCallback(cb func(taskType, note string)) {
 	b.workerCallback = cb
+}
+
+// SetWorkerCallbackSync sets the synchronous worker dispatch function.
+// Used by send_task(wait=true) — the driver blocks until the worker
+// finishes and gets the summary inline as a tool result.
+func (b *Bot) SetWorkerCallbackSync(cb func(taskType, note string) string) {
+	b.workerCallbackSync = cb
+}
+
+// SetGmailBridge injects a Gmail bridge for email access.
+func (b *Bot) SetGmailBridge(bridge gmail.Bridge) {
+	b.gmailBridge = bridge
 }
 
 // AgentEventChannel returns a write-only channel for emitting agent events.

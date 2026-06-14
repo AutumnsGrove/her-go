@@ -27,6 +27,7 @@ import (
 	"her/memory"
 	"her/persona"
 	"her/procmgr"
+	"her/gmail"
 	"her/retry"
 	"her/scheduler"
 	"her/search"
@@ -645,6 +646,10 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		}
 	}
 
+	// Gmail bridge — declared early so worker closures can capture it.
+	// Initialized after the worker callbacks are defined (section below).
+	var gmailBridge gmail.Bridge
+
 	// Build a shared WorkerCallback closure for both gateway and legacy bot paths.
 	var workerCallbackFn func(taskType, note string)
 	if len(workerLLMs) > 0 {
@@ -673,6 +678,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 					Store:        store,
 					Cfg:          cfg,
 					ReportsDir:   reportsDir,
+					GmailBridge:  gmailBridge,
 					EventBus:     bus,
 				})
 
@@ -708,6 +714,54 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 					}
 				}
 			}()
+		}
+	}
+
+	// --- Gmail bridge (initialization) ---
+	// Populates the gmailBridge var declared earlier (before worker closures).
+	// Fail-soft: if Gmail isn't configured, email tools return a clear error.
+	if cfg.Gmail.Enabled() {
+		apiBridge, err := gmail.NewAPIBridge(&cfg.Gmail)
+		if err != nil {
+			log.Error("gmail bridge init failed — email tools will be unavailable", "err", err)
+		} else {
+			gmailBridge = apiBridge
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "gmail", Status: "ready"})
+		}
+	}
+
+	// Build synchronous worker callback (for send_task wait=true).
+	var workerCallbackSyncFn func(taskType, note string) string
+	if len(workerLLMs) > 0 {
+		reportsDir := filepath.Join(rootDir, "reports")
+		if cfg.WorkerAgent.ReportsDir != "" {
+			reportsDir = filepath.Join(rootDir, cfg.WorkerAgent.ReportsDir)
+		}
+		workerCallbackSyncFn = func(taskType, note string) string {
+			tt := workeragent.Lookup(taskType)
+			if tt == nil {
+				return "error: unknown task type: " + taskType
+			}
+			llmClient := workerLLMs[tt.ModelTier]
+			if llmClient == nil {
+				return "error: no LLM configured for tier: " + tt.ModelTier
+			}
+			result := workeragent.RunWorker(workeragent.WorkerInput{
+				TaskType:    taskType,
+				Instruction: note,
+			}, workeragent.WorkerParams{
+				LLM:          llmClient,
+				TavilyClient: tavilyClient,
+				Store:        store,
+				Cfg:          cfg,
+				ReportsDir:   reportsDir,
+				GmailBridge:  gmailBridge,
+				EventBus:     bus,
+			})
+			if result.Summary == "" {
+				return "worker completed but produced no summary"
+			}
+			return result.Summary
 		}
 	}
 
@@ -756,6 +810,12 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		tgBot.SetOwnerChat(cfg.Telegram.OwnerChat)
 		if workerCallbackFn != nil {
 			tgBot.SetWorkerCallback(workerCallbackFn)
+		}
+		if workerCallbackSyncFn != nil {
+			tgBot.SetWorkerCallbackSync(workerCallbackSyncFn)
+		}
+		if gmailBridge != nil {
+			tgBot.SetGmailBridge(gmailBridge)
 		}
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "telegram", Status: "ready"})
 	} else if skipTelegram {
