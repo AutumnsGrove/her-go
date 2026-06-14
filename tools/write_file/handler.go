@@ -52,6 +52,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error writing file: %v", err)
 	}
 
+	ctx.WrittenFiles = append(ctx.WrittenFiles, absPath)
 	log.Infof("  write_file: %s (%d bytes)", args.Path, len(args.Content))
 	return fmt.Sprintf("wrote %s (%d bytes)", args.Path, len(args.Content))
 }

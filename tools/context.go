@@ -452,6 +452,11 @@ type Context struct {
 	// calling done. RunWorker reads this after the loop.
 	WorkerSummary string
 
+	// WrittenFiles tracks files created by write_file during this run.
+	// RunWorker reads this to determine which report file to attach,
+	// instead of guessing from filesystem timestamps.
+	WrittenFiles []string
+
 	// PreApprovedRewrites holds classifier-suggested rewrite texts that
 	// should bypass the classifier if the agent saves them verbatim.
 	// This prevents the self-contradiction bug where the classifier

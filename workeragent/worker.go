@@ -213,8 +213,12 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		Success:   tctx.DoneCalled,
 	}
 
-	workerResult.ReportPath = findLatestReport(params.ReportsDir)
-	if workerResult.ReportPath != "" {
+	// Use the last file the worker actually wrote (tracked by write_file
+	// tool via ctx.WrittenFiles), not the newest file in reports/ by
+	// timestamp. The old findLatestReport approach would attach unrelated
+	// reports from previous runs.
+	if len(tctx.WrittenFiles) > 0 {
+		workerResult.ReportPath = tctx.WrittenFiles[len(tctx.WrittenFiles)-1]
 		workerResult.Title = extractTitle(workerResult.ReportPath)
 	}
 	if workerResult.Title == "" {
