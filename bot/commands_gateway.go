@@ -601,22 +601,28 @@ func (b *Bot) ExecDreamLog() (string, error) {
 func (b *Bot) ExecCompact(convID string) (string, error) {
 	var parts []string
 
+	const skipThreshold = 1000
+
 	// --- Chat stream ---
 	recent, err := b.store.RecentMessages(convID, b.cfg.Memory.RecentMessages)
 	if err != nil || len(recent) < 4 {
 		parts = append(parts, "Chat: not enough messages to compact yet.")
 	} else {
 		tokensBefore := compact.EstimateHistoryTokens("", recent)
-		cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
-		if err != nil {
-			return "", fmt.Errorf("chat compaction failed: %w", err)
+		if tokensBefore < skipThreshold {
+			parts = append(parts, fmt.Sprintf("Chat: ~%d tokens — already compact, skipped.", tokensBefore))
+		} else {
+			cr, err := compact.MaybeCompact(b.llm, b.store, convID, recent, 1, b.cfg.Identity.Her, b.cfg.Identity.User)
+			if err != nil {
+				return "", fmt.Errorf("chat compaction failed: %w", err)
+			}
+			tokensAfter := compact.EstimateHistoryTokens(cr.Summary, cr.KeptMessages)
+			saved := tokensBefore - tokensAfter
+			parts = append(parts, fmt.Sprintf(
+				"== Chat ==\nMessages: %d → %d kept\nTokens: ~%d → ~%d (saved ~%d)\nSummary:\n%s",
+				len(recent), len(cr.KeptMessages), tokensBefore, tokensAfter, saved, cr.Summary,
+			))
 		}
-		tokensAfter := compact.EstimateHistoryTokens(cr.Summary, cr.KeptMessages)
-		saved := tokensBefore - tokensAfter
-		parts = append(parts, fmt.Sprintf(
-			"== Chat ==\nMessages: %d → %d kept\nTokens: ~%d → ~%d (saved ~%d)\nSummary:\n%s",
-			len(recent), len(cr.KeptMessages), tokensBefore, tokensAfter, saved, cr.Summary,
-		))
 	}
 
 	// --- Driver action stream ---
@@ -624,26 +630,31 @@ func (b *Bot) ExecCompact(convID string) (string, error) {
 	if err != nil || len(agentActions) == 0 {
 		parts = append(parts, "Driver: no action history to compact.")
 	} else {
-		// Pass budget=1 to force compaction (same trick as chat stream —
-		// any token count exceeds 75% of 1).
-		acr, err := compact.MaybeCompactAgent(
-			b.llm, b.store, convID, agentActions,
-			1, b.cfg.Identity.Her,
-		)
-		if err != nil {
-			return "", fmt.Errorf("driver compaction failed: %w", err)
-		}
-		if acr.DidCompact {
-			parts = append(parts, fmt.Sprintf(
-				"== Driver ==\nActions: %d summarized, %d kept\nTokens: ~%d → ~%d (saved ~%d)",
-				acr.Summarized, len(acr.RecentActions),
-				acr.TokensBefore, acr.TokensAfter, acr.TokensBefore-acr.TokensAfter,
-			))
+		estTokens := compact.EstimateActionTokens("", agentActions)
+		if estTokens < skipThreshold {
+			parts = append(parts, fmt.Sprintf("Driver: ~%d tokens — already compact, skipped.", estTokens))
 		} else {
-			parts = append(parts, fmt.Sprintf(
-				"Driver: %d actions, ~%d tokens (below threshold, no compaction needed).",
-				len(agentActions), compact.EstimateActionTokens("", agentActions),
-			))
+			// Pass budget=1 to force compaction (any token count exceeds
+			// 75% of 1).
+			acr, err := compact.MaybeCompactAgent(
+				b.llm, b.store, convID, agentActions,
+				1, b.cfg.Identity.Her,
+			)
+			if err != nil {
+				return "", fmt.Errorf("driver compaction failed: %w", err)
+			}
+			if acr.DidCompact {
+				parts = append(parts, fmt.Sprintf(
+					"== Driver ==\nActions: %d summarized, %d kept\nTokens: ~%d → ~%d (saved ~%d)",
+					acr.Summarized, len(acr.RecentActions),
+					acr.TokensBefore, acr.TokensAfter, acr.TokensBefore-acr.TokensAfter,
+				))
+			} else {
+				parts = append(parts, fmt.Sprintf(
+					"Driver: %d actions, ~%d tokens (below threshold, no compaction needed).",
+					len(agentActions), estTokens,
+				))
+			}
 		}
 	}
 
