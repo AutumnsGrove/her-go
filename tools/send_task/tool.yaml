@@ -10,13 +10,16 @@ description: >-
   - target "worker": send a research, briefing, or email task to the worker agent.
     The worker searches the web/email, writes a report file, and notifies you
     when done. Use for "deep dive on X", "research Y", or "check email" requests.
+    NOTE: email tools (search_emails, read_email) are worker-only — you cannot
+    load them with use_tools. Always use send_task with task_type="email_check"
+    for any email-related request.
 
   Use wait=true when you need the result before replying to the user — the
   worker runs synchronously and its summary is returned as this tool's result.
   Always use wait=true for email_check tasks so you can share the findings
   immediately. Use wait=false (default) for background research where the
   user doesn't need the result right now.
-hint: "delegate work to background agents (memory cleanup, research reports)"
+hint: "delegate work to background agents (memory cleanup, research reports, email triage)"
 hot: true
 parameters:
   type: object
