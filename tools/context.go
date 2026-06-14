@@ -21,6 +21,7 @@ import (
 
 	"her/calendar"
 	"her/config"
+	"her/gmail"
 	"her/embed"
 	"her/llm"
 	"her/memory"
@@ -252,6 +253,12 @@ type Context struct {
 	// FakeBridge (in-memory). Nil means calendar tools fall back to creating
 	// a CLIBridge on demand (backward-compatible with existing code).
 	CalendarBridge calendar.Bridge
+
+	// GmailBridge provides read-only email access. In production this is
+	// an APIBridge (Gmail API via OAuth2). In sims it's a FakeBridge
+	// (in-memory, seeded from YAML). Nil means email tools return a
+	// "not configured" error.
+	GmailBridge gmail.Bridge
 
 	// --- Callbacks (all nil-safe) ---
 

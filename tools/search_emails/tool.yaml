@@ -1,0 +1,26 @@
+name: search_emails
+agent: [worker]
+description: >-
+  Search emails in the connected Gmail account. Uses Gmail's native search
+  syntax: from:, subject:, is:unread, before:, after:, label:, has:attachment,
+  newer_than:7d, etc. An empty query returns recent messages. Returns a list
+  of email summaries (ID, from, subject, snippet, date, unread status) — use
+  read_email with the ID to see the full body.
+hot: false
+category: email
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: >-
+        Gmail search query. Supports operators: from:X, subject:X, is:unread,
+        before:YYYY/MM/DD, after:YYYY/MM/DD, newer_than:7d, has:attachment,
+        label:X. Empty = recent messages.
+    page:
+      type: integer
+      description: "Page number (1-indexed, default 1). Each page returns up to 20 results."
+  required: []
+trace:
+  emoji: "📧"
+  format: "\"{{.query | default \"recent\" | escape}}\" p{{.page | default 1}} → {{.Result | truncate 80 | escape}}"
