@@ -403,13 +403,14 @@ type Context struct {
 	// WorkerCallback fires the worker agent in a background goroutine.
 	// Called by send_task when target="worker" and wait=false. Nil-safe —
 	// returns an error message when the worker agent is not configured.
-	WorkerCallback func(taskType, note string)
+	// triggerMsgID links the worker's agent_turns to the parent message.
+	WorkerCallback func(taskType, note string, triggerMsgID int64)
 
 	// WorkerCallbackSync runs the worker agent synchronously and returns
 	// its result summary. Called by send_task when wait=true — the driver
 	// agent blocks until the worker finishes, then gets the summary as
 	// a tool response inline. Nil-safe.
-	WorkerCallbackSync func(taskType, note string) string
+	WorkerCallbackSync func(taskType, note string, triggerMsgID int64) string
 
 	// PendingNarration stores cleaned report text that should be sent
 	// as a voice memo after the turn completes. Set by narrate_report,

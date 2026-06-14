@@ -59,6 +59,11 @@ type WorkerInput struct {
 	// Payload carries structured key-value data from the scheduler or
 	// driver. Available in the prompt as {{payload.<key>}}.
 	Payload map[string]string
+
+	// TriggerMsgID links this worker run to the parent conversation turn.
+	// Used to save agent_turns so the worker's tool calls appear in sim
+	// reports alongside the driver's trace.
+	TriggerMsgID int64
 }
 
 // WorkerParams bundles the dependencies the worker agent needs.
@@ -148,6 +153,11 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		}
 	}
 
+	// Track turn index for agent_turns recording — same pattern as the
+	// driver agent's PostTool in agent/agent.go.
+	var turnIndex int
+	msgID := input.TriggerMsgID
+
 	// Run the tool-calling loop via the shared engine.
 	loopResult, err := engine.RunLoop(engine.EngineConfig{
 		Name:                "worker",
@@ -164,6 +174,21 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 		Messages: []llm.ChatMessage{
 			{Role: "system", Content: promptContent},
 			{Role: "user", Content: buildWorkerInstruction(input)},
+		},
+
+		// Record every tool call to agent_turns so worker activity is
+		// visible in sim reports and traces — same as the driver does.
+		PostTool: func(tc llm.ToolCall, result string, isError bool) {
+			if params.Store == nil || msgID == 0 {
+				return
+			}
+			// Prefix tool names with [worker] so traces distinguish
+			// worker calls from driver calls on the same turn.
+			prefixed := "[worker] " + tc.Function.Name
+			params.Store.SaveAgentTurn(msgID, turnIndex, "assistant", prefixed, tc.Function.Arguments, "")
+			turnIndex++
+			params.Store.SaveAgentTurn(msgID, turnIndex, "tool", prefixed, "", result)
+			turnIndex++
 		},
 
 		ContinuationMsg: func(window, maxWindows int, summary string) string {

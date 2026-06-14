@@ -651,13 +651,13 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	var gmailBridge gmail.Bridge
 
 	// Build a shared WorkerCallback closure for both gateway and legacy bot paths.
-	var workerCallbackFn func(taskType, note string)
+	var workerCallbackFn func(taskType, note string, triggerMsgID int64)
 	if len(workerLLMs) > 0 {
 		reportsDir := filepath.Join(rootDir, "reports")
 		if cfg.WorkerAgent.ReportsDir != "" {
 			reportsDir = filepath.Join(rootDir, cfg.WorkerAgent.ReportsDir)
 		}
-		workerCallbackFn = func(taskType, note string) {
+		workerCallbackFn = func(taskType, note string, triggerMsgID int64) {
 			tt := workeragent.Lookup(taskType)
 			if tt == nil {
 				log.Error("worker callback: unknown task type", "type", taskType)
@@ -670,8 +670,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			}
 			go func() {
 				result := workeragent.RunWorker(workeragent.WorkerInput{
-					TaskType:    taskType,
-					Instruction: note,
+					TaskType:     taskType,
+					Instruction:  note,
+					TriggerMsgID: triggerMsgID,
 				}, workeragent.WorkerParams{
 					LLM:          llmClient,
 					TavilyClient: tavilyClient,
@@ -731,13 +732,13 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	}
 
 	// Build synchronous worker callback (for send_task wait=true).
-	var workerCallbackSyncFn func(taskType, note string) string
+	var workerCallbackSyncFn func(taskType, note string, triggerMsgID int64) string
 	if len(workerLLMs) > 0 {
 		reportsDir := filepath.Join(rootDir, "reports")
 		if cfg.WorkerAgent.ReportsDir != "" {
 			reportsDir = filepath.Join(rootDir, cfg.WorkerAgent.ReportsDir)
 		}
-		workerCallbackSyncFn = func(taskType, note string) string {
+		workerCallbackSyncFn = func(taskType, note string, triggerMsgID int64) string {
 			tt := workeragent.Lookup(taskType)
 			if tt == nil {
 				return "error: unknown task type: " + taskType
@@ -747,8 +748,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 				return "error: no LLM configured for tier: " + tt.ModelTier
 			}
 			result := workeragent.RunWorker(workeragent.WorkerInput{
-				TaskType:    taskType,
-				Instruction: note,
+				TaskType:     taskType,
+				Instruction:  note,
+				TriggerMsgID: triggerMsgID,
 			}, workeragent.WorkerParams{
 				LLM:          llmClient,
 				TavilyClient: tavilyClient,

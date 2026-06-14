@@ -37,7 +37,7 @@ type Deps struct {
 	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
 	CalendarBridge   calendar.Bridge              // nil in prod, FakeBridge in sims
 	ConfigPath       string
-	WorkerCallback   func(taskType, note string) // nil-safe — fires worker agent in background
+	WorkerCallback   func(taskType, note string, triggerMsgID int64) // nil-safe — fires worker agent in background
 
 	// WorkerResultCh receives worker completion data in sim mode.
 	// The sim adapter reads it after each turn to inject follow-up turns.

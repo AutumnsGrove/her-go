@@ -319,10 +319,10 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		simReportsDir = filepath.Join(simRootDir, cfg.WorkerAgent.ReportsDir)
 	}
 
-	var simWorkerCB func(taskType, note string)
+	var simWorkerCB func(taskType, note string, triggerMsgID int64)
 	workerResultCh := make(chan gateway.WorkerResult, 1)
 	if len(simWorkerLLMs) > 0 {
-		simWorkerCB = func(taskType, note string) {
+		simWorkerCB = func(taskType, note string, triggerMsgID int64) {
 			tt := workeragent.Lookup(taskType)
 			if tt == nil {
 				log.Error("sim worker: unknown task type", "type", taskType)
@@ -335,8 +335,9 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			}
 			log.Info("sim worker: running", "task", taskType, "tier", tt.ModelTier)
 			result := workeragent.RunWorker(workeragent.WorkerInput{
-				TaskType:    taskType,
-				Instruction: note,
+				TaskType:     taskType,
+				Instruction:  note,
+				TriggerMsgID: triggerMsgID,
 			}, workeragent.WorkerParams{
 				LLM:          llmClient,
 				TavilyClient: tavilyClient,

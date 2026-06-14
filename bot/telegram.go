@@ -141,12 +141,12 @@ type Bot struct {
 	// workerCallback fires the worker agent in a background goroutine.
 	// Set by cmd/run.go after bot creation — the bot doesn't import
 	// workeragent directly (avoids import cycle).
-	workerCallback func(taskType, note string)
+	workerCallback func(taskType, note string, triggerMsgID int64)
 
 	// workerCallbackSync runs the worker synchronously and returns its
 	// summary. Used by send_task(wait=true) so the driver can block
 	// until the worker finishes.
-	workerCallbackSync func(taskType, note string) string
+	workerCallbackSync func(taskType, note string, triggerMsgID int64) string
 
 	// gmailBridge provides read-only Gmail access. Nil when Gmail is
 	// not configured (no credentials in config). Set by cmd/run.go.
@@ -184,14 +184,14 @@ func (b *Bot) SetTTSClient(c *voice.TTSClient) {
 // SetWorkerCallback sets the function that fires the worker agent in a
 // background goroutine. Called from cmd/run.go after bot creation to
 // avoid an import cycle (bot doesn't import workeragent).
-func (b *Bot) SetWorkerCallback(cb func(taskType, note string)) {
+func (b *Bot) SetWorkerCallback(cb func(taskType, note string, triggerMsgID int64)) {
 	b.workerCallback = cb
 }
 
 // SetWorkerCallbackSync sets the synchronous worker dispatch function.
 // Used by send_task(wait=true) — the driver blocks until the worker
 // finishes and gets the summary inline as a tool result.
-func (b *Bot) SetWorkerCallbackSync(cb func(taskType, note string) string) {
+func (b *Bot) SetWorkerCallbackSync(cb func(taskType, note string, triggerMsgID int64) string) {
 	b.workerCallbackSync = cb
 }
 
