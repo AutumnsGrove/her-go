@@ -90,7 +90,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", replyText, nil)
 		if styleVerdict.Model != "" && ctx.Store != nil {
-			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+			ctx.Store.SaveMetric(memory.MetricInput{
+				Model: styleVerdict.Model, PromptTokens: styleVerdict.PromptTokens,
+				CompletionTokens: styleVerdict.CompletionTokens, TotalTokens: styleVerdict.TotalTokens,
+				CostUSD: styleVerdict.CostUSD, MessageID: ctx.TriggerMsgID,
+				AgentRole: memory.RoleClassifier, CacheReadTokens: styleVerdict.CacheReadTokens,
+				CacheWriteTokens: styleVerdict.CacheWriteTokens, Provider: styleVerdict.Provider,
+			})
 		}
 		if !styleVerdict.Allowed {
 			return fmt.Sprintf("rejected (style): %s. Rephrase your text and try again.", styleVerdict.Reason)
@@ -105,7 +111,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}}
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", replyText, safetySnippet)
 		if safetyVerdict.Model != "" && ctx.Store != nil {
-			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+			ctx.Store.SaveMetric(memory.MetricInput{
+				Model: safetyVerdict.Model, PromptTokens: safetyVerdict.PromptTokens,
+				CompletionTokens: safetyVerdict.CompletionTokens, TotalTokens: safetyVerdict.TotalTokens,
+				CostUSD: safetyVerdict.CostUSD, MessageID: ctx.TriggerMsgID,
+				AgentRole: memory.RoleClassifier, CacheReadTokens: safetyVerdict.CacheReadTokens,
+				CacheWriteTokens: safetyVerdict.CacheWriteTokens, Provider: safetyVerdict.Provider,
+			})
 		}
 		if !safetyVerdict.Allowed {
 			return fmt.Sprintf("rejected (safety): %s. Rephrase to be supportive but balanced.", safetyVerdict.Reason)
@@ -167,7 +179,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 			log.Error("reply_direct: saving response", "err", err)
 		}
 		if respID > 0 {
-			ctx.Store.SaveMetric("direct", 0, 0, 0, 0, 0, respID, false, memory.RoleChat)
+			ctx.Store.SaveMetric(memory.MetricInput{Model: "direct", MessageID: respID, AgentRole: memory.RoleChat})
 		}
 	}
 

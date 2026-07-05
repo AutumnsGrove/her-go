@@ -19,6 +19,27 @@ const (
 	RoleClassifier    = "classifier"
 )
 
+// MetricInput bundles all data for a single LLM call metric. Replaces
+// the old 12-parameter SaveMetric signature with a readable struct.
+//
+// In Python you'd use a dataclass for this. In Go, a plain struct with
+// exported fields serves the same purpose — and since Go has zero values
+// for every type, callers only need to set the fields they care about.
+type MetricInput struct {
+	Model            string
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CostUSD          float64
+	LatencyMs        int
+	MessageID        int64
+	IsFallback       bool
+	AgentRole        string
+	CacheReadTokens  int
+	CacheWriteTokens int
+	Provider         string
+}
+
 // Metric represents token usage and cost data for a single LLM call.
 type Metric struct {
 	ID               int64
@@ -33,20 +54,15 @@ type Metric struct {
 }
 
 // SaveMetric logs token usage and cost data for an LLM call.
-// If messageID is 0, it's stored as NULL (e.g., for agent calls).
-// isFallback is true when the primary model failed and the fallback
-// model handled the request (the "Haiku tax" — see issue #68).
-// agentRole identifies which agent made the call (driver, memory, mood,
-// introspection, chat, dream, compaction, vision, classifier).
-func (s *SQLiteStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error {
-	var msgID interface{} = messageID
-	if messageID == 0 {
+func (s *SQLiteStore) SaveMetric(m MetricInput) error {
+	var msgID interface{} = m.MessageID
+	if m.MessageID == 0 {
 		msgID = nil
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback, agent_role)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, msgID, isFallback, agentRole,
+		`INSERT INTO metrics (model, prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms, message_id, is_fallback, agent_role, cache_read_tokens, cache_write_tokens, provider)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.Model, m.PromptTokens, m.CompletionTokens, m.TotalTokens, m.CostUSD, m.LatencyMs, msgID, m.IsFallback, m.AgentRole, m.CacheReadTokens, m.CacheWriteTokens, m.Provider,
 	)
 	if err != nil {
 		return fmt.Errorf("saving metric: %w", err)

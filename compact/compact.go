@@ -246,7 +246,12 @@ func MaybeCompact(
 	log.Infof("  summary: %s", truncate(newSummary, 200))
 
 	// Log metrics for the summarization call.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleCompaction)
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleCompaction, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
 
 	return &CompactResult{
 		Summary:      newSummary,
@@ -424,7 +429,12 @@ func MaybeCompactAgent(
 		len(toSummarize), tokensBefore, newTokens, tokensBefore-newTokens)
 	log.Infof("  agent summary: %s", truncate(newSummary, 200))
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleCompaction)
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleCompaction, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
 
 	return &AgentCompactResult{
 		Summary:       newSummary,

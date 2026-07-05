@@ -54,6 +54,11 @@ type SimResult struct {
 	IntrospectionSaved []string // introspection tool call results (save_self_memory)
 	FollowUpReply      string   // direct_message from notify_agent (memory → driver follow-up)
 	ToolLog            []string // condensed log of all tool calls for the report
+
+	// Cache + provider metrics accumulated across all LLM calls in this turn.
+	CacheReadTokens  int            // total prompt tokens served from cache
+	CacheWriteTokens int            // total prompt tokens written to cache
+	Providers        map[string]int // provider name → call count for this turn
 }
 
 // simAdapter implements the Adapter interface for simulation runs.
@@ -118,6 +123,11 @@ type turnCapture struct {
 	memoriesSaved      []string
 	introspectionSaved []string
 	followUpReply      string
+
+	// Cache + provider metrics accumulated across all LLM calls in this turn.
+	cacheReadTokens  int
+	cacheWriteTokens int
+	providers        map[string]int // provider name → call count
 }
 
 func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus, workerResultCh chan WorkerResult) (Adapter, error) {
@@ -325,6 +335,9 @@ func (a *simAdapter) enrichFromCapture(result SimResult) SimResult {
 		result.MemoriesSaved = tc.memoriesSaved
 		result.IntrospectionSaved = tc.introspectionSaved
 		result.FollowUpReply = tc.followUpReply
+		result.CacheReadTokens = tc.cacheReadTokens
+		result.CacheWriteTokens = tc.cacheWriteTokens
+		result.Providers = tc.providers
 	}
 
 	select {
@@ -377,6 +390,14 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 		a.captureMu.Lock()
 		if tc := a.activeTurn; tc != nil {
 			tc.cost += e.CostUSD
+			tc.cacheReadTokens += e.CacheReadTokens
+			tc.cacheWriteTokens += e.CacheWriteTokens
+			if e.Provider != "" {
+				if tc.providers == nil {
+					tc.providers = make(map[string]int)
+				}
+				tc.providers[e.Provider]++
+			}
 		}
 		a.captureMu.Unlock()
 
@@ -413,6 +434,14 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 		a.captureMu.Lock()
 		if tc := a.activeTurn; tc != nil {
 			tc.cost += e.CostUSD
+			tc.cacheReadTokens += e.CacheReadTokens
+			tc.cacheWriteTokens += e.CacheWriteTokens
+			if e.Provider != "" {
+				if tc.providers == nil {
+					tc.providers = make(map[string]int)
+				}
+				tc.providers[e.Provider]++
+			}
 		}
 		a.captureMu.Unlock()
 

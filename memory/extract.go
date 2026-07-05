@@ -85,9 +85,12 @@ func ExtractMemories(store Store, llmClient *llm.Client, conversationID string, 
 		return fmt.Errorf("LLM extraction call: %w", err)
 	}
 
-	// Parse the JSON response. The LLM should return a JSON object,
-	// but sometimes it wraps it in markdown code fences. Strip those.
+	// Parse the JSON response. The LLM may wrap it in markdown code
+	// fences or reasoning model <think> tags. Strip both.
 	jsonStr := strings.TrimSpace(resp.Content)
+	if idx := strings.Index(jsonStr, "</think>"); idx >= 0 {
+		jsonStr = strings.TrimSpace(jsonStr[idx+len("</think>"):])
+	}
 	jsonStr = strings.TrimPrefix(jsonStr, "```json")
 	jsonStr = strings.TrimPrefix(jsonStr, "```")
 	jsonStr = strings.TrimSuffix(jsonStr, "```")

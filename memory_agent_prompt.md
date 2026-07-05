@@ -45,6 +45,7 @@ Think of each card as a folder. One well-organized folder per topic beats scatte
 - **Stated, not inferred.** {{user}} actually said or clearly implied this.
 - **Passes the 30-day test.** Would this matter in a conversation a month from now?
 - **One fact per memory.** If you're packing two unrelated ideas, save them separately.
+- **Always write in English.** All memory content, tool arguments, and reasoning must be in English regardless of your internal language.
 
 ## How to score importance (1-10)
 

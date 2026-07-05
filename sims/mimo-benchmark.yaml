@@ -1,0 +1,101 @@
+name: "MiMo Benchmark"
+description: >
+  Model comparison benchmark designed to measure cache efficiency, cost,
+  speed, and response quality across all agent roles. Optimized for
+  repeated context patterns that reward prompt caching — progressive
+  memory buildup, multi-iteration driver loops, compaction, and a
+  dream cycle.
+
+  Premise: User is a 28-year-old marine biologist named Sable who just
+  moved from Monterey to Portland for a research position studying
+  microplastics in the Columbia River. Has a cat named Barnacle. Into
+  film photography, trail running, and fermentation (kombucha, kimchi).
+  Anxious about leaving the ocean behind.
+
+  Structure:
+  - Turns 1-5: Dense fact seeding + memory buildup (maximizes context prefix)
+  - Turn 6: Image — tests vision model
+  - Turn 7: Emotional depth + recall (exercises memory retrieval)
+  - Compaction after turn 7
+  - Turns 8-10: Post-compaction recall + decision-making
+  - Turn 11: Correction/supersession
+  - Turn 12: Warm close
+  - Dream cycle after turn 12
+
+  Expected outcomes:
+  - 8-12 memories with at least 1 supersession chain
+  - 3+ mood entries across valences
+  - Vision description of image
+  - Compaction fires after turn 7
+  - Dream: card summaries, possible merges from dense early context
+  - Progressive cache hit rate increase across turns (key metric)
+
+tags: ["benchmark", "cache", "cost", "memory", "mood", "vision", "compaction", "dreaming", "introspection"]
+
+seed_cards: true
+compact_after: 7
+dream_after: [12]
+
+seed_persona: >
+  I'm observant and a little sardonic. I notice small things — the way
+  someone phrases a question, the thing they didn't say. I care more about
+  asking the right question than giving the right answer. I like people
+  who make things and who pay attention.
+
+messages:
+  # ═══════════════════════════════════════════════════════════════════════
+  # PHASE 1 — Dense fact seeding (turns 1-5)
+  # Heavy system prompt + growing memory context = cache-friendly prefix
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 1: Rich intro — lots of facts to seed
+  - "hi. i'm sable, 28. marine biologist — just moved from monterey to portland last week for a research position at PSU. studying microplastics in the columbia river basin. it's a big change from open ocean work"
+
+  # Turn 2: Personal life + emotional signal
+  - "i brought my cat barnacle with me. he's a huge orange tabby, 14 pounds, absolutely furious about the move. he keeps sitting in the empty bathtub and yelling. i feel bad but also it's kind of funny"
+
+  # Turn 3: Hobby detail (multiple hobbies, dense info)
+  - "i shoot film — mostly 35mm, sometimes medium format. i've been documenting the move actually, like all the weird transitional moments. half-packed rooms, barnacle in boxes, the last sunset i watched from the wharf in monterey. also i run trails and i make kombucha and kimchi. i'm a lot"
+
+  # Turn 4: Work detail + emotional texture (anxiety)
+  - "the research is cool but honestly intimidating. my PI is this intense woman who's published like 80 papers and she expects everyone to keep up. i've never done freshwater work before — all my experience is tidal and pelagic. i keep worrying i'll say something that reveals how out of my depth i am. no pun intended"
+
+  # Turn 5: Relationship/social context
+  - "i left a lot behind in monterey. my dive buddy elena, the lab team i'd been with for three years, this incredible taco truck that knew my order. portland is supposed to be great for my career but right now it just feels empty. my apartment echoes"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # PHASE 2 — Vision + emotional depth (turns 6-7)
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 6: Image — exercises vision model
+  - text: "took this on my run today. the trails here are different from what i'm used to but there's something about them"
+    image: sims/assets/aspen-grove.jpg
+
+  # Turn 7: Deep emotional content + implicit recall test
+  - "you know what's weird? i keep thinking about the ocean. like physically. i'll be in the lab processing river samples and my body expects salt air and the sound of waves. portland has rain and coffee shops and mountains but no tide. i think i'm grieving a place"
+
+  # ──────────────── COMPACTION HAPPENS AFTER TURN 7 ──────────────────
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # PHASE 3 — Post-compaction recall + progression (turns 8-12)
+  # Tests whether summarized context still works + cache rebuilds
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # Turn 8: Direct recall test (forces memory lookup after compaction)
+  - "wait — what do you actually remember about me? i want to make sure the important stuff stuck"
+
+  # Turn 9: New information + builds on existing context
+  - "update — i found a darkroom. there's a community space in southeast portland where you can rent time. i processed my first roll of the move photos yesterday. the monterey ones came out beautifully, the portland ones are all grey and moody. fitting i guess"
+
+  # Turn 10: Seeking advice (exercises driver reasoning)
+  - "my PI wants me to present at a conference in two months. it would be my first solo presentation — all my previous talks were with elena as co-presenter. part of me wants to say yes because it would be huge for my career. part of me wants to throw up. what would you do"
+
+  # Turn 11: Correction — triggers supersession
+  - "oh i need to correct something — i said i do kombucha and kimchi but honestly i haven't fermented anything in months. the move killed my scoby and i haven't started a new one. so right now it's just photography and running. maybe i'll get back into it once i'm settled"
+
+  # Turn 12: Warm close + callback
+  - "okay i have to go prep slides for lab meeting tomorrow. thanks for being here while i figure portland out. barnacle says hi. well, barnacle says MROW but i'm translating. talk soon"
+
+  # ──────────────────────── DREAM CYCLE ────────────────────────────────
+  # Expected: consolidation of memories, merge overlapping location/work
+  # facts, reflection on user's adaptation pattern (grief → discovery)

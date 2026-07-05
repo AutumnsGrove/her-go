@@ -389,11 +389,13 @@ func runClassifierGate(input PipelineInput, deps PipelineDeps) Verdict {
 
 	// Save classifier metrics.
 	if verdict.Model != "" && deps.Store != nil {
-		_ = deps.Store.SaveMetric(
-			verdict.Model, verdict.PromptTokens, verdict.CompletionTokens,
-			verdict.TotalTokens, verdict.CostUSD, 0, deps.TriggerMsgID,
-			false, memory.RoleClassifier,
-		)
+		_ = deps.Store.SaveMetric(memory.MetricInput{
+			Model: verdict.Model, PromptTokens: verdict.PromptTokens,
+			CompletionTokens: verdict.CompletionTokens, TotalTokens: verdict.TotalTokens,
+			CostUSD: verdict.CostUSD, MessageID: deps.TriggerMsgID,
+			AgentRole: memory.RoleClassifier, CacheReadTokens: verdict.CacheReadTokens,
+			CacheWriteTokens: verdict.CacheWriteTokens, Provider: verdict.Provider,
+		})
 	}
 
 	// Save classifier log.
@@ -433,11 +435,13 @@ func runClassifierGate(input PipelineInput, deps PipelineDeps) Verdict {
 	if input.Subject == "self" {
 		safetyVerdict := classifier.Check(deps.ClassifierLLM, "self_memory_safety", input.Text, snippet)
 		if safetyVerdict.Model != "" && deps.Store != nil {
-			_ = deps.Store.SaveMetric(
-				safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens,
-				safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, deps.TriggerMsgID,
-				false, memory.RoleClassifier,
-			)
+			_ = deps.Store.SaveMetric(memory.MetricInput{
+				Model: safetyVerdict.Model, PromptTokens: safetyVerdict.PromptTokens,
+				CompletionTokens: safetyVerdict.CompletionTokens, TotalTokens: safetyVerdict.TotalTokens,
+				CostUSD: safetyVerdict.CostUSD, MessageID: deps.TriggerMsgID,
+				AgentRole: memory.RoleClassifier, CacheReadTokens: safetyVerdict.CacheReadTokens,
+				CacheWriteTokens: safetyVerdict.CacheWriteTokens, Provider: safetyVerdict.Provider,
+			})
 		}
 		if deps.Store != nil {
 			_ = deps.Store.SaveClassifierLog(

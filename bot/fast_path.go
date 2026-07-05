@@ -97,8 +97,12 @@ func (b *Bot) classifyRoute(scrubbedText, conversationID string) string {
 	}
 
 	if b.store != nil {
-		b.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens,
-			resp.TotalTokens, resp.CostUSD, 0, 0, false, memory.RoleClassifier)
+		b.store.SaveMetric(memory.MetricInput{
+			Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+			TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, AgentRole: memory.RoleClassifier,
+			CacheReadTokens: resp.CacheReadTokens, CacheWriteTokens: resp.CacheWriteTokens,
+			Provider: resp.Provider,
+		})
 	}
 
 	verdict := strings.TrimSpace(strings.ToUpper(resp.Content))
@@ -281,6 +285,9 @@ func (b *Bot) runFastPath(
 			TotalTokens:      resp.TotalTokens,
 			CostUSD:          resp.CostUSD,
 			LatencyMs:        latencyMs,
+			CacheReadTokens:  resp.CacheReadTokens,
+			CacheWriteTokens: resp.CacheWriteTokens,
+			Provider:         resp.Provider,
 		})
 	}
 
@@ -302,8 +309,13 @@ func (b *Bot) runFastPath(
 	}
 	if respID > 0 {
 		b.store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		b.store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens,
-			resp.TotalTokens, resp.CostUSD, latencyMs, respID, resp.UsedFallback, memory.RoleChat)
+		b.store.SaveMetric(memory.MetricInput{
+			Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+			TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, LatencyMs: latencyMs,
+			MessageID: respID, IsFallback: resp.UsedFallback, AgentRole: memory.RoleChat,
+			CacheReadTokens: resp.CacheReadTokens, CacheWriteTokens: resp.CacheWriteTokens,
+			Provider: resp.Provider,
+		})
 	}
 
 	if onMessageSend != nil {

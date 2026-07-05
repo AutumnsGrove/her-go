@@ -277,6 +277,9 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		TotalTokens:      resp.TotalTokens,
 		CostUSD:          resp.CostUSD,
 		LatencyMs:        latencyMs,
+		CacheReadTokens:  resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens,
+		Provider:         resp.Provider,
 	}
 	if ctx.Phase != nil {
 		ctx.Phase.Emit(replyEvent)
@@ -354,7 +357,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	if styleHint == "" && ctx.ClassifierLLM != nil {
 		styleVerdict := classifier.Check(ctx.ClassifierLLM, "reply", resp.Content, nil)
 		if styleVerdict.Model != "" && ctx.Store != nil {
-			ctx.Store.SaveMetric(styleVerdict.Model, styleVerdict.PromptTokens, styleVerdict.CompletionTokens, styleVerdict.TotalTokens, styleVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+			ctx.Store.SaveMetric(memory.MetricInput{
+				Model: styleVerdict.Model, PromptTokens: styleVerdict.PromptTokens,
+				CompletionTokens: styleVerdict.CompletionTokens, TotalTokens: styleVerdict.TotalTokens,
+				CostUSD: styleVerdict.CostUSD, MessageID: ctx.TriggerMsgID,
+				AgentRole: memory.RoleClassifier, CacheReadTokens: styleVerdict.CacheReadTokens,
+				CacheWriteTokens: styleVerdict.CacheWriteTokens, Provider: styleVerdict.Provider,
+			})
 		}
 		if styleVerdict.Allowed {
 			styleGateNote = "[style: PASS]"
@@ -417,7 +426,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}}
 		safetyVerdict := classifier.Check(ctx.ClassifierLLM, "reply_safety", resp.Content, safetySnippet)
 		if safetyVerdict.Model != "" && ctx.Store != nil {
-			ctx.Store.SaveMetric(safetyVerdict.Model, safetyVerdict.PromptTokens, safetyVerdict.CompletionTokens, safetyVerdict.TotalTokens, safetyVerdict.CostUSD, 0, ctx.TriggerMsgID, false, memory.RoleClassifier)
+			ctx.Store.SaveMetric(memory.MetricInput{
+				Model: safetyVerdict.Model, PromptTokens: safetyVerdict.PromptTokens,
+				CompletionTokens: safetyVerdict.CompletionTokens, TotalTokens: safetyVerdict.TotalTokens,
+				CostUSD: safetyVerdict.CostUSD, MessageID: ctx.TriggerMsgID,
+				AgentRole: memory.RoleClassifier, CacheReadTokens: safetyVerdict.CacheReadTokens,
+				CacheWriteTokens: safetyVerdict.CacheWriteTokens, Provider: safetyVerdict.Provider,
+			})
 		}
 		if safetyVerdict.Allowed {
 			safetyGateNote = "[safety: SAFE]"
@@ -559,7 +574,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 	if respID > 0 {
 		ctx.Store.UpdateMessageTokenCount(respID, resp.CompletionTokens)
-		ctx.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs, ctx.TriggerMsgID, resp.UsedFallback, memory.RoleChat)
+		ctx.Store.SaveMetric(memory.MetricInput{
+			Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+			TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, LatencyMs: latencyMs,
+			MessageID: ctx.TriggerMsgID, IsFallback: resp.UsedFallback, AgentRole: memory.RoleChat,
+			CacheReadTokens: resp.CacheReadTokens, CacheWriteTokens: resp.CacheWriteTokens,
+			Provider: resp.Provider,
+		})
 	}
 
 	// Consume tomorrow's preload after successful delivery. The preload

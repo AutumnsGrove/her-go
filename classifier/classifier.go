@@ -40,6 +40,9 @@ type Verdict struct {
 	CompletionTokens int
 	TotalTokens      int
 	CostUSD          float64
+	CacheReadTokens  int
+	CacheWriteTokens int
+	Provider         string
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +237,9 @@ func Check(
 	v.CompletionTokens = resp.CompletionTokens
 	v.TotalTokens = resp.TotalTokens
 	v.CostUSD = resp.CostUSD
+	v.CacheReadTokens = resp.CacheReadTokens
+	v.CacheWriteTokens = resp.CacheWriteTokens
+	v.Provider = resp.Provider
 	return v
 }
 

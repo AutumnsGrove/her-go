@@ -115,6 +115,9 @@ type AgentIterEvent struct {
 	CompletionTokens int
 	CostUSD          float64
 	FinishReason     string // "tool_calls", "stop"
+	CacheReadTokens  int    // prompt tokens served from provider cache
+	CacheWriteTokens int    // prompt tokens written to cache
+	Provider         string // infrastructure that served this request
 }
 
 func (e AgentIterEvent) EventTime() time.Time { return e.Time }
@@ -155,6 +158,9 @@ type ReplyEvent struct {
 	TotalTokens      int
 	CostUSD          float64
 	LatencyMs        int
+	CacheReadTokens  int    // prompt tokens served from provider cache
+	CacheWriteTokens int    // prompt tokens written to cache
+	Provider         string // infrastructure that served this request
 }
 
 func (e ReplyEvent) EventTime() time.Time { return e.Time }

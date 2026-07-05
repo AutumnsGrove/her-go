@@ -97,7 +97,12 @@ func Reflect(
 	}
 
 	// Log metrics for the reflection call.
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
 
 	log.Info("reflection saved", "preview", truncate(resp.Content, 120))
 	return nil
@@ -219,7 +224,12 @@ func ExtractTraits(
 		return fmt.Errorf("trait extraction LLM call: %w", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
 
 	// Parse the JSON response.
 	var scores struct {
@@ -412,7 +422,12 @@ func NightlyReflect(
 		return fmt.Errorf("nightly reflection LLM call: %w", err)
 	}
 
-	store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
 
 	content := strings.TrimSpace(resp.Content)
 	if content == "NOTHING_NOTABLE" {
@@ -618,7 +633,12 @@ func classifyAndRetryPersona(
 	if err != nil {
 		return newPersona, fmt.Errorf("persona compose retry: %w", err)
 	}
-	store.SaveMetric(retryResp.Model, retryResp.PromptTokens, retryResp.CompletionTokens, retryResp.TotalTokens, retryResp.CostUSD, 0, 0, retryResp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: retryResp.Model, PromptTokens: retryResp.PromptTokens, CompletionTokens: retryResp.CompletionTokens,
+		TotalTokens: retryResp.TotalTokens, CostUSD: retryResp.CostUSD, IsFallback: retryResp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: retryResp.CacheReadTokens,
+		CacheWriteTokens: retryResp.CacheWriteTokens, Provider: retryResp.Provider,
+	})
 
 	retryPersona := strings.TrimSpace(retryResp.Content)
 	if retryPersona == "" {
@@ -693,7 +713,12 @@ func twoStepRewrite(
 	if err != nil {
 		return "", "", false, fmt.Errorf("persona analysis LLM call: %w", err)
 	}
-	store.SaveMetric(analysisResp.Model, analysisResp.PromptTokens, analysisResp.CompletionTokens, analysisResp.TotalTokens, analysisResp.CostUSD, 0, 0, analysisResp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: analysisResp.Model, PromptTokens: analysisResp.PromptTokens, CompletionTokens: analysisResp.CompletionTokens,
+		TotalTokens: analysisResp.TotalTokens, CostUSD: analysisResp.CostUSD, IsFallback: analysisResp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: analysisResp.CacheReadTokens,
+		CacheWriteTokens: analysisResp.CacheWriteTokens, Provider: analysisResp.Provider,
+	})
 
 	bullets := strings.TrimSpace(analysisResp.Content)
 	if bullets == "UNCHANGED" {
@@ -728,7 +753,12 @@ func twoStepRewrite(
 	if err != nil {
 		return "", bullets, false, fmt.Errorf("persona compose LLM call: %w", err)
 	}
-	store.SaveMetric(composeResp.Model, composeResp.PromptTokens, composeResp.CompletionTokens, composeResp.TotalTokens, composeResp.CostUSD, 0, 0, composeResp.UsedFallback, memory.RoleDream)
+	store.SaveMetric(memory.MetricInput{
+		Model: composeResp.Model, PromptTokens: composeResp.PromptTokens, CompletionTokens: composeResp.CompletionTokens,
+		TotalTokens: composeResp.TotalTokens, CostUSD: composeResp.CostUSD, IsFallback: composeResp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: composeResp.CacheReadTokens,
+		CacheWriteTokens: composeResp.CacheWriteTokens, Provider: composeResp.Provider,
+	})
 
 	newPersona := strings.TrimSpace(composeResp.Content)
 	if newPersona == "" {

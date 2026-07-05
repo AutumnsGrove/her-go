@@ -85,9 +85,16 @@ func buildPrompt(template string, v *Vocab, turns []Turn, recentMoods []string) 
 
 // parseInference decodes the LLM's reply into an Inference. Tolerant
 // to markdown code fences around the JSON ("```json\n{...}\n```"),
-// and to leading/trailing whitespace the model sometimes adds.
+// reasoning model <think> tags, and leading/trailing whitespace.
 func parseInference(raw string) (*Inference, error) {
 	cleaned := strings.TrimSpace(raw)
+
+	// Strip reasoning model <think>...</think> blocks. Models like MiMo
+	// wrap their output in thinking tags before the actual JSON payload.
+	if idx := strings.Index(cleaned, "</think>"); idx >= 0 {
+		cleaned = strings.TrimSpace(cleaned[idx+len("</think>"):])
+	}
+
 	cleaned = strings.TrimPrefix(cleaned, "```json")
 	cleaned = strings.TrimPrefix(cleaned, "```")
 	cleaned = strings.TrimSuffix(cleaned, "```")

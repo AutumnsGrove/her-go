@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"her/memory"
+
 	tele "gopkg.in/telebot.v4"
 )
 
@@ -222,7 +224,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	transcript := sttResult.Text
 
 	if sttResult.Cost > 0 {
-		_ = b.store.SaveMetric(b.cfg.Voice.STT.Model, 0, 0, 0, sttResult.Cost, 0, 0, false, "stt")
+		_ = b.store.SaveMetric(memory.MetricInput{Model: b.cfg.Voice.STT.Model, CostUSD: sttResult.Cost, AgentRole: "stt"})
 	}
 
 	log.Infof("  transcript: %s", truncate(transcript, 100))

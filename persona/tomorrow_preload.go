@@ -171,7 +171,12 @@ func RunTomorrowPreload(p TomorrowPreloadParams) error {
 
 	// Log cost.
 	if p.Store != nil && resp.Model != "" {
-		p.Store.SaveMetric(resp.Model, resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, 0, 0, resp.UsedFallback, memory.RoleDream)
+		p.Store.SaveMetric(memory.MetricInput{
+			Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+			TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+			AgentRole: memory.RoleDream, CacheReadTokens: resp.CacheReadTokens,
+			CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+		})
 	}
 
 	return nil

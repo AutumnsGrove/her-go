@@ -58,6 +58,11 @@ type Client struct {
 	// both reasoning and non-reasoning modes (Qwen3.6, DeepSeek V3.2), this
 	// toggles the mode. nil = API default, pointer to false = disable reasoning.
 	reasoning *ReasoningControl
+
+	// sessionID enables sticky routing on OpenRouter — all requests with the
+	// same session_id are pinned to the same provider endpoint, maximizing
+	// prompt cache hits across a conversation. Max 256 chars.
+	sessionID string
 }
 
 // ReasoningControl maps to OpenRouter's `reasoning` parameter object.
@@ -195,6 +200,17 @@ type ChatResponse struct {
 	CostUSD          float64 // actual cost from OpenRouter (0 if not provided)
 	Model            string  // the model that actually responded (may differ from requested)
 	UsedFallback     bool    // true if the primary model failed and the fallback model was used
+
+	// Cache metrics from OpenRouter's prompt_tokens_details.
+	// CacheReadTokens = tokens served from provider-side prompt cache (cheap).
+	// CacheWriteTokens = tokens written to cache for future reuse (slight premium).
+	CacheReadTokens  int
+	CacheWriteTokens int
+
+	// Provider is the infrastructure that served this request (e.g., "Moonshot",
+	// "Groq"). Captured from the top-level `provider` field in SSE chunks, or
+	// from openrouter_metadata in non-streaming responses.
+	Provider string
 }
 
 // chatRequest is the JSON body we send to the API.
@@ -226,6 +242,10 @@ type chatRequest struct {
 	// Pure reasoning models ignore this, pure instruct models don't need it.
 	Reasoning *ReasoningControl `json:"reasoning,omitempty"`
 
+	// SessionID enables OpenRouter sticky routing — pins requests to the
+	// same provider endpoint for better prompt cache hit rates.
+	SessionID string `json:"session_id,omitempty"`
+
 	Stream bool `json:"stream,omitempty"`
 }
 
@@ -243,8 +263,32 @@ type chatAPIResponse struct {
 		CompletionTokens int     `json:"completion_tokens"`
 		TotalTokens      int     `json:"total_tokens"`
 		Cost             float64 `json:"cost"`
+		// PromptTokensDetails is OpenRouter's nested cache breakdown.
+		// cached_tokens = prompt tokens served from provider cache (reads).
+		// cache_write_tokens = tokens written to cache for future reuse.
+		PromptTokensDetails *promptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage"`
 	Model string `json:"model"`
+
+	// Provider is set by OpenRouter on non-streaming responses when
+	// X-OpenRouter-Metadata header is enabled. For streaming, the
+	// provider field appears on each SSE chunk instead.
+	Metadata *openrouterMetadata `json:"openrouter_metadata,omitempty"`
+}
+
+// promptTokensDetails holds OpenRouter's cache token breakdown,
+// nested inside the usage object.
+type promptTokensDetails struct {
+	CachedTokens    int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
+}
+
+// openrouterMetadata holds routing info returned when the
+// X-OpenRouter-Metadata header is sent. We only need the provider name.
+type openrouterMetadata struct {
+	Attempts []struct {
+		Provider string `json:"provider"`
+	} `json:"attempts,omitempty"`
 }
 
 // sseChunk mirrors one streaming delta event from the OpenAI SSE format.
@@ -258,12 +302,17 @@ type sseChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int     `json:"prompt_tokens"`
-		CompletionTokens int     `json:"completion_tokens"`
-		TotalTokens      int     `json:"total_tokens"`
-		Cost             float64 `json:"cost"`
+		PromptTokens        int                  `json:"prompt_tokens"`
+		CompletionTokens    int                  `json:"completion_tokens"`
+		TotalTokens         int                  `json:"total_tokens"`
+		Cost                float64              `json:"cost"`
+		PromptTokensDetails *promptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage"`
 	Model string `json:"model"`
+
+	// Provider appears on every SSE chunk from OpenRouter — tells us
+	// which infrastructure (e.g., "Moonshot", "Groq") served this request.
+	Provider string `json:"provider,omitempty"`
 }
 
 // sseToolCallDelta is one fragment of a streaming tool call. Arguments
@@ -323,6 +372,15 @@ func (c *Client) WithProvider(p *ProviderRouting) *Client {
 // Pass nil to use API default, &ReasoningControl{Enabled: &false} to disable.
 func (c *Client) WithReasoning(r *ReasoningControl) *Client {
 	c.reasoning = r
+	return c
+}
+
+// WithSessionID enables OpenRouter sticky routing. All requests with the
+// same session ID are pinned to the same provider endpoint, which maximizes
+// prompt cache hits across a conversation. Think of it like HTTP session
+// affinity for LLM inference — same idea as a load balancer sticky cookie.
+func (c *Client) WithSessionID(id string) *Client {
+	c.sessionID = id
 	return c
 }
 
@@ -523,6 +581,9 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 	if c.reasoning != nil {
 		reqBody.Reasoning = c.reasoning
 	}
+	if c.sessionID != "" {
+		reqBody.SessionID = c.sessionID
+	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -550,6 +611,8 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
 	req.Header.Set("X-Title", "her-go")
+	// Opt in to OpenRouter routing metadata — gives us the provider name.
+	req.Header.Set("X-OpenRouter-Metadata", "enabled")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -575,6 +638,19 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
 
+	// Extract cache metrics from the nested prompt_tokens_details object.
+	var cacheRead, cacheWrite int
+	if d := apiResp.Usage.PromptTokensDetails; d != nil {
+		cacheRead = d.CachedTokens
+		cacheWrite = d.CacheWriteTokens
+	}
+
+	// Extract provider name from openrouter_metadata (opt-in via header).
+	var provider string
+	if m := apiResp.Metadata; m != nil && len(m.Attempts) > 0 {
+		provider = m.Attempts[0].Provider
+	}
+
 	// Debug mode: log response metadata. We don't log the full content
 	// (it's already visible in traces), just the usage stats.
 	if debugMode {
@@ -584,6 +660,9 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 			"prompt_tokens", apiResp.Usage.PromptTokens,
 			"completion_tokens", apiResp.Usage.CompletionTokens,
 			"cost", apiResp.Usage.Cost,
+			"cache_read", cacheRead,
+			"cache_write", cacheWrite,
+			"provider", provider,
 			"tool_calls", len(apiResp.Choices[0].Message.ToolCalls),
 		)
 	}
@@ -597,6 +676,9 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 		TotalTokens:      apiResp.Usage.TotalTokens,
 		CostUSD:          apiResp.Usage.Cost,
 		Model:            apiResp.Model,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		Provider:         provider,
 	}, nil
 }
 
@@ -626,6 +708,9 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	}
 	if c.reasoning != nil {
 		reqBody.Reasoning = c.reasoning
+	}
+	if c.sessionID != "" {
+		reqBody.SessionID = c.sessionID
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -692,8 +777,9 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	var contentBuilder strings.Builder
 	var finishReason string
 	var promptTokens, completionTokens, totalTokens int
+	var cacheReadTokens, cacheWriteTokens int
 	var costUSD float64
-	var respModel string
+	var respModel, respProvider string
 
 readLoop:
 	for scanner.Scan() {
@@ -714,11 +800,19 @@ readLoop:
 		if chunk.Model != "" {
 			respModel = chunk.Model
 		}
+		// Provider appears on every SSE chunk from OpenRouter.
+		if chunk.Provider != "" {
+			respProvider = chunk.Provider
+		}
 		if chunk.Usage != nil {
 			promptTokens = chunk.Usage.PromptTokens
 			completionTokens = chunk.Usage.CompletionTokens
 			totalTokens = chunk.Usage.TotalTokens
 			costUSD = chunk.Usage.Cost
+			if d := chunk.Usage.PromptTokensDetails; d != nil {
+				cacheReadTokens = d.CachedTokens
+				cacheWriteTokens = d.CacheWriteTokens
+			}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -793,6 +887,9 @@ readLoop:
 			"prompt_tokens", promptTokens,
 			"completion_tokens", completionTokens,
 			"cost", costUSD,
+			"cache_read", cacheReadTokens,
+			"cache_write", cacheWriteTokens,
+			"provider", respProvider,
 			"tool_calls", len(toolCalls),
 		)
 	}
@@ -806,6 +903,9 @@ readLoop:
 		TotalTokens:      totalTokens,
 		CostUSD:          costUSD,
 		Model:            respModel,
+		CacheReadTokens:  cacheReadTokens,
+		CacheWriteTokens: cacheWriteTokens,
+		Provider:         respProvider,
 	}, nil
 }
 
@@ -827,6 +927,9 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	}
 	if c.reasoning != nil {
 		reqBody.Reasoning = c.reasoning
+	}
+	if c.sessionID != "" {
+		reqBody.SessionID = c.sessionID
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -864,8 +967,9 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	var contentBuilder strings.Builder
 	var finishReason string
 	var promptTokens, completionTokens, totalTokens int
+	var cacheReadTokens, cacheWriteTokens int
 	var costUSD float64
-	var respModel string
+	var respModel, respProvider string
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -882,11 +986,18 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 		if chunk.Model != "" {
 			respModel = chunk.Model
 		}
+		if chunk.Provider != "" {
+			respProvider = chunk.Provider
+		}
 		if chunk.Usage != nil {
 			promptTokens = chunk.Usage.PromptTokens
 			completionTokens = chunk.Usage.CompletionTokens
 			totalTokens = chunk.Usage.TotalTokens
 			costUSD = chunk.Usage.Cost
+			if d := chunk.Usage.PromptTokensDetails; d != nil {
+				cacheReadTokens = d.CachedTokens
+				cacheWriteTokens = d.CacheWriteTokens
+			}
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -913,5 +1024,8 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 		TotalTokens:      totalTokens,
 		CostUSD:          costUSD,
 		Model:            respModel,
+		CacheReadTokens:  cacheReadTokens,
+		CacheWriteTokens: cacheWriteTokens,
+		Provider:         respProvider,
 	}, nil
 }

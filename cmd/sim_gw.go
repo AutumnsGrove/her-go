@@ -52,12 +52,21 @@ func init() {
 	f.StringVar(&memoryModelFlag, "memory-model", "", "override memory agent model")
 	f.StringVar(&moodModelFlag, "mood-model", "", "override mood agent model")
 	f.StringVar(&introspectionModelFlag, "introspection-model", "", "override introspection agent model")
+	f.StringVar(&dreamModelFlag, "dream-model", "", "override dream agent model")
+	f.StringVar(&visionModelFlag, "vision-model", "", "override vision model")
 	f.StringVar(&classifierModelFlag, "classifier-model", "", "override classifier model")
 	f.StringVar(&embedModelFlag, "embed-model", "", "override embedding model")
 	f.StringVar(&embedBaseURLFlag, "embed-base-url", "", "override embedding API base URL")
 	f.StringVar(&embedAPIKeyFlag, "embed-api-key", "", "API key for remote embedding APIs")
 	f.IntVar(&embedDimensionFlag, "embed-dimension", 0, "override embedding dimension")
 	f.StringVar(&chatProviderFlag, "chat-provider", "", "pin chat model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&driverProviderFlag, "driver-provider", "", "pin driver model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&memoryProviderFlag, "memory-provider", "", "pin memory agent model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&moodProviderFlag, "mood-provider", "", "pin mood agent model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&introspectionProviderFlag, "introspection-provider", "", "pin introspection agent model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&dreamProviderFlag, "dream-provider", "", "pin dream agent model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&visionProviderFlag, "vision-provider", "", "pin vision model to OpenRouter provider(s), comma-separated")
+	f.StringVar(&sessionIDFlag, "session-id", "", "OpenRouter session ID for sticky routing (auto-generated if empty)")
 	f.StringVar(&fallbackModelFlag, "fallback-model", "", "override fallback model for all roles")
 	f.StringVar(&fallbackVisionModelFlag, "fallback-vision-model", "", "override fallback model for vision")
 	f.BoolVar(&disableReasoningFlag, "disable-reasoning", false, "disable reasoning mode for hybrid models")
@@ -89,6 +98,15 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if cfg.OpenRouter.APIKey == "" {
 		return fmt.Errorf("LLM API key is required — set OPENROUTER_API_KEY or fill in config.yaml")
 	}
+
+	// --- Session ID for sticky routing ---
+	// Auto-generate a unique session ID per sim run so all LLM calls land
+	// on the same provider endpoint, maximizing prompt cache hits.
+	simSessionID := sessionIDFlag
+	if simSessionID == "" {
+		simSessionID = fmt.Sprintf("her-sim-%d", time.Now().UnixMilli())
+	}
+	log.Infof("sim: session_id=%s (sticky routing for cache hits)", simSessionID)
 
 	// --- Apply CLI flag overrides ---
 	applySimModelOverrides(cfg)
@@ -159,8 +177,19 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	// independent models, temperatures, timeouts, and fallbacks. In Python
 	// you'd probably use a dict; in Go we use explicit named fields in Deps.
 
+	// applyProvider is a helper that wires a --*-provider CLI flag onto a client.
+	// Keeps the per-client blocks below clean.
+	applyProvider := func(c *llm.Client, flag, label string) {
+		if flag != "" {
+			providers := strings.Split(flag, ",")
+			c.WithProvider(&llm.ProviderRouting{Order: providers})
+			log.Infof("sim: %s provider → %v", label, providers)
+		}
+	}
+
 	chatLLM := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 		cfg.Chat.Model, cfg.Chat.Temperature, cfg.Chat.MaxTokens)
+	chatLLM.WithSessionID(simSessionID)
 	if cfg.Chat.Timeout > 0 {
 		chatLLM.WithTimeout(time.Duration(cfg.Chat.Timeout) * time.Second)
 	}
@@ -170,11 +199,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if cfg.Chat.Provider != nil {
 		chatLLM.WithProvider(&llm.ProviderRouting{Order: cfg.Chat.Provider.Order, Only: cfg.Chat.Provider.Only, Sort: cfg.Chat.Provider.Sort})
 	}
-	if chatProviderFlag != "" {
-		providers := strings.Split(chatProviderFlag, ",")
-		chatLLM.WithProvider(&llm.ProviderRouting{Order: providers})
-		log.Infof("sim: chat provider → %v", providers)
-	}
+	applyProvider(chatLLM, chatProviderFlag, "chat")
 	if disableReasoningFlag {
 		disabled := false
 		chatLLM.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
@@ -182,12 +207,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	driverLLM := llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 		cfg.Driver.Model, cfg.Driver.Temperature, cfg.Driver.MaxTokens)
+	driverLLM.WithSessionID(simSessionID)
 	if cfg.Driver.Timeout > 0 {
 		driverLLM.WithTimeout(time.Duration(cfg.Driver.Timeout) * time.Second)
 	}
 	if cfg.Driver.Fallback != nil {
 		driverLLM.WithFallback(cfg.Driver.Fallback.Model, cfg.Driver.Fallback.Temperature, cfg.Driver.Fallback.MaxTokens)
 	}
+	applyProvider(driverLLM, driverProviderFlag, "driver")
 	if disableReasoningFlag {
 		disabled := false
 		driverLLM.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
@@ -197,12 +224,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if cfg.MemoryAgent.Model != "" {
 		memoryAgentLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 			cfg.MemoryAgent.Model, cfg.MemoryAgent.Temperature, cfg.MemoryAgent.MaxTokens)
+		memoryAgentLLM.WithSessionID(simSessionID)
 		if cfg.MemoryAgent.Timeout > 0 {
 			memoryAgentLLM.WithTimeout(time.Duration(cfg.MemoryAgent.Timeout) * time.Second)
 		}
 		if cfg.MemoryAgent.Fallback != nil {
 			memoryAgentLLM.WithFallback(cfg.MemoryAgent.Fallback.Model, cfg.MemoryAgent.Fallback.Temperature, cfg.MemoryAgent.Fallback.MaxTokens)
 		}
+		applyProvider(memoryAgentLLM, memoryProviderFlag, "memory")
 	}
 
 	var moodAgentLLM *llm.Client
@@ -217,20 +246,27 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		}
 		moodAgentLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 			cfg.MoodAgent.Model, mTemp, mTokens)
+		moodAgentLLM.WithSessionID(simSessionID)
 		if cfg.MoodAgent.Timeout > 0 {
 			moodAgentLLM.WithTimeout(time.Duration(cfg.MoodAgent.Timeout) * time.Second)
 		}
+		applyProvider(moodAgentLLM, moodProviderFlag, "mood")
 	}
 
 	var visionLLM *llm.Client
 	if cfg.Vision.Model != "" {
 		visionLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 			cfg.Vision.Model, cfg.Vision.Temperature, cfg.Vision.MaxTokens)
+		visionLLM.WithSessionID(simSessionID)
 		if cfg.Vision.Fallback != nil {
 			visionLLM.WithFallback(cfg.Vision.Fallback.Model, cfg.Vision.Fallback.Temperature, cfg.Vision.Fallback.MaxTokens)
 		}
+		applyProvider(visionLLM, visionProviderFlag, "vision")
 	}
 
+	// Classifier intentionally has NO session ID or provider override —
+	// it stays on its own model/provider (e.g., Gemini Flash Lite) regardless
+	// of what's being benchmarked.
 	var classifierLLM *llm.Client
 	if cfg.Classifier.Model != "" {
 		classifierLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
@@ -241,22 +277,26 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	if cfg.DreamAgent.Model != "" {
 		dreamAgentLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 			cfg.DreamAgent.Model, cfg.DreamAgent.Temperature, cfg.DreamAgent.MaxTokens)
+		dreamAgentLLM.WithSessionID(simSessionID)
 		timeout := cfg.DreamAgent.Timeout
 		if timeout == 0 {
 			timeout = 120
 		}
 		dreamAgentLLM.WithTimeout(time.Duration(timeout) * time.Second)
+		applyProvider(dreamAgentLLM, dreamProviderFlag, "dream")
 	}
 
 	var introspectionLLM *llm.Client
 	if cfg.IntrospectionAgent.Model != "" {
 		introspectionLLM = llm.NewClient(cfg.OpenRouter.BaseURL, cfg.OpenRouter.APIKey,
 			cfg.IntrospectionAgent.Model, cfg.IntrospectionAgent.Temperature, cfg.IntrospectionAgent.MaxTokens)
+		introspectionLLM.WithSessionID(simSessionID)
 		timeout := cfg.IntrospectionAgent.Timeout
 		if timeout == 0 {
 			timeout = 60
 		}
 		introspectionLLM.WithTimeout(time.Duration(timeout) * time.Second)
+		applyProvider(introspectionLLM, introspectionProviderFlag, "introspection")
 	}
 
 	// --- Search client ---
@@ -615,8 +655,21 @@ func printSimResults(suiteName string, results []gateway.SimResult) {
 		}
 
 		fmt.Printf("[%d/%d] OK    %s\n", i+1, len(results), truncSimText(r.Input, 60))
-		fmt.Printf("         reply (%s, $%.4f, %d tools): %s\n",
+		cacheInfo := ""
+		if r.CacheReadTokens > 0 || r.CacheWriteTokens > 0 {
+			cacheInfo = fmt.Sprintf(", cache r:%d w:%d", r.CacheReadTokens, r.CacheWriteTokens)
+		}
+		providerInfo := ""
+		if len(r.Providers) > 0 {
+			var names []string
+			for name := range r.Providers {
+				names = append(names, name)
+			}
+			providerInfo = fmt.Sprintf(", via %s", strings.Join(names, "+"))
+		}
+		fmt.Printf("         reply (%s, $%.4f, %d tools%s%s): %s\n",
 			r.Duration.Round(time.Millisecond), r.Cost, r.ToolCalls,
+			cacheInfo, providerInfo,
 			truncSimText(r.Reply, 80))
 
 		// Mood verdict
@@ -678,6 +731,14 @@ func applySimModelOverrides(cfg *config.Config) {
 	if introspectionModelFlag != "" {
 		cfg.IntrospectionAgent.Model = introspectionModelFlag
 		log.Infof("sim: introspection model → %s", introspectionModelFlag)
+	}
+	if dreamModelFlag != "" {
+		cfg.DreamAgent.Model = dreamModelFlag
+		log.Infof("sim: dream model → %s", dreamModelFlag)
+	}
+	if visionModelFlag != "" {
+		cfg.Vision.Model = visionModelFlag
+		log.Infof("sim: vision model → %s", visionModelFlag)
 	}
 	if classifierModelFlag != "" {
 		cfg.Classifier.Model = classifierModelFlag
@@ -758,22 +819,29 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 		elapsed.Round(time.Second),
 		totalCost, len(results))
 
-	// Model table
+	// Model + provider table
 	modelOrNone := func(m string) string {
 		if m == "" {
 			return "(none)"
 		}
 		return m
 	}
-	fmt.Fprintf(&b, "| Role | Model |\n|------|-------|\n")
-	fmt.Fprintf(&b, "| Chat | %s |\n", modelOrNone(cfg.Chat.Model))
-	fmt.Fprintf(&b, "| Driver | %s |\n", modelOrNone(cfg.Driver.Model))
-	fmt.Fprintf(&b, "| Memory | %s |\n", modelOrNone(cfg.MemoryAgent.Model))
-	fmt.Fprintf(&b, "| Mood | %s |\n", modelOrNone(cfg.MoodAgent.Model))
-	fmt.Fprintf(&b, "| Classifier | %s |\n", modelOrNone(cfg.Classifier.Model))
-	fmt.Fprintf(&b, "| Vision | %s |\n", modelOrNone(cfg.Vision.Model))
-	fmt.Fprintf(&b, "| Introspection | %s |\n", modelOrNone(cfg.IntrospectionAgent.Model))
-	fmt.Fprintf(&b, "| Embed | %s |\n\n", modelOrNone(cfg.Embed.Model))
+	providerOrDefault := func(flag string) string {
+		if flag == "" {
+			return "(auto)"
+		}
+		return flag
+	}
+	fmt.Fprintf(&b, "| Role | Model | Provider |\n|------|-------|----------|\n")
+	fmt.Fprintf(&b, "| Chat | %s | %s |\n", modelOrNone(cfg.Chat.Model), providerOrDefault(chatProviderFlag))
+	fmt.Fprintf(&b, "| Driver | %s | %s |\n", modelOrNone(cfg.Driver.Model), providerOrDefault(driverProviderFlag))
+	fmt.Fprintf(&b, "| Memory | %s | %s |\n", modelOrNone(cfg.MemoryAgent.Model), providerOrDefault(memoryProviderFlag))
+	fmt.Fprintf(&b, "| Mood | %s | %s |\n", modelOrNone(cfg.MoodAgent.Model), providerOrDefault(moodProviderFlag))
+	fmt.Fprintf(&b, "| Classifier | %s | (auto) |\n", modelOrNone(cfg.Classifier.Model))
+	fmt.Fprintf(&b, "| Vision | %s | %s |\n", modelOrNone(cfg.Vision.Model), providerOrDefault(visionProviderFlag))
+	fmt.Fprintf(&b, "| Introspection | %s | %s |\n", modelOrNone(cfg.IntrospectionAgent.Model), providerOrDefault(introspectionProviderFlag))
+	fmt.Fprintf(&b, "| Dream | %s | %s |\n", modelOrNone(cfg.DreamAgent.Model), providerOrDefault(dreamProviderFlag))
+	fmt.Fprintf(&b, "| Embed | %s | (auto) |\n\n", modelOrNone(cfg.Embed.Model))
 
 	// --- Conversation ---
 	b.WriteString("## Conversation\n\n")
@@ -785,8 +853,19 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 			continue
 		}
 
-		fmt.Fprintf(&b, "### Turn %d *(%.1fs, $%.4f, %d tools)*\n",
-			i+1, r.Duration.Seconds(), r.Cost, r.ToolCalls)
+		// Build per-turn header with optional cache + provider annotations.
+		turnHeader := fmt.Sprintf("%.1fs, $%.4f, %d tools", r.Duration.Seconds(), r.Cost, r.ToolCalls)
+		if r.CacheReadTokens > 0 || r.CacheWriteTokens > 0 {
+			turnHeader += fmt.Sprintf(", cache ↓%d ↑%d", r.CacheReadTokens, r.CacheWriteTokens)
+		}
+		if len(r.Providers) > 0 {
+			var names []string
+			for name := range r.Providers {
+				names = append(names, name)
+			}
+			turnHeader += fmt.Sprintf(", via %s", strings.Join(names, "+"))
+		}
+		fmt.Fprintf(&b, "### Turn %d *(%s)*\n", i+1, turnHeader)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, r.Reply)
 
@@ -1047,7 +1126,9 @@ func writeGWCostBreakdownSection(b *strings.Builder, s *memory.SQLiteStore) {
 		        SUM(prompt_tokens) as prompt,
 		        SUM(completion_tokens) as completion,
 		        SUM(cost_usd) as cost,
-		        SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END) as fallbacks
+		        SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END) as fallbacks,
+		        SUM(cache_read_tokens) as cache_read,
+		        SUM(cache_write_tokens) as cache_write
 		 FROM metrics
 		 GROUP BY agent_role
 		 ORDER BY cost DESC`)
@@ -1060,19 +1141,21 @@ func writeGWCostBreakdownSection(b *strings.Builder, s *memory.SQLiteStore) {
 	var count int
 	for rows.Next() {
 		var role string
-		var calls, prompt, completion, fallbacks int
+		var calls, prompt, completion, fallbacks, cacheRead, cacheWrite int
 		var cost float64
-		if err := rows.Scan(&role, &calls, &prompt, &completion, &cost, &fallbacks); err != nil {
+		if err := rows.Scan(&role, &calls, &prompt, &completion, &cost, &fallbacks, &cacheRead, &cacheWrite); err != nil {
 			continue
 		}
 		if count == 0 {
-			fmt.Fprintf(b, "| Role | Calls | Prompt | Completion | Cost | Fallbacks |\n|------|-------|--------|------------|------|-----------|\n")
+			fmt.Fprintf(b, "| Role | Calls | Prompt | Completion | Cost | Cache Read | Cache Write | Hit %% |\n")
+			fmt.Fprintf(b, "|------|-------|--------|------------|------|------------|-------------|-------|\n")
 		}
-		fb := ""
-		if fallbacks > 0 {
-			fb = fmt.Sprintf("%d", fallbacks)
+		hitPct := ""
+		if prompt > 0 {
+			hitPct = fmt.Sprintf("%.0f%%", float64(cacheRead)/float64(prompt)*100)
 		}
-		fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f | %s |\n", role, calls, prompt, completion, cost, fb)
+		fmt.Fprintf(b, "| %s | %d | %d | %d | $%.4f | %d | %d | %s |\n",
+			role, calls, prompt, completion, cost, cacheRead, cacheWrite, hitPct)
 		count++
 	}
 	if err := rows.Err(); err != nil {
@@ -1082,6 +1165,86 @@ func writeGWCostBreakdownSection(b *strings.Builder, s *memory.SQLiteStore) {
 		b.WriteString("*No metrics recorded.*\n")
 	}
 	b.WriteString("\n")
+
+	// Provider breakdown — shows which infrastructure served each model.
+	writeGWProviderSection(b, s)
+
+	// Cache summary — aggregate cache efficiency across all calls.
+	writeGWCacheSummarySection(b, s)
+}
+
+func writeGWProviderSection(b *strings.Builder, s *memory.SQLiteStore) {
+	b.WriteString("## Provider Routing\n\n")
+
+	rows, err := s.DB().Query(
+		`SELECT provider, model, COUNT(*) as calls, SUM(cost_usd) as cost
+		 FROM metrics
+		 WHERE provider != ''
+		 GROUP BY provider, model
+		 ORDER BY calls DESC`)
+	if err != nil {
+		fmt.Fprintf(b, "*Error loading provider data: %v*\n\n", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var provider, model string
+		var calls int
+		var cost float64
+		if err := rows.Scan(&provider, &model, &calls, &cost); err != nil {
+			continue
+		}
+		if count == 0 {
+			fmt.Fprintf(b, "| Provider | Model | Calls | Cost |\n|----------|-------|-------|------|\n")
+		}
+		fmt.Fprintf(b, "| %s | %s | %d | $%.4f |\n", provider, model, calls, cost)
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(b, "\n*Error iterating provider data: %v*\n", err)
+	}
+	if count == 0 {
+		b.WriteString("*No provider data recorded (provider field may not be populated by this model).*\n")
+	}
+	b.WriteString("\n")
+}
+
+func writeGWCacheSummarySection(b *strings.Builder, s *memory.SQLiteStore) {
+	var totalPrompt, totalCacheRead, totalCacheWrite, totalCalls int
+	var totalCost float64
+	err := s.DB().QueryRow(
+		`SELECT COUNT(*),
+		        COALESCE(SUM(prompt_tokens), 0),
+		        COALESCE(SUM(cache_read_tokens), 0),
+		        COALESCE(SUM(cache_write_tokens), 0),
+		        COALESCE(SUM(cost_usd), 0)
+		 FROM metrics`,
+	).Scan(&totalCalls, &totalPrompt, &totalCacheRead, &totalCacheWrite, &totalCost)
+	if err != nil || totalCacheRead == 0 && totalCacheWrite == 0 {
+		return
+	}
+
+	b.WriteString("## Cache Efficiency\n\n")
+
+	hitRate := 0.0
+	if totalPrompt > 0 {
+		hitRate = float64(totalCacheRead) / float64(totalPrompt) * 100
+	}
+	uncached := totalPrompt - totalCacheRead
+	if uncached < 0 {
+		uncached = 0
+	}
+
+	fmt.Fprintf(b, "| Metric | Value |\n|--------|-------|\n")
+	fmt.Fprintf(b, "| Total prompt tokens | %d |\n", totalPrompt)
+	fmt.Fprintf(b, "| Cache read (hits) | %d |\n", totalCacheRead)
+	fmt.Fprintf(b, "| Cache write (new) | %d |\n", totalCacheWrite)
+	fmt.Fprintf(b, "| Uncached prompt | %d |\n", uncached)
+	fmt.Fprintf(b, "| **Cache hit rate** | **%.1f%%** |\n", hitRate)
+	fmt.Fprintf(b, "| Total LLM calls | %d |\n", totalCalls)
+	fmt.Fprintf(b, "| Total cost | $%.4f |\n\n", totalCost)
 }
 
 func writeGWFallbackSection(b *strings.Builder, s *memory.SQLiteStore) {

@@ -64,17 +64,17 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Log metrics — same pattern as other LLM calls.
 	if ctx.Store != nil && ctx.TriggerMsgID > 0 {
-		if err := ctx.Store.SaveMetric(
-			result.Model,
-			result.PromptTokens,
-			result.CompletionTokens,
-			result.TotalTokens,
-			result.CostUSD,
-			0, // latency — not tracked at this level
-			ctx.TriggerMsgID,
-			result.UsedFallback,
-			memory.RoleVision,
-		); err != nil {
+		if err := ctx.Store.SaveMetric(memory.MetricInput{
+			Model:            result.Model,
+			PromptTokens:     result.PromptTokens,
+			CompletionTokens: result.CompletionTokens,
+			TotalTokens:      result.TotalTokens,
+			CostUSD:          result.CostUSD,
+			MessageID:        ctx.TriggerMsgID,
+			IsFallback:       result.UsedFallback,
+			AgentRole:        memory.RoleVision,
+			// DescribeResult has no cache/provider fields — zero values for those
+		}); err != nil {
 			log.Error("saving vision metric", "err", err)
 		}
 	}

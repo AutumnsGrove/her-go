@@ -130,9 +130,31 @@ var fallbackVisionModelFlag string
 // Example: --introspection-model "moonshotai/kimi-k2-0905"
 var introspectionModelFlag string
 
+// dreamModelFlag overrides the dream agent model for this run.
+var dreamModelFlag string
+
+// visionModelFlag overrides the vision model for this run.
+var visionModelFlag string
+
 // moodModelFlag overrides the mood agent model for this run.
 // Example: --mood-model "qwen/qwen3-235b-a22b-2507"
 var moodModelFlag string
+
+// Per-role provider flags pin each agent's model to a specific OpenRouter
+// provider. Comma-separated lists tried in order. Only set for models that
+// the provider actually serves — e.g., don't pin the classifier to xiaomi/fp8
+// if it runs a Gemini model.
+var driverProviderFlag string
+var memoryProviderFlag string
+var moodProviderFlag string
+var introspectionProviderFlag string
+var dreamProviderFlag string
+var visionProviderFlag string
+
+// sessionIDFlag enables OpenRouter sticky routing — pins all requests to the
+// same provider endpoint for maximum prompt cache hit rates. If empty, a
+// unique session ID is auto-generated per sim run.
+var sessionIDFlag string
 
 // disableReasoningFlag disables reasoning mode for hybrid models that support
 // both reasoning and non-reasoning modes (e.g., Qwen3.6, DeepSeek V3.2).

@@ -953,14 +953,14 @@ func (s *SyncedStore) SavePIIVaultEntry(messageID int64, token, originalValue, e
 // SaveMetric logs token usage locally and records in outbox.
 // Queries back by timestamp DESC to avoid last_insert_rowid() races
 // with concurrent background agents.
-func (s *SyncedStore) SaveMetric(model string, promptTokens, completionTokens, totalTokens int, costUSD float64, latencyMs int, messageID int64, isFallback bool, agentRole string) error {
-	if err := s.SQLiteStore.SaveMetric(model, promptTokens, completionTokens, totalTokens, costUSD, latencyMs, messageID, isFallback, agentRole); err != nil {
+func (s *SyncedStore) SaveMetric(m MetricInput) error {
+	if err := s.SQLiteStore.SaveMetric(m); err != nil {
 		return err
 	}
 	var id int64
 	err := s.SQLiteStore.db.QueryRow(
 		`SELECT id FROM metrics WHERE model = ? AND agent_role = ? ORDER BY id DESC LIMIT 1`,
-		model, agentRole,
+		m.Model, m.AgentRole,
 	).Scan(&id)
 	if err == nil && id > 0 {
 		s.writeOutbox("metrics", id, "upsert")

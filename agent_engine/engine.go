@@ -369,11 +369,13 @@ outer:
 
 			// -- Metrics --
 			if cfg.Store != nil {
-				_ = cfg.Store.SaveMetric(
-					resp.Model, resp.PromptTokens, resp.CompletionTokens,
-					resp.TotalTokens, resp.CostUSD, 0, cfg.TriggerMsgID,
-					resp.UsedFallback, cfg.MetricRole,
-				)
+				_ = cfg.Store.SaveMetric(memory.MetricInput{
+					Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+					TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, MessageID: cfg.TriggerMsgID,
+					IsFallback: resp.UsedFallback, AgentRole: cfg.MetricRole,
+					CacheReadTokens: resp.CacheReadTokens, CacheWriteTokens: resp.CacheWriteTokens,
+					Provider: resp.Provider,
+				})
 			}
 			totalCost += resp.CostUSD
 			log.Infof("  [%s] tokens: %d prompt + %d completion | $%.6f | finish=%s",
@@ -389,6 +391,9 @@ outer:
 				CompletionTokens: resp.CompletionTokens,
 				CostUSD:          resp.CostUSD,
 				FinishReason:     resp.FinishReason,
+				CacheReadTokens:  resp.CacheReadTokens,
+				CacheWriteTokens: resp.CacheWriteTokens,
+				Provider:         resp.Provider,
 			})
 
 			// Surface model fallback in traces.
