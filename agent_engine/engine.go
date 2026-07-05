@@ -413,6 +413,34 @@ outer:
 				}
 			}
 
+			// -- Surface reasoning model <think> blocks --
+			// Models like MiMo wrap internal reasoning in <think>...</think>
+			// tags. Extract the thinking text and emit it as a synthetic
+			// think tool call so it appears in traces, TUI, and sim reports
+			// — same visibility as the explicit think tool that instruct
+			// models use.
+			if thought, cleaned, ok := extractThinkBlock(resp.Content); ok {
+				resp.Content = cleaned
+
+				if tracing {
+					traceLines = append(traceLines, fmt.Sprintf(
+						"🧠 <i>%s</i>", TruncateLog(thought, 300)))
+					sendTrace()
+				}
+				if cfg.Phase != nil {
+					cfg.Phase.EmitToolCall("think", TruncateLog(thought, 200), "", false)
+				} else {
+					emit(tui.ToolCallEvent{
+						Time:     time.Now(),
+						TurnID:   cfg.TriggerMsgID,
+						Source:   cfg.Name,
+						ToolName: "think",
+						Args:     fmt.Sprintf(`{"thought":"%s"}`, TruncateLog(thought, 200)),
+						Result:   "(internal reasoning)",
+					})
+				}
+			}
+
 			// -- No tool calls → exit (unless hook handles it) --
 			if len(resp.ToolCalls) == 0 {
 				if cfg.OnNoToolCalls != nil {
@@ -619,4 +647,24 @@ func TruncateLog(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// extractThinkBlock finds and removes a <think>...</think> block from
+// model output. Reasoning models (MiMo, DeepSeek R1) wrap their chain
+// of thought in these tags before the actual response. Returns the
+// extracted thought, the cleaned content, and whether a block was found.
+func extractThinkBlock(content string) (thought, cleaned string, ok bool) {
+	openTag := "<think>"
+	closeTag := "</think>"
+
+	openIdx := strings.Index(content, openTag)
+	closeIdx := strings.Index(content, closeTag)
+	if openIdx < 0 || closeIdx < 0 || closeIdx <= openIdx {
+		return "", content, false
+	}
+
+	thought = strings.TrimSpace(content[openIdx+len(openTag) : closeIdx])
+	// Everything before <think> + everything after </think>
+	cleaned = strings.TrimSpace(content[:openIdx] + content[closeIdx+len(closeTag):])
+	return thought, cleaned, thought != ""
 }

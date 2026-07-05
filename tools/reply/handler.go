@@ -263,6 +263,13 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("error generating response: %v", err)
 	}
 
+	// Strip reasoning model <think> blocks from the reply. If MiMo-pro
+	// (or any reasoning model) is the chat model, its internal chain of
+	// thought would otherwise appear in the user-facing message.
+	if idx := strings.Index(resp.Content, "</think>"); idx >= 0 {
+		resp.Content = strings.TrimSpace(resp.Content[idx+len("</think>"):])
+	}
+
 	ctx.ReplyCost += resp.CostUSD
 	ctx.ReplyUsedFallback = resp.UsedFallback
 	ctx.ReplyModel = resp.Model

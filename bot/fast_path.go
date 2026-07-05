@@ -271,6 +271,11 @@ func (b *Bot) runFastPath(
 		return nil, fmt.Errorf("fast-path chat error: %w", err)
 	}
 
+	// Strip reasoning model <think> blocks from fast-path replies.
+	if idx := strings.Index(resp.Content, "</think>"); idx >= 0 {
+		resp.Content = strings.TrimSpace(resp.Content[idx+len("</think>"):])
+	}
+
 	log.Infof("  fast-path reply: %d prompt + %d completion = %d total | $%.6f | %dms",
 		resp.PromptTokens, resp.CompletionTokens, resp.TotalTokens, resp.CostUSD, latencyMs)
 
