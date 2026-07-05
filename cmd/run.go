@@ -423,6 +423,11 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		if cfg.MoodAgent.Fallback != nil {
 			moodAgentClient.WithFallback(cfg.MoodAgent.Fallback.Model, cfg.MoodAgent.Fallback.Temperature, cfg.MoodAgent.Fallback.MaxTokens)
 		}
+		// Mood agent does plain JSON extraction — always disable reasoning
+		// so reasoning models (MiMo, DeepSeek R1) output JSON directly
+		// instead of consuming all tokens on internal <think> blocks.
+		disabled := false
+		moodAgentClient.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "mood_agent", Status: "ready", Detail: cfg.MoodAgent.Model})
 	} else {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "mood_agent", Status: "skipped"})

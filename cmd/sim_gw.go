@@ -251,6 +251,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			moodAgentLLM.WithTimeout(time.Duration(cfg.MoodAgent.Timeout) * time.Second)
 		}
 		applyProvider(moodAgentLLM, moodProviderFlag, "mood")
+		// Mood agent does plain JSON extraction — no benefit from internal
+		// reasoning. Disable it so reasoning models (MiMo) output JSON
+		// directly instead of consuming all tokens on <think> blocks.
+		disabled := false
+		moodAgentLLM.WithReasoning(&llm.ReasoningControl{Enabled: &disabled})
 	}
 
 	var visionLLM *llm.Client
