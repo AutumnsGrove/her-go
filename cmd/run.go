@@ -1170,6 +1170,16 @@ func stopManagedServiceIfRunning(cfg *config.Config) {
 		return
 	}
 	label := procmgr.EffectiveLabel(cfg.Update.ServiceLabel, botName)
+
+	// launchd sets XPC_SERVICE_NAME to the plist Label for any process it
+	// spawns. If it matches, we ARE the managed service starting up — not
+	// a second instance racing against it. Stopping in that case would
+	// make the process bootout (kill) itself, then get respawned by
+	// KeepAlive, then do it again: an infinite self-inflicted crash loop.
+	if os.Getenv("XPC_SERVICE_NAME") == label {
+		return
+	}
+
 	mgr, err := procmgr.New(label)
 	if err != nil {
 		return
