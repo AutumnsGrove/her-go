@@ -18,20 +18,20 @@ openrouter:
   api_key: "${OPENROUTER_API_KEY}"
 
 chat:
-  model: "moonshotai/kimi-k2-0905"  # reply model — Kimi K2 via Groq: fast, consistent, no AI-isms
+  model: "xiaomi/mimo-v2.5-pro"    # reply model — MiMo v2.5 Pro via xiaomi/fp8: excellent cache rate, natural voice
   temperature: 0.85
   max_tokens: 4096
-  timeout: 20                        # Groq/Kimi responds in <5s — 20s catches real hangs without waiting 60s for fallback
+  timeout: 30
   streaming: false                   # set true to stream reply tokens to Telegram (live typing effect)
   provider:
-    order: ["Groq"]                  # pin to Groq for speed and consistency
+    order: ["xiaomi/fp8"]            # pin to xiaomi/fp8 for ~80% prompt cache hit rate
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.85
     max_tokens: 4096
 
 driver:
-  model: "qwen/qwen3-235b-a22b-2507"               # instruct model — consistent tool protocol, natural replies, good cost/quality ratio
+  model: "xiaomi/mimo-v2.5"                      # MiMo v2.5 — reasoning model with internal chain-of-thought, excellent cache rate on xiaomi/fp8
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
@@ -39,6 +39,8 @@ driver:
   # require_tool_choice: true                    # force tool_choice="required" on first agent call (default true). Set false for models/providers that don't support tool_choice.
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fast_path: false                               # route simple messages (greetings, reactions) directly to chat model, skipping driver agent
+  provider:
+    order: ["xiaomi/fp8"]
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.1
@@ -50,27 +52,33 @@ classifier:
   max_tokens: 64                                  # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — reliable tool-calling, nearly free on OpenRouter
+  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — reliable tool-calling, excellent cache rate on xiaomi/fp8
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
   timeout: 120                        # 120s — memory agent processes long transcripts
+  provider:
+    order: ["xiaomi/fp8"]
 
 persona_agent:
-  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — persona evolution. Falls back to memory_agent if empty.
+  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — persona evolution. Falls back to memory_agent if empty.
   temperature: 0.5                     # moderate creativity for persona prose
   max_tokens: 2048                     # persona output is short — 2K is plenty
   timeout: 120                         # reflections process long context
 
 dream_agent:
-  model: "qwen/qwen3-235b-a22b-2507"  # Qwen3 235B — memory dreamer consolidation. Falls back to memory_agent if empty.
+  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — memory dreamer consolidation. Falls back to memory_agent if empty.
   temperature: 0.3                     # low temp for analytical merge/expire decisions
   max_tokens: 4096                     # needs room for tool call sequences
   timeout: 120                         # processes all active memories
+  provider:
+    order: ["xiaomi/fp8"]
 
 vision:
-  model: "google/gemini-3-flash-preview"  # VLM for image understanding (via OpenRouter, same base_url/api_key as llm)
+  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — multimodal, handles image understanding
   temperature: 0.3                         # low temp for accurate descriptions
   max_tokens: 512
+  provider:
+    order: ["xiaomi/fp8"]
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.3
@@ -92,22 +100,27 @@ foursquare:
   api_key: "${FOURSQUARE_API_KEY}"  # Foursquare Places API (Service API Key). Free tier: 10k calls/month. Generate at https://foursquare.com/developers → Settings → Service API Keys
 
 mood_agent:
-  # Qwen3 235B — structured JSON output for mood schema.
+  # MiMo v2.5 — structured JSON output for mood schema.
+  # Reasoning is auto-disabled for mood (plain JSON extraction task).
   # Empty model disables the post-turn mood agent entirely.
-  model: "qwen/qwen3-235b-a22b-2507"
+  model: "xiaomi/mimo-v2.5"
   temperature: 0.2
   max_tokens: 512
   timeout: 60
+  provider:
+    order: ["xiaomi/fp8"]
 
 introspection_agent:
-  # Qwen3 235B — self-reflection agent, runs after memory + mood.
+  # MiMo v2.5 — self-reflection agent, runs after memory + mood.
   # Empty model falls back to memory_agent model.
-  model: "qwen/qwen3-235b-a22b-2507"
+  model: "xiaomi/mimo-v2.5"
   temperature: 0.3
   max_tokens: 2048
   timeout: 60
   iterations_per_window: 5   # smaller than other agents — should be fast
   max_continuations: 1       # one window is enough, skip or save and move on
+  provider:
+    order: ["xiaomi/fp8"]
 
 mood:
   # Point at a custom vocab file to override Apple's embedded lists.
@@ -347,16 +360,18 @@ worker_agent:
   reports_dir: "reports"           # relative to project root
   tiers:
     low:
-      model: "qwen/qwen3-235b-a22b-2507"
+      model: "xiaomi/mimo-v2.5"
       temperature: 0.7
       max_tokens: 8192
+      provider:
+        order: ["xiaomi/fp8"]
     medium:
       model: "deepseek/deepseek-v4-flash"
       temperature: 0.7
       max_tokens: 16384
     high:
-      model: "moonshotai/kimi-k2-0905"
+      model: "xiaomi/mimo-v2.5-pro"
       temperature: 0.7
       max_tokens: 32768
       provider:
-        order: ["Groq"]
+        order: ["xiaomi/fp8"]

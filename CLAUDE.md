@@ -10,10 +10,10 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** driver_agent_prompt.md (driver agent orchestration rules, hot-reloadable)
-- **Chat model:** Kimi K2 (moonshotai/kimi-k2-0905) via OpenRouter → Groq
-- **Agent models:** Qwen3 235B (qwen/qwen3-235b-a22b-2507) via OpenRouter — used for driver, memory, mood, introspection, persona, and dream agents
+- **Chat model:** MiMo v2.5 Pro (xiaomi/mimo-v2.5-pro) via OpenRouter → xiaomi/fp8 (~80% prompt cache hit rate)
+- **Agent models:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8 — used for driver, memory, mood, introspection, persona, dream, and vision agents
 - **Classifier model:** Gemini 3.1 Flash Lite via OpenRouter (memory + reply safety gates)
-- **Vision model:** Gemini 3 Flash via OpenRouter
+- **Vision model:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8
 - **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
 
 ## Running
