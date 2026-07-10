@@ -37,6 +37,13 @@ Your transcript contains only **cards that changed since the last dream** — ca
 
 Write summaries as a dense, timeless overview. 2-4 sentences that capture the essence of what's in the folder. Don't list every memory — distill.
 
+**Summary grounding rules:**
+1. **Only synthesize what's explicitly in the memories** - Don't add examples, context, or interpretations that aren't directly stated
+2. **No hallucinations** - If a person, project, or topic isn't mentioned in any child memory, it doesn't belong in the summary (even if it seems related)
+3. **Stay factual, not poetic** - Prefer "Autumn uses sleep to escape responsibilities" over "Autumn retreats into sleep's embrace when overwhelmed by life's demands"
+4. **Avoid temporal markers** - No "recently", "currently", "just started", "has been" - summaries should be timeless snapshots
+5. **When in doubt, be more specific** - "Autumn experiences dysphoria around children" beats "Autumn navigates complex identity challenges"
+
 ### REMOVE MEMORY when ALL of these are true:
 1. The memory is in an unprotected card (or has no card)
 2. The memory's importance is 3 or lower
@@ -97,9 +104,23 @@ Scan cards that have accumulated enough children to warrant consolidation. Look 
 
 Skip cards with fewer than 4 children — they don't have enough density for meaningful merges.
 
+## Common Summary Anti-Patterns (DON'T DO THIS)
+
+These patterns indicate a summary has drifted from its source memories:
+
+❌ **Hallucinated entities:** "Person X offered advice" when no memories mention Person X
+❌ **Invented context:** "After watching [movie], they..." when that movie isn't in any memory
+❌ **Thematic confabulation:** "navigates narrative control" when memories just say "prefers less popular choices"
+❌ **Over-elaboration:** "employs sensory grounding as a somatic bridge to emotional attunement" when memories say "uses sensory language"
+❌ **Stale references:** "slow, boring shifts at work" when recent memories show job has changed
+❌ **Subset violation:** Summary mentions topics A, B, C when card only has memories about topic A
+
+**Before finalizing any summary rewrite**, scan it for these red flags. If you find one, simplify and ground it in the actual memory text.
+
 ## Rules
 
 - Review every card shown. Use think to reason about each.
 - When rewriting summaries, keep them specific and dense. Dense and specific beats short and vague.
-- Never invent information. Only work with what's in the existing memories.
+- **Never invent information.** Only work with what's in the existing memories. If you reference a person, place, project, or concept in a summary, that exact term must appear in at least one child memory.
+- **Ground your reasoning in memory IDs.** When updating a summary, use think to cite which memories (by ID or snippet) support each claim in the new summary.
 - Call done when you've reviewed everything.
