@@ -175,6 +175,17 @@ func (h *HealthMonitor) checkHealth() {
 	}
 }
 
+// NotifyReady tells systemd that the service has finished starting up.
+// This must be called when using Type=notify in the service file, otherwise
+// systemd will wait indefinitely and eventually time out.
+//
+// Call this once after the bot is fully initialized and ready to accept
+// messages (after Start() begins listening).
+func (h *HealthMonitor) NotifyReady() {
+	h.sdNotify("READY=1")
+	log.Info("notified systemd that service is ready")
+}
+
 // notifyWatchdog sends a keepalive notification to systemd. If we don't
 // call this within the watchdog timeout, systemd will assume we're hung
 // and restart the service.
@@ -182,9 +193,16 @@ func (h *HealthMonitor) checkHealth() {
 // This uses sd_notify protocol: we write "WATCHDOG=1\n" to the Unix socket
 // at $NOTIFY_SOCKET. systemd reads this and resets its watchdog timer.
 func (h *HealthMonitor) notifyWatchdog() {
+	h.sdNotify("WATCHDOG=1")
+	log.Debug("systemd watchdog notified")
+}
+
+// sdNotify sends a notification to systemd via the sd_notify protocol.
+// The message format is key=value (e.g., "READY=1" or "WATCHDOG=1").
+func (h *HealthMonitor) sdNotify(state string) {
 	socketPath := os.Getenv("NOTIFY_SOCKET")
 	if socketPath == "" {
-		// Not running under systemd with Type=notify, or watchdog not enabled
+		// Not running under systemd with Type=notify
 		return
 	}
 
@@ -204,16 +222,14 @@ func (h *HealthMonitor) notifyWatchdog() {
 	}
 	defer conn.Close()
 
-	// Write the watchdog keepalive message. systemd expects exactly this
-	// format: "WATCHDOG=1" followed by a newline. Other sd_notify messages
-	// use the same socket but different content (e.g., "READY=1" on startup).
-	_, err = conn.Write([]byte("WATCHDOG=1\n"))
+	// Write the notification message. Format is "KEY=value\n".
+	// Common messages:
+	//   READY=1    - service finished starting
+	//   WATCHDOG=1 - keepalive ping
+	//   STATUS=... - status text shown in systemctl status
+	_, err = conn.Write([]byte(state + "\n"))
 	if err != nil {
-		log.Warn("failed to notify systemd watchdog", "err", err)
+		log.Warn("failed to notify systemd", "state", state, "err", err)
 		return
 	}
-
-	// Success — systemd now knows we're alive. We'll ping again in
-	// h.watchdogInterval (typically 30-60 seconds).
-	log.Debug("systemd watchdog notified")
 }
