@@ -29,6 +29,9 @@ import (
 // single *tele.Photo (the highest-quality version Telegram selected).
 // The photo's FileID lets us download the actual bytes.
 func (b *Bot) handlePhoto(c tele.Context) error {
+	// Record Telegram activity for health monitoring
+	b.healthMonitor.RecordUpdate()
+
 	msg := c.Message()
 	photo := msg.Photo
 
@@ -142,6 +145,9 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 // format conversion internally (via ffmpeg for local, API-side for remote),
 // so we just forward the raw bytes.
 func (b *Bot) handleVoice(c tele.Context) error {
+	// Record Telegram activity for health monitoring
+	b.healthMonitor.RecordUpdate()
+
 	msg := c.Message()
 	v := msg.Voice
 

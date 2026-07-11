@@ -151,6 +151,13 @@ type Bot struct {
 	// gmailBridge provides read-only Gmail access. Nil when Gmail is
 	// not configured (no credentials in config). Set by cmd/run.go.
 	gmailBridge gmail.Bridge
+
+	// healthMonitor tracks Telegram activity and notifies systemd watchdog.
+	// Started in Start() and stopped in Stop(). Logs warnings if the bot
+	// receives no updates for extended periods (potential hung connection).
+	healthMonitor       *HealthMonitor
+	healthMonitorCtx    context.Context
+	healthMonitorCancel context.CancelFunc
 }
 
 // PendingTurn stores the data needed to run background agents on a
@@ -293,6 +300,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		eventBus:         eventBus,
 		agentEvents:      make(chan agent.AgentEvent, 16),
 		shutdownCh:       make(chan struct{}),
+		healthMonitor:    NewHealthMonitor(),
 	}
 
 	// Build the mood runner + sweeper if the mood agent is configured.
@@ -504,6 +512,12 @@ func (b *Bot) Start() {
 	// is configured. No-op otherwise.
 	b.startMoodSweeper()
 
+	// Start the health monitor. This goroutine tracks Telegram activity
+	// and notifies systemd watchdog to prevent silent hangs of the
+	// long-polling connection.
+	b.healthMonitorCtx, b.healthMonitorCancel = context.WithCancel(context.Background())
+	go b.healthMonitor.Start(b.healthMonitorCtx)
+
 	// Check for a pending restart flag. If the previous process wrote a
 	// flag before dying, edit the "Restarting..." message to confirm
 	// we're back. Runs before Start() so the edit arrives before any
@@ -518,6 +532,9 @@ func (b *Bot) Start() {
 func (b *Bot) Stop() {
 	if b.moodSweeperStop != nil {
 		b.moodSweeperStop() // cancels the sweeper goroutine
+	}
+	if b.healthMonitorCancel != nil {
+		b.healthMonitorCancel() // stops the health monitor goroutine
 	}
 	b.agentEventsStopped.Store(true) // prevent sends before channel close
 	close(b.shutdownCh)              // unblocks wizard expiry + other goroutines
@@ -739,6 +756,11 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 // and manages memory. The placeholder message gets edited to show status
 // updates and the final response as tools execute.
 func (b *Bot) handleMessage(c tele.Context) error {
+	// Record that we received a Telegram update for health monitoring.
+	// This must be called early so we track activity even if the message
+	// is intercepted by a wizard or command handler.
+	b.healthMonitor.RecordUpdate()
+
 	// Intercept text replies when a /mood wizard is waiting on its
 	// note step. The wizard handler writes the entry + acknowledges
 	// via edit; we return early so the message doesn't flow through
