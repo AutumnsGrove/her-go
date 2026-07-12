@@ -127,27 +127,45 @@ type unitData struct {
 
 // unitTemplate is the systemd service unit file. The key settings:
 //
+//   - Type=notify: bot calls sd_notify when ready (enables WatchdogSec)
 //   - After=network-online.target: wait for network (needed for API calls)
 //   - After=ollama.service: if Ollama is installed, wait for it
-//   - Restart=always + RestartSec=3: same behavior as launchd's
-//     KeepAlive + ThrottleInterval
-//   - StandardOutput/Error=journal: logs go to journalctl (view with
-//     `journalctl -u her-go -f`)
+//   - Restart=always: restart on ALL exit codes (including panics)
+//   - StartLimitBurst=5 in 10min: prevents infinite crash loops
+//   - WatchdogSec=120: systemd restarts if bot doesn't ping every 2min
+//   - RestartSec=10: wait 10s between restart attempts
+//   - StandardOutput/Error=append: logs go to rotating files in logs/
 const unitTemplate = `[Unit]
 Description={{.Description}}
 After=network-online.target ollama.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 User={{.User}}
+Group={{.User}}
 WorkingDirectory={{.WorkDir}}
-ExecStart={{.BinaryPath}} run
-Restart=always
-RestartSec=3
 Environment=PATH={{.Path}}
-StandardOutput=journal
-StandardError=journal
+ExecStart={{.BinaryPath}} run
+
+# Restart policy: always restart on failure, including panics (exit code 2).
+# This prevents single crashes from causing extended downtime.
+Restart=always
+RestartSec=10
+# StartLimitIntervalSec and StartLimitBurst prevent infinite restart loops
+# if the service crashes immediately on startup (e.g., config error).
+# 5 crashes within 10 minutes → systemd gives up and marks it failed.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+StandardOutput=append:{{.WorkDir}}/logs/her.log
+StandardError=append:{{.WorkDir}}/logs/her.log
+
+# Watchdog configuration: if the service doesn't ping systemd within 2 minutes,
+# assume it's hung and restart it. The bot notifies every 30s, so this gives
+# plenty of margin for temporary network issues.
+WatchdogSec=120
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

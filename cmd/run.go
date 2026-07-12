@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -308,6 +309,17 @@ var sidecarOut io.Writer = os.Stderr
 // runBotBackground handles all init and bot lifecycle in a goroutine while
 // the TUI runs on the main goroutine.
 func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, program *tea.Program, quitCh chan struct{}) {
+	// Panic recovery — log crashes and let systemd restart the service.
+	// Without this, panics would exit silently and systemd wouldn't know
+	// what went wrong. This is like Python's top-level try/except, but
+	// defer runs at function exit (normal or panic).
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("PANIC in bot background goroutine", "panic", r, "stack", string(debug.Stack()))
+			bus.Close() // unblock TUI so it can exit cleanly
+		}
+	}()
+
 	skipTelegram := adapterFilter != "" && adapterFilter != "telegram"
 
 	// --- Create LLM clients ---
