@@ -67,6 +67,7 @@ type Bot struct {
 	moodSweeper     *mood.ProposalSweeper
 	moodSweeperStop context.CancelFunc // cancels the sweeper goroutine on Stop()
 	shutdownCh      chan struct{}      // closed on Stop(); goroutines select on this to exit cleanly
+	stopOnce        sync.Once          // ensures Stop() only runs once (prevents double-close panic)
 
 	// moodVocab is the loaded vocab used by both the agent and the
 	// /mood wizard. Shared so the two paths can't drift.
@@ -533,20 +534,23 @@ func (b *Bot) Start() {
 	b.tb.Start()
 }
 
-// Stop gracefully shuts down the bot.
+// Stop gracefully shuts down the bot. Safe to call multiple times —
+// only the first call will execute the shutdown sequence.
 func (b *Bot) Stop() {
-	if b.moodSweeperStop != nil {
-		b.moodSweeperStop() // cancels the sweeper goroutine
-	}
-	if b.healthMonitorCancel != nil {
-		b.healthMonitorCancel() // stops the health monitor goroutine
-	}
-	b.agentEventsStopped.Store(true) // prevent sends before channel close
-	close(b.shutdownCh)              // unblocks wizard expiry + other goroutines
-	if b.tb != nil {
-		b.tb.Stop() // stop accepting new Telegram updates
-	}
-	close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
+	b.stopOnce.Do(func() {
+		if b.moodSweeperStop != nil {
+			b.moodSweeperStop() // cancels the sweeper goroutine
+		}
+		if b.healthMonitorCancel != nil {
+			b.healthMonitorCancel() // stops the health monitor goroutine
+		}
+		b.agentEventsStopped.Store(true) // prevent sends before channel close
+		close(b.shutdownCh)              // unblocks wizard expiry + other goroutines
+		if b.tb != nil {
+			b.tb.Stop() // stop accepting new Telegram updates
+		}
+		close(b.agentEvents) // signals consumeAgentEvents goroutine to exit
+	})
 }
 
 // IsAgentBusy returns true when the bot is mid-turn (agent.Run is executing).
