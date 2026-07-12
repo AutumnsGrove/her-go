@@ -790,11 +790,16 @@ const (
 // the Whisper API. Set BaseURL + Model; APIKey defaults to openrouter.api_key.
 // Example: base_url = "https://openrouter.ai/api/v1",
 // model = "openai/whisper-large-v3-turbo".
+//
+// FallbackModel is used when the primary model fails with a timeout, 503, or
+// other retriable error. Good choice: openai/whisper-large-v3 (more reliable
+// than turbo, handles long audio better).
 type STTConfig struct {
-	Engine  string `yaml:"engine"`   // STTEngineParakeet or STTEngineWhisper
-	BaseURL string `yaml:"base_url"` // local server URL or remote API base
-	Model   string `yaml:"model"`    // HuggingFace model ID, local path, or remote model name
-	APIKey  string `yaml:"api_key"`  // auth token for remote engines; empty = use openrouter.api_key
+	Engine        string `yaml:"engine"`         // STTEngineParakeet or STTEngineWhisper
+	BaseURL       string `yaml:"base_url"`       // local server URL or remote API base
+	Model         string `yaml:"model"`          // HuggingFace model ID, local path, or remote model name
+	APIKey        string `yaml:"api_key"`        // auth token for remote engines; empty = use openrouter.api_key
+	FallbackModel string `yaml:"fallback_model"` // fallback model for retries on timeout/503 — empty = no fallback
 }
 
 // TTSConfig controls text-to-speech. The "piper" engine expects a local

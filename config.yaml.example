@@ -227,6 +227,7 @@ voice:
     # base_url: "https://openrouter.ai/api/v1"
     # model: "openai/whisper-large-v3-turbo"
     # api_key: ""                                                 # leave empty to auto-use openrouter.api_key
+    fallback_model: "openai/whisper-large-v3"                     # fallback on timeout/503 (more reliable than turbo)
   tts:
     enabled: false                                                # set true to reply with voice
     engine: "piper"                                               # "piper" (local, privacy-first) — future cloud options may be added

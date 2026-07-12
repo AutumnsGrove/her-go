@@ -34,12 +34,14 @@ var log = logger.WithPrefix("voice")
 
 // Client is the STT client. It talks to either a local parakeet-server or a
 // remote Whisper-compatible API endpoint depending on the configured engine.
+// Supports automatic fallback to a different model on timeout/503 errors.
 type Client struct {
-	engine     string // config.STTEngineParakeet or STTEngineWhisper — determines sidecar and health check behavior
-	baseURL    string
-	model      string
-	apiKey     string // auth token for remote engines; empty for local (parakeet)
-	httpClient *http.Client
+	engine        string // config.STTEngineParakeet or STTEngineWhisper — determines sidecar and health check behavior
+	baseURL       string
+	model         string
+	apiKey        string // auth token for remote engines; empty for local (parakeet)
+	fallbackModel string // fallback model for retries; empty = no fallback
+	httpClient    *http.Client
 }
 
 // NewClient creates an STT client from config. Returns nil if voice is
@@ -68,21 +70,29 @@ func NewClient(cfg *config.VoiceConfig, fallbackAPIKey string) *Client {
 		apiKey = fallbackAPIKey
 	}
 
+	fallbackMsg := "none"
+	if cfg.STT.FallbackModel != "" {
+		fallbackMsg = cfg.STT.FallbackModel
+	}
+
 	log.Info("STT client initialized",
 		"engine", cfg.STT.Engine,
 		"base_url", baseURL,
 		"model", cfg.STT.Model,
+		"fallback", fallbackMsg,
 	)
 
 	return &Client{
-		engine:  cfg.STT.Engine,
-		baseURL: baseURL,
-		model:   cfg.STT.Model,
-		apiKey:  apiKey,
+		engine:        cfg.STT.Engine,
+		baseURL:       baseURL,
+		model:         cfg.STT.Model,
+		apiKey:        apiKey,
+		fallbackModel: cfg.STT.FallbackModel,
 		httpClient: &http.Client{
-			// 30 s is generous for normal voice memos. Remote Whisper APIs
-			// typically respond in 2-5 s for under-a-minute clips.
-			Timeout: 30 * time.Second,
+			// 120 s to handle longer voice memos. OpenRouter's Whisper endpoint
+			// scales processing time with audio duration (40s audio can take 60s+
+			// to transcribe during high load).
+			Timeout: 120 * time.Second,
 		},
 	}
 }
@@ -116,11 +126,46 @@ type TranscribeResult struct {
 //
 // The format is auto-detected from the base URL: OpenRouter gets JSON, everything
 // else gets multipart. This keeps config simple — no extra field needed.
+//
+// If the primary model fails with a retriable error (timeout, 503, 502, 504) and
+// a fallback model is configured, automatically retries with the fallback once.
 func (c *Client) Transcribe(audioBytes []byte, filename string) (TranscribeResult, error) {
-	if isOpenRouter(c.baseURL) {
-		return c.transcribeJSON(audioBytes, filename)
+	result, err := c.transcribeWithModel(audioBytes, filename, c.model)
+
+	// If primary failed with a retriable error AND we have a fallback, try it
+	if err != nil && c.fallbackModel != "" && isRetriable(err) {
+		log.Warn("primary STT failed, trying fallback",
+			"primary_model", c.model,
+			"fallback_model", c.fallbackModel,
+			"error", err.Error(),
+		)
+		return c.transcribeWithModel(audioBytes, filename, c.fallbackModel)
 	}
-	return c.transcribeMultipart(audioBytes, filename)
+
+	return result, err
+}
+
+// isRetriable checks whether an error should trigger a fallback retry.
+// Retriable: timeouts, 503 (service unavailable), 502 (bad gateway), 504 (gateway timeout).
+func isRetriable(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "deadline exceeded") ||
+		strings.Contains(errStr, "503") ||
+		strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "504")
+}
+
+// transcribeWithModel performs transcription using the specified model.
+// Extracted from Transcribe to enable fallback retries.
+func (c *Client) transcribeWithModel(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
+	if isOpenRouter(c.baseURL) {
+		return c.transcribeJSON(audioBytes, filename, model)
+	}
+	return c.transcribeMultipart(audioBytes, filename, model)
 }
 
 // isOpenRouter checks whether the base URL points to OpenRouter's API.
@@ -141,9 +186,9 @@ func audioFormatFromFilename(filename string) string {
 }
 
 // transcribeJSON uses OpenRouter's JSON+base64 format.
-func (c *Client) transcribeJSON(audioBytes []byte, filename string) (TranscribeResult, error) {
+func (c *Client) transcribeJSON(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
 	payload := map[string]any{
-		"model": c.model,
+		"model": model,
 		"input_audio": map[string]string{
 			"data":   base64.StdEncoding.EncodeToString(audioBytes),
 			"format": audioFormatFromFilename(filename),
@@ -170,7 +215,7 @@ func (c *Client) transcribeJSON(audioBytes []byte, filename string) (TranscribeR
 }
 
 // transcribeMultipart uses the standard OpenAI Whisper multipart/form-data format.
-func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (TranscribeResult, error) {
+func (c *Client) transcribeMultipart(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
@@ -182,8 +227,8 @@ func (c *Client) transcribeMultipart(audioBytes []byte, filename string) (Transc
 		return TranscribeResult{}, fmt.Errorf("writing audio bytes: %w", err)
 	}
 
-	if c.model != "" {
-		if err := writer.WriteField("model", c.model); err != nil {
+	if model != "" {
+		if err := writer.WriteField("model", model); err != nil {
 			return TranscribeResult{}, fmt.Errorf("writing model field: %w", err)
 		}
 	}
