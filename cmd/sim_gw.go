@@ -310,11 +310,17 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	// --- Calendar FakeBridge ---
 	// Create an in-memory calendar bridge for sims. This bypasses the
 	// Swift EventKit binary and lets calendar tools work without macOS
-	// dependencies. Events were already seeded into SQLite by seedSimDB;
-	// now we also seed them into the FakeBridge so calendar_list works.
+	// dependencies. Always create it (even if empty) so tools don't crash.
 	var fakeBridge *calendar.FakeBridge
-	if len(s.SeedCalendarEvents) > 0 && len(cfg.Calendar.Calendars) > 0 {
+	if len(cfg.Calendar.Calendars) > 0 {
 		fakeBridge = calendar.NewFakeBridge(cfg.Calendar.Calendars)
+	} else {
+		// Create empty bridge with default calendars so tools don't crash
+		fakeBridge = calendar.NewFakeBridge([]string{"Work", "Personal"})
+	}
+
+	// Seed events if provided
+	if len(s.SeedCalendarEvents) > 0 {
 		var fakeEvents []*calendar.FakeEvent
 		for _, seed := range s.SeedCalendarEvents {
 			start, err := time.Parse(time.RFC3339, seed.Start)
@@ -343,9 +349,13 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 
 	// --- Gmail FakeBridge ---
+	// Always create Gmail FakeBridge (even if empty) so worker tools don't crash.
+	// Tools will just return "no emails found" instead of nil pointer panic.
 	var gmailFakeBridge *gmail.FakeBridge
+	gmailFakeBridge = gmail.NewFakeBridge(0) // 0 = default page size (20)
+
+	// Seed emails if provided
 	if len(s.SeedEmails) > 0 {
-		gmailFakeBridge = gmail.NewFakeBridge(0)
 		var msgs []gmail.Message
 		for _, seed := range s.SeedEmails {
 			d, err := time.Parse(time.RFC3339, seed.Date)
