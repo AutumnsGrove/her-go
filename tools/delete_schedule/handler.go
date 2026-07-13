@@ -22,9 +22,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		TaskID int64 `json:"task_id"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
-		return "error: invalid arguments"
+		log.Error("delete_schedule: JSON unmarshal failed", "input", argsJSON, "err", err)
+		return fmt.Sprintf("error: invalid arguments (failed to parse JSON: %v)", err)
 	}
 	if a.TaskID == 0 {
+		log.Warn("delete_schedule: task_id is zero", "input", argsJSON)
 		return "error: task_id is required"
 	}
 
