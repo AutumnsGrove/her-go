@@ -18,6 +18,26 @@ func (s *Scheduler) TickOnce(ctx context.Context) {
 	s.tick(ctx)
 }
 
+// FireDueSchedules fires all due schedules and returns the count fired.
+// Used by sims for time-travel: advance the clock, then call this to
+// fire all schedules that became due. Returns count for logging.
+func (s *Scheduler) FireDueSchedules(ctx context.Context) (int, error) {
+	now := time.Now()
+	tasks, err := s.store.DueSchedulerTasks(now)
+	if err != nil {
+		return 0, fmt.Errorf("fetching due tasks: %w", err)
+	}
+
+	for _, t := range tasks {
+		if ctx.Err() != nil {
+			return len(tasks), ctx.Err()
+		}
+		s.dispatch(ctx, &t)
+	}
+
+	return len(tasks), nil
+}
+
 // tick fetches every due task and dispatches it. Called once per
 // ticker interval from Run(). A slow handler delays subsequent handlers
 // on the same tick, which is fine for our scale — we don't have

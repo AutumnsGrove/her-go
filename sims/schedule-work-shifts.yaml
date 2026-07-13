@@ -1,0 +1,71 @@
+name: "Schedule Work Shifts — complex recurring schedules with natural language"
+description: >
+  Tests realistic work schedule patterns: "I work Monday Wednesday Friday",
+  "I have a meeting every other Tuesday", etc. Validates time-travel with
+  multiple schedules firing on the same day, and batch operations.
+
+  This sim exercises:
+  - Multiple recurring schedules created in one conversation
+  - Natural language time expressions ("Monday/Wednesday/Friday")
+  - Time-travel to specific weekdays to trigger schedules
+  - Updating schedule times ("change it to 9am")
+  - Disabling schedules temporarily ("pause my Monday reminder")
+  - Re-enabling paused schedules
+  - Deleting schedules by name (not contextually)
+
+tags: ["schedule", "work", "time-travel", "batch-operations"]
+
+messages:
+  # Turn 1: Complex work schedule setup
+  - "I work at the coffee shop on Mondays, Wednesdays, and Fridays. Can you remind me to check the schedule each morning at 8am on those days?"
+
+  # Turn 2: Add a different pattern
+  - "also I have therapy every other Thursday at 10am, remind me an hour before"
+
+  # Turn 3: One-off meeting
+  - "oh and I have a dentist appointment next Tuesday at 2pm"
+
+  # Turn 4: Verify all schedules
+  - "what's my reminder schedule look like?"
+
+  # TIME TRAVEL: advance to Monday 8am (first work day)
+  - advance_time: 24h
+
+  # Turn 5: Work reminder fires, user responds
+  # User receives: "Check the coffee shop schedule"
+
+  # Turn 6: User wants to change the time
+  - "actually can you make that 9am instead? 8am is too early"
+
+  # TIME TRAVEL: advance to Wednesday 9am (updated time)
+  - advance_time: 49h
+
+  # Turn 7: Updated reminder should fire at new time
+  # User receives: "Check the coffee shop schedule" (at 9am, not 8am)
+
+  # Turn 8: User wants to pause Friday reminders
+  - "pause my Friday reminder for now, I'm taking a week off"
+
+  # Turn 9: List schedules to see paused status
+  - "show me my reminders"
+
+  # TIME TRAVEL: advance to Friday (paused reminder should NOT fire)
+  - advance_time: 48h
+
+  # Turn 10: Confirm nothing fired
+  - "did any reminders go off just now?"
+
+  # Turn 11: Re-enable the Friday reminder
+  - "okay back from vacation, turn my Friday reminder back on"
+
+  # TIME TRAVEL: advance to next Friday (should fire now)
+  - advance_time: 168h
+
+  # Turn 12: Friday reminder fires after being re-enabled
+  # User receives: "Check the coffee shop schedule"
+
+  # Turn 13: Delete all work-related reminders
+  - "actually delete all my coffee shop reminders, I quit the job"
+
+  # Turn 14: Verify only therapy reminder remains
+  - "what reminders are still active?"

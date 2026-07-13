@@ -309,14 +309,17 @@ type SeedEmail struct {
 //	  - image: sims/assets/sunset.jpg      # image-only → Image path only
 //	  - text: "what do you think?"          # explicit text form (also works)
 //	    image: sims/assets/sunset.jpg       # can combine text + image
+//	  - advance_time: 2h                   # time-travel directive (no message sent)
+//	  - advance_time: 1d                   # advance by 1 day, fire any schedules
 //
 // This is similar to Python's Union[str, dict] pattern, but in Go we use
 // a struct with a custom unmarshal method. The YAML library calls
 // UnmarshalYAML, which tries string first (fast path), then falls back
 // to the struct form.
 type simMessage struct {
-	Text  string `yaml:"text"`
-	Image string `yaml:"image"` // path to local image file (relative to working dir)
+	Text        string `yaml:"text"`
+	Image       string `yaml:"image"`        // path to local image file (relative to working dir)
+	AdvanceTime string `yaml:"advance_time"` // time-travel: "2h", "1d", "30m" — advances sim clock and fires due schedules
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler so a simMessage can be decoded
@@ -1328,6 +1331,75 @@ func runSim(cmd *cobra.Command, args []string) error {
 	total := len(messages)
 	for i, msg := range messages {
 		turnStart := time.Now()
+
+		// Time-travel directive: advance the sim clock and fire schedules.
+		// This lets sims test scheduled tasks without waiting real time.
+		// Format: "2h", "1d", "30m" — parsed via time.ParseDuration.
+		if msg.AdvanceTime != "" {
+			duration, err := time.ParseDuration(msg.AdvanceTime)
+			if err != nil {
+				log.Error("invalid advance_time duration", "value", msg.AdvanceTime, "err", err)
+				continue
+			}
+
+			log.Infof("[%d/%d] ⏰ TIME TRAVEL: advancing %s", i+1, total, msg.AdvanceTime)
+
+			// Update next_fire for all schedules by subtracting the duration.
+			// This makes schedules "due now" that were N hours/days in the future.
+			// SQLite datetime() with negative offset: datetime('2026-07-15 14:00', '-50 hours') → '2026-07-13 12:00'
+			if _, err := store.DB().Exec(
+				`UPDATE scheduler_tasks SET next_fire = datetime(next_fire, ?) WHERE enabled = 1`,
+				fmt.Sprintf("-%d seconds", int(duration.Seconds())),
+			); err != nil {
+				log.Error("failed to advance schedule times", "err", err)
+				continue
+			}
+
+			// Manually fetch and fire all due schedules. Create minimal scheduler
+			// deps to execute the handlers.
+			now := time.Now()
+			tasks, err := store.DueSchedulerTasks(now)
+			if err != nil {
+				log.Error("failed to fetch due tasks after time travel", "err", err)
+				continue
+			}
+
+			if len(tasks) > 0 {
+				log.Infof("  🔔 firing %d schedule(s)", len(tasks))
+
+				// Build scheduler deps with the same send callback the agent uses.
+				// This makes scheduled messages flow through the normal pipeline.
+				schedDeps := &scheduler.Deps{
+					ChatID: 0, // sims don't have a real chat ID
+					Send: func(chatID int64, message string) (int, error) {
+						// In sim mode, scheduled messages just get logged.
+						// They would normally trigger the agent via EventSchedulerFired.
+						log.Infof("     📨 scheduled message: %s", message)
+						return 0, nil
+					},
+					ScheduledPromptFn: func(taskID int64, taskName, prompt string) error {
+						// Scheduled prompts would normally fire EventSchedulerFired.
+						// For now, just log that it would fire.
+						log.Infof("     🤖 scheduled prompt (task #%d): %s", taskID, prompt)
+						return nil
+					},
+				}
+
+				// Use the scheduler's FireAllUserTasks to properly execute handlers.
+				results := scheduler.FireAllUserTasks(context.Background(), store, schedDeps)
+				for _, res := range results {
+					if res.Err != nil {
+						log.Error("schedule execution failed", "id", res.TaskID, "kind", res.Kind, "err", res.Err)
+					} else {
+						log.Infof("     ✓ fired #%d %s (%s)", res.TaskID, res.Name, res.Kind)
+					}
+				}
+			} else {
+				log.Info("  (no schedules were due)")
+			}
+
+			continue // don't process as a message — it's a time directive
+		}
 
 		// Build the user-visible text. For image messages this includes
 		// the "[User sent a photo]" prefix, mirroring Telegram's behavior

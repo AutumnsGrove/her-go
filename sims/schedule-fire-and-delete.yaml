@@ -1,0 +1,53 @@
+name: "Schedule Fire and Delete — contextual deletion after scheduled message fires"
+description: >
+  Tests the REAL schedule UX flow: creating schedules with natural language,
+  time-traveling to make them fire, and deleting them contextually without
+  mentioning IDs.
+
+  This sim validates the full schedule_id column infrastructure that makes
+  "delete this reminder" work without showing schedule IDs to users.
+
+  What to look for in the report:
+  - Agent creates schedules from natural language ("every Tuesday at 2pm")
+  - Time-travel directives advance the sim clock (advance_time: 1d)
+  - Schedules fire and send their messages
+  - schedule_context layer injects deletion hints invisibly
+  - User says "delete this" with zero explicit context
+  - Bot correctly identifies and deletes the schedule that just fired
+  - No visible schedule IDs in any message
+  - delete_schedule accepts both string and int task_id values
+
+tags: ["schedule", "time-travel", "contextual-deletion", "ux"]
+
+messages:
+  # Turn 1: Create a recurring reminder with natural language
+  - "hey, can you remind me to submit my timesheet every Tuesday at 2pm?"
+
+  # Turn 2: Create another schedule for variety
+  - "also remind me to take out the trash on Thursday evenings at 6pm"
+
+  # Turn 3: List schedules to verify they were created
+  - "what reminders do I have set up?"
+
+  # TIME TRAVEL: advance 2 days to Tuesday 2pm
+  # This makes the timesheet reminder due and fires it
+  - advance_time: 50h
+
+  # Turn 4: User responds to the fired reminder contextually
+  # NO schedule ID mentioned — pure natural deletion
+  - "oh actually I don't need this anymore, can you delete it?"
+
+  # Turn 5: Verify the deletion worked
+  - "what reminders are still active?"
+
+  # TIME TRAVEL: advance to Thursday 6pm
+  - advance_time: 52h
+
+  # Turn 6: The trash reminder should fire now
+  # (User receives the scheduled message)
+
+  # Turn 7: Delete this one too, different phrasing
+  - "remove this reminder please"
+
+  # Turn 8: Confirm both schedules are gone
+  - "show me all my reminders including cancelled ones"
