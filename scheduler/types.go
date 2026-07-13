@@ -94,7 +94,25 @@ type Deps struct {
 	// loop. Set by cmd/run.go — the callback constructs an AgentEvent
 	// and emits it on the event channel. This avoids a scheduler → agent
 	// import cycle while still triggering contextual agent runs.
-	ScheduledPromptFn func(prompt string) error
+	//
+	// The task ID and name are injected into the agent context so the bot
+	// knows which schedule triggered the run. This enables natural deletion:
+	// "delete this reminder" works because the agent has the schedule ID.
+	ScheduledPromptFn func(taskID int64, taskName string, prompt string) error
+
+	// TaskContext holds the currently executing task's metadata. Set by
+	// dispatch() before calling Execute(). Handlers can read this to know
+	// which task they're running as (useful for logging, or for passing
+	// the task ID downstream when firing agent events).
+	TaskContext *TaskContext
+}
+
+// TaskContext holds metadata about the currently executing scheduled task.
+// Populated by the scheduler before calling Handler.Execute().
+type TaskContext struct {
+	ID   int64  // scheduler_tasks.id
+	Name string // task name (from the name column or "<unnamed>")
+	Kind string // task kind (e.g., "send_prompt", "send_message")
 }
 
 // RetryConfig governs what happens when a handler returns an error.

@@ -35,7 +35,15 @@ func (h sendPromptHandler) Execute(_ context.Context, payload json.RawMessage, d
 		return fmt.Errorf("send_prompt: no prompt callback configured")
 	}
 
-	return deps.ScheduledPromptFn(p.Prompt)
+	// Pass task metadata so the agent knows which schedule triggered this run.
+	taskID := int64(0)
+	taskName := ""
+	if deps.TaskContext != nil {
+		taskID = deps.TaskContext.ID
+		taskName = deps.TaskContext.Name
+	}
+
+	return deps.ScheduledPromptFn(taskID, taskName, p.Prompt)
 }
 
 func init() {

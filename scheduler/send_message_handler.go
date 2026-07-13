@@ -24,7 +24,16 @@ func (h sendMessageHandler) Execute(_ context.Context, payload json.RawMessage, 
 	if p.Message == "" {
 		return fmt.Errorf("send_message: empty message")
 	}
-	_, err := deps.Send(deps.ChatID, p.Message)
+
+	// Append schedule context so the user knows this came from a schedule
+	// and can easily delete it ("delete this reminder").
+	message := p.Message
+	if deps.TaskContext != nil && deps.TaskContext.ID > 0 {
+		message = fmt.Sprintf("%s\n\n<i>📅 Scheduled reminder #%d</i>",
+			p.Message, deps.TaskContext.ID)
+	}
+
+	_, err := deps.Send(deps.ChatID, message)
 	return err
 }
 

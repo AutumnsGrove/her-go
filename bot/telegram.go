@@ -634,7 +634,15 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 	case agent.EventSchedulerFired:
 		prompt = evt.Prompt
 		conversationID = "scheduled"
-		log.Info("handling scheduled event", "task", evt.TaskName)
+		log.Info("handling scheduled event", "task", evt.TaskName, "schedule_id", evt.ScheduleID)
+
+		// Inject schedule metadata so the agent knows which schedule triggered this.
+		// This enables natural deletion: "delete this reminder" → bot knows the schedule ID.
+		if evt.ScheduleID > 0 {
+			prompt = fmt.Sprintf("%s\n\n[context: This message was triggered by schedule #%d (%q). "+
+				"If the user asks to delete/remove/cancel this reminder or schedule, use delete_schedule with task_id=%d]",
+				evt.Prompt, evt.ScheduleID, evt.TaskName, evt.ScheduleID)
+		}
 
 	case agent.EventSkillFailed:
 		prompt = fmt.Sprintf("[system] Skill %q failed: %s. "+

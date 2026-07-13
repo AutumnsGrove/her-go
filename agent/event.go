@@ -81,8 +81,9 @@ type AgentEvent struct {
 	Type AgentEventType
 
 	// --- EventSchedulerFired fields ---
-	Prompt   string // the prompt text to run through the agent
-	TaskName string // task name for logging ("morning briefing", etc.)
+	Prompt     string // the prompt text to run through the agent
+	TaskName   string // task name for logging ("morning briefing", etc.)
+	ScheduleID int64  // the scheduler_tasks.id that triggered this event (for deletion/updates)
 
 	// --- EventSkillFailed fields ---
 	SkillName string // which skill failed or modified its schema

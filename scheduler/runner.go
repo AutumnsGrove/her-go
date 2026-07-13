@@ -70,6 +70,19 @@ func (s *Scheduler) dispatch(ctx context.Context, t *memory.SchedulerTask) {
 		return
 	}
 
+	// Inject task context so handlers know which task they're executing.
+	// This enables scheduled prompts to tag their output with the schedule ID.
+	taskName := t.Name
+	if taskName == "" {
+		taskName = "<unnamed>"
+	}
+	s.deps.TaskContext = &TaskContext{
+		ID:   t.ID,
+		Name: taskName,
+		Kind: t.Kind,
+	}
+	defer func() { s.deps.TaskContext = nil }()
+
 	err := runHandler(ctx, h, t.Payload, s.deps)
 
 	if err == nil {

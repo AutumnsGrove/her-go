@@ -880,14 +880,18 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		Cfg:          cfg,
 		RootDir:      rootDir,
 		AgentEventCh: agentEventCh,
-		ScheduledPromptFn: func(prompt string) error {
+		ScheduledPromptFn: func(taskID int64, taskName string, prompt string) error {
 			if agentEventCh == nil {
 				return fmt.Errorf("send_prompt: no agent event channel")
 			}
+			if taskName == "" {
+				taskName = "send_prompt"
+			}
 			evt := agent.AgentEvent{
-				Type:     agent.EventSchedulerFired,
-				Prompt:   prompt,
-				TaskName: "send_prompt",
+				Type:       agent.EventSchedulerFired,
+				Prompt:     prompt,
+				TaskName:   taskName,
+				ScheduleID: taskID,
 			}
 			select {
 			case agentEventCh <- evt:
