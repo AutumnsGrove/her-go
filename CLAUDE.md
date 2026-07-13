@@ -29,6 +29,31 @@ go run main.go run
 go build -o her && ./her run
 ```
 
+## Remote Updates
+
+After the initial deployment, you can update the bot remotely via SSH:
+
+```bash
+# SSH into remote host (e.g., Le Potato)
+ssh potato-remote
+
+# Run the self-update command
+cd /home/autumn/her-go
+./her update
+```
+
+The `her update` command:
+1. Pulls the latest code from `origin/main`
+2. Rebuilds the binary
+3. Restarts the service via systemd
+
+**Note:** The `update` command must exist on the remote machine first. Bootstrap it with one manual update:
+```bash
+ssh potato-remote "cd /home/autumn/her-go && git pull && go build -o her && systemctl --user restart her-go"
+```
+
+After that, `./her update` handles all future updates.
+
 ## Telegraph Setup (for Worker Agent reports)
 
 The worker agent publishes reports to [Telegraph](https://telegra.ph) for rich rendering in Telegram. One-time setup:
