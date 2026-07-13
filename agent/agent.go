@@ -157,6 +157,7 @@ type RunParams struct {
 	ScrubVault                *scrub.Vault
 	ConversationID            string
 	TriggerMsgID              int64
+	ScheduleID                int64 // scheduler_tasks.id that triggered this run (0 if not from a schedule)
 	StatusCallback            tools.StatusCallback
 	SendCallback              tools.SendCallback
 	TTSCallback               tools.TTSCallback           // DEPRECATED: use OnMessageSend
@@ -419,6 +420,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ScrubbedUserMessage:       params.ScrubbedUserMessage,
 		ConversationID:            params.ConversationID,
 		TriggerMsgID:              params.TriggerMsgID,
+		ScheduleID:                params.ScheduleID,
 		ConversationSummary:       conversationSummary,
 		ImageBase64:               params.ImageBase64,
 		ImageMIME:                 params.ImageMIME,

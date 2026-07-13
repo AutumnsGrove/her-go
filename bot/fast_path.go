@@ -308,7 +308,7 @@ func (b *Bot) runFastPath(
 	}
 
 	// Save to DB after confirmed delivery.
-	respID, err := b.store.SaveMessage("assistant", resp.Content, resp.Content, input.ConversationID)
+	respID, err := b.store.SaveMessage("assistant", resp.Content, resp.Content, input.ConversationID, 0)
 	if err != nil {
 		log.Error("fast-path: saving response", "err", err)
 	}

@@ -76,7 +76,7 @@ func (b *Bot) handleConfirmCallback(c tele.Context) error {
 
 		// Record in conversation history so the agent knows.
 		note := fmt.Sprintf("[User cancelled: %s]", pending.Description)
-		b.store.SaveMessage("user", note, note, convID)
+		b.store.SaveMessage("user", note, note, convID, 0)
 		return nil
 	}
 
@@ -100,7 +100,7 @@ func (b *Bot) handleConfirmCallback(c tele.Context) error {
 	// context has no record of the resolution — the agent sees its own
 	// "I sent you a confirmation" but not the user's click.
 	note := fmt.Sprintf("[User confirmed: %s]", result)
-	b.store.SaveMessage("user", note, note, convID)
+	b.store.SaveMessage("user", note, note, convID, 0)
 	return nil
 }
 

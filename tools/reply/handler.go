@@ -575,7 +575,8 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	}
 
 	// Save to DB only after confirmed delivery.
-	respID, err := ctx.Store.SaveMessage("assistant", resp.Content, resp.Content, ctx.ConversationID)
+	// Pass ctx.ScheduleID so schedule-triggered replies are tagged.
+	respID, err := ctx.Store.SaveMessage("assistant", resp.Content, resp.Content, ctx.ConversationID, ctx.ScheduleID)
 	if err != nil {
 		log.Error("reply: saving response", "err", err)
 	}

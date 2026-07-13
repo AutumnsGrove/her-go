@@ -556,8 +556,8 @@ func (s *SyncedStore) Close() error {
 // ---------------------------------------------------------------------------
 
 // SaveMessage stores a message locally, then records it in the outbox for D1.
-func (s *SyncedStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error) {
-	id, err := s.SQLiteStore.SaveMessage(role, contentRaw, contentScrubbed, conversationID)
+func (s *SyncedStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string, scheduleID int64) (int64, error) {
+	id, err := s.SQLiteStore.SaveMessage(role, contentRaw, contentScrubbed, conversationID, scheduleID)
 	if err != nil {
 		return 0, err
 	}

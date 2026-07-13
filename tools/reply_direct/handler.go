@@ -174,7 +174,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	// Save to DB.
 	if ctx.Store != nil {
-		respID, err := ctx.Store.SaveMessage("assistant", replyText, replyText, ctx.ConversationID)
+		respID, err := ctx.Store.SaveMessage("assistant", replyText, replyText, ctx.ConversationID, ctx.ScheduleID)
 		if err != nil {
 			log.Error("reply_direct: saving response", "err", err)
 		}

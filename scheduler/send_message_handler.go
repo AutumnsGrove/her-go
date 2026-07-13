@@ -25,15 +25,11 @@ func (h sendMessageHandler) Execute(_ context.Context, payload json.RawMessage, 
 		return fmt.Errorf("send_message: empty message")
 	}
 
-	// Append schedule context so the user knows this came from a schedule
-	// and can easily delete it ("delete this reminder").
-	message := p.Message
-	if deps.TaskContext != nil && deps.TaskContext.ID > 0 {
-		message = fmt.Sprintf("%s\n\n<i>📅 Scheduled reminder #%d</i>",
-			p.Message, deps.TaskContext.ID)
-	}
-
-	_, err := deps.Send(deps.ChatID, message)
+	// Send the message directly — no visible footer needed anymore.
+	// The schedule_id is tracked via the message column (migration 000021)
+	// so the schedule_context layer can enable "delete this reminder" UX
+	// without showing the schedule ID to users.
+	_, err := deps.Send(deps.ChatID, p.Message)
 	return err
 }
 

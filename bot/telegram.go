@@ -451,7 +451,7 @@ func (b *Bot) ProcessMessageInput(fe Frontend, input MessageInput) (string, erro
 	log.Info("─── incoming message ───")
 	log.Infof("  user: %s", truncate(input.Text, 100))
 
-	msgID, err := b.store.SaveMessage("user", input.Text, "", input.ConversationID)
+	msgID, err := b.store.SaveMessage("user", input.Text, "", input.ConversationID, 0)
 	if err != nil {
 		log.Error("saving message", "err", err)
 	}
@@ -725,6 +725,7 @@ func (b *Bot) handleAgentEvent(evt agent.AgentEvent) {
 	params.ScrubbedUserMessage = prompt
 	params.ScrubVault = &scrub.Vault{} // empty vault — event prompts have no PII tokens
 	params.ConversationID = conversationID
+	params.ScheduleID = evt.ScheduleID // pass schedule ID so replies get tagged
 	params.StatusCallback = sendFn
 	params.SendCallback = sendFn
 
@@ -804,7 +805,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	log.Infof("  user: %s", truncate(userText, 100))
 
 	// Step 1: Log the raw message to SQLite.
-	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID, 0)
 	if err != nil {
 		log.Error("saving message", "err", err)
 	}

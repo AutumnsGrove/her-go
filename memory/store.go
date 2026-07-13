@@ -40,7 +40,7 @@ type Store interface {
 	Close() error
 
 	// Messages
-	SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error)
+	SaveMessage(role, contentRaw, contentScrubbed, conversationID string, scheduleID int64) (int64, error)
 	GlobalRecentMessages(limit int) ([]Message, error)
 	RecentMessages(conversationID string, limit int) ([]Message, error)
 	MessagesAfter(conversationID string, sinceID int64) ([]Message, error)

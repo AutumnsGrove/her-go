@@ -92,7 +92,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	// From here, same pipeline as handleMessage: save, scrub, run agent.
 	// CRITICAL: If SaveMessage fails, we must NOT call runAgent with msgID=0.
 	// That creates orphaned TUI turns that attach to the wrong section.
-	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID, 0)
 	if err != nil {
 		log.Error("saving message", "err", err)
 		return c.Send("I couldn't save that photo. Try sending it again?")
@@ -242,7 +242,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Also must close stopTyping to avoid goroutine leak.
 	userText := transcript
 
-	msgID, err := b.store.SaveMessage("user", userText, "", conversationID)
+	msgID, err := b.store.SaveMessage("user", userText, "", conversationID, 0)
 	if err != nil {
 		close(stopTyping)
 		log.Error("saving message", "err", err)

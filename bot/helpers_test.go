@@ -29,7 +29,7 @@ import (
 type stubStore struct{}
 
 func (s stubStore) Close() error                                   { return nil }
-func (s stubStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error) {
+func (s stubStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string, scheduleID int64) (int64, error) {
 	return 0, nil
 }
 func (s stubStore) GlobalRecentMessages(limit int) ([]memory.Message, error) { return nil, nil }

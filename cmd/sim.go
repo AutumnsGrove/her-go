@@ -1361,7 +1361,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 		}
 
 		// Save the user message to the temp store.
-		msgID, err := store.SaveMessage("user", userText, "", conversationID)
+		msgID, err := store.SaveMessage("user", userText, "", conversationID, 0)
 		if err != nil {
 			log.Error("failed to save message", "err", err)
 			continue

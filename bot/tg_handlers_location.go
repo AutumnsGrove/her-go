@@ -82,7 +82,7 @@ func (b *Bot) handleVenue(c tele.Context) error {
 // data in our tiered model. The shared runAgent handles all the UI boilerplate.
 func (b *Bot) runLocationAgent(c tele.Context, syntheticText, conversationID string) error {
 	// Log the synthetic message to the DB.
-	msgID, err := b.store.SaveMessage("user", syntheticText, "", conversationID)
+	msgID, err := b.store.SaveMessage("user", syntheticText, "", conversationID, 0)
 	if err != nil {
 		log.Error("saving location message", "err", err)
 	}

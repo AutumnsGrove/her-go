@@ -311,6 +311,11 @@ type Context struct {
 	// Used for linking metrics and saving the response.
 	TriggerMsgID int64
 
+	// ScheduleID is the scheduler_tasks.id that triggered this agent run
+	// (0 if not from a schedule). Used to tag messages as schedule-triggered
+	// so the schedule_context layer can enable "delete this reminder" UX.
+	ScheduleID int64
+
 	// ConversationSummary is the compacted summary of older messages.
 	// Injected into the system prompt for context.
 	ConversationSummary string

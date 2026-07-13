@@ -19,7 +19,7 @@ func newMessageTestStore(t *testing.T) *SQLiteStore {
 func TestSaveMessage_RoundTrip(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id, err := store.SaveMessage("user", "raw hello", "scrubbed hello", "conv-1")
+	id, err := store.SaveMessage("user", "raw hello", "scrubbed hello", "conv-1", 0)
 	if err != nil {
 		t.Fatalf("SaveMessage: %v", err)
 	}
@@ -52,9 +52,9 @@ func TestSaveMessage_RoundTrip(t *testing.T) {
 func TestRecentMessages_OldestFirst(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	store.SaveMessage("user", "first", "", "conv-1")
-	store.SaveMessage("assistant", "second", "", "conv-1")
-	store.SaveMessage("user", "third", "", "conv-1")
+	store.SaveMessage("user", "first", "", "conv-1", 0)
+	store.SaveMessage("assistant", "second", "", "conv-1", 0)
+	store.SaveMessage("user", "third", "", "conv-1", 0)
 
 	msgs, err := store.RecentMessages("conv-1", 10)
 	if err != nil {

@@ -2,7 +2,6 @@ package layers
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"her/logger"
@@ -50,12 +49,12 @@ func buildScheduleContext(ctx *LayerContext) LayerResult {
 	now := time.Now()
 	var scheduleInfo string
 
-	// Look for recent assistant messages that might have come from a schedule.
-	// We check the timestamp to see if it's within the "active context window"
-	// where the user would naturally say "this reminder" or "that schedule".
+	// Look for recent assistant messages that came from a schedule.
+	// Check the schedule_id column (added in migration 000021) instead of
+	// parsing message text — much more reliable than regex matching.
 	for i := len(recent) - 1; i >= 0; i-- {
 		msg := recent[i]
-		if msg.Role != "assistant" {
+		if msg.Role != "assistant" || msg.ScheduleID == 0 {
 			continue
 		}
 
@@ -64,38 +63,30 @@ func buildScheduleContext(ctx *LayerContext) LayerResult {
 			break // too old to be relevant
 		}
 
-		// Check if this message contains our schedule marker.
-		// send_message appends: "📅 Scheduled reminder #<ID>"
-		// send_prompt injects: "[context: This message was triggered by schedule #<ID>"
-		content := msg.ContentRaw
-		if strings.Contains(content, "📅 Scheduled reminder #") ||
-			strings.Contains(content, "triggered by schedule #") {
-
-			// Extract the schedule ID from the message.
-			// This is hacky but works for now - proper solution would be
-			// to store schedule_id as a message column.
-			var schedID int64
-			var schedName string
-
-			// Try both formats
-			if _, err := fmt.Sscanf(content, "%*[^#]#%d", &schedID); err == nil && schedID > 0 {
-				// Found an ID - try to get the full schedule info
-				if task, err := ctx.Store.GetSchedulerTaskByID(schedID); err == nil && task != nil {
-					schedName = task.Name
-					if schedName == "" {
-						schedName = task.Kind
-					}
-					scheduleInfo = fmt.Sprintf(
-						"**Active schedule context:** The most recent message was triggered by "+
-						"schedule #%d (%q, type: %s). If the user refers to \"this reminder\", "+
-						"\"that schedule\", or asks to delete/remove/cancel it, they mean "+
-						"schedule #%d. Use `delete_schedule` with task_id=%d.",
-						schedID, schedName, task.Kind, schedID, schedID,
-					)
-					break
-				}
-			}
+		// Found a schedule-triggered message — fetch the task details.
+		task, err := ctx.Store.GetSchedulerTaskByID(msg.ScheduleID)
+		if err != nil {
+			log.Error("schedule_context: failed to fetch task", "schedule_id", msg.ScheduleID, "err", err)
+			continue
 		}
+		if task == nil {
+			log.Warn("schedule_context: task not found", "schedule_id", msg.ScheduleID)
+			continue
+		}
+
+		schedName := task.Name
+		if schedName == "" {
+			schedName = task.Kind
+		}
+
+		scheduleInfo = fmt.Sprintf(
+			"**Active schedule context:** The most recent message was triggered by "+
+			"schedule #%d (%q, type: %s). If the user refers to \"this reminder\", "+
+			"\"that schedule\", or asks to delete/remove/cancel it, they mean "+
+			"schedule #%d. Use `delete_schedule` with task_id=%d.",
+			msg.ScheduleID, schedName, task.Kind, msg.ScheduleID, msg.ScheduleID,
+		)
+		break
 	}
 
 	if scheduleInfo == "" {

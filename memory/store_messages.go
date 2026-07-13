@@ -15,16 +15,30 @@ type Message struct {
 	ContentScrubbed string // PII-scrubbed version sent to LLM
 	ConversationID  string
 	TokenCount      int
+	ScheduleID      int64 // ID of the scheduler_tasks row that triggered this message (0 if not from a schedule)
 }
 
 // SaveMessage inserts a message into the database and returns its ID.
 // This is called for both user messages and assistant responses.
-func (s *SQLiteStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string) (int64, error) {
-	result, err := s.db.Exec(
-		`INSERT INTO messages (role, content_raw, content_scrubbed, conversation_id)
-		 VALUES (?, ?, ?, ?)`,
-		role, contentRaw, contentScrubbed, conversationID,
-	)
+func (s *SQLiteStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string, scheduleID int64) (int64, error) {
+	var result sql.Result
+	var err error
+
+	// If scheduleID is provided, include it in the insert.
+	// Otherwise leave it NULL (which SQLite represents as 0 when scanned into int64).
+	if scheduleID > 0 {
+		result, err = s.db.Exec(
+			`INSERT INTO messages (role, content_raw, content_scrubbed, conversation_id, schedule_id)
+			 VALUES (?, ?, ?, ?, ?)`,
+			role, contentRaw, contentScrubbed, conversationID, scheduleID,
+		)
+	} else {
+		result, err = s.db.Exec(
+			`INSERT INTO messages (role, content_raw, content_scrubbed, conversation_id)
+			 VALUES (?, ?, ?, ?)`,
+			role, contentRaw, contentScrubbed, conversationID,
+		)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("saving message: %w", err)
 	}
@@ -44,9 +58,9 @@ func (s *SQLiteStore) SaveMessage(role, contentRaw, contentScrubbed, conversatio
 // of which conversation ID they belong to.
 func (s *SQLiteStore) GlobalRecentMessages(limit int) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0), COALESCE(schedule_id, 0)
 		 FROM (
-			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count
+			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count, schedule_id
 			FROM messages
 			ORDER BY id DESC
 			LIMIT ?
@@ -63,7 +77,7 @@ func (s *SQLiteStore) GlobalRecentMessages(limit int) ([]Message, error) {
 		var m Message
 		var ts string
 		var scrubbed sql.NullString
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount, &m.ScheduleID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		m.Timestamp = parseTimestamp(ts)
@@ -84,9 +98,9 @@ func (s *SQLiteStore) RecentMessages(conversationID string, limit int) ([]Messag
 	// The subquery grabs the last N rows (newest first), then the outer
 	// query flips them to chronological order for the prompt.
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0)
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(token_count, 0), COALESCE(schedule_id, 0)
 		 FROM (
-			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count
+			SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, token_count, schedule_id
 			FROM messages
 			WHERE conversation_id = ?
 			ORDER BY id DESC
@@ -113,7 +127,7 @@ func (s *SQLiteStore) RecentMessages(conversationID string, limit int) ([]Messag
 		// Scan reads column values into Go variables. The order must match
 		// the SELECT column order exactly. sql.NullString handles NULL values —
 		// regular strings can't represent NULL in Go.
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.TokenCount, &m.ScheduleID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 
@@ -133,7 +147,7 @@ func (s *SQLiteStore) RecentMessages(conversationID string, limit int) ([]Messag
 // Used by fact extraction to get the batch of messages to analyze.
 func (s *SQLiteStore) MessagesAfter(conversationID string, sinceID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(schedule_id, 0)
 		 FROM messages
 		 WHERE conversation_id = ? AND id > ?
 		 ORDER BY id ASC`,
@@ -149,7 +163,7 @@ func (s *SQLiteStore) MessagesAfter(conversationID string, sinceID int64) ([]Mes
 		var m Message
 		var ts string
 		var scrubbed sql.NullString
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.ScheduleID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		m.Timestamp = parseTimestamp(ts)
@@ -167,7 +181,7 @@ func (s *SQLiteStore) MessagesAfter(conversationID string, sinceID int64) ([]Mes
 // MessagesInRange returns messages between startID and endID inclusive.
 func (s *SQLiteStore) MessagesInRange(conversationID string, startID, endID int64) ([]Message, error) {
 	rows, err := s.db.Query(
-		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id
+		`SELECT id, timestamp, role, content_raw, content_scrubbed, conversation_id, COALESCE(schedule_id, 0)
 		 FROM messages
 		 WHERE conversation_id = ? AND id >= ? AND id <= ?
 		 ORDER BY id ASC`,
@@ -183,7 +197,7 @@ func (s *SQLiteStore) MessagesInRange(conversationID string, startID, endID int6
 		var m Message
 		var ts string
 		var scrubbed sql.NullString
-		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.Role, &m.ContentRaw, &scrubbed, &m.ConversationID, &m.ScheduleID); err != nil {
 			return nil, fmt.Errorf("scanning message row: %w", err)
 		}
 		m.Timestamp = parseTimestamp(ts)
