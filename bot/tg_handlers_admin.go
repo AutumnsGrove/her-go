@@ -79,7 +79,17 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 			return c.Send(fmt.Sprintf("❌ Failed to get working directory: %v", err))
 		}
 	}
-	binaryPath := filepath.Join(repoPath, "her-go")
+
+	// Auto-detect binary name by checking which file exists.
+	// Supports both "her" (standard) and "her-go" (legacy).
+	var binaryPath string
+	if _, err := os.Stat(filepath.Join(repoPath, "her")); err == nil {
+		binaryPath = filepath.Join(repoPath, "her")
+	} else if _, err := os.Stat(filepath.Join(repoPath, "her-go")); err == nil {
+		binaryPath = filepath.Join(repoPath, "her-go")
+	} else {
+		return c.Send("❌ Binary not found (checked 'her' and 'her-go')")
+	}
 
 	// Step 1: git pull
 	_ = c.Send("📥 Pulling changes...")
