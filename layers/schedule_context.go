@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"her/logger"
 )
 
 func init() {
@@ -23,7 +25,11 @@ func init() {
 // This solves the UX problem where the bot sent a scheduled message but
 // doesn't remember it came from a schedule when the user replies.
 func buildScheduleContext(ctx *LayerContext) LayerResult {
+	log := logger.WithPrefix("layers/schedule_context")
+	log.Debug("schedule_context layer called")
+
 	if ctx.Store == nil {
+		log.Warn("schedule_context: ctx.Store is nil, skipping")
 		return LayerResult{}
 	}
 
@@ -31,9 +37,15 @@ func buildScheduleContext(ctx *LayerContext) LayerResult {
 	// If we find one within the last 10 minutes, assume the user might be
 	// referring to that schedule.
 	recent, err := ctx.Store.RecentMessages(ctx.ConversationID, 5)
-	if err != nil || len(recent) == 0 {
+	if err != nil {
+		log.Error("schedule_context: failed to get recent messages", "err", err)
 		return LayerResult{}
 	}
+	if len(recent) == 0 {
+		log.Debug("schedule_context: no recent messages")
+		return LayerResult{}
+	}
+	log.Debug("schedule_context: checking messages", "count", len(recent))
 
 	now := time.Now()
 	var scheduleInfo string
@@ -87,9 +99,11 @@ func buildScheduleContext(ctx *LayerContext) LayerResult {
 	}
 
 	if scheduleInfo == "" {
+		log.Debug("schedule_context: no schedule markers found in recent messages")
 		return LayerResult{}
 	}
 
+	log.Info("schedule_context: injecting schedule context", "info", scheduleInfo)
 	return LayerResult{
 		Content: scheduleInfo + "\n\n",
 		Detail:  "schedule context",
