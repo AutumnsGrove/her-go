@@ -15,10 +15,37 @@ import (
 )
 
 // SimMessage is a single message in a simulation scenario.
+// Supports three forms:
+//   - "plain text"          → Text field
+//   - image: path/to.jpg    → Image field
+//   - advance_time: 2h      → AdvanceTime field
+//   - text: "..."           → explicit Text + optional Image
 type SimMessage struct {
-	Text        string
-	Image       string // path to local image file (optional)
-	AdvanceTime string // time-travel directive: "2h", "1d", "30m" — advances sim clock and fires due schedules
+	Text        string `yaml:"text"`
+	Image       string `yaml:"image"`        // path to local image file (optional)
+	AdvanceTime string `yaml:"advance_time"` // time-travel directive: "2h", "1d", "30m"
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler to accept both plain strings
+// and structured objects in the messages list.
+func (m *SimMessage) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Try plain string first (fast path).
+	var s string
+	if err := unmarshal(&s); err == nil {
+		m.Text = s
+		return nil
+	}
+
+	// Fall back to structured object (text/image/advance_time fields).
+	type rawMsg SimMessage
+	var raw rawMsg
+	if err := unmarshal(&raw); err != nil {
+		return fmt.Errorf("decoding sim message: %w", err)
+	}
+	m.Text = raw.Text
+	m.Image = raw.Image
+	m.AdvanceTime = raw.AdvanceTime
+	return nil
 }
 
 // SimTriggers defines lifecycle events to fire during a sim run.
