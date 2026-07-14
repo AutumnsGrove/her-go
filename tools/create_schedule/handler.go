@@ -1,6 +1,7 @@
 package create_schedule
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -48,15 +49,25 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: cron_expr is required"
 	}
 	if _, ok := validTaskTypes[a.TaskType]; !ok {
+		log.Warnf("create_schedule rejected: invalid task_type %q", a.TaskType)
 		return "error: task_type must be one of: worker_briefing, send_message, send_prompt"
 	}
 
 	if err := scheduler.ValidateCron(a.CronExpr); err != nil {
+		log.Warnf("create_schedule rejected: bad cron_expr %q: %v", a.CronExpr, err)
 		return fmt.Sprintf("error: %v", err)
 	}
 
+	// Some models double-encode nested object parameters as an escaped JSON
+	// string (e.g. "payload": "{\"message\":\"...\"}") instead of a true
+	// nested object. json.RawMessage happily captures either shape without
+	// erroring, so unwrap a string-encoded payload before validating.
+	a.Payload = unwrapStringifiedJSON(a.Payload)
+
 	// Validate payload shape per task type.
 	if err := scheduler.ValidatePayload(a.TaskType, a.Payload); err != nil {
+		log.Warnf("create_schedule rejected: bad payload for task_type=%s: %v (raw payload: %s)",
+			a.TaskType, err, string(a.Payload))
 		return fmt.Sprintf("error: %s", err)
 	}
 
@@ -112,5 +123,28 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 func hashName(name string) string {
 	h := sha256.Sum256([]byte(name + time.Now().String()))
 	return fmt.Sprintf("%x-%s", h[:3], name)
+}
+
+// unwrapStringifiedJSON detects a JSON payload that is itself a quoted
+// string containing escaped JSON (e.g. "\"{\\\"message\\\":\\\"hi\\\"}\"")
+// and unwraps it one level. Returns the input unchanged if it isn't a
+// string-encoded object.
+func unwrapStringifiedJSON(payload json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) < 2 || trimmed[0] != '"' {
+		return payload
+	}
+
+	var inner string
+	if err := json.Unmarshal(trimmed, &inner); err != nil {
+		return payload
+	}
+
+	innerTrimmed := bytes.TrimSpace([]byte(inner))
+	if len(innerTrimmed) == 0 || innerTrimmed[0] != '{' {
+		return payload
+	}
+
+	return json.RawMessage(innerTrimmed)
 }
 

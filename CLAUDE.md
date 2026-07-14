@@ -95,6 +95,39 @@ go run main.go run
 - Runs automatically via `memory.NewStore()`
 - Use `IF NOT EXISTS` for safety
 
+## Sims — Two Commands, Don't Confuse Them
+
+`cmd/sim.go` and `cmd/sim_gw.go` are both in package `cmd`, which makes it easy to
+edit the wrong one. They define two **separate cobra commands**:
+
+- **`her sim`** → `simGWCmd` in `cmd/sim_gw.go` (`Use: "sim"`). This is the one you
+  run day to day. It drives the suite through the **real gateway pipeline**
+  (`gateway/sim.go`'s `simAdapter`) — same driver/chat/memory/mood agent code as
+  production.
+- **`her sim-legacy`** → `simCmd` in `cmd/sim.go` (`Use: "sim-legacy"`). Older,
+  separate implementation that talks to the agent directly, bypassing the gateway.
+  Not the current path — don't add features here expecting `her sim` to pick them up.
+
+**The trap:** `cmd/sim_gw.go` reuses two things physically defined in `cmd/sim.go`
+because they're in the same package: the `suite`/`simMessage` YAML schema types
+(including `simMessage.UnmarshalYAML`) and the `seedSimDB` helper. Everything
+else `sim.go` defines — `runSim`, `runDreamCycle`, all the `write*Section` report
+generators — is **only** reachable via `sim-legacy` and has zero callers from
+`sim_gw.go`.
+
+If you're debugging or extending `her sim` behavior:
+1. YAML parsing bugs (new fields on messages, etc.) → fix in `cmd/sim.go`'s
+   `simMessage`/`suite` structs, but verify the fix with a standalone `go test`
+   that just unmarshals the YAML — don't burn LLM cost re-running the full sim
+   to check a parsing change.
+2. Pipeline/execution bugs (turns, time-travel, report rendering) → fix in
+   `gateway/sim.go` (the adapter) and `cmd/sim_gw.go` (report generation), not
+   `cmd/sim.go`.
+3. When copying a struct field-by-field between two representations (e.g.
+   `simMessage` → `gateway.SimMessage`), grep for the struct's full field list
+   and check every field made it into the copy — a silently-dropped field here
+   is exactly how a time-travel bug went unnoticed for an entire session.
+
 ## Primary Design Principles
 
 ### Data Primacy

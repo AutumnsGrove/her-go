@@ -486,16 +486,16 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	// --- Assemble deps ---
 	deps := gateway.Deps{
-		ChatLLM:          chatLLM,
-		DriverLLM:        driverLLM,
-		MemoryAgentLLM:   memoryAgentLLM,
-		MoodAgentLLM:     moodAgentLLM,
-		VisionLLM:        visionLLM,
-		ClassifierLLM:    classifierLLM,
-		DreamAgentLLM:    dreamAgentLLM,
-		IntrospectionLLM: introspectionLLM,
-		EmbedClient:      embedClient,
-		TavilyClient:     tavilyClient,
+		ChatLLM:            chatLLM,
+		DriverLLM:          driverLLM,
+		MemoryAgentLLM:     memoryAgentLLM,
+		MoodAgentLLM:       moodAgentLLM,
+		VisionLLM:          visionLLM,
+		ClassifierLLM:      classifierLLM,
+		DreamAgentLLM:      dreamAgentLLM,
+		IntrospectionLLM:   introspectionLLM,
+		EmbedClient:        embedClient,
+		TavilyClient:       tavilyClient,
 		CalendarBridge:     fakeBridge,
 		ConfigPath:         cfgFile,
 		WorkerCallback:     simWorkerCB,
@@ -515,8 +515,9 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	gwMessages := make([]gateway.SimMessage, len(msgs))
 	for i, m := range msgs {
 		gwMessages[i] = gateway.SimMessage{
-			Text:  m.Text,
-			Image: m.Image,
+			Text:        m.Text,
+			Image:       m.Image,
+			AdvanceTime: m.AdvanceTime,
 		}
 	}
 
@@ -582,8 +583,8 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 		// Fire all due schedules.
 		schedDeps := &scheduler.Deps{
-			Store:        store,
-			Send:         func(chatID int64, text string) (int, error) {
+			Store: store,
+			Send: func(chatID int64, text string) (int, error) {
 				log.Infof("sim: [send_message] %s", text)
 				return 0, nil
 			},
@@ -592,6 +593,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			TavilyClient: tavilyClient,
 			Cfg:          cfg,
 			RootDir:      simRootDir,
+			// Route fired schedule messages into the sim's actual conversation
+			// (not a synthetic tg_0_<ts> ID) so schedule_context can find them.
+			GetConversationID: func(chatID int64) string {
+				return sa.ConversationID()
+			},
 		}
 		results := scheduler.FireAllUserTasks(ctx, store, schedDeps)
 		var lines []string

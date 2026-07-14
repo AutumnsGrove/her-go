@@ -342,6 +342,7 @@ func (m *simMessage) UnmarshalYAML(node *yaml.Node) error {
 	}
 	m.Text = raw.Text
 	m.Image = raw.Image
+	m.AdvanceTime = raw.AdvanceTime
 	return nil
 }
 

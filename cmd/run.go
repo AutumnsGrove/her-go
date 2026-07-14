@@ -23,12 +23,12 @@ import (
 	"her/d1"
 	"her/embed"
 	"her/gateway"
+	"her/gmail"
 	"her/llm"
 	"her/logger"
 	"her/memory"
 	"her/persona"
 	"her/procmgr"
-	"her/gmail"
 	"her/retry"
 	"her/scheduler"
 	"her/search"
@@ -871,15 +871,21 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		agentEventCh = tgBot.AgentEventChannel()
 	}
 
+	var getConversationID func(chatID int64) string
+	if tgBot != nil {
+		getConversationID = tgBot.ConversationID
+	}
+
 	schedDeps := &scheduler.Deps{
-		Store:        store,
-		Send:         sendFunc,
-		ChatID:       cfg.Telegram.OwnerChat,
-		WorkerLLMs:   workerLLMs,
-		TavilyClient: tavilyClient,
-		Cfg:          cfg,
-		RootDir:      rootDir,
-		AgentEventCh: agentEventCh,
+		Store:             store,
+		Send:              sendFunc,
+		ChatID:            cfg.Telegram.OwnerChat,
+		WorkerLLMs:        workerLLMs,
+		TavilyClient:      tavilyClient,
+		Cfg:               cfg,
+		RootDir:           rootDir,
+		AgentEventCh:      agentEventCh,
+		GetConversationID: getConversationID,
 		ScheduledPromptFn: func(taskID int64, taskName string, prompt string) error {
 			if agentEventCh == nil {
 				return fmt.Errorf("send_prompt: no agent event channel")

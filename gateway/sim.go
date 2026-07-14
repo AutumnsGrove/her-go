@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"her/config"
 	"her/tui"
 )
@@ -27,19 +29,21 @@ type SimMessage struct {
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler to accept both plain strings
-// and structured objects in the messages list.
-func (m *SimMessage) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	// Try plain string first (fast path).
-	var s string
-	if err := unmarshal(&s); err == nil {
-		m.Text = s
+// and structured objects in the messages list. Uses node-based decoding
+// to properly distinguish between scalar strings and mapping objects.
+func (m *SimMessage) UnmarshalYAML(node *yaml.Node) error {
+	// Fast path: plain string → text-only message.
+	if node.Kind == yaml.ScalarNode {
+		m.Text = node.Value
 		return nil
 	}
 
-	// Fall back to structured object (text/image/advance_time fields).
+	// Slow path: mapping with text/image/advance_time fields.
+	// Use a type alias to avoid infinite recursion — without this,
+	// node.Decode(&m) would call UnmarshalYAML again forever.
 	type rawMsg SimMessage
 	var raw rawMsg
-	if err := unmarshal(&raw); err != nil {
+	if err := node.Decode(&raw); err != nil {
 		return fmt.Errorf("decoding sim message: %w", err)
 	}
 	m.Text = raw.Text
@@ -50,11 +54,11 @@ func (m *SimMessage) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 // SimTriggers defines lifecycle events to fire during a sim run.
 type SimTriggers struct {
-	CompactAfter int   // force compaction after turn N (0 = disabled)
-	DreamAfter   []int // run dream cycle after these turns
-	RunDream     bool  // run dream after all messages complete
-	RunRollup    bool  // force the daily mood rollup after all messages complete
-	FireSchedules bool // force-fire all user-created schedules after all messages
+	CompactAfter  int   // force compaction after turn N (0 = disabled)
+	DreamAfter    []int // run dream cycle after these turns
+	RunDream      bool  // run dream after all messages complete
+	RunRollup     bool  // force the daily mood rollup after all messages complete
+	FireSchedules bool  // force-fire all user-created schedules after all messages
 }
 
 // SimOptions holds runtime options for sim execution.
@@ -106,6 +110,13 @@ type simAdapter struct {
 	triggers SimTriggers
 	options  SimOptions
 	bus      *tui.Bus
+
+	// convID is generated once at construction (not inside Start) so that
+	// callers like cmd/sim_gw.go can read it via ConversationID() before
+	// or during the run — needed so scheduler.Deps.GetConversationID can
+	// route fired schedule messages into the same conversation the driver
+	// is actually reading from.
+	convID string
 
 	msgCh    chan InboundMsg
 	commands []CommandDef
@@ -173,6 +184,7 @@ func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers Si
 		triggers:       triggers,
 		options:        opts,
 		bus:            bus,
+		convID:         fmt.Sprintf("sim-%d", time.Now().UnixMilli()),
 		msgCh:          make(chan InboundMsg, 1),
 		finishedTurn:   make(chan *turnCapture, 1),
 		Done:           make(chan struct{}),
@@ -181,6 +193,13 @@ func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers Si
 }
 
 func (a *simAdapter) Name() string { return a.cfg.Name }
+
+// ConversationID returns this sim run's conversation ID. Exposed so
+// cmd/sim_gw.go can wire scheduler.Deps.GetConversationID to it — without
+// this, fired schedule messages would land in a conversation the driver
+// never reads from (they'd be tagged with a synthetic tg_<chatID> ID that
+// has nothing to do with the sim's actual conversation).
+func (a *simAdapter) ConversationID() string { return a.convID }
 
 func (a *simAdapter) Capabilities() CapSet {
 	return CapSet{}
@@ -195,7 +214,7 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		go a.captureBusEvents(ctx)
 	}
 
-	convID := fmt.Sprintf("sim-%d", time.Now().UnixMilli())
+	convID := a.convID
 
 	for i, msg := range a.messages {
 		if ctx.Err() != nil {

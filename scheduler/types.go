@@ -68,6 +68,14 @@ type Deps struct {
 	// every extension that sends proactive messages targets this.
 	ChatID int64
 
+	// GetConversationID returns the currently-active conversation ID for a
+	// chat, so handlers that save a message (e.g. send_message, tagging its
+	// schedule_id) can attach it to the same conversation the driver agent
+	// is actually reading from. Set by cmd/run.go (wraps bot.ConversationID)
+	// and by cmd/sim_gw.go (wraps the sim adapter's fixed conversation ID).
+	// If nil, callers should fall back to reconstructing an ID from ChatID.
+	GetConversationID func(chatID int64) string
+
 	// --- Worker agent dependencies (used by briefing/research handlers) ---
 
 	// WorkerLLMs maps tier names ("low", "medium", "high") to LLM clients.

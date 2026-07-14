@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
+
+	"her/memory"
 )
 
 // sendMessageHandler sends a static Telegram message on a cron schedule.
@@ -25,12 +28,46 @@ func (h sendMessageHandler) Execute(_ context.Context, payload json.RawMessage, 
 		return fmt.Errorf("send_message: empty message")
 	}
 
-	// Send the message directly — no visible footer needed anymore.
-	// The schedule_id is tracked via the message column (migration 000021)
-	// so the schedule_context layer can enable "delete this reminder" UX
-	// without showing the schedule ID to users.
 	_, err := deps.Send(deps.ChatID, p.Message)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Persist the sent message with its schedule_id (migration 000021) so
+	// the schedule_context layer can find it later and enable "delete this
+	// reminder" UX without the user ever seeing the schedule ID. Without
+	// this, send_message reminders fire but leave no trace the agent can
+	// use to resolve a contextual "delete it" — only send_prompt schedules
+	// got this for free, via tools/reply/handler.go's SaveMessage call.
+	if store, ok := deps.Store.(memory.Store); ok {
+		var scheduleID int64
+		if deps.TaskContext != nil {
+			scheduleID = deps.TaskContext.ID
+		}
+		var convID string
+		if deps.GetConversationID != nil {
+			convID = deps.GetConversationID(deps.ChatID)
+		} else {
+			convID = conversationIDForChat(store, deps.ChatID)
+		}
+		if _, err := store.SaveMessage("assistant", p.Message, p.Message, convID, scheduleID); err != nil {
+			return fmt.Errorf("send_message: sent but failed to record message: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// conversationIDForChat is the fallback used when deps.GetConversationID
+// isn't wired (e.g. handler tests). It mirrors bot.getConversationID's
+// lookup logic — resume the chat's latest conversation, or mint a fresh
+// ID — without importing the bot package.
+func conversationIDForChat(store memory.Store, chatID int64) string {
+	prefix := fmt.Sprintf("tg_%d", chatID)
+	if existing := store.LatestConversationID(prefix); existing != "" {
+		return existing
+	}
+	return fmt.Sprintf("tg_%d_%d", chatID, time.Now().Unix())
 }
 
 func init() {

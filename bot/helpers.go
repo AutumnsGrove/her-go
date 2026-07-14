@@ -80,6 +80,14 @@ func (b *Bot) getConversationID(chatID int64) string {
 	return newID
 }
 
+// ConversationID is the exported form of getConversationID, for callers
+// outside the bot package (the scheduler, via scheduler.Deps.GetConversationID)
+// that need to route a proactively-sent message into the same conversation
+// the driver agent is actually reading from.
+func (b *Bot) ConversationID(chatID int64) string {
+	return b.getConversationID(chatID)
+}
+
 // buildSystemPrompt assembles the full system prompt by reading prompt.md
 // fresh from disk (hot-reloadable), then layering in persona.md and
 // memory context (extracted facts).
