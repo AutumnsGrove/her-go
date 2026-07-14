@@ -873,9 +873,28 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 
 	// --- Conversation ---
 	b.WriteString("## Conversation\n\n")
-	for i, r := range results {
+	turnNum := 0 // Only increment for actual conversation turns, not time-travel events
+	for _, r := range results {
+		// Time-travel event (not a conversation turn).
+		if r.TimeTravelAdvance != "" {
+			fmt.Fprintf(&b, "### ⏰ Time Travel: +%s\n\n", r.TimeTravelAdvance)
+			if len(r.SchedulesFired) > 0 {
+				fmt.Fprintf(&b, "**🔔 Fired %d schedule(s):**\n\n", len(r.SchedulesFired))
+				for _, s := range r.SchedulesFired {
+					fmt.Fprintf(&b, "- %s\n", s)
+				}
+				b.WriteString("\n")
+			} else {
+				b.WriteString("*(No schedules were due)*\n\n")
+			}
+			b.WriteString("---\n\n")
+			continue
+		}
+
+		turnNum++
+
 		if r.Error != nil {
-			fmt.Fprintf(&b, "### Turn %d *(ERROR)*\n", i+1)
+			fmt.Fprintf(&b, "### Turn %d *(ERROR)*\n", turnNum)
 			fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
 			fmt.Fprintf(&b, "**Error:** %v\n\n---\n\n", r.Error)
 			continue
@@ -893,7 +912,7 @@ func generateSimReport(cfg *config.Config, s suite, results []gateway.SimResult,
 			}
 			turnHeader += fmt.Sprintf(", via %s", strings.Join(names, "+"))
 		}
-		fmt.Fprintf(&b, "### Turn %d *(%s)*\n", i+1, turnHeader)
+		fmt.Fprintf(&b, "### Turn %d *(%s)*\n", turnNum, turnHeader)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.User, r.Input)
 		fmt.Fprintf(&b, "**%s:** %s\n\n", cfg.Identity.Her, r.Reply)
 

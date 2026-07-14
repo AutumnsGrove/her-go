@@ -64,11 +64,17 @@ type SimOptions struct {
 
 // SimResult holds the response for one sim turn, enriched with
 // structured data captured from the bus event stream.
+// Can represent either a conversation turn OR a time-travel event.
 type SimResult struct {
 	Input    string
 	Reply    string
 	Duration time.Duration
 	Error    error
+
+	// Time-travel fields (mutually exclusive with Input/Reply).
+	// If TimeTravelAdvance is non-empty, this is a time-travel event, not a turn.
+	TimeTravelAdvance string   // e.g., "2h", "1d" — duration advanced
+	SchedulesFired    []string // descriptions of schedules that fired
 
 	// Per-turn metrics from bus events.
 	Cost      float64
@@ -209,17 +215,26 @@ func (a *simAdapter) Start(ctx context.Context) error {
 
 			// Fire all user schedules that are now due via the registered callback.
 			// The callback advances the scheduler clock and then fires due schedules.
+			var fired []string
 			if a.fireSchedulesFn != nil {
-				results := a.fireSchedulesFn(ctx, duration)
-				if len(results) > 0 {
-					log.Infof("sim: 🔔 fired %d schedule(s) after time travel", len(results))
-					for _, r := range results {
+				fired = a.fireSchedulesFn(ctx, duration)
+				if len(fired) > 0 {
+					log.Infof("sim: 🔔 fired %d schedule(s) after time travel", len(fired))
+					for _, r := range fired {
 						log.Info("sim: " + r)
 					}
 				} else {
 					log.Info("sim: (no schedules were due)")
 				}
 			}
+
+			// Append a time-travel result so it shows in the markdown report.
+			a.mu.Lock()
+			a.results = append(a.results, SimResult{
+				TimeTravelAdvance: msg.AdvanceTime,
+				SchedulesFired:    fired,
+			})
+			a.mu.Unlock()
 
 			continue // don't process as a message — it's a time directive
 		}
