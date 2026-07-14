@@ -17,3 +17,9 @@ content:
 
 schedule:
   hint: "User wants to create, view, update, or cancel a recurring schedule like daily briefings or reminders"
+
+email:
+  hint: "Worker task needs to search or read the connected Gmail account"
+
+meta:
+  hint: "Worker task is wrapping up and needs to record its findings before done"
