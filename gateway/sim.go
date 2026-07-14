@@ -16,8 +16,9 @@ import (
 
 // SimMessage is a single message in a simulation scenario.
 type SimMessage struct {
-	Text  string
-	Image string // path to local image file (optional)
+	Text        string
+	Image       string // path to local image file (optional)
+	AdvanceTime string // time-travel directive: "2h", "1d", "30m" — advances sim clock and fires due schedules
 }
 
 // SimTriggers defines lifecycle events to fire during a sim run.
@@ -79,9 +80,10 @@ type simAdapter struct {
 	// compactHandler is set by the gateway after pipeline creation.
 	compactHandler func(ctx context.Context, convID string) (string, error)
 
-	// fireSchedulesFn force-fires all user-created schedules. Set by
-	// cmd/sim_gw.go where scheduler deps are available.
-	fireSchedulesFn func(ctx context.Context) []string
+	// fireSchedulesFn force-fires all user-created schedules after advancing
+	// the scheduler clock by the given duration. Set by cmd/sim_gw.go where
+	// scheduler deps are available.
+	fireSchedulesFn func(ctx context.Context, advanceDuration time.Duration) []string
 
 	// workerResultCh receives worker completion data for follow-up turns.
 	workerResultCh chan WorkerResult
@@ -104,8 +106,9 @@ type simAdapter struct {
 }
 
 // SetFireSchedulesFn sets the callback for force-firing user schedules.
+// The callback receives a duration to advance the scheduler clock before firing.
 // Called from cmd/sim_gw.go where scheduler deps are available.
-func (a *simAdapter) SetFireSchedulesFn(fn func(ctx context.Context) []string) {
+func (a *simAdapter) SetFireSchedulesFn(fn func(ctx context.Context, advanceDuration time.Duration) []string) {
 	a.fireSchedulesFn = fn
 }
 
@@ -164,6 +167,34 @@ func (a *simAdapter) Start(ctx context.Context) error {
 	for i, msg := range a.messages {
 		if ctx.Err() != nil {
 			break
+		}
+
+		// Time-travel directive: advance the sim clock and fire schedules.
+		// This lets sims test scheduled tasks without waiting real time.
+		if msg.AdvanceTime != "" {
+			duration, err := time.ParseDuration(msg.AdvanceTime)
+			if err != nil {
+				log.Errorf("sim: [%d/%d] invalid advance_time: %v", i+1, len(a.messages), err)
+				continue
+			}
+
+			log.Infof("sim: [%d/%d] ⏰ TIME TRAVEL: advancing %s", i+1, len(a.messages), msg.AdvanceTime)
+
+			// Fire all user schedules that are now due via the registered callback.
+			// The callback advances the scheduler clock and then fires due schedules.
+			if a.fireSchedulesFn != nil {
+				results := a.fireSchedulesFn(ctx, duration)
+				if len(results) > 0 {
+					log.Infof("sim: 🔔 fired %d schedule(s) after time travel", len(results))
+					for _, r := range results {
+						log.Info("sim: " + r)
+					}
+				} else {
+					log.Info("sim: (no schedules were due)")
+				}
+			}
+
+			continue // don't process as a message — it's a time directive
 		}
 
 		start := time.Now()
@@ -300,9 +331,9 @@ func (a *simAdapter) Start(ctx context.Context) error {
 		}
 	}
 
-	// Post-run: force-fire all user-created schedules.
+	// Post-run: force-fire all user-created schedules (without time-travel).
 	if a.triggers.FireSchedules && a.fireSchedulesFn != nil {
-		results := a.fireSchedulesFn(ctx)
+		results := a.fireSchedulesFn(ctx, 0) // 0 duration = no time advance
 		for _, r := range results {
 			log.Info("sim: fire-schedule result: " + r)
 		}

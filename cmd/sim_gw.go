@@ -563,34 +563,47 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	}
 
 	// Wire fire-schedules callback — needs scheduler deps built from
-	// sim-local clients. Safe to set here: fire_schedules only runs
-	// after all messages complete.
-	if s.FireSchedules {
-		sa.SetFireSchedulesFn(func(ctx context.Context) []string {
-			schedDeps := &scheduler.Deps{
-				Store:        store,
-				Send:         func(chatID int64, text string) (int, error) {
-					log.Infof("sim: [send_message] %s", text)
-					return 0, nil
-				},
-				ChatID:       0,
-				WorkerLLMs:   simWorkerLLMs,
-				TavilyClient: tavilyClient,
-				Cfg:          cfg,
-				RootDir:      simRootDir,
+	// sim-local clients. Accepts a duration parameter to advance the scheduler
+	// clock before firing (time-travel).
+	sa.SetFireSchedulesFn(func(ctx context.Context, advanceDuration time.Duration) []string {
+		// Advance scheduler clock if duration > 0 (time-travel).
+		if advanceDuration > 0 {
+			// Update next_fire for all schedules by subtracting the duration.
+			// SQLite datetime() with negative offset makes schedules "due now".
+			_, err := store.DB().Exec(
+				`UPDATE scheduler_tasks SET next_fire = datetime(next_fire, ?) WHERE enabled = 1`,
+				fmt.Sprintf("-%d seconds", int(advanceDuration.Seconds())),
+			)
+			if err != nil {
+				return []string{fmt.Sprintf("ERROR: failed to advance scheduler clock: %v", err)}
 			}
-			results := scheduler.FireAllUserTasks(ctx, store, schedDeps)
-			var lines []string
-			for _, r := range results {
-				if r.Err != nil {
-					lines = append(lines, fmt.Sprintf("#%d %s (%s): FAILED — %v", r.TaskID, r.Name, r.Kind, r.Err))
-				} else {
-					lines = append(lines, fmt.Sprintf("#%d %s (%s): OK", r.TaskID, r.Name, r.Kind))
-				}
+			log.Infof("sim: advanced scheduler clock by %s", advanceDuration)
+		}
+
+		// Fire all due schedules.
+		schedDeps := &scheduler.Deps{
+			Store:        store,
+			Send:         func(chatID int64, text string) (int, error) {
+				log.Infof("sim: [send_message] %s", text)
+				return 0, nil
+			},
+			ChatID:       0,
+			WorkerLLMs:   simWorkerLLMs,
+			TavilyClient: tavilyClient,
+			Cfg:          cfg,
+			RootDir:      simRootDir,
+		}
+		results := scheduler.FireAllUserTasks(ctx, store, schedDeps)
+		var lines []string
+		for _, r := range results {
+			if r.Err != nil {
+				lines = append(lines, fmt.Sprintf("#%d %s (%s): FAILED — %v", r.TaskID, r.Name, r.Kind, r.Err))
+			} else {
+				lines = append(lines, fmt.Sprintf("#%d %s (%s): OK", r.TaskID, r.Name, r.Kind))
 			}
-			return lines
-		})
-	}
+		}
+		return lines
+	})
 
 	// Block until all messages are processed or the gateway exits early.
 	// We use a separate gatewayErr variable so both branches can drain
