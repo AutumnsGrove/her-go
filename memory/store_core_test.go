@@ -33,7 +33,7 @@ func TestNewStore_CreatesDB(t *testing.T) {
 	defer store.Close()
 
 	// Verify the DB is usable — insert and query a message
-	id, err := store.SaveMessage("user", "hello", "", "test")
+	id, err := store.SaveMessage("user", "hello", "", "test", 0)
 	if err != nil {
 		t.Fatalf("SaveMessage on fresh DB: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestNewStore_IdempotentInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	store1.SaveMessage("user", "persisted", "", "test")
+	store1.SaveMessage("user", "persisted", "", "test", 0)
 	store1.Close()
 
 	// Re-open — should not error or lose data
@@ -170,7 +170,7 @@ func TestPIIVault_RoundTrip(t *testing.T) {
 	store := newCoreTestStore(t)
 
 	// Save a message first (for the foreign key)
-	msgID, _ := store.SaveMessage("user", "call me at 555-1234", "", "conv-1")
+	msgID, _ := store.SaveMessage("user", "call me at 555-1234", "", "conv-1", 0)
 
 	err := store.SavePIIVaultEntry(msgID, "[PHONE_1]", "555-1234", "phone")
 	if err != nil {
@@ -204,7 +204,7 @@ func TestPIIVault_RoundTrip(t *testing.T) {
 func TestSaveMetric_RoundTrip(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	err := store.SaveMetric("gpt-4", 100, 50, 150, 0.003, 500, 0, false, "")
+	err := store.SaveMetric(MetricInput{Model: "gpt-4", PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CostUSD: 0.003, LatencyMs: 500, MessageID: 0, IsFallback: false, AgentRole: ""})
 	if err != nil {
 		t.Fatalf("SaveMetric: %v", err)
 	}
@@ -221,8 +221,8 @@ func TestSaveMetric_RoundTrip(t *testing.T) {
 func TestSaveMetric_WithMessageID(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	msgID, _ := store.SaveMessage("user", "hello", "", "conv-1")
-	err := store.SaveMetric("model-x", 10, 20, 30, 0.001, 200, msgID, false, "")
+	msgID, _ := store.SaveMessage("user", "hello", "", "conv-1", 0)
+	err := store.SaveMetric(MetricInput{Model: "model-x", PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30, CostUSD: 0.001, LatencyMs: 200, MessageID: msgID, IsFallback: false, AgentRole: ""})
 	if err != nil {
 		t.Fatalf("SaveMetric with msgID: %v", err)
 	}
@@ -253,9 +253,9 @@ func TestGetStats_Empty(t *testing.T) {
 func TestGetUsageReport(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	store.SaveMetric("model-a", 100, 50, 150, 0.003, 500, 0, false, "")
-	store.SaveMetric("model-b", 200, 100, 300, 0.006, 300, 0, false, "")
-	store.SaveMetric("model-a", 50, 25, 75, 0.001, 400, 0, false, "")
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CostUSD: 0.003, LatencyMs: 500, MessageID: 0, IsFallback: false, AgentRole: ""})
+	store.SaveMetric(MetricInput{Model: "model-b", PromptTokens: 200, CompletionTokens: 100, TotalTokens: 300, CostUSD: 0.006, LatencyMs: 300, MessageID: 0, IsFallback: false, AgentRole: ""})
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 50, CompletionTokens: 25, TotalTokens: 75, CostUSD: 0.001, LatencyMs: 400, MessageID: 0, IsFallback: false, AgentRole: ""})
 
 	report, err := store.GetUsageReport()
 	if err != nil {
@@ -285,10 +285,10 @@ func TestGetUsageReport(t *testing.T) {
 func TestGetUsageReport_RoleBreakdown(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	store.SaveMetric("model-a", 100, 50, 150, 0.003, 500, 0, false, "driver")
-	store.SaveMetric("model-a", 200, 100, 300, 0.006, 0, 0, false, "memory")
-	store.SaveMetric("model-b", 50, 25, 75, 0.001, 0, 0, false, "driver")
-	store.SaveMetric("model-a", 80, 40, 120, 0.002, 0, 0, false, "dream")
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CostUSD: 0.003, LatencyMs: 500, MessageID: 0, IsFallback: false, AgentRole: "driver"})
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 200, CompletionTokens: 100, TotalTokens: 300, CostUSD: 0.006, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "memory"})
+	store.SaveMetric(MetricInput{Model: "model-b", PromptTokens: 50, CompletionTokens: 25, TotalTokens: 75, CostUSD: 0.001, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "driver"})
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 80, CompletionTokens: 40, TotalTokens: 120, CostUSD: 0.002, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "dream"})
 
 	report, err := store.GetUsageReport()
 	if err != nil {
@@ -334,9 +334,9 @@ func TestCostSince(t *testing.T) {
 	store := newCoreTestStore(t)
 
 	// Save metrics with different roles and timestamps.
-	store.SaveMetric("model-a", 100, 50, 150, 0.003, 0, 0, false, "dream")
-	store.SaveMetric("model-a", 200, 100, 300, 0.007, 0, 0, false, "dream")
-	store.SaveMetric("model-b", 50, 25, 75, 0.002, 0, 0, false, "driver")
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CostUSD: 0.003, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "dream"})
+	store.SaveMetric(MetricInput{Model: "model-a", PromptTokens: 200, CompletionTokens: 100, TotalTokens: 300, CostUSD: 0.007, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "dream"})
+	store.SaveMetric(MetricInput{Model: "model-b", PromptTokens: 50, CompletionTokens: 25, TotalTokens: 75, CostUSD: 0.002, LatencyMs: 0, MessageID: 0, IsFallback: false, AgentRole: "driver"})
 
 	tests := []struct {
 		name     string
@@ -383,7 +383,7 @@ func TestCostSince_Empty(t *testing.T) {
 func TestSaveAgentTurn_RoundTrip(t *testing.T) {
 	store := newCoreTestStore(t)
 
-	msgID, _ := store.SaveMessage("user", "what's the weather?", "", "conv-1")
+	msgID, _ := store.SaveMessage("user", "what's the weather?", "", "conv-1", 0)
 
 	// Save an agent turn sequence: think → tool call → tool result
 	store.SaveAgentTurn(msgID, 0, "assistant", "think", `{"thought":"check weather"}`, "")

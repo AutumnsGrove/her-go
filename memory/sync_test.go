@@ -195,7 +195,7 @@ func TestPushPullRoundtrip(t *testing.T) {
 	// --- Store 1: seed with test data and push to D1 ---
 
 	store1 := newSyncTestStore(t)
-	msgID, err := store1.SaveMessage("user", "hello world", "hello world", "conv1")
+	msgID, err := store1.SaveMessage("user", "hello world", "hello world", "conv1", 0)
 	if err != nil {
 		t.Fatalf("SaveMessage: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestPushFailureDoesNotBlockLocalWrites(t *testing.T) {
 
 	// Save a message through SyncedStore — this writes locally and
 	// queues an outbox entry. The carrier will try to push and fail.
-	id, err := synced.SaveMessage("user", "test message", "test message", "conv1")
+	id, err := synced.SaveMessage("user", "test message", "test message", "conv1", 0)
 	if err != nil {
 		t.Fatalf("SaveMessage should succeed locally even when D1 is down: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestPullBumpsSequence(t *testing.T) {
 
 	// Now save a new message locally — it should get ID > 100,
 	// not ID 1 (which would collide with the remote data).
-	newID, err := synced.SaveMessage("user", "local msg", "local msg", "conv2")
+	newID, err := synced.SaveMessage("user", "local msg", "local msg", "conv2", 0)
 	if err != nil {
 		t.Fatalf("SaveMessage after pull: %v", err)
 	}

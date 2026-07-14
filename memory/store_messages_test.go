@@ -73,7 +73,7 @@ func TestRecentMessages_Limit(t *testing.T) {
 	store := newMessageTestStore(t)
 
 	for i := 0; i < 10; i++ {
-		store.SaveMessage("user", "msg", "", "conv-1")
+		store.SaveMessage("user", "msg", "", "conv-1", 0)
 	}
 
 	msgs, err := store.RecentMessages("conv-1", 3)
@@ -88,8 +88,8 @@ func TestRecentMessages_Limit(t *testing.T) {
 func TestRecentMessages_ConversationIsolation(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	store.SaveMessage("user", "conv1 msg", "", "conv-1")
-	store.SaveMessage("user", "conv2 msg", "", "conv-2")
+	store.SaveMessage("user", "conv1 msg", "", "conv-1", 0)
+	store.SaveMessage("user", "conv2 msg", "", "conv-2", 0)
 
 	msgs, err := store.RecentMessages("conv-1", 10)
 	if err != nil {
@@ -106,9 +106,9 @@ func TestRecentMessages_ConversationIsolation(t *testing.T) {
 func TestGlobalRecentMessages_CrossConversation(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	store.SaveMessage("user", "conv1", "", "conv-1")
-	store.SaveMessage("user", "conv2", "", "conv-2")
-	store.SaveMessage("user", "conv1 again", "", "conv-1")
+	store.SaveMessage("user", "conv1", "", "conv-1", 0)
+	store.SaveMessage("user", "conv2", "", "conv-2", 0)
+	store.SaveMessage("user", "conv1 again", "", "conv-1", 0)
 
 	msgs, err := store.GlobalRecentMessages(10)
 	if err != nil {
@@ -126,9 +126,9 @@ func TestGlobalRecentMessages_CrossConversation(t *testing.T) {
 func TestMessagesAfter(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id1, _ := store.SaveMessage("user", "first", "", "conv-1")
-	store.SaveMessage("user", "second", "", "conv-1")
-	store.SaveMessage("user", "third", "", "conv-1")
+	id1, _ := store.SaveMessage("user", "first", "", "conv-1", 0)
+	store.SaveMessage("user", "second", "", "conv-1", 0)
+	store.SaveMessage("user", "third", "", "conv-1", 0)
 
 	msgs, err := store.MessagesAfter("conv-1", id1)
 	if err != nil {
@@ -145,10 +145,10 @@ func TestMessagesAfter(t *testing.T) {
 func TestMessagesInRange(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id1, _ := store.SaveMessage("user", "one", "", "conv-1")
-	id2, _ := store.SaveMessage("user", "two", "", "conv-1")
-	id3, _ := store.SaveMessage("user", "three", "", "conv-1")
-	store.SaveMessage("user", "four", "", "conv-1") // outside range
+	id1, _ := store.SaveMessage("user", "one", "", "conv-1", 0)
+	id2, _ := store.SaveMessage("user", "two", "", "conv-1", 0)
+	id3, _ := store.SaveMessage("user", "three", "", "conv-1", 0)
+	store.SaveMessage("user", "four", "", "conv-1", 0) // outside range
 
 	msgs, err := store.MessagesInRange("conv-1", id1, id3)
 	if err != nil {
@@ -163,7 +163,7 @@ func TestMessagesInRange(t *testing.T) {
 func TestUpdateMessageScrubbed(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id, _ := store.SaveMessage("user", "my SSN is 123-45-6789", "", "conv-1")
+	id, _ := store.SaveMessage("user", "my SSN is 123-45-6789", "", "conv-1", 0)
 
 	err := store.UpdateMessageScrubbed(id, "my SSN is [SSN_REDACTED]")
 	if err != nil {
@@ -186,10 +186,10 @@ func TestUpdateMessageScrubbed(t *testing.T) {
 func TestMessageCountSince(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id1, _ := store.SaveMessage("user", "one", "", "conv-1")
-	store.SaveMessage("user", "two", "", "conv-1")
-	store.SaveMessage("assistant", "reply", "", "conv-1") // assistant, shouldn't count
-	store.SaveMessage("user", "three", "", "conv-1")
+	id1, _ := store.SaveMessage("user", "one", "", "conv-1", 0)
+	store.SaveMessage("user", "two", "", "conv-1", 0)
+	store.SaveMessage("assistant", "reply", "", "conv-1", 0) // assistant, shouldn't count
+	store.SaveMessage("user", "three", "", "conv-1", 0)
 
 	count, err := store.MessageCountSince("conv-1", id1)
 	if err != nil {
@@ -204,8 +204,8 @@ func TestMessageCountSince(t *testing.T) {
 func TestLatestConversationID(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	store.SaveMessage("user", "old", "", "tg_123_aaa")
-	store.SaveMessage("user", "new", "", "tg_123_bbb")
+	store.SaveMessage("user", "old", "", "tg_123_aaa", 0)
+	store.SaveMessage("user", "new", "", "tg_123_bbb", 0)
 
 	got := store.LatestConversationID("tg_123")
 	if got != "tg_123_bbb" {
@@ -225,7 +225,7 @@ func TestLatestConversationID_NoMessages(t *testing.T) {
 func TestUpdateMessageTokenCount(t *testing.T) {
 	store := newMessageTestStore(t)
 
-	id, _ := store.SaveMessage("user", "hello", "", "conv-1")
+	id, _ := store.SaveMessage("user", "hello", "", "conv-1", 0)
 	if err := store.UpdateMessageTokenCount(id, 42); err != nil {
 		t.Fatalf("UpdateMessageTokenCount: %v", err)
 	}
