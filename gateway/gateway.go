@@ -33,8 +33,9 @@ type Deps struct {
 	DreamAgentLLM    *llm.Client
 	IntrospectionLLM *llm.Client
 	EmbedClient      *embed.Client
-	TavilyClient     *search.TavilyClient
-	VoiceClient      *voice.Client    // STT — nil if voice disabled
+	SearXNGClient    *search.SearXNGClient // self-hosted search — nil if not configured
+	TavilyClient     *search.TavilyClient  // web search fallback
+	VoiceClient      *voice.Client         // STT — nil if voice disabled
 	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
 	CalendarBridge   calendar.Bridge              // nil in prod, FakeBridge in sims
 	ConfigPath       string

@@ -39,10 +39,11 @@ func NewTavilyClient(apiKey, baseURL string) *TavilyClient {
 
 // searchRequest is the JSON body for POST /search.
 type searchRequest struct {
-	Query           string `json:"query"`
-	SearchDepth     string `json:"search_depth,omitempty"`
-	MaxResults      int    `json:"max_results,omitempty"`
-	IncludeAnswer   bool   `json:"include_answer,omitempty"`
+	Query         string `json:"query"`
+	SearchDepth   string `json:"search_depth,omitempty"`
+	MaxResults    int    `json:"max_results,omitempty"`
+	IncludeAnswer bool   `json:"include_answer,omitempty"`
+	IncludeImages bool   `json:"include_images,omitempty"`
 }
 
 // SearchResponse is the parsed response from Tavily search.
@@ -50,15 +51,17 @@ type SearchResponse struct {
 	Query        string         `json:"query"`
 	Answer       string         `json:"answer"`
 	Results      []SearchResult `json:"results"`
+	Images       []string       `json:"images"` // image URLs related to the query, when IncludeImages is set
 	ResponseTime float64        `json:"response_time"`
 }
 
-// SearchResult is a single search result from Tavily.
+// SearchResult is a single search result from Tavily or SearXNG.
 type SearchResult struct {
-	Title   string  `json:"title"`
-	URL     string  `json:"url"`
-	Content string  `json:"content"` // NLP-extracted snippet
-	Score   float64 `json:"score"`   // relevance 0-1
+	Title     string  `json:"title"`
+	URL       string  `json:"url"`
+	Content   string  `json:"content"`   // NLP-extracted snippet
+	Score     float64 `json:"score"`     // relevance 0-1
+	Thumbnail string  `json:"thumbnail"` // thumbnail image URL (SearXNG only, empty for Tavily)
 }
 
 // Search performs a web search via Tavily.
@@ -73,6 +76,7 @@ func (c *TavilyClient) Search(query string, maxResults int) (*SearchResponse, er
 		SearchDepth:   "basic", // 1 credit per search
 		MaxResults:    maxResults,
 		IncludeAnswer: true, // get a synthesized answer
+		IncludeImages: true, // surface image URLs so callers can view_image them
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
@@ -186,7 +190,19 @@ func FormatSearchResults(resp *SearchResponse) string {
 
 	b.WriteString("**Sources:**\n")
 	for i, r := range resp.Results {
-		fmt.Fprintf(&b, "%d. [%s](%s)\n   %s\n", i+1, r.Title, r.URL, r.Content)
+		fmt.Fprintf(&b, "%d. [%s](%s)\n   %s", i+1, r.Title, r.URL, r.Content)
+		if r.Thumbnail != "" {
+			fmt.Fprintf(&b, "\n   [Image: %s]", r.Thumbnail)
+		}
+		b.WriteString("\n")
+	}
+
+	if len(resp.Images) > 0 {
+		b.WriteString("\n**Images found:**\n")
+		for i, imgURL := range resp.Images {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, imgURL)
+		}
+		b.WriteString("Call view_image(image_url=...) on one before trusting or embedding it — search image results are sometimes mismatched or unrelated to the query.\n")
 	}
 
 	return b.String()

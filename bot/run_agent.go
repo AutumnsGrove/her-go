@@ -769,6 +769,7 @@ func (b *Bot) baseRunParams() agent.RunParams {
 		Store:               b.store,
 		EmbedClient:         b.embedClient,
 		SimilarityThreshold: b.cfg.Embed.SimilarityThreshold,
+		SearXNGClient:       b.searxngClient,
 		TavilyClient:        b.tavilyClient,
 		CalendarBridge:      b.calendarBridge,
 		Cfg:                 b.cfg,

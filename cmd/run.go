@@ -494,11 +494,21 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 
 	// --- Search ---
 
+	var searxngClient *search.SearXNGClient
+	if cfg.Search.SearXNGBaseURL != "" {
+		searxngClient = search.NewSearXNGClient(cfg.Search.SearXNGBaseURL)
+		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "ready", Detail: "SearXNG"})
+	}
+
 	var tavilyClient *search.TavilyClient
 	if cfg.Search.TavilyAPIKey != "" {
 		tavilyClient = search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
-		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "ready"})
-	} else {
+		if searxngClient == nil {
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "ready", Detail: "Tavily"})
+		} else {
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "ready", Detail: "SearXNG + Tavily fallback"})
+		}
+	} else if searxngClient == nil {
 		bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "search", Status: "skipped"})
 	}
 
@@ -691,13 +701,15 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 					Instruction:  note,
 					TriggerMsgID: triggerMsgID,
 				}, workeragent.WorkerParams{
-					LLM:          llmClient,
-					TavilyClient: tavilyClient,
-					Store:        store,
-					Cfg:          cfg,
-					ReportsDir:   reportsDir,
-					GmailBridge:  gmailBridge,
-					EventBus:     bus,
+					LLM:           llmClient,
+					SearXNGClient: searxngClient,
+					TavilyClient:  tavilyClient,
+					Store:         store,
+					Cfg:           cfg,
+					ReportsDir:    reportsDir,
+					VisionLLM:     visionClient,
+					GmailBridge:   gmailBridge,
+					EventBus:      bus,
 				})
 
 				if cfg.WorkerAgent.TelegraphToken != "" && result.ReportPath != "" {
@@ -774,6 +786,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 				Store:        store,
 				Cfg:          cfg,
 				ReportsDir:   reportsDir,
+				VisionLLM:    visionClient,
 				GmailBridge:  gmailBridge,
 				EventBus:     bus,
 			})
@@ -795,6 +808,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 			DreamAgentLLM:      dreamAgentClient,
 			IntrospectionLLM:   introspectionClient,
 			EmbedClient:        embedClient,
+			SearXNGClient:      searxngClient,
 			TavilyClient:       tavilyClient,
 			VoiceClient:        voiceClient,
 			TTSClient:          ttsClient,
@@ -822,7 +836,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	// bot.Bot internally — no need for a second one here.
 	if !skipTelegram && !gatewayOwnsTelegram {
 		var botErr error
-		tgBot, botErr = bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, tavilyClient, voiceClient, ttsClient, store, bus)
+		tgBot, botErr = bot.New(cfg, cfgFile, llmClient, driverClient, memoryAgentClient, moodAgentClient, visionClient, classifierClient, dreamAgentClient, introspectionClient, embedClient, searxngClient, tavilyClient, voiceClient, ttsClient, store, bus)
 		if botErr != nil {
 			log.Error("Failed to create Telegram bot", "err", botErr)
 			bus.Close()
@@ -881,7 +895,9 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 		Send:              sendFunc,
 		ChatID:            cfg.Telegram.OwnerChat,
 		WorkerLLMs:        workerLLMs,
+		SearXNGClient:     searxngClient,
 		TavilyClient:      tavilyClient,
+		VisionLLM:         visionClient,
 		Cfg:               cfg,
 		RootDir:           rootDir,
 		AgentEventCh:      agentEventCh,

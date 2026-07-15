@@ -304,7 +304,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		applyProvider(introspectionLLM, introspectionProviderFlag, "introspection")
 	}
 
-	// --- Search client ---
+	// --- Search clients ---
+	var searxngClient *search.SearXNGClient
+	if cfg.Search.SearXNGBaseURL != "" {
+		searxngClient = search.NewSearXNGClient(cfg.Search.SearXNGBaseURL)
+	}
 	tavilyClient := search.NewTavilyClient(cfg.Search.TavilyAPIKey, cfg.Search.TavilyBaseURL)
 
 	// --- Calendar FakeBridge ---
@@ -425,12 +429,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 				Instruction:  note,
 				TriggerMsgID: triggerMsgID,
 			}, workeragent.WorkerParams{
-				LLM:          llmClient,
-				TavilyClient: tavilyClient,
-				Store:        store,
-				Cfg:          cfg,
-				ReportsDir:   simReportsDir,
-				GmailBridge:  gmailFakeBridge,
+				LLM:           llmClient,
+				SearXNGClient: searxngClient,
+				TavilyClient:  tavilyClient,
+				Store:         store,
+				Cfg:           cfg,
+				ReportsDir:    simReportsDir,
+				VisionLLM:     visionLLM,
+				GmailBridge:   gmailFakeBridge,
 			})
 			log.Info("sim worker: done", "report", result.ReportPath, "success", result.Success)
 
@@ -463,12 +469,14 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 				Instruction:  note,
 				TriggerMsgID: triggerMsgID,
 			}, workeragent.WorkerParams{
-				LLM:          llmClient,
-				TavilyClient: tavilyClient,
-				Store:        store,
-				Cfg:          cfg,
-				ReportsDir:   simReportsDir,
-				GmailBridge:  gmailFakeBridge,
+				LLM:           llmClient,
+				SearXNGClient: searxngClient,
+				TavilyClient:  tavilyClient,
+				Store:         store,
+				Cfg:           cfg,
+				ReportsDir:    simReportsDir,
+				VisionLLM:     visionLLM,
+				GmailBridge:   gmailFakeBridge,
 			})
 			log.Info("sim worker (sync): done", "success", result.Success)
 			if result.Summary == "" {
@@ -495,6 +503,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 		DreamAgentLLM:      dreamAgentLLM,
 		IntrospectionLLM:   introspectionLLM,
 		EmbedClient:        embedClient,
+		SearXNGClient:      searxngClient,
 		TavilyClient:       tavilyClient,
 		CalendarBridge:     fakeBridge,
 		ConfigPath:         cfgFile,
@@ -588,10 +597,11 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 				log.Infof("sim: [send_message] %s", text)
 				return 0, nil
 			},
-			ChatID:       0,
-			WorkerLLMs:   simWorkerLLMs,
-			TavilyClient: tavilyClient,
-			Cfg:          cfg,
+			ChatID:        0,
+			WorkerLLMs:    simWorkerLLMs,
+			SearXNGClient: searxngClient,
+			TavilyClient:  tavilyClient,
+			Cfg:           cfg,
 			RootDir:      simRootDir,
 			// Route fired schedule messages into the sim's actual conversation
 			// (not a synthetic tg_0_<ts> ID) so schedule_context can find them.

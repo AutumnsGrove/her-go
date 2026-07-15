@@ -244,6 +244,11 @@ type Context struct {
 	// EmbedClient generates embedding vectors for semantic search.
 	EmbedClient *embed.Client
 
+	// SearXNGClient provides web search via a self-hosted SearXNG instance.
+	// Optional — if set, web_search uses this instead of Tavily. Nil if
+	// not configured.
+	SearXNGClient *search.SearXNGClient
+
 	// TavilyClient provides web search and URL extraction. Nil if not
 	// configured.
 	TavilyClient *search.TavilyClient

@@ -14,10 +14,10 @@ import (
 
 	"her/agent"
 	"her/calendar"
-	"her/gmail"
 	"her/compact"
 	"her/config"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/memory"
 	"her/mood"
@@ -1046,6 +1046,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 			Store:        store,
 			Cfg:          cfg,
 			ReportsDir:   simReportsDir,
+			VisionLLM:    visionClient,
 			GmailBridge:  gmailFakeBridge,
 		})
 	}

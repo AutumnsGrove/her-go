@@ -47,9 +47,10 @@ type Bot struct {
 	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
 	dreamAgentLLM    *llm.Client          // memory dreamer — nil falls back to memoryAgentLLM
 	introspectionLLM *llm.Client          // self-reflection agent — nil falls back to memoryAgentLLM
-	embedClient      *embed.Client        // local embedding model for similarity
-	tavilyClient     *search.TavilyClient // web search and URL extraction
-	calendarBridge   calendar.Bridge      // nil in prod (tools create CLIBridge), FakeBridge in sims
+	embedClient      *embed.Client          // local embedding model for similarity
+	searxngClient    *search.SearXNGClient  // self-hosted meta-search (optional, free, no rate limits)
+	tavilyClient     *search.TavilyClient   // web search and URL extraction (fallback if SearXNG not configured)
+	calendarBridge   calendar.Bridge        // nil in prod (tools create CLIBridge), FakeBridge in sims
 	voiceClient      *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
 	ttsClient        *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store            memory.Store
@@ -216,7 +217,7 @@ func (b *Bot) AgentEventChannel() chan<- agent.AgentEvent {
 }
 
 // New creates and configures a new Telegram bot.
-func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, searxngClient *search.SearXNGClient, tavilyClient *search.TavilyClient, voiceClient *voice.Client, ttsClient *voice.TTSClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	// Choose update transport based on config. In poll mode (the default),
 	// the bot calls Telegram every 10 seconds asking for new messages.
 	// In webhook mode, Telegram POSTs updates to us — used when a CF
@@ -290,6 +291,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 		dreamAgentLLM:    dreamAgentLLM,
 		introspectionLLM: introspectionLLM,
 		embedClient:      embedClient,
+		searxngClient:    searxngClient,
 		tavilyClient:     tavilyClient,
 		voiceClient:      voiceClient,
 		ttsClient:        ttsClient,
@@ -376,7 +378,7 @@ func New(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM
 // This is the same Bot struct with the same agent pipeline — just no
 // Telegram transport. Like creating a Python class with all methods
 // working but the network socket set to None.
-func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, tavilyClient *search.TavilyClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
+func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driverLLM *llm.Client, memoryAgentLLM *llm.Client, moodAgentLLM *llm.Client, visionLLM *llm.Client, classifierLLM *llm.Client, dreamAgentLLM *llm.Client, introspectionLLM *llm.Client, embedClient *embed.Client, searxngClient *search.SearXNGClient, tavilyClient *search.TavilyClient, store memory.Store, eventBus *tui.Bus) (*Bot, error) {
 	promptBytes, err := os.ReadFile(cfg.Persona.PromptFile)
 	if err != nil {
 		return nil, fmt.Errorf("reading system prompt from %s: %w", cfg.Persona.PromptFile, err)
@@ -393,6 +395,7 @@ func NewDev(cfg *config.Config, configPath string, llmClient *llm.Client, driver
 		dreamAgentLLM:    dreamAgentLLM,
 		introspectionLLM: introspectionLLM,
 		embedClient:      embedClient,
+		searxngClient:    searxngClient,
 		tavilyClient:     tavilyClient,
 		store:            store,
 		cfg:              cfg,

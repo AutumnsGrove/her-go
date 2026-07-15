@@ -733,8 +733,9 @@ type EmbedConfig struct {
 
 // SearchConfig controls web search and book search integrations.
 type SearchConfig struct {
-	TavilyAPIKey  string `yaml:"tavily_api_key"`
-	TavilyBaseURL string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
+	SearXNGBaseURL string `yaml:"searxng_base_url"` // optional: if set, use SearXNG instead of Tavily (e.g., http://localhost:8888)
+	TavilyAPIKey   string `yaml:"tavily_api_key"`
+	TavilyBaseURL  string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
 }
 
 // FoursquareConfig holds credentials for the Foursquare Places API v3.

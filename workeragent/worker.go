@@ -69,29 +69,35 @@ type WorkerInput struct {
 
 // WorkerParams bundles the dependencies the worker agent needs.
 type WorkerParams struct {
-	LLM          *llm.Client
-	TavilyClient *search.TavilyClient
-	EmbedClient  *embed.Client
-	Store        memory.Store
-	Cfg          *config.Config
-	ReportsDir   string // absolute path to reports/
+	LLM           *llm.Client
+	SearXNGClient *search.SearXNGClient
+	TavilyClient  *search.TavilyClient
+	EmbedClient   *embed.Client
+	Store         memory.Store
+	Cfg           *config.Config
+	ReportsDir    string // absolute path to reports/
+
+	// VisionLLM lets the worker call view_image to vet a candidate image
+	// (from web_search results or search_books' CoverURL) before embedding
+	// it in a report. Nil means view_image returns "not configured".
+	VisionLLM *llm.Client
 
 	// GmailBridge provides email access for email-related task types.
 	// Nil means email tools return "not configured".
 	GmailBridge gmail.Bridge
 
 	// Trace callbacks — same pattern as memory agent.
-	TraceCallback tools.TraceCallback // nil = full tracing disabled
+	TraceCallback tools.TraceCallback   // nil = full tracing disabled
 	LiteToolHook  func(toolName string) // nil = lite tracing disabled
 	EventBus      *tui.Bus              // nil-safe
 }
 
 // WorkerResult holds the outcome of a worker run.
 type WorkerResult struct {
-	ReportPath   string  // local file path (empty if no file written)
-	TelegraphURL string  // published URL (empty if publishing skipped/failed)
-	Title        string  // first markdown heading, or task type
-	Summary      string  // from the done tool's summary arg
+	ReportPath   string // local file path (empty if no file written)
+	TelegraphURL string // published URL (empty if publishing skipped/failed)
+	Title        string // first markdown heading, or task type
+	Summary      string // from the done tool's summary arg
 	CostUSD      float64
 	ToolCalls    int
 	Success      bool
@@ -132,14 +138,16 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 	// Build a minimal tools.Context — only the fields worker tools need.
 	workerToolDefs := tools.ToolDefsForAgent("worker", params.Cfg)
 	tctx := &tools.Context{
-		AgentName:    "worker",
-		Store:        params.Store,
-		EmbedClient:  params.EmbedClient,
-		TavilyClient: params.TavilyClient,
-		GmailBridge:  params.GmailBridge,
-		Cfg:          params.Cfg,
-		ReportsDir:   params.ReportsDir,
-		ActiveTools:  &workerToolDefs,
+		AgentName:     "worker",
+		Store:         params.Store,
+		EmbedClient:   params.EmbedClient,
+		SearXNGClient: params.SearXNGClient,
+		TavilyClient:  params.TavilyClient,
+		VisionLLM:     params.VisionLLM,
+		GmailBridge:   params.GmailBridge,
+		Cfg:           params.Cfg,
+		ReportsDir:    params.ReportsDir,
+		ActiveTools:   &workerToolDefs,
 	}
 
 	// Loop limits from config with sensible defaults.
@@ -261,7 +269,6 @@ func buildWorkerInstruction(input WorkerInput) string {
 	return sb.String()
 }
 
-
 // findLatestReport finds the most recently modified file in the reports dir.
 func findLatestReport(dir string) string {
 	var latest string
@@ -345,4 +352,3 @@ func extractDoneSummary(messages []llm.ChatMessage) string {
 	}
 	return ""
 }
-

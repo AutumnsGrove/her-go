@@ -150,6 +150,7 @@ type RunParams struct {
 	Store                     memory.Store
 	EmbedClient               *embed.Client
 	SimilarityThreshold       float64
+	SearXNGClient             *search.SearXNGClient
 	TavilyClient              *search.TavilyClient
 	CalendarBridge            calendar.Bridge // nil in prod (tools create CLIBridge), FakeBridge in sims
 	Cfg                       *config.Config
@@ -413,6 +414,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ChatLLM:                   params.ChatLLM,
 		VisionLLM:                 params.VisionLLM,
 		ClassifierLLM:             params.ClassifierLLM,
+		SearXNGClient:             params.SearXNGClient,
 		TavilyClient:              params.TavilyClient,
 		CalendarBridge:            params.CalendarBridge,
 		Cfg:                       params.Cfg,

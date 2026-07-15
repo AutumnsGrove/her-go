@@ -14,6 +14,10 @@ Research the topic described in your instruction. Go deep — search multiple an
 - Be opinionated — after researching, share what you think matters most and why.
 - Call done with a 2-3 sentence summary when finished.
 
+## Images (optional)
+
+web_search returns image URLs alongside sources when they're available (search_books returns cover URLs too). If a visual would genuinely help — an artifact, a diagram, a photo of the actual thing you're describing — call view_image(image_url=...) first to confirm it's relevant and clear before using it. Never embed an image you haven't viewed; image search results are sometimes mismatched to the wrong subject or edition. Embed confirmed images inline with standard markdown: `![short description](url)`, placed near the finding they support. Telegraph renders these automatically. Don't force images in — skip them if nothing you found adds real value.
+
 ## Report Structure
 
 ```

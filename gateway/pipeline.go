@@ -32,7 +32,7 @@ func NewPipeline(cfg *config.Config, deps Deps, store memory.Store, bus *tui.Bus
 		deps.MemoryAgentLLM, deps.MoodAgentLLM,
 		deps.VisionLLM, deps.ClassifierLLM,
 		deps.DreamAgentLLM, deps.IntrospectionLLM,
-		deps.EmbedClient, deps.TavilyClient,
+		deps.EmbedClient, deps.SearXNGClient, deps.TavilyClient,
 		store, bus,
 	)
 	if err != nil {

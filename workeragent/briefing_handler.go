@@ -91,7 +91,9 @@ func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, d
 		return fmt.Errorf("worker briefing: no LLM for tier %q", tier)
 	}
 
+	searxngClient, _ := deps.SearXNGClient.(*search.SearXNGClient)
 	tavilyClient, _ := deps.TavilyClient.(*search.TavilyClient)
+	visionLLM, _ := deps.VisionLLM.(*llm.Client)
 	store, _ := deps.Store.(memory.Store)
 
 	reportsDir := filepath.Join(deps.RootDir, "reports")
@@ -104,11 +106,13 @@ func (h briefingHandler) Execute(ctx context.Context, payload json.RawMessage, d
 		TaskType:    "briefing",
 		Instruction: instruction,
 	}, WorkerParams{
-		LLM:          llmClient,
-		TavilyClient: tavilyClient,
-		Store:        store,
-		Cfg:          cfg,
-		ReportsDir:   reportsDir,
+		LLM:           llmClient,
+		SearXNGClient: searxngClient,
+		TavilyClient:  tavilyClient,
+		Store:         store,
+		Cfg:           cfg,
+		ReportsDir:    reportsDir,
+		VisionLLM:     visionLLM,
 	})
 
 	// Publish to Telegraph if configured.

@@ -83,8 +83,19 @@ type Deps struct {
 	// handler casts to map[string]*llm.Client at the call site.
 	WorkerLLMs any
 
-	// TavilyClient provides web search for worker tasks. Nil if not configured.
+	// SearXNGClient provides free, self-hosted web search for worker tasks.
+	// Preferred over Tavily when configured. Nil if not configured.
+	SearXNGClient any
+
+	// TavilyClient provides web search for worker tasks. Falls back to this
+	// if SearXNGClient is nil. Nil if not configured.
 	TavilyClient any
+
+	// VisionLLM lets worker tasks call view_image to vet candidate images
+	// before embedding them in a report. Typed as any for the same reason
+	// as WorkerLLMs; the briefing handler casts to *llm.Client. Nil if
+	// vision isn't configured.
+	VisionLLM any
 
 	// Cfg is the full app config — used by the worker for prompt expansion,
 	// telegraph tokens, and report directory resolution.

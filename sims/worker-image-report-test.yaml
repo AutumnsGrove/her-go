@@ -1,0 +1,23 @@
+name: "Worker Agent — Image-Embedded Report"
+description: >
+  Validates the worker agent's new image capability end-to-end: web_search
+  returning image URLs, view_image vetting a candidate before trusting it,
+  and the confirmed image getting embedded inline in the markdown report
+  via standard `![alt](url)` syntax (which Telegraph auto-renders). Uses
+  an archaeology topic — deliberately not a book cover — to confirm the
+  capability generalizes beyond the original example that motivated it.
+
+  Expected outcomes:
+  - Driver calls send_task(target="worker", task_type="research", note="...")
+  - Worker calls web_search, sees image URLs in results
+  - Worker calls view_image(image_url=...) on at least one candidate
+  - The final report file contains a markdown image reference
+
+tags: ["worker", "vision", "image", "report"]
+
+seed_persona: >
+  I'm curious and proactive. When someone asks me to look into something,
+  I jump on it and go deep.
+
+messages:
+  - "hey, can you do a deep dive on the Antikythera mechanism? the ancient greek device, i want to understand what it actually did and what it looked like — include a photo of it if you can find a good one"

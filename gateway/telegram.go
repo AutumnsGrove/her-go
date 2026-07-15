@@ -48,7 +48,7 @@ func newTelegramAdapter(acfg config.AdapterConfig, gcfg *config.Config, deps Dep
 		deps.MemoryAgentLLM, deps.MoodAgentLLM,
 		deps.VisionLLM, deps.ClassifierLLM,
 		deps.DreamAgentLLM, deps.IntrospectionLLM,
-		deps.EmbedClient, deps.TavilyClient,
+		deps.EmbedClient, deps.SearXNGClient, deps.TavilyClient,
 		deps.VoiceClient, deps.TTSClient,
 		store, bus,
 	)

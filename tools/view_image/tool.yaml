@@ -1,14 +1,17 @@
 name: view_image
-agent: [main]
+agent: [main, worker]
 description: >-
   Analyze an image and return a detailed description of what's in it. Works
   two ways: (1) with no image_url, describes the photo the user just sent
   on Telegram — call this BEFORE reply when the user sends a photo; (2) with
   image_url set, describes a remote image instead — e.g. a book cover from
-  search_books' CoverURL, a photo from web_search results, or a link the
+  search_books' CoverURL, an image URL from web_search results, or a link the
   user pasted into chat. Use this when the user describes an image they
   want identified or discussed (e.g. "the book with the red cover") — search
-  first, then view_image the URL you found.
+  first, then view_image the URL you found. Worker agent: use this to vet
+  candidate images (are they actually relevant? readable? on-topic?) before
+  embedding them in a report with markdown image syntax `![alt](url)` —
+  never embed an image you haven't viewed.
 hot: true
 parameters:
   type: object
