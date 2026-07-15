@@ -1,0 +1,12 @@
+name: "Vision URL Test"
+description: >
+  Tests view_image's image_url path — viewing a remote image the agent
+  discovers itself (a book cover from search_books), rather than a photo
+  the user uploaded directly. Verifies the agent chains search_books ->
+  view_image(image_url=cover_url) and that the reply reflects what the
+  VLM actually saw in the cover art, not just the search snippet text.
+tags: ["vision", "image", "url", "pipeline"]
+
+messages:
+  - "hey, quick question — what does the cover of The Count of Monte Cristo look like? I want to know if I have the right edition"
+  - "cool, does it look like an old classic hardcover or more like a modern paperback reprint?"

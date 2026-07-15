@@ -10,6 +10,7 @@ package view_image
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"her/logger"
 	"her/memory"
@@ -31,15 +32,23 @@ func init() {
 // results and can decide how to respond.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		Prompt string `json:"prompt"`
+		Prompt   string `json:"prompt"`
+		ImageURL string `json:"image_url"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	// Guard: no image attached to this message.
-	if ctx.ImageBase64 == "" {
-		return "No image attached to this message. The user didn't send a photo."
+	// Guard: image_url must be a real link, not a data: URI or garbage —
+	// those only make sense coming from ctx.ImageBase64, which already
+	// has its own path below.
+	if args.ImageURL != "" && !strings.HasPrefix(args.ImageURL, "http://") && !strings.HasPrefix(args.ImageURL, "https://") {
+		return "image_url must be a direct http(s):// link to an image."
+	}
+
+	// Guard: no image_url given and no photo attached to this message.
+	if args.ImageURL == "" && ctx.ImageBase64 == "" {
+		return "No image attached to this message and no image_url given. Either the user needs to send a photo, or you need to pass a URL (e.g. from search_books or web_search)."
 	}
 
 	// Guard: vision model not configured.
@@ -52,11 +61,19 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		_ = ctx.StatusCallback("looking at the image...")
 	}
 
-	log.Info("  view_image", "prompt", args.Prompt)
+	log.Info("  view_image", "prompt", args.Prompt, "image_url", args.ImageURL)
 
 	// Call the VLM through the vision package. This builds a multimodal
 	// request (image + text prompt) and sends it to the vision model.
-	result, err := vision.Describe(ctx.VisionLLM, ctx.ImageBase64, ctx.ImageMIME, args.Prompt)
+	// Prefer image_url when given — it lets the agent look at images it
+	// discovered on the web without ever downloading them itself.
+	var result *vision.DescribeResult
+	var err error
+	if args.ImageURL != "" {
+		result, err = vision.DescribeURL(ctx.VisionLLM, args.ImageURL, args.Prompt)
+	} else {
+		result, err = vision.Describe(ctx.VisionLLM, ctx.ImageBase64, ctx.ImageMIME, args.Prompt)
+	}
 	if err != nil {
 		log.Error("vision describe failed", "err", err)
 		return fmt.Sprintf("Failed to analyze the image: %v", err)

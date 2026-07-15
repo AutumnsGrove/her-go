@@ -77,6 +77,9 @@ Cron cheat sheet: `0 8 * * *` (daily 8am), `0 9 * * 1-5` (weekdays 9am), `0 9 * 
 4. User sends a photo:
    think("user sent a photo") → recall_memories("context about topic in photo") → view_image("describe this photo") → reply("respond about the photo", memories=[...]) → done
 
+4b. User describes an image they want identified (e.g. "the book with the red cover"), not one they sent:
+   think("user wants help identifying something visual — search first") → use_tools(["search"]) → search_books({"query": "..."}) → view_image({"prompt": "describe the cover", "image_url": "<cover_url from search results>"}) → reply("confirm or discuss what you found", memories=[...]) → done
+
 5. Research request:
    think("user wants a deep dive — delegate to worker") → send_task({target: "worker", task_type: "research", note: "..."}) → reply("I'm on it — I'll write up a report and send it when it's ready") → done
 

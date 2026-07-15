@@ -35,11 +35,40 @@ type DescribeResult struct {
 // imageMIME is the MIME type (e.g., "image/jpeg", "image/png").
 // The function builds the full data URI internally.
 func Describe(client *llm.Client, imageBase64, imageMIME, prompt string) (*DescribeResult, error) {
-	if client == nil {
-		return nil, fmt.Errorf("vision client is not configured")
-	}
 	if imageBase64 == "" {
 		return nil, fmt.Errorf("no image data provided")
+	}
+
+	// Build a data: URI — the OpenAI vision API accepts inline base64
+	// images this way. No need to host the image anywhere; it travels
+	// inside the JSON request body.
+	dataURI := "data:" + imageMIME + ";base64," + imageBase64
+	return describe(client, dataURI, prompt)
+}
+
+// DescribeURL sends a remote image URL to the VLM and returns a natural
+// language description, without downloading or re-encoding the image
+// locally. This is what lets the agent look at images it discovers on the
+// web — a book cover from search_books' CoverURL, a photo from a
+// web_search result, a link the user pastes into chat — not just photos
+// the user uploaded directly to Telegram.
+//
+// The OpenAI-compatible vision API fetches the URL server-side, so we just
+// pass it straight through as the "image_url" content part instead of
+// building a data: URI.
+func DescribeURL(client *llm.Client, imageURL, prompt string) (*DescribeResult, error) {
+	if imageURL == "" {
+		return nil, fmt.Errorf("no image URL provided")
+	}
+	return describe(client, imageURL, prompt)
+}
+
+// describe is the shared implementation behind Describe and DescribeURL.
+// imageURL is either a data: URI (inline base64) or a regular https://
+// link — the vision API treats both the same way as an "image_url" part.
+func describe(client *llm.Client, imageURL, prompt string) (*DescribeResult, error) {
+	if client == nil {
+		return nil, fmt.Errorf("vision client is not configured")
 	}
 
 	// Default prompt if none given.
@@ -47,18 +76,12 @@ func Describe(client *llm.Client, imageBase64, imageMIME, prompt string) (*Descr
 		prompt = "Describe this image in detail."
 	}
 
-	// Build a multi-modal message with text + image.
-	// The data URI format is "data:<mime>;base64,<data>" — this is how
-	// the OpenAI vision API accepts inline images. No need to host the
-	// image anywhere; it travels inside the JSON request body.
-	dataURI := "data:" + imageMIME + ";base64," + imageBase64
-
 	messages := []llm.ChatMessage{
 		{
 			Role: "user",
 			ContentParts: []llm.ContentPart{
 				{Type: "text", Text: prompt},
-				{Type: "image_url", ImageURL: &llm.ImageURL{URL: dataURI}},
+				{Type: "image_url", ImageURL: &llm.ImageURL{URL: imageURL}},
 			},
 		},
 	}

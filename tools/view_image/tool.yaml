@@ -1,8 +1,14 @@
 name: view_image
 agent: [main]
 description: >-
-  Analyze an image the user sent. Returns a detailed description of what's
-  in it. Call this BEFORE reply when the user sends a photo.
+  Analyze an image and return a detailed description of what's in it. Works
+  two ways: (1) with no image_url, describes the photo the user just sent
+  on Telegram — call this BEFORE reply when the user sends a photo; (2) with
+  image_url set, describes a remote image instead — e.g. a book cover from
+  search_books' CoverURL, a photo from web_search results, or a link the
+  user pasted into chat. Use this when the user describes an image they
+  want identified or discussed (e.g. "the book with the red cover") — search
+  first, then view_image the URL you found.
 hot: true
 parameters:
   type: object
@@ -12,6 +18,12 @@ parameters:
       description: >-
         What to focus on when describing the image. E.g., 'describe this
         photo', 'what food is this', 'read any text in this image'.
+    image_url:
+      type: string
+      description: >-
+        Optional. A direct https:// URL to an image to view instead of the
+        user's attached photo — e.g. a cover_url from search_books or a URL
+        from web_search results. Leave unset to describe the attached photo.
   required:
     - prompt
 trace:
