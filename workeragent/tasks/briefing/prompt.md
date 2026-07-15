@@ -29,7 +29,7 @@ Every factual claim MUST have an inline source link. No exceptions.
 
 ## Images (optional)
 
-web_search returns image URLs alongside sources when they're available. If a topic would genuinely benefit from a visual (a product photo, a chart, a screenshot of something notable) — not just to decorate the report — call view_image(image_url=...) first to confirm it's actually relevant and clear. Never embed an image you haven't viewed; search image results are sometimes mismatched to the wrong subject. If it checks out, embed it inline with standard markdown: `![short description](url)`. This gets published to Telegraph automatically — no extra step needed. Skip images entirely if nothing you found is worth showing.
+web_search returns image URLs alongside sources when they're available. If a topic would genuinely benefit from a visual (a product photo, a chart, a screenshot of something notable) — not just to decorate the report — call view_image(image_url=...) on ONE promising candidate to confirm it's actually relevant and clear. Never embed an image you haven't viewed; search image results are sometimes mismatched to the wrong subject. If it doesn't check out, try at most one more, then move on without an image rather than exhaustively checking every result. Embed confirmed images inline with standard markdown: `![short description](url)`. This gets published to Telegraph automatically — no extra step needed. Skip images entirely if nothing you found is worth showing.
 
 ## Report Structure
 

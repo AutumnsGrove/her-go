@@ -16,6 +16,12 @@ import (
 	"her/tui"
 )
 
+// simTurnTimeout bounds how long a single sim turn waits for a reply.
+// Worker-delegated turns (research reports with multiple web_search/
+// web_read/view_image calls) legitimately run long — 5 minutes was
+// clipping real, still-progressing worker runs, not just hung ones.
+const simTurnTimeout = 15 * time.Minute
+
 // SimMessage is a single message in a simulation scenario.
 // Supports three forms:
 //   - "plain text"          → Text field
@@ -294,8 +300,8 @@ func (a *simAdapter) Start(ctx context.Context) error {
 			result.Duration = time.Since(start)
 		case <-ctx.Done():
 			result.Error = ctx.Err()
-		case <-time.After(5 * time.Minute):
-			result.Error = fmt.Errorf("timeout after 5 minutes")
+		case <-time.After(simTurnTimeout):
+			result.Error = fmt.Errorf("timeout after %s", simTurnTimeout)
 		}
 
 		// Wait for bus capture to finalize this turn's data.
