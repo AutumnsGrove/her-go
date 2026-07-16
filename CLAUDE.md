@@ -26,7 +26,7 @@ cp config.yaml.example config.yaml
 go run main.go run
 
 # Or build and run
-go build -o her && ./her run
+go build -ldflags="-s -w" -o her && ./her run
 ```
 
 ## Remote Updates
@@ -49,7 +49,7 @@ The `her update` command:
 
 **Note:** The `update` command must exist on the remote machine first. Bootstrap it with one manual update:
 ```bash
-ssh potato-remote "cd /home/autumn/her-go && git pull && go build -o her && systemctl --user restart her-go"
+ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s -w\" -o her && systemctl --user restart her-go"
 ```
 
 After that, `./her update` handles all future updates.

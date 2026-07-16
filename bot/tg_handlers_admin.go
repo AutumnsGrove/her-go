@@ -107,7 +107,7 @@ func (b *Bot) handleUpdate(c tele.Context) error {
 	// Step 2: go build
 	_ = c.Send(fmt.Sprintf("🔨 Building...\n<pre>%s</pre>", truncateForTelegram(pullMsg, 1000)), &tele.SendOptions{ParseMode: tele.ModeHTML})
 	nextBinary := binaryPath + ".next"
-	buildCmd := exec.Command("go", "build", "-o", nextBinary, ".")
+	buildCmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", nextBinary, ".")
 	buildCmd.Dir = repoPath
 	buildOut, err := buildCmd.CombinedOutput()
 	if err != nil {

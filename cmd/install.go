@@ -77,7 +77,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	start := time.Now()
 
 	// go build -o ./her . — drops the binary right here in the project.
-	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
+	buildCmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", binPath, ".")
 	buildCmd.Dir = wd
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
@@ -98,7 +98,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		gopath = filepath.Join(os.Getenv("HOME"), "go")
 	}
 	gopathBin := filepath.Join(gopath, "bin", binName)
-	pathCmd := exec.Command("go", "build", "-o", gopathBin, ".")
+	pathCmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", gopathBin, ".")
 	pathCmd.Dir = wd
 	pathCmd.Stdout = os.Stdout
 	pathCmd.Stderr = os.Stderr

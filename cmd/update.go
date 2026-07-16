@@ -54,7 +54,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	// Step 2: go build
 	log.Info("🔨 Building...")
-	buildCmd := exec.Command("go", "build", "-o", "her", ".")
+	buildCmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", "her", ".")
 	buildCmd.Dir = repoPath
 	buildOut, err := buildCmd.CombinedOutput()
 	if err != nil {

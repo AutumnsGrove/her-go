@@ -297,7 +297,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	// Step 1: Build the binary.
 	log.Info("[1/4] building binary")
 	binaryPath := filepath.Join(workDir, "her-go")
-	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
+	buildCmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", binaryPath, ".")
 	buildCmd.Dir = workDir
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
