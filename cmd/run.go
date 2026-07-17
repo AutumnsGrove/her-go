@@ -1336,6 +1336,9 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 	if p.Semi > 0 {
 		ttsArgs = append(ttsArgs, "--pause-semi", strconv.Itoa(p.Semi))
 	}
+	if cfg.Voice.TTS.IdleUnloadSec > 0 {
+		ttsArgs = append(ttsArgs, "--idle-unload-sec", strconv.Itoa(cfg.Voice.TTS.IdleUnloadSec))
+	}
 
 	ttsProcess := exec.Command(uvPath, ttsArgs...)
 	ttsProcess.Stdout = sidecarOut

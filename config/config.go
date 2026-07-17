@@ -807,14 +807,15 @@ type STTConfig struct {
 // HTTP server (piper TTS sidecar) running on BaseURL with an OpenAI-compatible
 // /v1/audio/speech endpoint. The Go side POSTs JSON and gets back WAV bytes.
 type TTSConfig struct {
-	Enabled   bool           `yaml:"enabled"`
-	Engine    string         `yaml:"engine"`     // "piper" (local) — future engines can be added
-	BaseURL   string         `yaml:"base_url"`   // e.g. "http://localhost:8766"
-	Model     string         `yaml:"model"`      // HuggingFace model ID or local path
-	VoiceID   string         `yaml:"voice_id"`   // voice preset (for piper: same as model)
-	Speed     float64        `yaml:"speed"`      // speaking rate (1.0 = normal)
-	ReplyMode string         `yaml:"reply_mode"` // "voice" (always reply with voice) or "match" (mirror input format)
-	Pauses    TTSPauseConfig `yaml:"pauses"`
+	Enabled       bool           `yaml:"enabled"`
+	Engine        string         `yaml:"engine"`          // "piper" (local) — future engines can be added
+	BaseURL       string         `yaml:"base_url"`        // e.g. "http://localhost:8766"
+	Model         string         `yaml:"model"`           // HuggingFace model ID or local path
+	VoiceID       string         `yaml:"voice_id"`        // voice preset (for piper: same as model)
+	Speed         float64        `yaml:"speed"`           // speaking rate (1.0 = normal)
+	ReplyMode     string         `yaml:"reply_mode"`      // "voice" (always reply with voice) or "match" (mirror input format)
+	Pauses        TTSPauseConfig `yaml:"pauses"`
+	IdleUnloadSec int            `yaml:"idle_unload_sec"` // piper (local engines): unload the model after this many idle seconds to free RAM (~120MB on Piper); 0 = never unload
 }
 
 // TTSPauseConfig controls the silence durations (in milliseconds) inserted

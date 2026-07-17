@@ -22,9 +22,11 @@ or grab them manually from https://huggingface.co/rhasspy/piper-voices
 # ///
 
 import argparse
+import gc
 import io
 import logging
 import re
+import threading
 import time
 import wave
 from pathlib import Path
@@ -40,9 +42,18 @@ log = logging.getLogger("tts-server")
 
 app = FastAPI(title="Piper TTS Server")
 
-# Global voice reference -- loaded once at startup.
+# Global voice reference -- loaded lazily on first request, and optionally
+# unloaded again after IDLE_UNLOAD_SEC of inactivity. Piper's onnxruntime
+# session holds a large (~120MB) memory arena; on a RAM-constrained box it's
+# cheaper to pay a ~1-2s reload cost occasionally than to hold that arena
+# resident 24/7. _model_path/_voice_name are set at startup regardless (so
+# /healthz can report the configured voice even before it's ever loaded).
 _voice = None
 _voice_name = None
+_model_path: Path | None = None
+_last_used: float = 0.0
+_voice_lock = threading.Lock()
+IDLE_UNLOAD_SEC = 0  # 0 = load once on first use, never unload
 
 # Pause durations (ms) -- set from CLI args at startup, which come from
 # config.yaml via the Go sidecar launcher. These defaults match
@@ -197,10 +208,47 @@ def preprocess_text(text, pauses):
     return chunks
 
 
+def _load_voice_locked():
+    """Load the PiperVoice from _model_path. Caller must hold _voice_lock."""
+    global _voice
+    from piper import PiperVoice
+    log.info(f"Loading voice: {_voice_name}")
+    _voice = PiperVoice.load(str(_model_path))
+    log.info(f"Voice loaded (sample_rate={_voice.config.sample_rate})")
+
+
+def _ensure_voice():
+    """Load the voice if needed and return a live reference to it.
+
+    Returning the reference (rather than callers reading the _voice global
+    directly) matters: even if the idle watchdog unloads the global right
+    after this returns, the caller's local reference keeps the PiperVoice
+    object alive via refcounting until the in-flight request finishes.
+    """
+    global _last_used
+    with _voice_lock:
+        if _voice is None:
+            _load_voice_locked()
+        _last_used = time.monotonic()
+        return _voice
+
+
+def _idle_watchdog(idle_sec: int):
+    """Background thread: unload the voice after idle_sec of inactivity."""
+    global _voice
+    check_interval = max(5, min(30, idle_sec // 2))
+    while True:
+        time.sleep(check_interval)
+        with _voice_lock:
+            if _voice is not None and (time.monotonic() - _last_used) >= idle_sec:
+                log.info(f"Unloading voice after {idle_sec}s idle (freeing onnxruntime arena)")
+                _voice = None
+                gc.collect()
+
+
 @app.post("/v1/audio/speech")
 async def speech(req: SpeechRequest):
-    if _voice is None:
-        return Response(content="Model not loaded", status_code=503)
+    voice = _ensure_voice()
 
     pauses = _resolve_pauses(req.pauses)
     log.info(f"TTS request: voice={_voice_name}, text_len={len(req.input)}, speed={req.speed}")
@@ -221,13 +269,13 @@ async def speech(req: SpeechRequest):
         length_scale=1.0 / req.speed if req.speed > 0 else 1.0,
     )
 
-    sample_rate = _voice.config.sample_rate
+    sample_rate = voice.config.sample_rate
     pcm_parts = []
 
     for chunk in chunks:
         try:
             cleaned = clean_for_tts(chunk["text"])
-            for audio_chunk in _voice.synthesize(cleaned, syn_config=syn_config):
+            for audio_chunk in voice.synthesize(cleaned, syn_config=syn_config):
                 pcm_parts.append(audio_chunk.audio_int16_bytes)
         except Exception as e:
             log.error(f"TTS synthesis failed for chunk: {e}")
@@ -253,11 +301,11 @@ async def speech(req: SpeechRequest):
 
 @app.get("/healthz")
 async def health():
-    return {"status": "ok", "engine": "piper", "voice": _voice_name}
+    return {"status": "ok", "engine": "piper", "voice": _voice_name, "loaded": _voice is not None}
 
 
 def main():
-    global _voice, _voice_name
+    global _voice_name, _model_path, IDLE_UNLOAD_SEC
 
     parser = argparse.ArgumentParser(description="Piper TTS server")
     parser.add_argument("--host", default="127.0.0.1")
@@ -272,6 +320,12 @@ def main():
     parser.add_argument("--pause-sentence", type=int, default=75)
     parser.add_argument("--pause-comma", type=int, default=50)
     parser.add_argument("--pause-semi", type=int, default=30)
+    parser.add_argument(
+        "--idle-unload-sec",
+        type=int,
+        default=0,
+        help="Unload the voice after this many idle seconds to free RAM (0 = never unload)",
+    )
     args = parser.parse_args()
 
     global PARAGRAPH_PAUSE_MS, LINE_PAUSE_MS, SENTENCE_PAUSE_MS, COMMA_PAUSE_MS, SEMI_PAUSE_MS
@@ -280,6 +334,7 @@ def main():
     SENTENCE_PAUSE_MS = args.pause_sentence
     COMMA_PAUSE_MS = args.pause_comma
     SEMI_PAUSE_MS = args.pause_semi
+    IDLE_UNLOAD_SEC = args.idle_unload_sec
 
     # Resolve model path. Default to the southern_english_female voice.
     script_dir = Path(__file__).parent
@@ -299,12 +354,19 @@ def main():
         log.error(f"Voice config not found: {config_path}")
         raise SystemExit(1)
 
+    _model_path = model_path
     _voice_name = model_path.stem
-    log.info(f"Loading voice: {_voice_name}")
 
-    from piper import PiperVoice
-    _voice = PiperVoice.load(str(model_path))
-    log.info(f"Voice loaded (sample_rate={_voice.config.sample_rate}), starting server")
+    # Voice loads lazily on first request (see _ensure_voice) rather than
+    # here, so the onnxruntime arena isn't allocated until TTS is actually
+    # used. If idle-unload is enabled, start the watchdog thread that frees
+    # it again after a period of inactivity.
+    if IDLE_UNLOAD_SEC > 0:
+        log.info(f"Idle-unload enabled: voice unloads after {IDLE_UNLOAD_SEC}s inactivity")
+        watchdog = threading.Thread(target=_idle_watchdog, args=(IDLE_UNLOAD_SEC,), daemon=True)
+        watchdog.start()
+
+    log.info(f"Configured voice: {_voice_name} (loads on first request), starting server")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

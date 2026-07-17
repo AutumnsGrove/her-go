@@ -241,6 +241,7 @@ voice:
     voice_id: "en_GB-southern_english_female-low"                  # Voice preset (for Piper, same as model)
     speed: 1.0                                                    # Speaking rate (1.0 = normal)
     reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
+    idle_unload_sec: 300                                          # piper: unload the model after this many idle seconds to free ~120MB RAM; 0 = never unload
     pauses:                                                       # Silence durations (ms) inserted at punctuation boundaries
       paragraph_ms: 500                                           # between paragraphs (double newlines)
       line_ms: 250                                                # between single newlines
