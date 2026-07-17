@@ -24,7 +24,7 @@ import (
 )
 
 // TTSEngine is the common interface for all TTS engines.
-// Both PiperTTSClient and CloudflareTTSClient implement this.
+// Both PiperTTSClient and ElevenLabsTTSClient implement this.
 type TTSEngine interface {
 	Synthesize(text string) ([]byte, error)
 	ReplyMode() string
@@ -49,8 +49,10 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 	var engine TTSEngine
 
 	switch cfg.Engine {
-	case "piper":
+	case config.TTSEnginePiper:
 		engine = NewPiperTTSClient(cfg)
+	case config.TTSEngineElevenLabs:
+		engine = NewElevenLabsTTSClient(cfg)
 	default:
 		log.Warn("Unknown TTS engine — TTS disabled", "engine", cfg.Engine)
 		return nil
@@ -61,7 +63,68 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 		return nil
 	}
 
+	if cfg.Fallback != nil {
+		if fb := newFallbackTTSEngine(cfg, cfg.Fallback); fb != nil {
+			engine = &FallbackTTSClient{primary: engine, fallback: fb}
+		} else {
+			log.Warn("tts.fallback configured but failed to initialize — continuing without fallback")
+		}
+	}
+
 	return &TTSClient{engine: engine}
+}
+
+// newFallbackTTSEngine builds the fallback engine from a TTSFallbackConfig.
+// Reuses NewPiperTTSClient by assembling a throwaway TTSConfig from the
+// fallback fields plus the primary config's shared settings (reply mode,
+// pause timings) — those aren't engine-specific, so there's no reason to
+// duplicate them in TTSFallbackConfig.
+func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig) TTSEngine {
+	switch fb.Engine {
+	case config.TTSEnginePiper, "":
+		piperCfg := &config.TTSConfig{
+			BaseURL:   fb.BaseURL,
+			Model:     fb.Model,
+			VoiceID:   fb.VoiceID,
+			ReplyMode: cfg.ReplyMode,
+			Pauses:    cfg.Pauses,
+		}
+		return NewPiperTTSClient(piperCfg)
+	default:
+		log.Warn("Unknown TTS fallback engine", "engine", fb.Engine)
+		return nil
+	}
+}
+
+// FallbackTTSClient wraps a primary TTSEngine with an automatic fallback.
+// If the primary fails for any reason — API error, network failure, or
+// quota exhausted (e.g. hitting ElevenLabs' free-tier character limit
+// mid-month) — it retries once with the fallback engine so voice replies
+// keep working instead of silently failing.
+type FallbackTTSClient struct {
+	primary  TTSEngine
+	fallback TTSEngine
+}
+
+func (c *FallbackTTSClient) Synthesize(text string) ([]byte, error) {
+	audio, err := c.primary.Synthesize(text)
+	if err == nil {
+		return audio, nil
+	}
+	log.Warn("primary TTS engine failed, falling back", "error", err.Error())
+	return c.fallback.Synthesize(text)
+}
+
+// ReplyMode uses the primary engine's setting — fallback is purely a
+// synthesis-time failover, not a separate reply-mode configuration.
+func (c *FallbackTTSClient) ReplyMode() string {
+	return c.primary.ReplyMode()
+}
+
+// IsAvailable reports true if either the primary or fallback engine is up,
+// since a Synthesize call would still succeed via failover either way.
+func (c *FallbackTTSClient) IsAvailable() bool {
+	return c.primary.IsAvailable() || c.fallback.IsAvailable()
 }
 
 // Synthesize delegates to the underlying engine.
@@ -153,12 +216,12 @@ func NewPiperTTSClient(cfg *config.TTSConfig) *PiperTTSClient {
 // Extends the OpenAI TTS shape with a pauses field for hot-reloadable
 // punctuation pause durations.
 type speechRequest struct {
-	Model          string          `json:"model"`
-	Input          string          `json:"input"`
-	Voice          string          `json:"voice"`
-	Speed          float64         `json:"speed,omitempty"`
-	ResponseFormat string          `json:"response_format"`
-	Pauses         *speechPauses   `json:"pauses,omitempty"`
+	Model          string        `json:"model"`
+	Input          string        `json:"input"`
+	Voice          string        `json:"voice"`
+	Speed          float64       `json:"speed,omitempty"`
+	ResponseFormat string        `json:"response_format"`
+	Pauses         *speechPauses `json:"pauses,omitempty"`
 }
 
 // speechPauses carries per-request pause overrides to the TTS sidecar.
@@ -233,34 +296,9 @@ func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 
 	ttsElapsed := time.Since(start)
 
-	// Convert WAV → OGG/Opus for Telegram.
-	// Telegram voice memos MUST be Opus-encoded in an OGG container.
-	// ffmpeg does this conversion: pipe WAV in via stdin, get OGG out
-	// via stdout. The -c:a libopus flag selects the Opus codec.
-	//
-	// The -ar 48000 is critical: Opus internally operates at 48kHz,
-	// and Piper's "low" voice models output at 16kHz. Without an
-	// explicit resample, the OGG container can get ambiguous sample
-	// rate metadata — Telegram then plays the audio at 3x speed
-	// (chipmunk effect). Forcing 48kHz ensures correct playback.
-	cmd := exec.Command("ffmpeg",
-		"-i", "pipe:0", // read WAV from stdin
-		"-ar", "48000", // resample to 48kHz (Opus native rate)
-		"-c:a", "libopus", // encode with Opus codec
-		"-b:a", "64k", // 64kbps — good quality for speech
-		"-application", "voip", // optimize for speech (vs music)
-		"-f", "ogg", // output format
-		"pipe:1", // write to stdout
-	)
-	cmd.Stdin = bytes.NewReader(wavBytes)
-
-	var oggBuf bytes.Buffer
-	var errBuf bytes.Buffer
-	cmd.Stdout = &oggBuf
-	cmd.Stderr = &errBuf
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffmpeg WAV→OGG conversion failed: %w (stderr: %s)", err, errBuf.String())
+	oggBytes, err := convertToOpusOGG(wavBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	elapsed := time.Since(start)
@@ -269,8 +307,41 @@ func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 		"total_duration", elapsed.Round(time.Millisecond),
 		"text_len", len(text),
 		"wav_bytes", len(wavBytes),
-		"ogg_bytes", oggBuf.Len(),
+		"ogg_bytes", len(oggBytes),
 	)
+
+	return oggBytes, nil
+}
+
+// convertToOpusOGG converts audio bytes to OGG/Opus, which Telegram requires
+// for voice memos. ffmpeg auto-detects the input container (WAV from Piper,
+// MP3 from ElevenLabs) by probing the stream, so no input format flag is needed.
+//
+// The -ar 48000 is critical: Opus internally operates at 48kHz, and source
+// audio (e.g. Piper's "low" voice models) can be as low as 16kHz. Without an
+// explicit resample, the OGG container can get ambiguous sample rate
+// metadata — Telegram then plays the audio at 3x speed (chipmunk effect).
+// Forcing 48kHz ensures correct playback.
+func convertToOpusOGG(audioBytes []byte) ([]byte, error) {
+	cmd := exec.Command("ffmpeg",
+		"-i", "pipe:0", // read audio from stdin
+		"-ar", "48000", // resample to 48kHz (Opus native rate)
+		"-c:a", "libopus", // encode with Opus codec
+		"-b:a", "64k", // 64kbps — good quality for speech
+		"-application", "voip", // optimize for speech (vs music)
+		"-f", "ogg", // output format
+		"pipe:1", // write to stdout
+	)
+	cmd.Stdin = bytes.NewReader(audioBytes)
+
+	var oggBuf bytes.Buffer
+	var errBuf bytes.Buffer
+	cmd.Stdout = &oggBuf
+	cmd.Stderr = &errBuf
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffmpeg audio→OGG conversion failed: %w (stderr: %s)", err, errBuf.String())
+	}
 
 	return oggBuf.Bytes(), nil
 }
@@ -289,4 +360,140 @@ func (c *PiperTTSClient) IsAvailable() bool {
 	}
 	resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ElevenLabs TTS Client (remote engine)
+// ─────────────────────────────────────────────────────────────────────────
+
+// elevenLabsDefaultModel is used when tts.model is left empty in config.yaml.
+// eleven_flash_v2_5 is ElevenLabs' lowest-latency model — a good default for
+// chat replies where response time matters more than maximum fidelity.
+const elevenLabsDefaultModel = "eleven_flash_v2_5"
+
+// ElevenLabsTTSClient talks to the ElevenLabs text-to-speech API. Unlike
+// Piper, there's no local process — every Synthesize call is a network
+// request, and there's no local RAM cost.
+type ElevenLabsTTSClient struct {
+	apiKey     string
+	voiceID    string
+	model      string
+	replyMode  string
+	httpClient *http.Client
+}
+
+// NewElevenLabsTTSClient creates a new ElevenLabs TTS client from config.
+// Returns nil if required fields are missing.
+func NewElevenLabsTTSClient(cfg *config.TTSConfig) *ElevenLabsTTSClient {
+	if cfg.APIKey == "" {
+		log.Warn("TTS enabled with elevenlabs but tts.api_key is empty — TTS disabled")
+		return nil
+	}
+
+	voiceID := cfg.VoiceID
+	if voiceID == "" {
+		log.Warn("TTS enabled with elevenlabs but voice_id is empty — TTS disabled")
+		return nil
+	}
+
+	model := cfg.Model
+	if model == "" {
+		model = elevenLabsDefaultModel
+	}
+
+	replyMode := cfg.ReplyMode
+	if replyMode == "" {
+		replyMode = "voice"
+	}
+
+	log.Info("ElevenLabs TTS client initialized",
+		"engine", "elevenlabs",
+		"voice_id", voiceID,
+		"model", model,
+		"reply_mode", replyMode,
+	)
+
+	return &ElevenLabsTTSClient{
+		apiKey:    cfg.APIKey,
+		voiceID:   voiceID,
+		model:     model,
+		replyMode: replyMode,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// elevenLabsSpeechRequest is the JSON body for ElevenLabs' text-to-speech endpoint.
+type elevenLabsSpeechRequest struct {
+	Text    string `json:"text"`
+	ModelID string `json:"model_id"`
+}
+
+// Synthesize converts text to audio bytes via the ElevenLabs API. Returns
+// OGG/Opus audio suitable for sending as a Telegram voice memo.
+func (c *ElevenLabsTTSClient) Synthesize(text string) ([]byte, error) {
+	reqBody := elevenLabsSpeechRequest{Text: text, ModelID: c.model}
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling TTS request: %w", err)
+	}
+
+	url := "https://api.elevenlabs.io/v1/text-to-speech/" + c.voiceID
+	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating TTS request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("xi-api-key", c.apiKey)
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TTS request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ElevenLabs returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	mp3Bytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading TTS response: %w", err)
+	}
+	ttsElapsed := time.Since(start)
+
+	// ElevenLabs returns MP3 by default; convertToOpusOGG's ffmpeg call
+	// auto-detects the input container, same as it does for Piper's WAV.
+	oggBytes, err := convertToOpusOGG(mp3Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("TTS synthesis complete",
+		"engine", "elevenlabs",
+		"tts_duration", ttsElapsed.Round(time.Millisecond),
+		"total_duration", time.Since(start).Round(time.Millisecond),
+		"text_len", len(text),
+		"mp3_bytes", len(mp3Bytes),
+		"ogg_bytes", len(oggBytes),
+	)
+
+	return oggBytes, nil
+}
+
+// ReplyMode returns whether the bot should always reply with voice
+// ("voice") or only when the user sends a voice memo ("match").
+func (c *ElevenLabsTTSClient) ReplyMode() string {
+	return c.replyMode
+}
+
+// IsAvailable always returns true for the remote ElevenLabs engine — there's
+// no local process to health-check. Any failure surfaces on the first
+// Synthesize call instead (mirrors voice.Client.IsAvailable for STT's
+// remote "whisper" engine).
+func (c *ElevenLabsTTSClient) IsAvailable() bool {
+	return true
 }

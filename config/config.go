@@ -592,12 +592,12 @@ type WorkerAgentConfig struct {
 
 // WorkerTierConfig maps a model tier to a specific model and parameters.
 type WorkerTierConfig struct {
-	Model       string           `yaml:"model"`
-	Temperature float64          `yaml:"temperature"`
-	MaxTokens   int              `yaml:"max_tokens"`
-	Timeout     int              `yaml:"timeout"`            // HTTP timeout in seconds (0 = 120s default)
-	Provider    *ProviderConfig  `yaml:"provider,omitempty"` // OpenRouter provider routing
-	Fallback    *FallbackConfig  `yaml:"fallback,omitempty"`
+	Model       string          `yaml:"model"`
+	Temperature float64         `yaml:"temperature"`
+	MaxTokens   int             `yaml:"max_tokens"`
+	Timeout     int             `yaml:"timeout"`            // HTTP timeout in seconds (0 = 120s default)
+	Provider    *ProviderConfig `yaml:"provider,omitempty"` // OpenRouter provider routing
+	Fallback    *FallbackConfig `yaml:"fallback,omitempty"`
 }
 
 // GmailConfig holds OAuth2 credentials for read-only Gmail API access.
@@ -782,6 +782,12 @@ const (
 	STTEngineWhisper  = "whisper"  // remote OpenAI-compatible endpoint (OpenRouter, OpenAI, etc.)
 )
 
+// TTS engine identifiers — mirrors the STT engine constants above.
+const (
+	TTSEnginePiper      = "piper"      // local sidecar (scripts/tts_server.py); bot spawns it automatically
+	TTSEngineElevenLabs = "elevenlabs" // remote ElevenLabs API — no local process
+)
+
 // STTConfig controls speech-to-text.
 //
 // STTEngineParakeet expects a local HTTP server (parakeet-mlx-fastapi) on
@@ -803,19 +809,43 @@ type STTConfig struct {
 	FallbackModel string `yaml:"fallback_model"` // fallback model for retries on timeout/503 — empty = no fallback
 }
 
-// TTSConfig controls text-to-speech. The "piper" engine expects a local
-// HTTP server (piper TTS sidecar) running on BaseURL with an OpenAI-compatible
-// /v1/audio/speech endpoint. The Go side POSTs JSON and gets back WAV bytes.
+// TTSConfig controls text-to-speech.
+//
+// TTSEnginePiper expects a local HTTP server (piper TTS sidecar) running on
+// BaseURL with an OpenAI-compatible /v1/audio/speech endpoint — the bot
+// spawns it automatically, no API key needed.
+//
+// TTSEngineElevenLabs sends text to the ElevenLabs API. Set VoiceID to the
+// voice you want (grab the ID from the voice's page in the ElevenLabs voice
+// library — it's the `voiceId` query param in the URL) and APIKey to your
+// ElevenLabs API key. Model defaults to "eleven_flash_v2_5" (low latency,
+// good for chat replies) if left empty.
 type TTSConfig struct {
-	Enabled       bool           `yaml:"enabled"`
-	Engine        string         `yaml:"engine"`          // "piper" (local) — future engines can be added
-	BaseURL       string         `yaml:"base_url"`        // e.g. "http://localhost:8766"
-	Model         string         `yaml:"model"`           // HuggingFace model ID or local path
-	VoiceID       string         `yaml:"voice_id"`        // voice preset (for piper: same as model)
-	Speed         float64        `yaml:"speed"`           // speaking rate (1.0 = normal)
-	ReplyMode     string         `yaml:"reply_mode"`      // "voice" (always reply with voice) or "match" (mirror input format)
-	Pauses        TTSPauseConfig `yaml:"pauses"`
-	IdleUnloadSec int            `yaml:"idle_unload_sec"` // piper (local engines): unload the model after this many idle seconds to free RAM (~120MB on Piper); 0 = never unload
+	Enabled       bool               `yaml:"enabled"`
+	Engine        string             `yaml:"engine"`             // TTSEnginePiper or TTSEngineElevenLabs
+	BaseURL       string             `yaml:"base_url"`           // piper only, e.g. "http://localhost:8766"
+	Model         string             `yaml:"model"`              // piper: HuggingFace model ID/local path. elevenlabs: model ID, e.g. "eleven_flash_v2_5"
+	VoiceID       string             `yaml:"voice_id"`           // piper: same as model. elevenlabs: voice ID from the voice library
+	APIKey        string             `yaml:"api_key"`            // elevenlabs only; unused for piper (local, no auth)
+	Speed         float64            `yaml:"speed"`              // speaking rate (1.0 = normal) — piper only
+	ReplyMode     string             `yaml:"reply_mode"`         // "voice" (always reply with voice) or "match" (mirror input format)
+	Pauses        TTSPauseConfig     `yaml:"pauses"`             // piper only
+	IdleUnloadSec int                `yaml:"idle_unload_sec"`    // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload
+	Fallback      *TTSFallbackConfig `yaml:"fallback,omitempty"` // optional: auto-retry with this engine if the primary fails (e.g. ElevenLabs quota exhausted)
+}
+
+// TTSFallbackConfig configures an automatic fallback TTS engine, used when
+// the primary engine's Synthesize call fails for any reason — API errors,
+// network issues, or running out of credits mid-month on a metered plan
+// like ElevenLabs' free tier. Currently only "piper" makes sense here, since
+// it's the only engine with no per-request cost or external dependency.
+// Leave the whole `fallback:` block out of config.yaml to disable this.
+type TTSFallbackConfig struct {
+	Engine        string `yaml:"engine"`          // TTSEnginePiper
+	BaseURL       string `yaml:"base_url"`        // e.g. "http://localhost:8766"
+	Model         string `yaml:"model"`           // Piper voice model
+	VoiceID       string `yaml:"voice_id"`        // Piper voice preset (same as model)
+	IdleUnloadSec int    `yaml:"idle_unload_sec"` // unload after this many idle seconds to free RAM; 0 = never unload
 }
 
 // TTSPauseConfig controls the silence durations (in milliseconds) inserted

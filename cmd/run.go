@@ -1293,9 +1293,31 @@ func startSTTSidecar(cfg *config.Config, bus *tui.Bus, voiceClient *voice.Client
 	return sttProcess
 }
 
-// startTTSSidecar launches the Piper TTS server.
+// startTTSSidecar launches the Piper TTS server, whether it's the primary
+// engine or just configured as a fallback (see config.TTSFallbackConfig) —
+// either way, the local sidecar needs to be running so it can serve requests.
+// Skipped entirely when neither the primary nor fallback engine is "piper"
+// (e.g. pure "elevenlabs" with no fallback configured), since those talk to
+// an external API and don't need a local process.
 // Output goes to sidecarOut (log file in TUI mode, stderr in plain mode).
 func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClient) *exec.Cmd {
+	// Resolve which settings actually apply to the piper instance we're
+	// launching: the top-level tts.* fields when piper is primary, or
+	// tts.fallback.* when piper is only there as a failover for another
+	// primary engine (e.g. elevenlabs).
+	baseURL := cfg.Voice.TTS.BaseURL
+	idleUnloadSec := cfg.Voice.TTS.IdleUnloadSec
+
+	if cfg.Voice.TTS.Engine != config.TTSEnginePiper {
+		fb := cfg.Voice.TTS.Fallback
+		if fb == nil || fb.Engine != config.TTSEnginePiper {
+			bus.Emit(tui.StartupEvent{Time: time.Now(), Phase: "tts", Status: "ready", Detail: cfg.Voice.TTS.Engine + " (remote)"})
+			return nil
+		}
+		baseURL = fb.BaseURL
+		idleUnloadSec = fb.IdleUnloadSec
+	}
+
 	uvPath, err := exec.LookPath("uv")
 	if err != nil {
 		log.Warn("uv not found in PATH — TTS will fail. Run: her setup")
@@ -1304,7 +1326,7 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 
 	ttsHost := "127.0.0.1"
 	ttsPort := "8766"
-	if u, err := url.Parse(cfg.Voice.TTS.BaseURL); err == nil {
+	if u, err := url.Parse(baseURL); err == nil {
 		if h := u.Hostname(); h != "" {
 			ttsHost = h
 		}
@@ -1320,6 +1342,8 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 	ttsArgs := []string{"run", ttsScript, "--host", ttsHost, "--port", ttsPort}
 
 	// Pass pause config from config.yaml so the sidecar doesn't hardcode values.
+	// Pauses stay top-level regardless of whether piper is primary or
+	// fallback — they're a formatting preference, not engine-specific.
 	p := cfg.Voice.TTS.Pauses
 	if p.Paragraph > 0 {
 		ttsArgs = append(ttsArgs, "--pause-paragraph", strconv.Itoa(p.Paragraph))
@@ -1336,8 +1360,8 @@ func startTTSSidecar(cfg *config.Config, bus *tui.Bus, ttsClient *voice.TTSClien
 	if p.Semi > 0 {
 		ttsArgs = append(ttsArgs, "--pause-semi", strconv.Itoa(p.Semi))
 	}
-	if cfg.Voice.TTS.IdleUnloadSec > 0 {
-		ttsArgs = append(ttsArgs, "--idle-unload-sec", strconv.Itoa(cfg.Voice.TTS.IdleUnloadSec))
+	if idleUnloadSec > 0 {
+		ttsArgs = append(ttsArgs, "--idle-unload-sec", strconv.Itoa(idleUnloadSec))
 	}
 
 	ttsProcess := exec.Command(uvPath, ttsArgs...)

@@ -235,14 +235,26 @@ voice:
     fallback_model: "openai/whisper-large-v3"                     # fallback on timeout/503 (more reliable than turbo)
   tts:
     enabled: false                                                # set true to reply with voice
-    engine: "piper"                                               # "piper" (local, privacy-first) — future cloud options may be added
+    # Local engine (privacy-first, zero API cost, lower quality):
+    engine: "piper"
     base_url: "http://localhost:8766"                              # Piper TTS server URL
     model: "en_GB-southern_english_female-low"                     # Piper voice model (HuggingFace ID or local path)
     voice_id: "en_GB-southern_english_female-low"                  # Voice preset (for Piper, same as model)
-    speed: 1.0                                                    # Speaking rate (1.0 = normal)
-    reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
     idle_unload_sec: 300                                          # piper: unload the model after this many idle seconds to free ~120MB RAM; 0 = never unload
-    pauses:                                                       # Silence durations (ms) inserted at punctuation boundaries
+    # Remote engine (much higher quality, costs per character, needs internet):
+    # engine: "elevenlabs"
+    # voice_id: ""                                                # from the voice's page in the ElevenLabs voice library — it's the `voiceId` query param in the URL
+    # model: "eleven_flash_v2_5"                                  # low-latency default; leave unset to use it automatically
+    # api_key: ""                                                 # your ElevenLabs API key
+    # fallback:                                                   # auto-retry with piper if elevenlabs fails (API error, network issue, or free-tier credits run out mid-month)
+    #   engine: "piper"
+    #   base_url: "http://localhost:8766"
+    #   model: "en_GB-southern_english_female-low"
+    #   voice_id: "en_GB-southern_english_female-low"
+    #   idle_unload_sec: 300                                      # keep this >0 so the fallback sidecar isn't sitting resident 24/7 for a path that's rarely used
+    speed: 1.0                                                    # Speaking rate (1.0 = normal) — piper only
+    reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
+    pauses:                                                       # Silence durations (ms) inserted at punctuation boundaries — piper only
       paragraph_ms: 500                                           # between paragraphs (double newlines)
       line_ms: 250                                                # between single newlines
       sentence_ms: 75                                             # after . ! ?
