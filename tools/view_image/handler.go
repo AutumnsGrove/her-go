@@ -79,7 +79,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return fmt.Sprintf("Failed to analyze the image: %v", err)
 	}
 
-	// Log metrics — same pattern as other LLM calls.
+	// Log metrics — same pattern as other LLM calls. ToolAPICost makes the
+	// vision spend count toward this turn's live total (TUI dashboard, sim
+	// reports) alongside SaveMetric's persisted record (GetStats, /usage,
+	// CostForMessage) — see tools.Context.ToolAPICost.
+	ctx.ToolAPICost += result.CostUSD
 	if ctx.Store != nil && ctx.TriggerMsgID > 0 {
 		if err := ctx.Store.SaveMetric(memory.MetricInput{
 			Model:            result.Model,

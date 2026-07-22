@@ -375,8 +375,8 @@ type Context struct {
 
 	// ToolAPICost accumulates real spend from tools that call a paid
 	// external API directly rather than going through the driver/chat
-	// LLM calls (e.g. polaris_search — Polaris's own OpenRouter spend
-	// answering the query). Tools that persist their cost via
+	// LLM calls (polaris_search's Polaris spend, view_image's vision
+	// model call). Tools that persist their cost via
 	// ctx.Store.SaveMetric should also add it here: SaveMetric makes the
 	// cost queryable later (GetStats, /usage, CostForMessage), but only
 	// this field makes it count toward *this turn's* live total (see
