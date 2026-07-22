@@ -104,6 +104,14 @@ search:
 foursquare:
   api_key: "${FOURSQUARE_API_KEY}"  # Foursquare Places API (Service API Key). Free tier: 10k calls/month. Generate at https://foursquare.com/developers → Settings → Service API Keys
 
+polaris:
+  # Polaris is a separate self-hosted research agent — enables the
+  # polaris_search tool, which does its own multi-step web search +
+  # synthesis and returns one finished, cited answer. Always co-located
+  # with her-go (same machine, whether that's a dev box or the potato),
+  # so this is always localhost. Leave empty to disable the tool entirely.
+  base_url: "http://localhost:8899"
+
 mood_agent:
   # MiMo v2.5 — structured JSON output for mood schema.
   # Reasoning is auto-disabled for mood (plain JSON extraction task).

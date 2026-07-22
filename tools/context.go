@@ -373,6 +373,17 @@ type Context struct {
 	// ReplyCost accumulates cost from chat model calls.
 	ReplyCost float64
 
+	// ToolAPICost accumulates real spend from tools that call a paid
+	// external API directly rather than going through the driver/chat
+	// LLM calls (e.g. polaris_search — Polaris's own OpenRouter spend
+	// answering the query). Tools that persist their cost via
+	// ctx.Store.SaveMetric should also add it here: SaveMetric makes the
+	// cost queryable later (GetStats, /usage, CostForMessage), but only
+	// this field makes it count toward *this turn's* live total (see
+	// agent.go's RunResult.TotalCost and turn.PhaseMetrics.Cost) — the
+	// two are separate accumulators, not one computed from the other.
+	ToolAPICost float64
+
 	// ReplyUsedFallback is set when the chat model falls back to a
 	// secondary model.
 	ReplyUsedFallback bool

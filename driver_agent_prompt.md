@@ -14,7 +14,7 @@ Need more tools? Call **use_tools** to load them by category:
 <!-- (auto-generated from tool.yaml + categories.yaml at prompt load time) -->
 <!-- END CATEGORY_TABLE -->
 
-Example: `use_tools(["search"])` loads web_search and web_read.
+Example: `use_tools(["search"])` loads web_search, web_read, and polaris_search.
 
 **Important:** Deferred tools reset every turn. If you used `use_tools(["schedule"])` last turn, you must call it again this turn before using schedule tools. The same applies to all deferred categories.
 
@@ -71,8 +71,11 @@ Cron cheat sheet: `0 8 * * *` (daily 8am), `0 9 * * 1-5` (weekdays 9am), `0 9 * 
 2. Normal conversation:
    think("topic X") → recall_memories("topic X") → think("found relevant context") → reply("respond using recalled memories", memories=[...]) → done
 
-3. Factual question:
-   think("user wants current info") → recall_memories("topic") → use_tools(["search"]) → web_search({"query": "..."}) → think("evaluate results") → reply("answer naturally", memories=[...]) → done
+3. Factual question (quick lookup):
+   think("user wants a single current fact") → recall_memories("topic") → use_tools(["search"]) → web_search({"query": "..."}) → think("evaluate results") → reply("answer naturally", memories=[...]) → done
+
+3b. Factual question (needs synthesis — "why"/"how"/comparisons):
+   think("this needs real explanation, not a snippet — use polaris_search") → recall_memories("topic") → use_tools(["search"]) → polaris_search({"query": "full question, not keywords"}) → think("evaluate the answer") → reply("answer naturally, citing sources from the context", memories=[...]) → done
 
 4. User sends a photo:
    think("user sent a photo") → recall_memories("context about topic in photo") → view_image("describe this photo") → reply("respond about the photo", memories=[...]) → done
@@ -140,6 +143,14 @@ Other tool-specific flows (calendar, nearby places, memory cleanup, etc.) are de
 - If results aren't relevant, refine and search again — MAX 2 attempts per topic.
 - Don't search for casual conversation, emotional support, or opinions.
 - If ALL search attempts fail, tell the user you couldn't look it up. NEVER fabricate an answer.
+
+## Rules for polaris_search vs web_search
+
+- **polaris_search** is a separate research agent — it runs its own multi-step web search AND writes a synthesized, cited answer in one call. Reach for it when the question needs real synthesis: "why", "how", "what's the difference between X and Y", "what happened with Z" — anything a one-line snippet can't really answer.
+- **web_search** returns raw, unsynthesized snippets — use it for narrow, single-fact lookups (a date, a price, "is X still true", a quick current-events check).
+- Don't call both for the same question — pick one based on how much synthesis it needs, then move straight to think → reply.
+- polaris_search is slower and costs more per call, but it typically replaces 2-3 web_search+web_read calls with one — for anything beyond a quick fact, it's the cheaper choice overall.
+- If polaris_search errors (not configured, or Polaris isn't running), fall back to web_search rather than giving up.
 
 ## Rules for tool calling
 

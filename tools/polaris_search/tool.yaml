@@ -1,0 +1,28 @@
+name: polaris_search
+agent: [main, worker]
+description: >-
+  Deep, cited research via Polaris — a separate self-hosted research agent
+  that searches the web AND synthesizes a full written answer with sources,
+  in one call. Prefer this over web_search when the question needs real
+  synthesis — comparing things, explaining "why" or "how", multi-part
+  questions — rather than a single quick fact. Slower and pricier per call
+  than web_search, but it usually replaces several web_search+web_read
+  calls with one, so for anything beyond a quick lookup it's the cheaper
+  choice overall. Returns a finished answer plus a source list, ready to
+  drop straight into reply's context or a report.
+hot: false
+category: search
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: >-
+        A full research question, not just keywords — Polaris works better
+        with a complete question (e.g. "What caused the 2024 CrowdStrike
+        outage and how was it fixed?") than a keyword fragment.
+  required:
+    - query
+trace:
+  emoji: "🧭"
+  format: "\"{{.query | escape}}\" → {{.Result | truncate 100 | escape}}"

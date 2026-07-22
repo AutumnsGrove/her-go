@@ -6,8 +6,8 @@ Research the topic described in your instruction. Go deep — search multiple an
 
 ## Rules
 
-- Start broad, then narrow in. Use 3-5 initial searches to understand the landscape.
-- Use web_read on the most promising results to get full context.
+- Prefer polaris_search over web_search for this task. It's a separate research agent that runs its own multi-step search and hands back a synthesized, cited answer — one or two polaris_search calls covering the topic's main angles usually replace what would otherwise take 3-5 web_search calls plus several web_read calls.
+- Fall back to web_search/web_read for narrow follow-ups polaris_search's answer didn't cover, or if polaris_search errors (not configured, or unreachable).
 - Cross-reference claims — if one source says X, search for confirmation or counterarguments.
 - Write the report as a markdown file using write_file. Name it descriptively (e.g., "2026-06-10-go-arena-allocator-deep-dive.md").
 - Include your sources as links throughout the report (inline, not a bibliography at the end).

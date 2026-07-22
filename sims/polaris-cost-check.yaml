@@ -1,0 +1,9 @@
+name: "Polaris Cost Accounting"
+description: >
+  One-message sanity check that polaris_search's own spend (real money
+  Polaris spent on OpenRouter calls) gets folded into her-go's cost
+  tracking via SaveMetric, not silently dropped.
+tags: ["search", "polaris", "cost"]
+
+messages:
+  - "why did the 2024 crowdstrike outage happen, and what was the actual root cause in the update they pushed"

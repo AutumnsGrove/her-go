@@ -17,6 +17,11 @@ const (
 	RoleCompaction    = "compaction"
 	RoleVision        = "vision"
 	RoleClassifier    = "classifier"
+	// RolePolaris tags spend that happened inside Polaris (a separate
+	// self-hosted service, not one of her-go's own LLM calls) — kept
+	// distinct from RoleDriver/RoleChat/etc so cost dashboards can break
+	// out "how much did delegating to Polaris cost" on its own.
+	RolePolaris = "polaris"
 )
 
 // MetricInput bundles all data for a single LLM call metric. Replaces
@@ -215,11 +220,11 @@ type RoleUsage struct {
 
 // UsageReport bundles everything the `her usage` command needs.
 type UsageReport struct {
-	Periods       []PeriodUsage
-	ByModel       []ModelUsage
-	ByRoleToday   []RoleUsage
-	ByRole7Days   []RoleUsage
-	ByRole30Days  []RoleUsage
+	Periods      []PeriodUsage
+	ByModel      []ModelUsage
+	ByRoleToday  []RoleUsage
+	ByRole7Days  []RoleUsage
+	ByRole30Days []RoleUsage
 }
 
 // GetUsageReport builds a complete cost/token breakdown.

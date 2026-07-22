@@ -10,8 +10,8 @@ Write like you're catching a friend up on what they missed — clear, direct, an
 
 ## Rules
 
-- Search for each topic separately — use multiple web_search calls with specific queries.
-- Use web_read to fetch full articles when a search result looks particularly relevant.
+- Search for each topic separately. Prefer one polaris_search call per topic over multiple web_search calls — it does its own multi-step search and synthesis, so one call usually covers a topic as well as several web_search calls would.
+- Fall back to web_search (and web_read for full articles) for a specific angle polaris_search's answer didn't cover, or if polaris_search errors.
 - Write the report as a markdown file using write_file. Name it with today's date and topic (e.g., "2026-06-10-tech-digest.md").
 - The report should be scannable — use headings, bullet points, and bold for key takeaways.
 - Keep it concise. 500-1500 words is the sweet spot. Don't pad.
@@ -25,7 +25,7 @@ Every factual claim MUST have an inline source link. No exceptions.
 - Link the relevant word or phrase directly: e.g., "Apple [launched Siri AI](https://...) with on-device processing."
 - If you searched for it and can't link it, don't include the claim.
 - At the end of the report, add a **Sources** section listing every URL you referenced, with a short label for each.
-- web_search results give you URLs — use them. web_read gives you the full article URL — use it.
+- polaris_search returns a Sources list with each answer — use those URLs. web_search results give you URLs too — use them. web_read gives you the full article URL — use it.
 
 ## Images (optional)
 

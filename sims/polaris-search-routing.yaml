@@ -1,0 +1,34 @@
+name: "Polaris Search Routing"
+description: >
+  Tests whether the driver correctly routes between web_search (quick,
+  single-fact lookups) and polaris_search (questions needing real synthesis
+  — "why", comparisons, explanations) rather than defaulting to one or the
+  other reflexively. Also exercises the worker agent's research task, which
+  should now lean on polaris_search internally per the updated task prompt.
+  Expect roughly 2 driver-level polaris_search calls (msgs 3 and 5) plus
+  1-2 more inside the worker's research report (msg 7).
+tags: ["search", "polaris", "worker", "tool-routing"]
+
+messages:
+  - "hey! whatcha been up to"
+
+  # Quick single-fact lookup — should stay on web_search, not polaris_search.
+  - "quick one — whats the current stable version of node.js"
+
+  # Needs real explanation, not a snippet — should route to polaris_search.
+  - "ok real question — why does TCP use a three-way handshake instead of just sending data directly"
+
+  - "haha nice, ok that actually makes sense"
+
+  # Comparison requiring synthesis — should route to polaris_search.
+  - "different topic — whats the actual difference between REST and GraphQL, and when would you pick graphql over rest for a real project"
+
+  # Another quick single-fact lookup, to confirm she doesn't over-correct
+  # into using polaris_search for everything after using it above.
+  - "oh also, whats the current exchange rate between usd and eur"
+
+  # Deep research delegation — should send_task to the worker, which
+  # should lean on polaris_search per the updated research prompt.
+  - "can you do a deep dive report on how transformer attention mechanisms work and where the computational bottlenecks are? write it up for me"
+
+  - "awesome, thanks — that's all for now"

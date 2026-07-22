@@ -353,7 +353,7 @@ func (g *Gateway) createAdapter(acfg config.AdapterConfig, store memory.Store) (
 	case "gradio":
 		return newGradioAdapter(acfg, g.bus)
 	case "sim":
-		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus, g.deps.WorkerResultCh)
+		return newSimAdapter(acfg, g.SimMessages, g.SimTriggers, g.SimOptions, g.bus, g.deps.WorkerResultCh, store)
 	default:
 		return nil, fmt.Errorf("unknown adapter type: %q", acfg.Type)
 	}

@@ -41,6 +41,7 @@ type Config struct {
 	Embed              EmbedConfig              `yaml:"embed"`
 	Search             SearchConfig             `yaml:"search"`
 	Foursquare         FoursquareConfig         `yaml:"foursquare"`
+	Polaris            PolarisConfig            `yaml:"polaris"`
 	Scrub              ScrubConfig              `yaml:"scrub"`
 	Persona            PersonaConfig            `yaml:"persona"`
 	Dream              DreamConfig              `yaml:"dream"`
@@ -736,6 +737,16 @@ type SearchConfig struct {
 	SearXNGBaseURL string `yaml:"searxng_base_url"` // optional: if set, use SearXNG instead of Tavily (e.g., http://localhost:8888)
 	TavilyAPIKey   string `yaml:"tavily_api_key"`
 	TavilyBaseURL  string `yaml:"tavily_base_url"` // defaults to https://api.tavily.com
+}
+
+// PolarisConfig points at a local Polaris instance — a separate
+// self-hosted research agent (github.com/AutumnsGrove/Polaris) that runs
+// its own multi-step web search + synthesis loop and returns one
+// finished, cited answer via POST /api/ask. Empty BaseURL disables the
+// polaris_search tool entirely (it returns an error rather than silently
+// falling back to something else).
+type PolarisConfig struct {
+	BaseURL string `yaml:"base_url"` // e.g. http://localhost:8899 — same host whether run locally in sims or on the potato, since her-go and Polaris are always co-located
 }
 
 // FoursquareConfig holds credentials for the Foursquare Places API v3.

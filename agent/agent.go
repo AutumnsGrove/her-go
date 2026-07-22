@@ -42,6 +42,7 @@ import (
 	_ "her/tools/list_schedules"
 	_ "her/tools/narrate_report"
 	_ "her/tools/nearby_search"
+	_ "her/tools/polaris_search"
 	_ "her/tools/publish_report"
 	_ "her/tools/read_file"
 	_ "her/tools/recall_memories"
@@ -619,7 +620,7 @@ func Run(params RunParams) (*RunResult, error) {
 		ReplyText:          tctx.ReplyText,
 		ThinkTraces:        thinkTraces,
 		ToolSequence:       toolSeq,
-		TotalCost:          totalCost + tctx.ReplyCost,
+		TotalCost:          totalCost + tctx.ReplyCost + tctx.ToolAPICost,
 		ToolCalls:          totalToolCalls,
 		MemoriesSaved:      len(tctx.SavedMemories),
 		PendingNarration:   tctx.PendingNarration,

@@ -10,6 +10,16 @@ import (
 	"her/config"
 )
 
+// CostQuerier is the minimal store capability the TUI needs — looking up
+// a turn's authoritative cost (see handleTurnEndEvent). A narrow local
+// interface rather than her/memory.Store is deliberate: her/memory
+// imports her/d1, which imports her/logger, which imports her/tui —
+// importing her/memory here would create an import cycle. Any
+// her/memory.Store implementation already satisfies this structurally.
+type CostQuerier interface {
+	CostForMessage(messageID int64) (float64, error)
+}
+
 // Section is one collapsible block in the TUI. Could be:
 //   - "startup" — initialization logs
 //   - "turn"    — a message turn (agent loop + reply)
@@ -61,6 +71,11 @@ type Model struct {
 	messageCount int
 	totalCost    float64
 
+	// store, when non-nil, is queried for each turn's authoritative cost
+	// instead of trusting TurnEndEvent.TotalCost — see handleTurnEndEvent.
+	// nil-safe: falls back to TotalCost if no store was wired in.
+	store CostQuerier
+
 	// Event channel bridge from Bus → Bubble Tea
 	eventCh <-chan Event
 
@@ -71,14 +86,18 @@ type Model struct {
 
 // NewModel creates a TUI model connected to the event bus.
 // quitCh is signaled when the user presses q — cmd/run.go uses this
-// to trigger graceful shutdown of the bot and sidecars.
-func NewModel(eventCh <-chan Event, quitCh chan<- struct{}, cfg *config.Config) Model {
+// to trigger graceful shutdown of the bot and sidecars. store is used to
+// look up each turn's authoritative cost from the DB rather than trusting
+// the in-memory total threaded through TurnEndEvent — pass nil to fall
+// back to that in-memory total (e.g. in tests without a real store).
+func NewModel(eventCh <-chan Event, quitCh chan<- struct{}, cfg *config.Config, store CostQuerier) Model {
 	return Model{
 		cfg:       cfg,
 		keys:      DefaultKeyMap(),
 		eventCh:   eventCh,
 		startTime: time.Now(),
 		quitCh:    quitCh,
+		store:     store,
 	}
 }
 
@@ -373,10 +392,24 @@ func (m *Model) handleTurnEndEvent(ev TurnEndEvent) {
 	if sec == nil {
 		return
 	}
-	sec.CostUSD = ev.TotalCost
+
+	// Query the DB rather than trusting ev.TotalCost: that field is summed
+	// purely from in-process LLM-call accounting and misses any cost a tool
+	// persisted directly via ctx.Store.SaveMetric (polaris_search, vision,
+	// STT) — CostForMessage sums the same metrics table those calls write
+	// to, so it can't drift out of sync as new cost sources get added.
+	// Falls back to ev.TotalCost if no store was wired in.
+	cost := ev.TotalCost
+	if m.store != nil {
+		if dbCost, err := m.store.CostForMessage(ev.TurnID); err == nil {
+			cost = dbCost
+		}
+	}
+
+	sec.CostUSD = cost
 	sec.LatencyMs = ev.ElapsedMs
 	sec.ToolCount = ev.ToolCalls
-	m.totalCost += ev.TotalCost
+	m.totalCost += cost
 }
 
 func (m *Model) handleSidecarEvent(ev SidecarEvent) {

@@ -23,7 +23,7 @@ func newTestSimAdapter(t *testing.T, messages []SimMessage) *simAdapter {
 		Name: "test-sim",
 		Type: "sim",
 	}
-	a, err := newSimAdapter(cfg, messages, SimTriggers{}, SimOptions{}, nil, nil)
+	a, err := newSimAdapter(cfg, messages, SimTriggers{}, SimOptions{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("newSimAdapter: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestSimAdapter_BusCaptureEnrichesResults(t *testing.T) {
 	defer bus.Close()
 
 	cfg := config.AdapterConfig{Name: "test-sim-bus", Type: "sim"}
-	a, err := newSimAdapter(cfg, nil, SimTriggers{}, SimOptions{}, bus, nil)
+	a, err := newSimAdapter(cfg, nil, SimTriggers{}, SimOptions{}, bus, nil, nil)
 	if err != nil {
 		t.Fatalf("newSimAdapter: %v", err)
 	}

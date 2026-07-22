@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"her/config"
+	"her/memory"
 	"her/tui"
 )
 
@@ -117,6 +118,14 @@ type simAdapter struct {
 	options  SimOptions
 	bus      *tui.Bus
 
+	// store, when non-nil, is queried for each turn's authoritative cost
+	// (SUM(cost_usd) FROM metrics WHERE message_id = ?) instead of trusting
+	// TurnEndEvent.TotalCost — the same in-memory accumulator the TUI uses,
+	// which only sums LLM completion costs and silently misses anything a
+	// tool persists directly via SaveMetric (polaris_search, vision, STT).
+	// nil in existing tests that don't need cost assertions.
+	store memory.Store
+
 	// convID is generated once at construction (not inside Start) so that
 	// callers like cmd/sim_gw.go can read it via ConversationID() before
 	// or during the run — needed so scheduler.Deps.GetConversationID can
@@ -183,13 +192,14 @@ type turnCapture struct {
 	providers        map[string]int // provider name → call count
 }
 
-func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus, workerResultCh chan WorkerResult) (Adapter, error) {
+func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus, workerResultCh chan WorkerResult, store memory.Store) (Adapter, error) {
 	return &simAdapter{
 		cfg:            acfg,
 		messages:       messages,
 		triggers:       triggers,
 		options:        opts,
 		bus:            bus,
+		store:          store,
 		convID:         fmt.Sprintf("sim-%d", time.Now().UnixMilli()),
 		msgCh:          make(chan InboundMsg, 1),
 		finishedTurn:   make(chan *turnCapture, 1),
@@ -556,7 +566,21 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 		a.captureMu.Lock()
 		tc := a.activeTurn
 		if tc != nil {
-			tc.cost = e.TotalCost // authoritative total from bot
+			// Query the DB rather than trusting e.TotalCost: that field is
+			// summed purely from in-process LLM-call accounting and misses
+			// any cost a tool persisted directly via ctx.Store.SaveMetric
+			// (polaris_search, vision, STT) — CostForMessage sums the same
+			// metrics table those calls write to, so it can't drift out of
+			// sync as new cost sources get added. Falls back to e.TotalCost
+			// if no store was wired in (e.g. existing tests).
+			tc.cost = e.TotalCost
+			if a.store != nil {
+				if dbCost, err := a.store.CostForMessage(e.TurnID); err == nil {
+					tc.cost = dbCost
+				} else {
+					log.Warn("sim: CostForMessage failed, falling back to in-memory total", "turn_id", e.TurnID, "err", err)
+				}
+			}
 		}
 		a.activeTurn = nil
 		a.captureMu.Unlock()

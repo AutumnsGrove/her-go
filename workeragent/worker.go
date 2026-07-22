@@ -36,6 +36,7 @@ import (
 	_ "her/tools/done"
 	_ "her/tools/list_files"
 	_ "her/tools/patch_file"
+	_ "her/tools/polaris_search"
 	_ "her/tools/read_email"
 	_ "her/tools/read_file"
 	_ "her/tools/search_emails"
@@ -215,8 +216,11 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 	}
 
 	// Extract results — find the report file(s) written and the done summary.
+	// CostUSD adds tctx.ToolAPICost alongside the LLM-call total: tools
+	// like polaris_search spend real money on an external API directly,
+	// outside loopResult's own LLM-cost accounting (see tools.Context.ToolAPICost).
 	workerResult := WorkerResult{
-		CostUSD:   loopResult.TotalCost,
+		CostUSD:   loopResult.TotalCost + tctx.ToolAPICost,
 		ToolCalls: loopResult.ToolCalls,
 		Success:   tctx.DoneCalled,
 	}
@@ -247,7 +251,7 @@ func RunWorker(input WorkerInput, params WorkerParams) WorkerResult {
 	}
 
 	log.Infof("  worker agent: task=%s | report=%s | $%.6f | %d tools",
-		input.TaskType, filepath.Base(workerResult.ReportPath), loopResult.TotalCost, loopResult.ToolCalls)
+		input.TaskType, filepath.Base(workerResult.ReportPath), workerResult.CostUSD, loopResult.ToolCalls)
 
 	return workerResult
 }
