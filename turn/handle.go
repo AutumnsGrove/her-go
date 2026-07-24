@@ -11,9 +11,10 @@ import (
 // Tracker accumulates these across all phases for the final
 // TurnEndEvent.
 type PhaseMetrics struct {
-	Cost          float64
-	ToolCalls     int
-	MemoriesSaved int
+	Cost            float64
+	ToolCalls       int
+	MemoriesSaved   int
+	CardIndexTokens int // tokens spent on the "Card Index" agent layer — card-index-recall experiment
 }
 
 // PhaseHandle is the interface an agent uses to participate in a turn.

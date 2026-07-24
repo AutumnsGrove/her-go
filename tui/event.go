@@ -169,12 +169,13 @@ func (e ReplyEvent) EventSource() string  { return "driver" }
 // TurnEndEvent fires when agent.Run() completes for a message turn.
 // Updates the turn section header with totals.
 type TurnEndEvent struct {
-	Time       time.Time
-	TurnID     int64
-	TotalCost  float64
-	ElapsedMs  int64
-	ToolCalls  int
-	MemoriesSaved int
+	Time            time.Time
+	TurnID          int64
+	TotalCost       float64
+	ElapsedMs       int64
+	ToolCalls       int
+	MemoriesSaved   int
+	CardIndexTokens int // tokens spent on the "Card Index" agent layer — card-index-recall experiment
 }
 
 func (e TurnEndEvent) EventTime() time.Time { return e.Time }

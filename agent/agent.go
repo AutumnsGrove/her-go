@@ -199,6 +199,7 @@ type RunResult struct {
 	MemoriesSaved    int      // number of memories saved/updated during this turn
 	PendingNarration   string // cleaned report text queued by narrate_report tool — bot sends as voice memo
 	PublishedReportURL string // Telegraph URL from publish_report — bot auto-appends as clickable link
+	CardIndexTokens    int    // tokens spent on the "Card Index" agent layer this turn (0 if layer produced no content) — surfaced for the card-index-recall experiment
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -369,6 +370,14 @@ func Run(params RunParams) (*RunResult, error) {
 		}
 	}
 	log.Infof("  agent context total: ~%d tokens", agentTotalTokens)
+
+	var cardIndexTokens int
+	for _, lr := range agentLayerResults {
+		if lr.Name == "Card Index" {
+			cardIndexTokens = lr.Tokens
+			break
+		}
+	}
 
 	// Load the agent prompt from disk (hot-reloadable, like prompt.md).
 	agentPrompt := loadAgentPrompt(params.Cfg.Persona.AgentPromptFile, params.Cfg)
@@ -625,13 +634,15 @@ func Run(params RunParams) (*RunResult, error) {
 		MemoriesSaved:      len(tctx.SavedMemories),
 		PendingNarration:   tctx.PendingNarration,
 		PublishedReportURL: tctx.PublishedReportURL,
+		CardIndexTokens:    cardIndexTokens,
 	}
 
 	if mainPhase != nil {
 		mainPhase.Done(turn.PhaseMetrics{
-			Cost:          result.TotalCost,
-			ToolCalls:     result.ToolCalls,
-			MemoriesSaved: result.MemoriesSaved,
+			Cost:            result.TotalCost,
+			ToolCalls:       result.ToolCalls,
+			MemoriesSaved:   result.MemoriesSaved,
+			CardIndexTokens: result.CardIndexTokens,
 		})
 	}
 

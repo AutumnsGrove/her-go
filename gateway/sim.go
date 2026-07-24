@@ -104,6 +104,8 @@ type SimResult struct {
 	CacheReadTokens  int            // total prompt tokens served from cache
 	CacheWriteTokens int            // total prompt tokens written to cache
 	Providers        map[string]int // provider name → call count for this turn
+
+	CardIndexTokens int // tokens spent on the "Card Index" agent layer — card-index-recall experiment
 }
 
 // simAdapter implements the Adapter interface for simulation runs.
@@ -190,6 +192,8 @@ type turnCapture struct {
 	cacheReadTokens  int
 	cacheWriteTokens int
 	providers        map[string]int // provider name → call count
+
+	cardIndexTokens int // tokens spent on the "Card Index" agent layer — card-index-recall experiment
 }
 
 func newSimAdapter(acfg config.AdapterConfig, messages []SimMessage, triggers SimTriggers, opts SimOptions, bus *tui.Bus, workerResultCh chan WorkerResult, store memory.Store) (Adapter, error) {
@@ -446,6 +450,7 @@ func (a *simAdapter) enrichFromCapture(result SimResult) SimResult {
 		result.CacheReadTokens = tc.cacheReadTokens
 		result.CacheWriteTokens = tc.cacheWriteTokens
 		result.Providers = tc.providers
+		result.CardIndexTokens = tc.cardIndexTokens
 	}
 
 	select {
@@ -581,6 +586,7 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 					log.Warn("sim: CostForMessage failed, falling back to in-memory total", "turn_id", e.TurnID, "err", err)
 				}
 			}
+			tc.cardIndexTokens = e.CardIndexTokens
 		}
 		a.activeTurn = nil
 		a.captureMu.Unlock()

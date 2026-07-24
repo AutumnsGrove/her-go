@@ -13,9 +13,10 @@ var log = logger.WithPrefix("turn")
 // Metrics accumulates turn-wide numbers across all phases. Each
 // PhaseHandle.Done() merges its phase's PhaseMetrics into this.
 type Metrics struct {
-	TotalCost     float64
-	ToolCalls     int
-	MemoriesSaved int
+	TotalCost       float64
+	ToolCalls       int
+	MemoriesSaved   int
+	CardIndexTokens int
 }
 
 // Tracker manages the lifecycle of one user-message turn. Created by
@@ -171,6 +172,7 @@ func (t *Tracker) phaseDone(name string, m PhaseMetrics) {
 	t.metrics.TotalCost += m.Cost
 	t.metrics.ToolCalls += m.ToolCalls
 	t.metrics.MemoriesSaved += m.MemoriesSaved
+	t.metrics.CardIndexTokens += m.CardIndexTokens
 
 	t.pending--
 	if t.pending < 0 {
@@ -184,12 +186,13 @@ func (t *Tracker) phaseDone(name string, m PhaseMetrics) {
 
 		// Emit TurnEndEvent with accumulated metrics from all phases.
 		t.emit(tui.TurnEndEvent{
-			Time:          time.Now(),
-			TurnID:        t.turnID,
-			ElapsedMs:     time.Since(t.startTime).Milliseconds(),
-			TotalCost:     t.metrics.TotalCost,
-			ToolCalls:     t.metrics.ToolCalls,
-			MemoriesSaved: t.metrics.MemoriesSaved,
+			Time:            time.Now(),
+			TurnID:          t.turnID,
+			ElapsedMs:       time.Since(t.startTime).Milliseconds(),
+			TotalCost:       t.metrics.TotalCost,
+			ToolCalls:       t.metrics.ToolCalls,
+			MemoriesSaved:   t.metrics.MemoriesSaved,
+			CardIndexTokens: t.metrics.CardIndexTokens,
 		})
 
 		// Stop typing (no-op if already stopped after reply delivery).

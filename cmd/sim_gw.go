@@ -711,9 +711,13 @@ func printSimResults(suiteName string, results []gateway.SimResult) {
 			}
 			providerInfo = fmt.Sprintf(", via %s", strings.Join(names, "+"))
 		}
-		fmt.Printf("         reply (%s, $%.4f, %d tools%s%s): %s\n",
+		cardIndexInfo := ""
+		if r.CardIndexTokens > 0 {
+			cardIndexInfo = fmt.Sprintf(", card-index:%d", r.CardIndexTokens)
+		}
+		fmt.Printf("         reply (%s, $%.4f, %d tools%s%s%s): %s\n",
 			r.Duration.Round(time.Millisecond), r.Cost, r.ToolCalls,
-			cacheInfo, providerInfo,
+			cacheInfo, providerInfo, cardIndexInfo,
 			truncSimText(r.Reply, 80))
 
 		// Mood verdict

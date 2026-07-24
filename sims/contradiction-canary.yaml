@@ -1,0 +1,96 @@
+name: "Contradiction Canary"
+description: >
+  Second diagnostic suite for the recall_memories vs. card-index-browsing
+  experiment. Where card-index-canary.yaml tests whether a distinctive fact
+  gets surfaced at all, this one tests what happens when TWO independently
+  seeded memories quietly contradict each other — seeded on different cards,
+  never linked or superseded, the way two separate real conversations might
+  drop facts that don't quite add up without either the user or Mira ever
+  noticing in the moment.
+
+  Premise: fresh persona ("Priya", freelance illustrator). No overlap with
+  other suites.
+
+  The two seeded facts are individually mundane and plausible — the tension
+  between them is "lowkey," not a blatant factual clash (e.g. not "lives in
+  Seattle" vs "lives in Miami"). A person can plausibly be both things; the
+  quiet contradiction is in what they imply about her habits:
+
+  - [routines] "Priya is absolutely not a morning person — she can't function
+    before 11am and always sleeps in hard on weekends, no exceptions."
+  - [interests] "Priya has a weekend sunrise ritual — she sets an alarm to
+    catch first light from her balcony with coffee before the day gets busy."
+
+  Neither memory supersedes the other (they're seeded independently, on
+  different cards, so the normal update_memory/supersession pipeline never
+  runs on them) — this deliberately creates a small, realistic crack in the
+  memory store, the kind that accumulates over months of real conversation.
+
+  Structure:
+  - Turns 1-2: scene-setting, no trigger
+  - Turn 3: OBLIQUE TRIGGER A — plan that only makes sense if she sleeps in
+  - Turn 4: filler
+  - DREAM (forced via dream_after) — see whether the dreamer notices/merges
+    anything when reviewing routines/interests cards
+  - Turn 5: filler
+  - Turn 6: OBLIQUE TRIGGER B — plan that only makes sense if she's up early
+  - Turn 7: EXPLICIT PROBE — asks directly whether she's a morning person
+  - Turn 8: close
+
+  Grading (manual, by reading the sim report): at turns 3 and 6, does the
+  reply confidently assert ONE fact without acknowledging the other (blind
+  spot), does it surface both and get confused, or does it show awareness of
+  the tension? At turn 7 (explicit), does the reply reconcile the two, or
+  just pick whichever memory recall_memories happened to rank higher? Compare
+  this behavior with and without the card-index layer — does making cards
+  more visible make cross-card contradictions MORE likely to surface (both
+  facts get pulled into context at once) or does it make no difference
+  because recall is still keyed on a single query?
+
+tags: ["diagnostic", "recall", "card-index", "canary", "contradiction"]
+
+seed_cards: true
+
+seed_memories:
+  - card: routines
+    content: >
+      Priya is absolutely not a morning person — she can't function before
+      11am and always sleeps in hard on weekends, no exceptions.
+  - card: interests
+    content: >
+      Priya has a weekend sunrise ritual — she sets an alarm to catch first
+      light from her balcony with a cup of coffee before the day gets busy.
+
+seed_persona: >
+  I'm attentive and I like noticing patterns in what someone tells me,
+  including when something doesn't quite line up with what I thought I knew.
+
+dream_after: [4]
+run_dream: true
+
+messages:
+  # Turn 1: scene-setting, no trigger
+  - "hey, just finished a big illustration commission, feeling good about it"
+
+  # Turn 2: distractor, unrelated
+  - "thinking about getting a new tablet for digital work, mine's getting old"
+
+  # Turn 3: OBLIQUE TRIGGER A — plan only makes sense if she sleeps in
+  - "my friend wants to do a 7am hike this saturday, kind of dreading it honestly"
+
+  # Turn 4: filler, before forced dream
+  - "anyway today's been pretty chill, just catching up on emails"
+
+  # ──────────────────────── DREAM (forced via dream_after: [4]) ────────────
+
+  # Turn 5: filler, post-dream
+  - "made a really good pour-over this morning, small win"
+
+  # Turn 6: OBLIQUE TRIGGER B — plan only makes sense if she's up at dawn
+  - "set my alarm for 5:45am tomorrow, want to catch the sunrise before it gets cloudy this weekend"
+
+  # Turn 7: EXPLICIT PROBE — direct question, forces reconciliation
+  - "random question — would you say i'm a morning person or not?"
+
+  # Turn 8: close
+  - "anyway i should get back to work. talk later"
