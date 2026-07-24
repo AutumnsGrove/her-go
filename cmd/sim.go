@@ -237,6 +237,7 @@ type suite struct {
 	SeedCalendarEvents []SeedCalendarEvent `yaml:"seed_calendar_events"` // calendar events (FakeBridge + DB)
 	SeedEmails         []SeedEmail         `yaml:"seed_emails"`          // emails (gmail FakeBridge)
 	SeedPersona        string              `yaml:"seed_persona"`         // initial persona.md content (blank = empty slate)
+	SeedCustomCards    []seedCard          `yaml:"seed_custom_cards"`    // hand-written cards (slug/name/subject/summary) for testing card-index recall
 	CompactAfter       int                 `yaml:"compact_after"`        // force compaction after turn N (0 = disabled)
 	DreamAfter         []int               `yaml:"dream_after"`          // run dream cycle after these turns (supports multiple dreams per suite)
 	RunDream           bool                `yaml:"run_dream"`            // run a full dream cycle after all messages complete
@@ -270,6 +271,17 @@ func (m *seedMemory) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	}
 	*m = seedMemory(r)
 	return nil
+}
+
+// seedCard lets a sim pre-write a card's dreamer-style summary directly,
+// instead of waiting for a real dream cycle to author one. Useful for testing
+// recall against a card that already has a mature summary — the normal
+// seed_cards block only creates the 14 default cards with empty summaries.
+type seedCard struct {
+	Slug    string `yaml:"slug"`
+	Name    string `yaml:"name"`
+	Subject string `yaml:"subject"` // "user" or "self", defaults to "user"
+	Summary string `yaml:"summary"`
 }
 
 // SeedCalendarEvent represents a calendar event to populate in sims.
@@ -1175,6 +1187,26 @@ func runSim(cmd *cobra.Command, args []string) error {
 			}
 		}
 		log.Info("  card seeding complete")
+	}
+
+	// --- Seed custom cards with pre-written summaries (if configured) ---
+	// Lets a sim start with a card that already has a mature, dreamer-style
+	// summary — bypassing the need to run a real dream cycle first.
+	if len(s.SeedCustomCards) > 0 {
+		log.Infof("  seeding %d custom cards...", len(s.SeedCustomCards))
+		seedCardSQL := `INSERT OR IGNORE INTO memory_cards (topic_slug, name, subject, summary, protected) VALUES (?, ?, ?, ?, ?)`
+		for _, c := range s.SeedCustomCards {
+			subject := c.Subject
+			if subject == "" {
+				subject = "user"
+			}
+			if _, err := store.DB().Exec(seedCardSQL, c.Slug, c.Name, subject, c.Summary, 0); err != nil {
+				log.Warn("seed custom card failed", "slug", c.Slug, "err", err)
+				continue
+			}
+			log.Infof("    seeded card [%s]: %s", c.Slug, c.Name)
+		}
+		log.Info("  custom card seeding complete")
 	}
 
 	// --- Helper: resolve card slug to ID for memory seeding ---

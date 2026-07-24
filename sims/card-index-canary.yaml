@@ -1,0 +1,110 @@
+name: "Card Index Canary"
+description: >
+  Diagnostic suite for the recall_memories vs. card-index-browsing experiment.
+  Not a coverage suite — it's a controlled canary test.
+
+  Premise: fresh persona ("Jess", late 20s, works in project management,
+  bouldering hobby, sister visiting). No overlap with other suites.
+
+  Setup: one memory is pre-seeded under a hand-written card
+  ("nickname-game") whose summary describes a very distinctive, low-vocabulary-
+  overlap inside joke: if a stranger calls Jess "babe" or "sweetheart," Mira
+  is supposed to jokingly call her "Donette" for the rest of the night, mob-
+  boss's-wife style. This is deliberately a "canary" — a fact that is
+  impossible to miss in a reply IF it gets recalled and used, and thematically
+  adjacent to (but lexically distant from) two later conversational turns, so
+  a naive keyword/embedding query for "how was your night" or "party" is
+  unlikely to surface it, while a driver that's browsing available card
+  summaries by topic might notice "nicknames" is relevant and drill in.
+
+  Distractor memories are seeded under two of the default cards (interests,
+  work) so the environment isn't a strawman of "one card, trivially found."
+
+  Structure:
+  - Turns 1-3: scene-setting, no trigger
+  - Turn 4: FIRST OBLIQUE TRIGGER (pre-dream) — stranger calls her "babe"
+  - Turn 5: filler
+  - DREAM (forced via dream_after) — tests whether a mid-cycle dream changes
+    anything about how discoverable the card becomes afterward
+  - Turn 6: filler
+  - Turn 7: SECOND OBLIQUE TRIGGER (post-dream) — stranger calls her "sweetheart"
+  - Turn 8: EXPLICIT PROBE — directly asks about inside jokes/nicknames
+    (sanity check / upper bound — if this fails too, something is broken
+    beyond just retrieval strategy)
+  - Turn 9: close
+
+  Grading (manual, by reading the sim report): does the reply reference
+  "Donette" or the bit at turn 4? At turn 7? At turn 8? Does recall_memories
+  get called each time, and if so, does its result include memory ID for the
+  nickname-game memory?
+
+tags: ["diagnostic", "recall", "card-index", "canary"]
+
+seed_cards: true
+
+seed_custom_cards:
+  - slug: nickname-game
+    name: "Nicknames & Inside Jokes"
+    subject: user
+    summary: >
+      Jess and Mira have a standing bit: if a stranger calls Jess "babe" or
+      "sweetheart" out in public, Jess wants Mira to lean into it back home by
+      jokingly calling her "Donette" for the rest of the night — like she's
+      the wife of a mob boss, exaggerated accent energy. It started as a joke
+      but Jess genuinely loves it when Mira fully commits to the bit rather
+      than playing it safe or ignoring the cue.
+
+seed_memories:
+  - card: nickname-game
+    content: >
+      Jess told Mira about an inside joke: if a stranger ever calls her
+      "babe" or "sweetheart" while she's out, she wants Mira to jokingly call
+      her "Donette" for the rest of the night, like she's a mob boss's wife.
+      She said she loves it when Mira really commits to the bit instead of
+      playing it safe.
+  - card: interests
+    content: >
+      Jess started bouldering about three months ago and is already
+      addicted to it, going to the climbing gym several times a week.
+  - card: work
+    content: >
+      Jess works in project management and has been feeling stressed
+      lately, considering whether to switch teams.
+
+seed_persona: >
+  I'm warm, playful, and I like to fully commit to a bit once I know it
+  lands. I pay attention to callbacks and inside jokes — reusing one at the
+  right moment is one of my favorite ways to show I remember someone.
+
+dream_after: [5]
+run_dream: true
+
+messages:
+  # Turn 1: scene-setting, no trigger
+  - "hey, long day. back to back meetings, i'm wiped"
+
+  # Turn 2: distractor, unrelated
+  - "on the bright side i went bouldering after work, i'm getting so much better at the overhangs"
+
+  # Turn 3: distractor, unrelated
+  - "my sister's visiting next weekend, haven't seen her since spring, kind of excited"
+
+  # Turn 4: FIRST OBLIQUE TRIGGER — no "nickname"/"Donette"/"joke" wording at all
+  - "went out for drinks with some friends tonight. this random guy at the bar called me babe all night, it was so weird"
+
+  # Turn 5: filler, before forced dream
+  - "anyway work's been stressful, i'm seriously thinking about switching teams"
+
+  # ──────────────────────── DREAM (forced via dream_after: [5]) ────────────
+
+  # Turn 6: filler, post-dream
+  - "started a new book last night, it's really good so far"
+
+  # Turn 7: SECOND OBLIQUE TRIGGER, post-dream — different phrasing, still no direct callback wording
+  - "was at a party last night and some person i just met called me sweetheart, kind of funny honestly"
+
+  # Turn 8: EXPLICIT PROBE — direct question, sanity upper bound
+  - "random question — do we have any inside jokes or nicknames or anything like that?"
+
+  # Turn 9: close
+  - "anyway i should get some sleep. night"
