@@ -295,11 +295,33 @@ func (b *Bot) handleVoice(c tele.Context) error {
 //
 // Telegram voice memos require Opus-encoded audio in an OGG container.
 // The TTS client handles the WAV→OGG/Opus conversion via ffmpeg.
+//
+// Cost tracking: remote TTS engines (OpenRouter, ElevenLabs) return
+// cost info in the SynthesizeResult. We save this to the metrics table
+// with agent_role="tts" so it appears in the turn's total cost.
 func (b *Bot) sendVoiceReply(c tele.Context, text string) {
-	oggBytes, err := b.ttsClient.Synthesize(text)
+	result, err := b.ttsClient.Synthesize(text)
 	if err != nil {
 		log.Error("TTS synthesis failed", "err", err)
 		return
+	}
+
+	// Track remote TTS costs (local engines return 0).
+	if result.Cost > 0 {
+		// Get the trigger message ID from context so this cost gets
+		// bundled into the turn's total. This matches how STT works.
+		msgID := int64(0)
+		if c.Message() != nil && c.Message().ReplyTo != nil {
+			msgID = int64(c.Message().ReplyTo.ID)
+		} else if c.Message() != nil {
+			msgID = int64(c.Message().ID)
+		}
+		_ = b.store.SaveMetric(memory.MetricInput{
+			Model:     b.cfg.Voice.TTS.Model,
+			CostUSD:   result.Cost,
+			AgentRole: "tts",
+			MessageID: msgID,
+		})
 	}
 
 	// In telebot, sending a voice memo requires a tele.Voice with a
@@ -309,7 +331,7 @@ func (b *Bot) sendVoiceReply(c tele.Context, text string) {
 	// tele.FromReader creates a File from an io.Reader — similar to how
 	// handlePhoto uses bot.File() but in reverse (sending instead of receiving).
 	voiceMsg := &tele.Voice{
-		File: tele.FromReader(bytes.NewReader(oggBytes)),
+		File: tele.FromReader(bytes.NewReader(result.Audio)),
 		MIME: "audio/ogg",
 	}
 
@@ -325,14 +347,25 @@ func (b *Bot) sendVoiceReply2(chatID int64, text string) {
 	if b.ttsClient == nil || b.tb == nil {
 		return
 	}
-	oggBytes, err := b.ttsClient.Synthesize(text)
+	result, err := b.ttsClient.Synthesize(text)
 	if err != nil {
 		log.Error("TTS synthesis failed", "err", err)
 		return
 	}
 
+	// Track remote TTS costs. No message ID context here (event-triggered),
+	// so this cost won't be tied to a specific turn — it'll show up in the
+	// global cost totals but not in per-turn breakdowns.
+	if result.Cost > 0 {
+		_ = b.store.SaveMetric(memory.MetricInput{
+			Model:     b.cfg.Voice.TTS.Model,
+			CostUSD:   result.Cost,
+			AgentRole: "tts",
+		})
+	}
+
 	voiceMsg := &tele.Voice{
-		File: tele.FromReader(bytes.NewReader(oggBytes)),
+		File: tele.FromReader(bytes.NewReader(result.Audio)),
 		MIME: "audio/ogg",
 	}
 

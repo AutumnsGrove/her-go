@@ -797,6 +797,7 @@ const (
 const (
 	TTSEnginePiper      = "piper"      // local sidecar (scripts/tts_server.py); bot spawns it automatically
 	TTSEngineElevenLabs = "elevenlabs" // remote ElevenLabs API — no local process
+	TTSEngineOpenRouter = "openrouter" // remote OpenRouter API with cost tracking
 )
 
 // STTConfig controls speech-to-text.

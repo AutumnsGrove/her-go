@@ -525,7 +525,7 @@ func runBotBackground(cfg *config.Config, store memory.Store, bus *tui.Bus, prog
 	}
 
 	var ttsProcess *exec.Cmd
-	ttsClient := voice.NewTTSClient(&cfg.Voice.TTS)
+	ttsClient := voice.NewTTSClient(&cfg.Voice.TTS, cfg.OpenRouter.APIKey)
 	if ttsClient != nil {
 		ttsProcess = startTTSSidecar(cfg, bus, ttsClient)
 	} else {

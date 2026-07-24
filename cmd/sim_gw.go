@@ -489,7 +489,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 	// --- TTS client (optional, for narrate_report support in sims) ---
 	var simTTSClient *voice.TTSClient
 	if cfg.Voice.TTS.Enabled {
-		simTTSClient = voice.NewTTSClient(&cfg.Voice.TTS)
+		simTTSClient = voice.NewTTSClient(&cfg.Voice.TTS, cfg.OpenRouter.APIKey)
 	}
 
 	// --- Assemble deps ---

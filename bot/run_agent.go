@@ -22,6 +22,7 @@ import (
 
 	"her/agent"
 	"her/classifier"
+	"her/memory"
 	"her/mood"
 	"her/scrub"
 	"her/tools"
@@ -390,20 +391,33 @@ func (b *Bot) runAgent(fe Frontend, input AgentInput) error {
 
 			if tp, ok := fe.(interface{ SendVoice(string) }); ok {
 				// Telegram path — send as voice memo.
+				// SendVoice (frontend_telegram.go → sendVoiceReply) handles
+				// cost tracking internally.
 				tp.SendVoice(result.PendingNarration)
 			} else {
 				// Sim/dev path — synthesize and save to file.
-				oggBytes, err := b.ttsClient.Synthesize(result.PendingNarration)
+				ttsResult, err := b.ttsClient.Synthesize(result.PendingNarration)
 				if err != nil {
 					log.Error("narration synthesis failed", "err", err)
 					return
 				}
+
+				// Track remote TTS costs for narrate_report tool.
+				if ttsResult.Cost > 0 {
+					_ = b.store.SaveMetric(memory.MetricInput{
+						Model:     b.cfg.Voice.TTS.Model,
+						CostUSD:   ttsResult.Cost,
+						AgentRole: "tts",
+						MessageID: input.TriggerMsgID,
+					})
+				}
+
 				narrationPath := filepath.Join(b.reportsDir(), "narration.ogg")
-				if err := os.WriteFile(narrationPath, oggBytes, 0644); err != nil {
+				if err := os.WriteFile(narrationPath, ttsResult.Audio, 0644); err != nil {
 					log.Error("saving narration file", "err", err)
 					return
 				}
-				log.Info("narration saved", "path", narrationPath, "bytes", len(oggBytes))
+				log.Info("narration saved", "path", narrationPath, "bytes", len(ttsResult.Audio))
 			}
 		}
 

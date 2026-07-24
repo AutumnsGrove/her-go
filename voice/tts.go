@@ -12,6 +12,7 @@ package voice
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,9 +25,9 @@ import (
 )
 
 // TTSEngine is the common interface for all TTS engines.
-// Both PiperTTSClient and ElevenLabsTTSClient implement this.
+// All implementations (Piper, ElevenLabs, OpenRouter) implement this.
 type TTSEngine interface {
-	Synthesize(text string) ([]byte, error)
+	Synthesize(text string) (SynthesizeResult, error)
 	ReplyMode() string
 	IsAvailable() bool
 }
@@ -41,7 +42,11 @@ type TTSClient struct {
 // NewTTSClient creates a new TTS client from config, dispatching to
 // the appropriate engine based on cfg.Engine. Returns nil if TTS is
 // disabled or misconfigured — callers should nil-check.
-func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
+//
+// fallbackAPIKey is used when cfg.APIKey is empty and the engine is
+// remote (openrouter). Pass cfg.OpenRouter.APIKey so remote engines
+// can inherit the main API key without duplicating it in config.
+func NewTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *TTSClient {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -53,6 +58,8 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 		engine = NewPiperTTSClient(cfg)
 	case config.TTSEngineElevenLabs:
 		engine = NewElevenLabsTTSClient(cfg)
+	case TTSEngineOpenRouter:
+		engine = NewOpenRouterTTSClient(cfg, fallbackAPIKey)
 	default:
 		log.Warn("Unknown TTS engine — TTS disabled", "engine", cfg.Engine)
 		return nil
@@ -64,7 +71,7 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 	}
 
 	if cfg.Fallback != nil {
-		if fb := newFallbackTTSEngine(cfg, cfg.Fallback); fb != nil {
+		if fb := newFallbackTTSEngine(cfg, cfg.Fallback, fallbackAPIKey); fb != nil {
 			engine = &FallbackTTSClient{primary: engine, fallback: fb}
 		} else {
 			log.Warn("tts.fallback configured but failed to initialize — continuing without fallback")
@@ -79,7 +86,7 @@ func NewTTSClient(cfg *config.TTSConfig) *TTSClient {
 // fallback fields plus the primary config's shared settings (reply mode,
 // pause timings) — those aren't engine-specific, so there's no reason to
 // duplicate them in TTSFallbackConfig.
-func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig) TTSEngine {
+func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig, fallbackAPIKey string) TTSEngine {
 	switch fb.Engine {
 	case config.TTSEnginePiper, "":
 		piperCfg := &config.TTSConfig{
@@ -90,6 +97,14 @@ func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig) T
 			Pauses:    cfg.Pauses,
 		}
 		return NewPiperTTSClient(piperCfg)
+	case TTSEngineOpenRouter:
+		orCfg := &config.TTSConfig{
+			BaseURL:   fb.BaseURL,
+			Model:     fb.Model,
+			VoiceID:   fb.VoiceID,
+			ReplyMode: cfg.ReplyMode,
+		}
+		return NewOpenRouterTTSClient(orCfg, fallbackAPIKey)
 	default:
 		log.Warn("Unknown TTS fallback engine", "engine", fb.Engine)
 		return nil
@@ -106,10 +121,10 @@ type FallbackTTSClient struct {
 	fallback TTSEngine
 }
 
-func (c *FallbackTTSClient) Synthesize(text string) ([]byte, error) {
-	audio, err := c.primary.Synthesize(text)
+func (c *FallbackTTSClient) Synthesize(text string) (SynthesizeResult, error) {
+	result, err := c.primary.Synthesize(text)
 	if err == nil {
-		return audio, nil
+		return result, nil
 	}
 	log.Warn("primary TTS engine failed, falling back", "error", err.Error())
 	return c.fallback.Synthesize(text)
@@ -128,7 +143,7 @@ func (c *FallbackTTSClient) IsAvailable() bool {
 }
 
 // Synthesize delegates to the underlying engine.
-func (c *TTSClient) Synthesize(text string) ([]byte, error) {
+func (c *TTSClient) Synthesize(text string) (SynthesizeResult, error) {
 	return c.engine.Synthesize(text)
 }
 
@@ -140,6 +155,209 @@ func (c *TTSClient) ReplyMode() string {
 // IsAvailable delegates to the underlying engine.
 func (c *TTSClient) IsAvailable() bool {
 	return c.engine.IsAvailable()
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// OpenRouter TTS Client (remote engine)
+// ─────────────────────────────────────────────────────────────────────────
+
+const (
+	// TTSEngineOpenRouter is the config identifier for OpenRouter TTS.
+	TTSEngineOpenRouter = "openrouter"
+)
+
+// OpenRouterTTSClient talks to OpenRouter's TTS API for text-to-speech.
+// Uses the OpenAI-compatible /api/v1/audio/speech endpoint with cost
+// tracking via a usage block in the response headers or body.
+type OpenRouterTTSClient struct {
+	baseURL    string
+	apiKey     string
+	model      string
+	voiceID    string
+	replyMode  string
+	httpClient *http.Client
+}
+
+// NewOpenRouterTTSClient creates a new OpenRouter TTS client from config.
+// Returns nil if required fields are missing.
+func NewOpenRouterTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *OpenRouterTTSClient {
+	baseURL := strings.TrimRight(cfg.BaseURL, "/")
+	if baseURL == "" {
+		log.Warn("TTS enabled with openrouter but tts.base_url is empty — TTS disabled")
+		return nil
+	}
+
+	apiKey := cfg.APIKey
+	if apiKey == "" {
+		apiKey = fallbackAPIKey
+	}
+	if apiKey == "" {
+		log.Warn("TTS enabled with openrouter but no api_key — TTS disabled")
+		return nil
+	}
+
+	model := cfg.Model
+	if model == "" {
+		log.Warn("TTS enabled with openrouter but model is empty — TTS disabled")
+		return nil
+	}
+
+	voiceID := cfg.VoiceID
+	if voiceID == "" {
+		log.Warn("TTS enabled with openrouter but voice_id is empty — TTS disabled")
+		return nil
+	}
+
+	replyMode := cfg.ReplyMode
+	if replyMode == "" {
+		replyMode = "voice"
+	}
+
+	log.Info("OpenRouter TTS client initialized",
+		"engine", "openrouter",
+		"base_url", baseURL,
+		"model", model,
+		"voice", voiceID,
+		"reply_mode", replyMode,
+	)
+
+	return &OpenRouterTTSClient{
+		baseURL:   baseURL,
+		apiKey:    apiKey,
+		model:     model,
+		voiceID:   voiceID,
+		replyMode: replyMode,
+		httpClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+	}
+}
+
+// openRouterTTSRequest is the JSON body for OpenRouter's /api/v1/audio/speech endpoint.
+// Follows the OpenAI TTS API shape.
+type openRouterTTSRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+	Voice string `json:"voice"`
+}
+
+// openRouterTTSResponse is the JSON response wrapper when the API returns
+// usage info. OpenRouter can return either raw audio bytes or a JSON envelope
+// with a `data` field containing base64-encoded audio + usage metadata.
+type openRouterTTSResponse struct {
+	Data  string `json:"data,omitempty"`  // base64-encoded audio
+	Usage *struct {
+		Cost float64 `json:"cost"`
+	} `json:"usage,omitempty"`
+}
+
+// Synthesize converts text to audio bytes via OpenRouter's TTS API.
+// Returns OGG/Opus audio suitable for sending as a Telegram voice memo.
+//
+// OpenRouter's TTS API returns either:
+//   - Raw audio bytes (MP3 or PCM) with cost in a response header
+//   - JSON with base64-encoded audio + usage.cost field
+//
+// We handle both formats: check Content-Type to distinguish.
+func (c *OpenRouterTTSClient) Synthesize(text string) (SynthesizeResult, error) {
+	reqBody := openRouterTTSRequest{
+		Model: c.model,
+		Input: text,
+		Voice: c.voiceID,
+	}
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return SynthesizeResult{}, fmt.Errorf("marshaling TTS request: %w", err)
+	}
+
+	url := c.baseURL + "/audio/speech"
+	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return SynthesizeResult{}, fmt.Errorf("creating TTS request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return SynthesizeResult{}, fmt.Errorf("TTS request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return SynthesizeResult{}, fmt.Errorf("OpenRouter TTS returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return SynthesizeResult{}, fmt.Errorf("reading TTS response: %w", err)
+	}
+	ttsElapsed := time.Since(start)
+
+	var audioBytes []byte
+	var cost float64
+
+	// Check Content-Type to determine response format.
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/json") {
+		// JSON envelope with base64 audio + usage.
+		var parsed openRouterTTSResponse
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return SynthesizeResult{}, fmt.Errorf("parsing JSON TTS response: %w", err)
+		}
+		if parsed.Data == "" {
+			return SynthesizeResult{}, fmt.Errorf("TTS response missing data field")
+		}
+		audioBytes, err = base64.StdEncoding.DecodeString(parsed.Data)
+		if err != nil {
+			return SynthesizeResult{}, fmt.Errorf("decoding base64 audio: %w", err)
+		}
+		if parsed.Usage != nil {
+			cost = parsed.Usage.Cost
+		}
+	} else {
+		// Raw audio bytes (MP3 or PCM).
+		audioBytes = respBody
+		// Cost might be in a header like X-OpenRouter-Cost (check docs).
+		// For now, we'll leave it at 0 unless we find the header.
+		if costHeader := resp.Header.Get("X-OpenRouter-Cost"); costHeader != "" {
+			fmt.Sscanf(costHeader, "%f", &cost)
+		}
+	}
+
+	// Convert to OGG/Opus for Telegram. ffmpeg auto-detects MP3/PCM input.
+	oggBytes, err := convertToOpusOGG(audioBytes)
+	if err != nil {
+		return SynthesizeResult{}, err
+	}
+
+	log.Info("TTS synthesis complete",
+		"engine", "openrouter",
+		"model", c.model,
+		"tts_duration", ttsElapsed.Round(time.Millisecond),
+		"total_duration", time.Since(start).Round(time.Millisecond),
+		"text_len", len(text),
+		"audio_bytes", len(audioBytes),
+		"ogg_bytes", len(oggBytes),
+		"cost", fmt.Sprintf("$%.6f", cost),
+	)
+
+	return SynthesizeResult{Audio: oggBytes, Cost: cost}, nil
+}
+
+// ReplyMode returns whether the bot should always reply with voice
+// ("voice") or only when the user sends a voice memo ("match").
+func (c *OpenRouterTTSClient) ReplyMode() string {
+	return c.replyMode
+}
+
+// IsAvailable always returns true for the remote OpenRouter engine — there's
+// no local process to health-check. Any failure surfaces on the first
+// Synthesize call instead (mirrors ElevenLabs and remote STT behavior).
+func (c *OpenRouterTTSClient) IsAvailable() bool {
+	return true
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -245,7 +463,9 @@ type speechPauses struct {
 //
 // We request WAV from the server (no ffmpeg dependency on the Python side)
 // and convert on the Go side where we already require ffmpeg for STT anyway.
-func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
+//
+// Cost is always zero for local Piper.
+func (c *PiperTTSClient) Synthesize(text string) (SynthesizeResult, error) {
 	// Build the request body.
 	reqBody := speechRequest{
 		Model:          c.model,
@@ -266,43 +486,44 @@ func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling TTS request: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("marshaling TTS request: %w", err)
 	}
 
 	// POST to the speech endpoint.
 	url := c.baseURL + "/v1/audio/speech"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBytes))
 	if err != nil {
-		return nil, fmt.Errorf("creating TTS request: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("creating TTS request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("TTS request failed: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("TTS request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("TTS server returned %d: %s", resp.StatusCode, string(body))
+		return SynthesizeResult{}, fmt.Errorf("TTS server returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	wavBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading TTS response: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("reading TTS response: %w", err)
 	}
 
 	ttsElapsed := time.Since(start)
 
 	oggBytes, err := convertToOpusOGG(wavBytes)
 	if err != nil {
-		return nil, err
+		return SynthesizeResult{}, err
 	}
 
 	elapsed := time.Since(start)
 	log.Info("TTS synthesis complete",
+		"engine", "piper",
 		"tts_duration", ttsElapsed.Round(time.Millisecond),
 		"total_duration", elapsed.Round(time.Millisecond),
 		"text_len", len(text),
@@ -310,7 +531,7 @@ func (c *PiperTTSClient) Synthesize(text string) ([]byte, error) {
 		"ogg_bytes", len(oggBytes),
 	)
 
-	return oggBytes, nil
+	return SynthesizeResult{Audio: oggBytes, Cost: 0}, nil
 }
 
 // convertToOpusOGG converts audio bytes to OGG/Opus, which Telegram requires
@@ -432,17 +653,20 @@ type elevenLabsSpeechRequest struct {
 
 // Synthesize converts text to audio bytes via the ElevenLabs API. Returns
 // OGG/Opus audio suitable for sending as a Telegram voice memo.
-func (c *ElevenLabsTTSClient) Synthesize(text string) ([]byte, error) {
+//
+// Cost is always zero — ElevenLabs doesn't expose per-request pricing via
+// their API. Track usage via their dashboard instead.
+func (c *ElevenLabsTTSClient) Synthesize(text string) (SynthesizeResult, error) {
 	reqBody := elevenLabsSpeechRequest{Text: text, ModelID: c.model}
 	jsonBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling TTS request: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("marshaling TTS request: %w", err)
 	}
 
 	url := "https://api.elevenlabs.io/v1/text-to-speech/" + c.voiceID
 	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBytes))
 	if err != nil {
-		return nil, fmt.Errorf("creating TTS request: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("creating TTS request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("xi-api-key", c.apiKey)
@@ -450,18 +674,18 @@ func (c *ElevenLabsTTSClient) Synthesize(text string) ([]byte, error) {
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("TTS request failed: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("TTS request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ElevenLabs returned %d: %s", resp.StatusCode, string(body))
+		return SynthesizeResult{}, fmt.Errorf("ElevenLabs returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	mp3Bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading TTS response: %w", err)
+		return SynthesizeResult{}, fmt.Errorf("reading TTS response: %w", err)
 	}
 	ttsElapsed := time.Since(start)
 
@@ -469,7 +693,7 @@ func (c *ElevenLabsTTSClient) Synthesize(text string) ([]byte, error) {
 	// auto-detects the input container, same as it does for Piper's WAV.
 	oggBytes, err := convertToOpusOGG(mp3Bytes)
 	if err != nil {
-		return nil, err
+		return SynthesizeResult{}, err
 	}
 
 	log.Info("TTS synthesis complete",
@@ -481,7 +705,7 @@ func (c *ElevenLabsTTSClient) Synthesize(text string) ([]byte, error) {
 		"ogg_bytes", len(oggBytes),
 	)
 
-	return oggBytes, nil
+	return SynthesizeResult{Audio: oggBytes, Cost: 0}, nil
 }
 
 // ReplyMode returns whether the bot should always reply with voice

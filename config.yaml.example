@@ -242,32 +242,57 @@ voice:
     # api_key: ""                                                 # leave empty to auto-use openrouter.api_key
     fallback_model: "openai/whisper-large-v3"                     # fallback on timeout/503 (more reliable than turbo)
   tts:
+    # Three engines available — see docs/guides/TTS_ENGINES.md for full comparison
+    # 1. Piper (local, free, privacy-first)
+    # 2. OpenRouter (remote, good quality, cost tracked)
+    # 3. ElevenLabs (remote, best quality, expensive)
+
     enabled: false                                                # set true to reply with voice
-    # Local engine (privacy-first, zero API cost, lower quality):
+
+    # ─── ENGINE 1: PIPER (LOCAL, DEFAULT) ───
+    # Privacy-first, zero cost, good quality, 50+ voices
     engine: "piper"
-    base_url: "http://localhost:8766"                              # Piper TTS server URL
-    model: "en_GB-southern_english_female-low"                     # Piper voice model (HuggingFace ID or local path)
-    voice_id: "en_GB-southern_english_female-low"                  # Voice preset (for Piper, same as model)
-    idle_unload_sec: 300                                          # piper: unload the model after this many idle seconds to free ~120MB RAM; 0 = never unload
-    # Remote engine (much higher quality, costs per character, needs internet):
+    base_url: "http://localhost:8766"
+    model: "en_GB-southern_english_female-low"
+    voice_id: "en_GB-southern_english_female-low"
+    idle_unload_sec: 300                                          # unload after 5min idle to free ~120MB RAM
+    speed: 1.0                                                    # speaking rate (1.0 = normal, 0.8 = slower, 1.2 = faster)
+    reply_mode: "voice"                                           # "voice" (always voice) or "match" (mirror input format)
+    pauses:                                                       # silence inserted at punctuation (piper only)
+      paragraph_ms: 500
+      line_ms: 250
+      sentence_ms: 75
+      comma_ms: 50
+      semi_ms: 30
+
+    # ─── ENGINE 2: OPENROUTER (REMOTE, COST TRACKED) ───
+    # Better quality than Piper, cost tracking built-in, 54 Kokoro voices
+    # To use: uncomment these 4 lines and comment out the "piper" lines above
+    # engine: "openrouter"
+    # base_url: "https://openrouter.ai/api/v1"
+    # model: "hexgrad/kokoro-82m"                                 # $0.62/1M input chars (~$0.0006 per 1K chars)
+    # voice_id: "af_sarah"                                        # af_sarah, bf_lily, am_adam — see docs/guides/TTS_ENGINES.md for full list
+    # api_key: ""                                                 # leave empty to use openrouter.api_key
+    # reply_mode: "voice"
+
+    # ─── ENGINE 3: ELEVENLABS (REMOTE, PREMIUM) ───
+    # Best quality, fastest, expensive (~$0.30/1K chars)
+    # To use: uncomment these 4 lines and comment out the "piper" lines above
     # engine: "elevenlabs"
-    # voice_id: ""                                                # from the voice's page in the ElevenLabs voice library — it's the `voiceId` query param in the URL
-    # model: "eleven_flash_v2_5"                                  # low-latency default; leave unset to use it automatically
-    # api_key: ""                                                 # your ElevenLabs API key
-    # fallback:                                                   # auto-retry with piper if elevenlabs fails (API error, network issue, or free-tier credits run out mid-month)
+    # voice_id: "21m00Tcm4TlvDq8ikWAM"                            # get from https://elevenlabs.io/voice-library (copy voiceId from URL)
+    # model: "eleven_flash_v2_5"                                  # eleven_flash_v2_5 (fast), eleven_multilingual_v2 (best quality)
+    # api_key: "${ELEVENLABS_API_KEY}"
+    # reply_mode: "voice"
+
+    # ─── AUTOMATIC FALLBACK (OPTIONAL) ───
+    # If the primary engine fails, automatically retry with Piper (free, always available)
+    # Uncomment this block to enable fallback:
+    # fallback:
     #   engine: "piper"
     #   base_url: "http://localhost:8766"
     #   model: "en_GB-southern_english_female-low"
     #   voice_id: "en_GB-southern_english_female-low"
-    #   idle_unload_sec: 300                                      # keep this >0 so the fallback sidecar isn't sitting resident 24/7 for a path that's rarely used
-    speed: 1.0                                                    # Speaking rate (1.0 = normal) — piper only
-    reply_mode: "voice"                                           # "voice" (always voice reply) or "match" (reply in same format as input)
-    pauses:                                                       # Silence durations (ms) inserted at punctuation boundaries — piper only
-      paragraph_ms: 500                                           # between paragraphs (double newlines)
-      line_ms: 250                                                # between single newlines
-      sentence_ms: 75                                             # after . ! ?
-      comma_ms: 50                                                # after ,
-      semi_ms: 30                                                 # after ; :
+    #   idle_unload_sec: 300
 
 calendar:
   # Path to the Swift EventKit bridge binary. Relative paths are resolved from
