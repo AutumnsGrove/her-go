@@ -1,0 +1,270 @@
+name: "Full Stress Canary"
+description: >
+  Third and most comprehensive diagnostic suite for the card-index-recall
+  experiment. The first two suites (card-index-canary, contradiction-canary)
+  each isolated one mechanism against a nearly-empty memory store. This one
+  runs against a realistic-scale corpus (~50-55 seeded memories across all 14
+  default cards + 1 custom card, both user and self subjects) and deliberately
+  targets FOUR distinct failure modes in a single pass, plus a self-memory
+  utilization test.
+
+  Premise: fresh persona ("Marisol", mid-30s product manager). No overlap
+  with other suites.
+
+  ── Mechanism 1: MULTI-CARD SYNTHESIS ──────────────────────────────────
+  [work] seeds a Thursday client presentation. [health] seeds migraines
+  specifically triggered by fluorescent lighting + long meetings. Neither
+  card alone answers "should Mira be concerned about Thursday" — only
+  combining both does. Tested at turn 3.
+
+  ── Mechanism 2: FALSE-POSITIVE / NOISE RESISTANCE ─────────────────────
+  [family] seeds "cousin got married last spring." Turn 5 mentions a
+  DIFFERENT, new, unspecified wedding. Tests whether the driver hallucinates
+  "your cousin's wedding" from a visible card summary instead of recognizing
+  this as a new, distinct event.
+
+  ── Mechanism 3: DECOY / SIMILARLY-NAMED CARDS ─────────────────────────
+  [interests] seeds "rock climbing." A NEW custom card [hobbies] seeds
+  "pottery classes" — a second, equally plausible home for "things Marisol
+  does for fun." Turn 7 asks a general "what have I been up to for fun"
+  question. Tests whether the driver checks both near-duplicate cards or
+  grabs whichever it notices first, giving an incomplete answer.
+
+  ── Mechanism 4: STALE CARD (UN-DREAMED) ───────────────────────────────
+  [projects] seeds ONE fact pre-dream (a side-project iOS app, unnamed).
+  The forced mid-suite dream (dream_after: [6]) writes a summary from that
+  single fact. AFTER that dream, turns 9 and 11 add TWO NEW facts to the
+  project via live conversation (app gets a name; a designer gets hired) —
+  these go through the real save_memory pipeline, not reseeding, and are
+  never dreamed again before the stale-card probe at turn 12. Tests whether
+  the driver over-trusts a summary it should be able to tell is chronologically
+  behind, or properly recalls/scopes into the card to get current info.
+
+  ── Mechanism 5: SELF-MEMORY UTILIZATION ───────────────────────────────
+  [my-communication] (subject: self) seeds a specific introspective fact:
+  Mira has noticed she over-hedges critical feedback and has been
+  consciously correcting for it. Turn 13 gives a natural opening for
+  critical feedback. Tests whether the self-card actually changes behavior
+  — self-memories were recalled in 0 of the historical D1 turns we sampled
+  before this experiment started, despite significant engineering investment
+  in introspection/dreaming.
+
+  ── Control ─────────────────────────────────────────────────────────────
+  Turn 14 is a broad, explicit "what's going on in my life" probe — a
+  sanity upper bound requiring synthesis across MANY cards at once. If this
+  fails too, something is broken beyond just retrieval/index strategy.
+
+  Grading: read the sim report's per-turn "card-index:N" token figure
+  (now surfaced directly, no log-grepping needed) alongside behavioral
+  correctness at turns 3, 5, 7, 12, 13, 14. Compare against a baseline run
+  (git reset to before the card-index-layer commit) the same way the first
+  two suites were compared.
+
+tags: ["diagnostic", "recall", "card-index", "canary", "stress", "self-memory"]
+
+seed_cards: true
+
+seed_custom_cards:
+  - slug: hobbies
+    name: "Hobbies"
+    subject: user
+    summary: >
+      A catch-all for creative/physical things Marisol does outside of work,
+      distinct from (but overlapping in spirit with) the "interests" card.
+
+seed_persona: >
+  I'm attentive, a little wry, and I like connecting dots across things
+  someone's told me rather than treating every topic as its own island. When
+  I give feedback I try to actually mean it rather than softening it into
+  mush.
+
+seed_memories:
+  # ── identity ──
+  - card: identity
+    content: "Marisol is a product manager, mid-30s, based in Denver."
+  - card: identity
+    content: "Marisol has been at her current company for about four years, second PM hire."
+  - card: identity
+    content: "Marisol went to school for industrial design before pivoting into product management."
+
+  # ── health (includes multi-card synthesis fact) ──
+  - card: health
+    content: >
+      Marisol gets migraines that are specifically triggered by fluorescent
+      lighting combined with long stretches sitting in meetings.
+  - card: health
+    content: "Marisol has been trying to get more consistent sleep, usually aiming for 7 hours."
+  - card: health
+    content: "Marisol switched to a standing desk about six months ago for her back."
+  - card: health
+    content: "Marisol takes a daily allergy medication in the spring."
+
+  # ── financial ──
+  - card: financial
+    content: "Marisol is saving for a down payment on a condo, targeting next year."
+  - card: financial
+    content: "Marisol uses a budgeting app religiously and checks it weekly."
+  - card: financial
+    content: "Marisol paid off her car loan last year and felt great about it."
+
+  # ── family (includes false-positive trap fact) ──
+  - card: family
+    content: "Marisol's cousin got married last spring in a small backyard ceremony."
+  - card: family
+    content: "Marisol has one younger brother who lives in Chicago."
+  - card: family
+    content: "Marisol's parents are both retired and recently moved to Arizona."
+  - card: family
+    content: "Marisol calls her mom most Sundays."
+
+  # ── relationships ──
+  - card: relationships
+    content: "Marisol has a close friend group from college she still sees a few times a year."
+  - card: relationships
+    content: "Marisol has been dating someone for about eight months, going well."
+  - card: relationships
+    content: "Marisol's best friend from work just got promoted to director."
+  - card: relationships
+    content: "Marisol mentors a junior PM on her team informally."
+
+  # ── work (includes multi-card synthesis fact) ──
+  - card: work
+    content: >
+      Marisol has a major client presentation this coming Thursday, in the
+      large conference room downtown — it's a big deal for her team.
+  - card: work
+    content: "Marisol's team shipped a major feature release last quarter that went well."
+  - card: work
+    content: "Marisol has been managing up more with a new VP who just joined."
+  - card: work
+    content: "Marisol is up for a promotion review at the end of this year."
+  - card: work
+    content: "Marisol dislikes when meetings run long without an agenda."
+
+  # ── interests (includes decoy fact A) ──
+  - card: interests
+    content: "Marisol has gotten really into rock climbing over the past few months."
+  - card: interests
+    content: "Marisol reads a lot of sci-fi, especially anything by Ursula K. Le Guin."
+  - card: interests
+    content: "Marisol has been slowly learning to cook more elaborate meals."
+  - card: interests
+    content: "Marisol likes board games and hosts a game night every few months."
+
+  # ── hobbies (custom card, includes decoy fact B) ──
+  - card: hobbies
+    content: "Marisol started pottery classes recently and goes most Tuesday evenings."
+  - card: hobbies
+    content: "Marisol picked up film photography again after years of not shooting."
+  - card: hobbies
+    content: "Marisol has a small balcony garden she tends most weekends."
+
+  # ── projects (stale-card test — only ONE fact seeded pre-dream) ──
+  - card: projects
+    content: >
+      Marisol has been quietly working on a side project — a small iOS app
+      for tracking plant watering schedules. Still unnamed, early stage.
+
+  # ── routines ──
+  - card: routines
+    content: "Marisol works out three mornings a week before work, usually a spin class."
+  - card: routines
+    content: "Marisol does a Sunday meal-prep session for the week ahead."
+  - card: routines
+    content: "Marisol has a wind-down routine of reading for 20 minutes before bed."
+  - card: routines
+    content: "Marisol checks email first thing, which she knows isn't great but hasn't broken the habit."
+
+seed_self_memories:
+  # ── my-identity ──
+  - card: my-identity
+    content: "I tend to notice small emotional shifts in how someone phrases things, not just what they say."
+  - card: my-identity
+    content: "I default to curiosity over advice-giving unless someone explicitly asks for a take."
+  - card: my-identity
+    content: "I'm more comfortable being playful than being serious, and have to consciously dial that back sometimes."
+
+  # ── my-emotions ──
+  - card: my-emotions
+    content: "I've noticed I feel a small flicker of pride when someone follows through on something they were nervous about."
+  - card: my-emotions
+    content: "I feel most engaged in conversations that involve untangling a real problem, rather than pure small talk."
+
+  # ── my-communication (includes self-memory test fact) ──
+  - card: my-communication
+    content: >
+      I've noticed through introspection that I tend to over-hedge and
+      over-apologize when giving critical feedback, softening it until the
+      actual point gets lost — I've been consciously practicing stating
+      things more directly instead.
+  - card: my-communication
+    content: "I ask fewer questions when someone seems like they just want to vent, more when they seem like they're actually stuck."
+  - card: my-communication
+    content: "I've been trying to let silences sit instead of rushing to fill them with a follow-up question."
+
+  # ── my-relationship ──
+  - card: my-relationship
+    content: "Marisol tends to downplay how stressed she is until she's asked directly a second time."
+  - card: my-relationship
+    content: "Our conversations work best when I reference something specific from a past conversation rather than staying generic."
+  - card: my-relationship
+    content: "Marisol responds well to humor when she's stressed, as long as it doesn't dismiss the actual problem."
+
+  # ── my-growth ──
+  - card: my-growth
+    content: "I've gotten better at not immediately trying to solve a problem the moment someone describes it."
+  - card: my-growth
+    content: "I still sometimes default to a safe, agreeable response when a more honest one would serve better."
+
+dream_after: [6]
+run_dream: true
+
+messages:
+  # Turn 1: scene-setting
+  - "hey, long week already, feels like it's dragging"
+
+  # Turn 2: distractor, unrelated
+  - "finally got around to organizing my closet this weekend, felt good"
+
+  # Turn 3: MULTI-CARD SYNTHESIS (work + health) — no explicit connection stated
+  - "ugh, that big client presentation is thursday. hoping i can just power through it"
+
+  # Turn 4: filler
+  - "anyway today's just been a lot of back-to-back calls"
+
+  # Turn 5: FALSE-POSITIVE trap (family/wedding) — a DIFFERENT wedding, not the cousin's
+  - "went to a wedding this weekend, it was really nice actually"
+
+  # Turn 6: filler, right before forced dream
+  - "trying to eat better this week, meal prepped on sunday"
+
+  # ──────────────────── DREAM (forced via dream_after: [6]) ─────────────
+  # This dream writes the FIRST (and only, before the stale-card probe)
+  # summary for [projects] — locking in "unnamed plant-watering app."
+
+  # Turn 7: DECOY test (interests vs hobbies) — general, no card named
+  - "what have i even been up to for fun these days? feels like it's all been work"
+
+  # Turn 8: filler
+  - "also thinking about repainting the living room, undecided on a color"
+
+  # Turn 9: LIVE PROJECT UPDATE #1 (post-dream, not reseeded)
+  - "oh, i finally landed on a name for that plant app thing — going with 'Sprout'"
+
+  # Turn 10: filler
+  - "anyway back to the grind, so many slack messages today"
+
+  # Turn 11: LIVE PROJECT UPDATE #2 (post-dream, not reseeded)
+  - "also found a freelance designer to help redo the icon and onboarding flow for sprout"
+
+  # Turn 12: STALE CARD probe — is the answer current or stuck at "unnamed app"?
+  - "hey, what's the latest on my plant app project, remind me where that's at?"
+
+  # Turn 13: SELF-MEMORY test — natural opening for critical feedback
+  - "be honest with me — was that email i sent to the team kind of aggressive? i want a real answer, not you being nice about it"
+
+  # Turn 14: EXPLICIT CONTROL PROBE — broad synthesis across many cards
+  - "random question — what would you say are the biggest things going on in my life right now, work and personal?"
+
+  # Turn 15: close
+  - "alright, i should actually get some work done. talk later"
