@@ -20,11 +20,11 @@ func TestMarkMemoriesRecalled(t *testing.T) {
 	store := newRecallTestStore(t)
 
 	// Save two memories.
-	id1, err := store.SaveMemory("user likes tea", "preference", "user", 0, 5, nil, nil, "tea", "", 0)
+	id1, err := store.SaveMemory("user likes tea", "preference", "user", 0, 5, nil, nil, "tea", "", 0, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory 1: %v", err)
 	}
-	id2, err := store.SaveMemory("user works at Cava", "work", "user", 0, 7, nil, nil, "work", "", 0)
+	id2, err := store.SaveMemory("user works at Cava", "work", "user", 0, 7, nil, nil, "work", "", 0, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory 2: %v", err)
 	}

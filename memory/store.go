@@ -55,7 +55,7 @@ type Store interface {
 	LastExtractionMessageID() (int64, error)
 
 	// Memories
-	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error)
+	SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64, hook string, slug string) (int64, error)
 	UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error
 	RecentMemories(subject string, limit int) ([]Memory, error)
 	GetMemoryContent(memoryID int64) (string, error)
@@ -68,6 +68,8 @@ type Store interface {
 	AutoLinkMemory(memoryID int64, embedding []float32) error
 	SupersedeMemory(oldID, newID int64, reason string) error
 	GetMemory(memoryID int64) (*Memory, error)
+	GetMemoryBySlug(slug string) (*Memory, error)
+	ActiveSelfMemories() ([]Memory, error)
 	MemoryHistory(memoryID int64) ([]Memory, error)
 	CountMemoryLinks() (int, error)
 	AllActiveMemories() ([]Memory, error)

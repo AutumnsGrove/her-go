@@ -43,6 +43,8 @@ type Memory struct {
 	Active          bool
 	Tags            string    // comma-separated topic descriptors for semantic search
 	Context         string    // optional note explaining WHY this memory matters (max 500 chars)
+	Hook            string    // single-line, trigger-oriented retrieval hint written at save time (e.g. "call her this when a stranger uses a pet name on her") — see docs/plans/PLAN-memory-hooks-dual-recall.md
+	Slug            string    // human-readable secondary identifier resolving to this row (e.g. "donette-bit"); id stays the canonical key
 	Embedding       []float32 // cached tag embedding vector (nil if not yet computed)
 	EmbeddingText   []float32 // cached text embedding vector (nil if not yet computed)
 	Distance        float64   // populated by SemanticSearch — cosine distance from query (0 = identical)
@@ -108,7 +110,11 @@ func deserializeEmbedding(data []byte) []float32 {
 // embedding is the tag-based vector (used for KNN search via vec_memories).
 // embeddingText is the raw-text vector (used for dedup and redundancy filtering).
 // Both are optional — pass nil if not yet computed.
-func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
+// hook is a single-line, trigger-oriented retrieval hint (pass "" if not yet
+// generated — old callers can leave a memory hookless until backfilled).
+// slug is a human-readable identifier derived from hook; pass "" to leave
+// the memory reachable only by id and semantic search.
+func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64, hook string, slug string) (int64, error) {
 	var srcID interface{} = sourceMessageID
 	if sourceMessageID == 0 {
 		srcID = nil
@@ -151,10 +157,20 @@ func (s *SQLiteStore) SaveMemory(content, category, subject string, sourceMessag
 		cardVal = cardID
 	}
 
+	// Normalize empty hook/slug to nil so they store as NULL, not "" — lets
+	// idx_memories_slug's partial index (WHERE slug IS NOT NULL) skip them.
+	var hookVal, slugVal interface{}
+	if hook != "" {
+		hookVal = hook
+	}
+	if slug != "" {
+		slugVal = slug
+	}
+
 	result, err := s.db.Exec(
-		`INSERT INTO memories (memory, category, subject, source_message_id, importance, embedding, embedding_text, tags, context, card_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		content, category, subject, srcID, importance, embBlob, embTextBlob, tags, ctxVal, cardVal,
+		`INSERT INTO memories (memory, category, subject, source_message_id, importance, embedding, embedding_text, tags, context, card_id, hook, slug)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		content, category, subject, srcID, importance, embBlob, embTextBlob, tags, ctxVal, cardVal, hookVal, slugVal,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("saving memory: %w", err)
@@ -534,28 +550,48 @@ func (s *SQLiteStore) SupersedeMemory(oldID, newID int64, reason string) error {
 
 // GetMemory returns a single memory by ID, including inactive (superseded) ones.
 // Returns nil and no error if the memory doesn't exist. Used by update_memory
-// to read the old memory's metadata before creating a supersession chain.
+// to read the old memory's metadata before creating a supersession chain, and
+// by recall_memories' id-lookup mode (the primary, cheap path — no embedding
+// call — see docs/plans/PLAN-memory-hooks-dual-recall.md).
 func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
+	return s.getMemoryByColumn("id", memoryID)
+}
+
+// GetMemoryBySlug returns a single active memory by its human-readable slug
+// (e.g. "donette-bit"). Returns nil and no error if no memory has that slug —
+// callers should fall back to id or semantic search, not treat this as fatal.
+func (s *SQLiteStore) GetMemoryBySlug(slug string) (*Memory, error) {
+	return s.getMemoryByColumn("slug", slug)
+}
+
+// getMemoryByColumn is the shared implementation behind GetMemory and
+// GetMemoryBySlug — column is trusted (only ever "id" or "slug" from within
+// this file), so it's safe to interpolate into the query string.
+func (s *SQLiteStore) getMemoryByColumn(column string, value interface{}) (*Memory, error) {
 	var m Memory
 	var ts string
 	var active bool
 	var supersededBy sql.NullInt64
 	var supersedeReason sql.NullString
 	var context sql.NullString
+	var hook sql.NullString
+	var slug sql.NullString
 	var lastRecalled sql.NullString
 	err := s.db.QueryRow(
-		`SELECT id, timestamp, memory, category, subject, importance, tags, active,
-		        superseded_by, supersede_reason, COALESCE(context, ''),
-		        COALESCE(recall_count, 0), last_recalled_at
-		 FROM memories WHERE id = ?`, memoryID,
+		fmt.Sprintf(
+			`SELECT id, timestamp, memory, category, subject, importance, tags, active,
+			        superseded_by, supersede_reason, COALESCE(context, ''),
+			        COALESCE(recall_count, 0), last_recalled_at, hook, slug
+			 FROM memories WHERE %s = ?`, column,
+		), value,
 	).Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject, &m.Importance,
 		&m.Tags, &active, &supersededBy, &supersedeReason, &context,
-		&m.RecallCount, &lastRecalled)
+		&m.RecallCount, &lastRecalled, &hook, &slug)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("getting memory %d: %w", memoryID, err)
+		return nil, fmt.Errorf("getting memory by %s=%v: %w", column, value, err)
 	}
 	m.Timestamp = parseTimestamp(ts)
 	m.Active = active
@@ -571,7 +607,47 @@ func (s *SQLiteStore) GetMemory(memoryID int64) (*Memory, error) {
 	if context.Valid {
 		m.Context = context.String
 	}
+	if hook.Valid {
+		m.Hook = hook.String
+	}
+	if slug.Valid {
+		m.Slug = slug.String
+	}
 	return &m, nil
+}
+
+// ActiveSelfMemories returns every active subject="self" memory, ordered by
+// recency. Used by the always-visible self-memory index layer — unlike user
+// memories, the self-memory set is small and actively curated by the dream
+// cycle (merge/expire), so showing all of it every turn is cheap.
+func (s *SQLiteStore) ActiveSelfMemories() ([]Memory, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, memory, category, importance, COALESCE(hook, ''), COALESCE(slug, '')
+		 FROM memories
+		 WHERE active = 1 AND subject = 'self'
+		 ORDER BY timestamp DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying active self memories: %w", err)
+	}
+	defer rows.Close()
+
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		var ts string
+		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Importance, &m.Hook, &m.Slug); err != nil {
+			return nil, fmt.Errorf("scanning self memory row: %w", err)
+		}
+		m.Timestamp = parseTimestamp(ts)
+		m.Active = true
+		m.Subject = "self"
+		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
+	return memories, nil
 }
 
 // MemoryHistory returns the full supersession chain containing a memory —

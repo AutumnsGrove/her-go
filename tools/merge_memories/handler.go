@@ -126,6 +126,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	newID, err := ctx.Store.SaveMemory(
 		args.MergedText, args.Category, subject, 0, 5,
 		vec, vec, args.Tags, "", 0,
+		"", "", // hook/slug: Phase 2
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving merged memory: %v", err)

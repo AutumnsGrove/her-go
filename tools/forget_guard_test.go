@@ -34,7 +34,7 @@ func TestCanForget(t *testing.T) {
 	if err != nil || protectedCard == nil {
 		t.Fatalf("GetCard identity: %v", err)
 	}
-	protectedID, err := store.SaveMemory("user name is Autumn", "identity", "user", 0, 10, nil, nil, "name", "", protectedCard.ID)
+	protectedID, err := store.SaveMemory("user name is Autumn", "identity", "user", 0, 10, nil, nil, "name", "", protectedCard.ID, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory protected: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestCanForget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCard organic: %v", err)
 	}
-	eligibleID, err := store.SaveMemory("had coffee on march 1", "event", "user", 0, 2, nil, nil, "coffee", "", organicCard.ID)
+	eligibleID, err := store.SaveMemory("had coffee on march 1", "event", "user", 0, 2, nil, nil, "coffee", "", organicCard.ID, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory eligible: %v", err)
 	}
@@ -52,14 +52,14 @@ func TestCanForget(t *testing.T) {
 	store.DB().Exec("UPDATE memories SET timestamp = datetime('now', '-90 days') WHERE id = ?", eligibleID)
 
 	// Save a high-importance memory in an unprotected card.
-	highImpID, err := store.SaveMemory("user's primary job", "work", "user", 0, 8, nil, nil, "work", "", organicCard.ID)
+	highImpID, err := store.SaveMemory("user's primary job", "work", "user", 0, 8, nil, nil, "work", "", organicCard.ID, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory high-imp: %v", err)
 	}
 	store.DB().Exec("UPDATE memories SET timestamp = datetime('now', '-90 days') WHERE id = ?", highImpID)
 
 	// Save a recent memory (low importance, unprotected, but too new).
-	recentID, err := store.SaveMemory("mentioned weather today", "event", "user", 0, 1, nil, nil, "weather", "", organicCard.ID)
+	recentID, err := store.SaveMemory("mentioned weather today", "event", "user", 0, 1, nil, nil, "weather", "", organicCard.ID, "", "")
 	if err != nil {
 		t.Fatalf("SaveMemory recent: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestCanForget_RecalledRecently(t *testing.T) {
 	}
 
 	card, _ := store.CreateCard("temp", "Temp", "user", 0)
-	id, _ := store.SaveMemory("old stale note", "event", "user", 0, 2, nil, nil, "note", "", card.ID)
+	id, _ := store.SaveMemory("old stale note", "event", "user", 0, 2, nil, nil, "note", "", card.ID, "", "")
 	// Backdate the memory to 90 days ago.
 	store.DB().Exec("UPDATE memories SET timestamp = datetime('now', '-90 days') WHERE id = ?", id)
 	// But mark it as recalled recently.
@@ -150,8 +150,8 @@ func TestCanForget_SupersessionChain(t *testing.T) {
 	}
 
 	card, _ := store.CreateCard("temp", "Temp", "user", 0)
-	oldID, _ := store.SaveMemory("works at Panera", "work", "user", 0, 2, nil, nil, "work", "", card.ID)
-	newID, _ := store.SaveMemory("works at Cava", "work", "user", 0, 2, nil, nil, "work", "", card.ID)
+	oldID, _ := store.SaveMemory("works at Panera", "work", "user", 0, 2, nil, nil, "work", "", card.ID, "", "")
+	newID, _ := store.SaveMemory("works at Cava", "work", "user", 0, 2, nil, nil, "work", "", card.ID, "", "")
 	store.SupersedeMemory(oldID, newID, "job changed")
 
 	// Backdate both.

@@ -1419,7 +1419,7 @@ func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config
 				}
 			}
 			cardID := resolveCardID(m.Card)
-			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID)
+			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
 			if err != nil {
 				log.Errorf("sim: seed memory failed: %v", err)
 				continue
@@ -1445,7 +1445,7 @@ func seedSimDB(store memory.Store, embedClient *embed.Client, cfg *config.Config
 				}
 			}
 			cardID := resolveCardID(m.Card)
-			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID)
+			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
 			if err != nil {
 				log.Errorf("sim: seed self memory failed: %v", err)
 				continue

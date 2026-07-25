@@ -1238,7 +1238,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				}
 			}
 			cardID := resolveCardID(m.Card)
-			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID)
+			id, err := store.SaveMemory(m.Content, "", "user", 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
 			if err != nil {
 				log.Error("seed memory failed", "err", err)
 				continue
@@ -1269,7 +1269,7 @@ func runSim(cmd *cobra.Command, args []string) error {
 				}
 			}
 			cardID := resolveCardID(m.Card)
-			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID)
+			id, err := store.SaveMemory(m.Content, "", "self", 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
 			if err != nil {
 				log.Error("seed self memory failed", "err", err)
 				continue

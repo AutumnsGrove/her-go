@@ -57,7 +57,7 @@ func (s stubStore) ConversationCountSince(since time.Time) (int, error) { return
 func (s stubStore) LatestConversationID(prefix string) string { return "" }
 
 func (s stubStore) LastExtractionMessageID() (int64, error) { return 0, nil }
-func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64) (int64, error) {
+func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID int64, importance int, embedding []float32, embeddingText []float32, tags string, context string, cardID int64, hook string, slug string) (int64, error) {
 	return 0, nil
 }
 func (s stubStore) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {
@@ -77,6 +77,8 @@ func (s stubStore) LinkedMemories(memoryID int64, limit int) ([]memory.Memory, e
 func (s stubStore) AutoLinkMemory(memoryID int64, embedding []float32) error { return nil }
 func (s stubStore) SupersedeMemory(oldID, newID int64, reason string) error  { return nil }
 func (s stubStore) GetMemory(memoryID int64) (*memory.Memory, error)         { return nil, nil }
+func (s stubStore) GetMemoryBySlug(slug string) (*memory.Memory, error)      { return nil, nil }
+func (s stubStore) ActiveSelfMemories() ([]memory.Memory, error)             { return nil, nil }
 func (s stubStore) MemoryHistory(memoryID int64) ([]memory.Memory, error)    { return nil, nil }
 func (s stubStore) CountMemoryLinks() (int, error)                           { return 0, nil }
 func (s stubStore) AllActiveMemories() ([]memory.Memory, error)              { return nil, nil }

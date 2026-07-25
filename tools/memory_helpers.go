@@ -104,7 +104,8 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		importance = 5
 	}
 
-	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, importance, newVec, textVec, args.Tags, args.Context, cardID)
+	// hook/slug wired up in feat/memory-hooks Phase 2 (save_memory tool.yaml)
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, importance, newVec, textVec, args.Tags, args.Context, cardID, "", "")
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
@@ -149,7 +150,7 @@ func ExecSplitMemories(splits []string, category, subject string, cardID int64, 
 			}
 		}
 
-		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", cardID)
+		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
 		if err != nil {
 			memoryLog.Error("split memory: save failed", "err", err)
 			continue

@@ -102,6 +102,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		args.Memory, args.Category, oldMemory.Subject,
 		oldMemory.SourceMessageID, 5,
 		tagVec, textVec, args.Tags, args.Context, 0,
+		"", "", // hook/slug: Phase 2
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving updated memory: %v", err)

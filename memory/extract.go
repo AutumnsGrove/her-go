@@ -114,7 +114,7 @@ func ExtractMemories(store Store, llmClient *llm.Client, conversationID string, 
 	// so we know where extraction left off.
 	lastMsgID := messages[len(messages)-1].ID
 	for _, m := range extraction.Facts {
-		_, err := store.SaveMemory(m.Fact, m.Category, "user", lastMsgID, 5, nil, nil, "", "", 0)
+		_, err := store.SaveMemory(m.Fact, m.Category, "user", lastMsgID, 5, nil, nil, "", "", 0, "", "") // hook/slug: Phase 2
 		if err != nil {
 			log.Error("saving extracted memory", "err", err)
 			continue
