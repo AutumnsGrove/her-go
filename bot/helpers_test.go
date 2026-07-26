@@ -80,6 +80,8 @@ func (s stubStore) GetMemory(memoryID int64) (*memory.Memory, error)         { r
 func (s stubStore) GetMemoryBySlug(slug string) (*memory.Memory, error)      { return nil, nil }
 func (s stubStore) ActiveSelfMemories() ([]memory.Memory, error)             { return nil, nil }
 func (s stubStore) UniqueSlug(base string) (string, error)                  { return base, nil }
+func (s stubStore) SetMemoryHook(memoryID int64, hook, slug string) error   { return nil }
+func (s stubStore) MemoriesWithoutHooks() ([]memory.Memory, error)          { return nil, nil }
 func (s stubStore) MemoryHistory(memoryID int64) ([]memory.Memory, error)    { return nil, nil }
 func (s stubStore) CountMemoryLinks() (int, error)                           { return 0, nil }
 func (s stubStore) AllActiveMemories() ([]memory.Memory, error)              { return nil, nil }

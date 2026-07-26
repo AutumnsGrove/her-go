@@ -71,6 +71,8 @@ type Store interface {
 	GetMemoryBySlug(slug string) (*Memory, error)
 	ActiveSelfMemories() ([]Memory, error)
 	UniqueSlug(base string) (string, error)
+	SetMemoryHook(memoryID int64, hook, slug string) error
+	MemoriesWithoutHooks() ([]Memory, error)
 	MemoryHistory(memoryID int64) ([]Memory, error)
 	CountMemoryLinks() (int, error)
 	AllActiveMemories() ([]Memory, error)

@@ -79,8 +79,12 @@ parameters:
         hook = "migraine trigger — watch for this before long or
         fluorescent-lit meetings"
 
-        The label becomes a slug automatically, so keep it short (2-5 words)
-        and avoid punctuation beyond spaces.
+        The label becomes a slug automatically, so keep it short (2-5 words),
+        sentence case (capitalize only the first word and proper nouns), and
+        avoid punctuation beyond spaces. Make it SPECIFIC enough to
+        distinguish this memory from others on a similar topic — a generic
+        label like "steady space" or "coping mechanism" could describe a
+        dozen different memories and defeats the point of a scannable index.
   required:
     - card_slug
     - memory

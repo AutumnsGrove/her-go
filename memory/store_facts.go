@@ -325,6 +325,47 @@ func (s *SQLiteStore) UpdateMemoryTags(memoryID int64, tags string) error {
 	return err
 }
 
+// SetMemoryHook sets a memory's hook and slug in place — no new row, no
+// supersession chain, since the memory's content isn't changing. Used by the
+// one-off backfill command (cmd/backfill_hooks.go) to retroactively hook
+// memories that were saved before feat/memory-hooks.
+func (s *SQLiteStore) SetMemoryHook(memoryID int64, hook, slug string) error {
+	_, err := s.db.Exec(`UPDATE memories SET hook = ?, slug = ? WHERE id = ?`, hook, slug, memoryID)
+	return err
+}
+
+// MemoriesWithoutHooks returns every active memory that has no hook yet —
+// the backfill target list. Ordered oldest-first so the backfill command's
+// progress output reads chronologically.
+func (s *SQLiteStore) MemoriesWithoutHooks() ([]Memory, error) {
+	rows, err := s.db.Query(
+		`SELECT id, timestamp, memory, category, COALESCE(subject, 'user')
+		 FROM memories
+		 WHERE active = 1 AND (hook IS NULL OR hook = '')
+		 ORDER BY timestamp ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying memories without hooks: %w", err)
+	}
+	defer rows.Close()
+
+	var memories []Memory
+	for rows.Next() {
+		var m Memory
+		var ts string
+		if err := rows.Scan(&m.ID, &ts, &m.Content, &m.Category, &m.Subject); err != nil {
+			return nil, fmt.Errorf("scanning memory row: %w", err)
+		}
+		m.Timestamp = parseTimestamp(ts)
+		m.Active = true
+		memories = append(memories, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
+	return memories, nil
+}
+
 // MarkMemoriesRecalled bumps the usage signal for memories that were just
 // pulled into the chat prompt — either via the reply tool's memory_ids or
 // via auto-injection from the memory layers. This is the write side of the
