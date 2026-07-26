@@ -23,17 +23,28 @@ func init() {
 	tools.Register("recall_memories", Handle)
 }
 
-// Handle embeds the query and searches the memories vector index for matches.
-// Returns memories sorted by similarity with distance scores so the agent can
-// judge relevance. Cosine distance 0 = identical, 1 = orthogonal.
+// Handle is dual-mode: LOOKUP (id/slug — a direct, deterministic DB fetch,
+// no embedding call) or SEARCH (query — semantic KNN, the fallback for when
+// the agent doesn't already know which memory it wants). See
+// docs/plans/PLAN-memory-hooks-dual-recall.md.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
+		ID       int64  `json:"id"`
+		Slug     string `json:"slug"`
 		Query    string `json:"query"`
 		CardSlug string `json:"card_slug"`
 		Limit    int    `json:"limit"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	if args.ID != 0 || args.Slug != "" {
+		return handleLookup(args.ID, args.Slug, ctx)
+	}
+
+	if args.Query == "" {
+		return "error: provide either id, slug, or query"
 	}
 
 	if ctx.EmbedClient == nil {
@@ -124,6 +135,47 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 
 	log.Infof("  recall_memories: %d results for %q (user=%d, self=%d)",
 		len(memories), args.Query, len(userMems), len(selfMems))
+	return b.String()
+}
+
+// handleLookup fetches a single memory by id or slug — a direct DB read, no
+// embedding call, no ranking. This is the primary path once a card/self
+// index hook has already told the caller which memory it wants; SEARCH mode
+// in Handle is the fallback for when it hasn't.
+func handleLookup(id int64, slug string, ctx *tools.Context) string {
+	var m *memory.Memory
+	var err error
+	var by string
+	if id != 0 {
+		m, err = ctx.Store.GetMemory(id)
+		by = fmt.Sprintf("id=%d", id)
+	} else {
+		m, err = ctx.Store.GetMemoryBySlug(slug)
+		by = fmt.Sprintf("slug=%q", slug)
+	}
+	if err != nil {
+		return fmt.Sprintf("error looking up memory (%s): %v", by, err)
+	}
+	if m == nil || !m.Active {
+		return fmt.Sprintf("no active memory found for %s — try recall_memories(query=...) instead", by)
+	}
+	// SelfOnly guard — the introspection agent should only read self-memories.
+	// Same rule update_memory enforces for writes.
+	if ctx.SelfOnly && m.Subject != "self" {
+		return fmt.Sprintf("rejected: memory (%s) is a %s memory, not a self-memory", by, m.Subject)
+	}
+
+	heading := "About the user"
+	if m.Subject == "self" {
+		heading = "About myself"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## %s\n- [ID=%d, %s] %s\n", heading, m.ID, m.Category, m.Content)
+	if m.Hook != "" {
+		fmt.Fprintf(&b, "  (hook: %s)\n", m.Hook)
+	}
+
+	log.Infof("  recall_memories: lookup %s → ID=%d", by, m.ID)
 	return b.String()
 }
 

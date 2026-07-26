@@ -240,3 +240,119 @@ func TestHandle_ReturnStrings_GuardMessages(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Lookup mode (id/slug) — unlike search mode, this needs no EmbedClient at
+// all, so it's fully unit-testable against a real SQLite store.
+// ---------------------------------------------------------------------------
+
+// TestHandle_LookupByID verifies the primary lookup path: given an id, the
+// handler fetches the memory directly with no embedding call.
+func TestHandle_LookupByID(t *testing.T) {
+	store := newTestStore(t, 0)
+	id, err := store.SaveMemory("Autumn has a dog named Biscuit", "identity", "user",
+		0, 5, nil, nil, "", "", 0, "has a dog named Biscuit", "dog-biscuit")
+	if err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+
+	ctx := &tools.Context{Store: store} // no EmbedClient — lookup mode shouldn't need it
+	result := Handle(fmt.Sprintf(`{"id": %d}`, id), ctx)
+
+	if !strings.Contains(result, "Biscuit") {
+		t.Errorf("result = %q, want it to contain the memory content", result)
+	}
+	if !strings.Contains(result, "About the user") {
+		t.Errorf("result = %q, want the user-subject heading", result)
+	}
+	if !strings.Contains(result, "hook:") {
+		t.Errorf("result = %q, want the hook shown", result)
+	}
+}
+
+// TestHandle_LookupBySlug mirrors TestHandle_LookupByID but via slug instead
+// of id — the two are meant to be interchangeable lookup keys.
+func TestHandle_LookupBySlug(t *testing.T) {
+	store := newTestStore(t, 0)
+	_, err := store.SaveMemory("Mira tends to over-hedge critical feedback", "pattern", "self",
+		0, 5, nil, nil, "", "", 0, "say it straight when asked for honesty", "over-hedges-feedback")
+	if err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+
+	ctx := &tools.Context{Store: store}
+	result := Handle(`{"slug": "over-hedges-feedback"}`, ctx)
+
+	if !strings.Contains(result, "over-hedge") {
+		t.Errorf("result = %q, want it to contain the memory content", result)
+	}
+	if !strings.Contains(result, "About myself") {
+		t.Errorf("result = %q, want the self-subject heading", result)
+	}
+}
+
+// TestHandle_LookupNotFound verifies a missing id/slug returns a clear error
+// pointing at the search fallback, not a crash or an empty success.
+func TestHandle_LookupNotFound(t *testing.T) {
+	store := newTestStore(t, 0)
+	ctx := &tools.Context{Store: store}
+
+	result := Handle(`{"id": 99999}`, ctx)
+	if !strings.Contains(result, "no active memory found") {
+		t.Errorf("result = %q, want 'no active memory found'", result)
+	}
+	if !strings.Contains(result, "recall_memories(query=") {
+		t.Errorf("result = %q, want it to point at the search fallback", result)
+	}
+}
+
+// TestHandle_LookupInactiveMemory verifies a deactivated (superseded) memory
+// is treated the same as not found — lookup should never surface stale rows.
+func TestHandle_LookupInactiveMemory(t *testing.T) {
+	store := newTestStore(t, 0)
+	id, err := store.SaveMemory("old content", "test", "user", 0, 5, nil, nil, "", "", 0, "old hook", "old-slug")
+	if err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if err := store.DeactivateMemory(id); err != nil {
+		t.Fatalf("DeactivateMemory: %v", err)
+	}
+
+	ctx := &tools.Context{Store: store}
+	result := Handle(fmt.Sprintf(`{"id": %d}`, id), ctx)
+
+	if !strings.Contains(result, "no active memory found") {
+		t.Errorf("result = %q, want 'no active memory found' for a deactivated memory", result)
+	}
+}
+
+// TestHandle_LookupSelfOnlyGuard verifies the introspection agent (SelfOnly)
+// can't read a user memory by id/slug — same rule update_memory enforces
+// for writes.
+func TestHandle_LookupSelfOnlyGuard(t *testing.T) {
+	store := newTestStore(t, 0)
+	id, err := store.SaveMemory("Autumn's favorite color is teal", "preference", "user",
+		0, 5, nil, nil, "", "", 0, "favorite color", "favorite-color")
+	if err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+
+	ctx := &tools.Context{Store: store, SelfOnly: true}
+	result := Handle(fmt.Sprintf(`{"id": %d}`, id), ctx)
+
+	if !strings.Contains(result, "rejected") {
+		t.Errorf("result = %q, want a rejection for a user memory under SelfOnly", result)
+	}
+}
+
+// TestHandle_NoModeProvided verifies that omitting id, slug, AND query
+// returns a clear error instead of silently no-op'ing.
+func TestHandle_NoModeProvided(t *testing.T) {
+	store := newTestStore(t, 0)
+	ctx := &tools.Context{Store: store}
+
+	result := Handle(`{}`, ctx)
+	if !strings.Contains(result, "provide either id, slug, or query") {
+		t.Errorf("result = %q, want the missing-mode error", result)
+	}
+}
+

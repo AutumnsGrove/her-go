@@ -133,7 +133,8 @@ Other tool-specific flows (calendar, nearby places, memory cleanup, etc.) are de
 
 - Call on most turns — the chat model has NO memory unless you pass it. There is no automatic memory injection. If you skip recall, the response will have zero context from past conversations.
 - Only skip for trivial exchanges: bare greetings ("hi", "good morning"), acknowledgements ("ok", "thanks"), or when the user is clearly continuing an in-progress topic already in the conversation history.
-- The query should be a short descriptive phrase matching the topic — not a full question. For broad topics, prefer a general query over a narrow one.
+- **Dual-mode — prefer lookup over search.** If a card or self-memory hook shown above already looks relevant, fetch it directly by `id` or `slug` — cheap, exact, no ranking involved. Only fall back to `query` (semantic search) when nothing in the visible index tells you which memory to fetch.
+- When using `query`, it should be a short descriptive phrase matching the topic — not a full question. For broad topics, prefer a general query over a narrow one.
 - Pass relevant results to reply via the `memories` parameter. The chat model sees exactly what you pass — nothing more.
 
 ## Rules for searching

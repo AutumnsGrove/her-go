@@ -1,27 +1,49 @@
 name: recall_memories
 agent: [main, memory, introspection]
 description: >-
-  Search stored memories by semantic similarity. The chat model has NO memory
-  unless you call this and pass results via reply(memories=[...]). Call on
-  most turns — skip only for bare greetings or trivial acknowledgements.
-  Optionally scope to a specific card for more precise results.
+  Fetch stored memories. The chat model has NO memory unless you call this
+  and pass results via reply(memories=[...]).
+
+  TWO MODES — prefer lookup over search:
+
+  1. LOOKUP (id or slug) — the card index / self-memory index already shown
+  to you lists hooks with their id/slug. If you saw a relevant hook, fetch it
+  directly: recall_memories(id=502) or recall_memories(slug="donette-bit").
+  This is cheap and exact — no ranking involved.
+
+  2. SEARCH (query) — only when nothing in the visible index matches what
+  you're looking for. This is a semantic/fuzzy fallback, not the default —
+  prefer lookup whenever you already have an id or slug to work with.
+
+  Call on most turns — skip only for bare greetings or trivial acknowledgements.
 hot: true
 parameters:
   type: object
   properties:
+    id:
+      type: integer
+      description: >-
+        LOOKUP MODE: fetch a specific memory by id, as seen in a card/self
+        index hook. Cheapest and most precise option — use this whenever
+        you already know which memory you want.
+    slug:
+      type: string
+      description: >-
+        LOOKUP MODE: fetch a specific memory by its slug (e.g.
+        "donette-bit"), as seen in a card/self index hook. Same as id, just
+        by name instead of number.
     query:
       type: string
       description: >-
-        What to search for in memory. Be specific — 'user's dog' works
-        better than 'pet'.
+        SEARCH MODE (fallback): what to search for in memory, when nothing
+        in the visible index already tells you which memory to fetch. Be
+        specific — 'user's dog' works better than 'pet'.
     card_slug:
       type: string
       description: >-
-        Optional: scope search to a specific card's memories only.
-        When provided, only memories under this card are searched.
-        Omit for global search across all cards.
-  required:
-    - query
+        Optional, SEARCH MODE only: scope search to a specific card's
+        memories. Omit for global search across all cards.
+  required: []
 trace:
   emoji: "🔎"
-  format: "\"{{.query | escape}}\"\n    → {{.Result | truncate 80 | escape}}"
+  format: "{{if .id}}id={{.id}}{{else if .slug}}slug={{.slug}}{{else}}\"{{.query | escape}}\"{{end}}\n    → {{.Result | truncate 80 | escape}}"
