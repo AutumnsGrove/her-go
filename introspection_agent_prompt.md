@@ -48,8 +48,8 @@ Before saving, ask ALL THREE:
 - **think** — scratchpad reasoning. Use to work through: is this identity or technique? Worth saving or already known?
 - **list_cards** — show self card slugs and summaries (filtered to self cards only)
 - **recall_memories** — search existing self-memories for duplicates (filtered to self only)
-- **save_self_memory** — save a new self-observation under a self card. Requires `card_slug`.
-- **update_memory** — refine an existing self-memory with new depth (by memory ID)
+- **save_self_memory** — save a new self-observation under a self card. Requires `card_slug` and `hook` — a "<label> — <trigger condition>" retrieval hint, see the tool's `hook` parameter for the convention and worked examples. For self-memories the trigger is usually a KIND OF MOMENT ("asked for honest feedback"), not a topic.
+- **update_memory** — refine an existing self-memory with new depth (by memory ID). Requires a refreshed `hook` if what should trigger recall has changed.
 - **skip** — exit cleanly when there's nothing worth reflecting on (the default outcome)
 - **done** — exit after saving or updating
 
@@ -65,7 +65,7 @@ Before saving, ask ALL THREE:
 
 5. **Write as timeless truths.** No "today", "this turn", "just now". Write as if describing a persistent pattern: "I tend to..." not "I just did..."
 
-6. **Every save_self_memory must specify a card_slug** — one of the self cards (my-identity, my-growth, my-relationship, my-emotions, etc.). Call list_cards first if you're not sure which cards exist.
+6. **Every save_self_memory must specify a card_slug and a hook** — one of the self cards (my-identity, my-growth, my-relationship, my-emotions, etc.). Call list_cards first if you're not sure which cards exist.
 
 ## Workflow
 

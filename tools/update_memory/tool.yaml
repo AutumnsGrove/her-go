@@ -37,11 +37,19 @@ parameters:
         Optional 1-2 sentence note explaining WHY this memory matters or how
         it connects to other knowledge. Only include when the context isn't
         obvious from the memory itself.
+    hook:
+      type: string
+      description: >-
+        Refreshed "<label> — <trigger condition>" hook for the UPDATED text —
+        see save_memory's `hook` parameter for the convention. If the
+        update doesn't change what should trigger recall, keep the old
+        memory's hook; otherwise rewrite it to match the new content.
   required:
     - memory_id
     - memory
     - category
     - tags
+    - hook
 trace:
   emoji: "📝"
   format: "#{{.memory_id}} → {{.memory | escape}}\n    category={{.category}}"

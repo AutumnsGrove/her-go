@@ -14,8 +14,23 @@ parameters:
     new_facts:
       type: array
       items:
-        type: string
-      description: "Individual facts extracted from the compound memory. Each becomes its own memory."
+        type: object
+        properties:
+          fact:
+            type: string
+            description: "A single fact extracted from the compound memory."
+          hook:
+            type: string
+            description: >-
+              Single-line retrieval hint for this fact, written as a trigger
+              condition rather than a restatement — see save_memory's `hook`
+              parameter for the convention and worked examples.
+        required:
+          - fact
+          - hook
+      description: >-
+        Individual facts extracted from the compound memory, each with its
+        own hook. Each becomes its own memory.
     reason:
       type: string
       description: "Brief reason for the split"

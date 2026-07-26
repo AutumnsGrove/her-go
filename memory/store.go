@@ -70,6 +70,7 @@ type Store interface {
 	GetMemory(memoryID int64) (*Memory, error)
 	GetMemoryBySlug(slug string) (*Memory, error)
 	ActiveSelfMemories() ([]Memory, error)
+	UniqueSlug(base string) (string, error)
 	MemoryHistory(memoryID int64) ([]Memory, error)
 	CountMemoryLinks() (int, error)
 	AllActiveMemories() ([]Memory, error)

@@ -27,9 +27,12 @@ func init() {
 // new fact through the shared split pipeline (embedding + autolink, no classifier).
 func Handle(argsJSON string, ctx *tools.Context) string {
 	var args struct {
-		MemoryID int64    `json:"memory_id"`
-		NewFacts []string `json:"new_facts"`
-		Reason   string   `json:"reason"`
+		MemoryID int64 `json:"memory_id"`
+		NewFacts []struct {
+			Fact string `json:"fact"`
+			Hook string `json:"hook"`
+		} `json:"new_facts"`
+		Reason string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -60,7 +63,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	// Save each new fact via the shared split pipeline. This handles
 	// embedding, autolink, and SavedMemories tracking — same path the
 	// classifier's SPLIT verdict uses.
-	result := tools.ExecSplitMemories(args.NewFacts, original.Category, original.Subject, 0, ctx)
+	facts := make([]tools.SplitFact, len(args.NewFacts))
+	for i, f := range args.NewFacts {
+		facts[i] = tools.SplitFact{Content: f.Fact, Hook: f.Hook}
+	}
+	result := tools.ExecSplitMemories(facts, original.Category, original.Subject, 0, ctx)
 
 	return fmt.Sprintf("split #%d (%s): %s", args.MemoryID, args.Reason, result)
 }

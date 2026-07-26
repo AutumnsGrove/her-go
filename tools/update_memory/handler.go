@@ -13,8 +13,10 @@ package update_memory
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"her/logger"
+	"her/memory"
 	"her/tools"
 	"her/tools/memgate"
 )
@@ -34,6 +36,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Category string `json:"category"`
 		Tags     string `json:"tags"`
 		Context  string `json:"context"` // optional: why this memory matters
+		Hook     string `json:"hook"`    // refreshed retrieval hook for the updated text
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -97,12 +100,23 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
+	// --- Derive slug from the (possibly refreshed) hook ---
+	hook := strings.TrimSpace(args.Hook)
+	var slug string
+	if hook != "" {
+		var slugErr error
+		slug, slugErr = ctx.Store.UniqueSlug(memory.DeriveSlug(hook))
+		if slugErr != nil {
+			log.Warnf("slug derivation failed, saving without one: %v", slugErr)
+		}
+	}
+
 	// --- Save new memory + supersede old ---
 	newID, err := ctx.Store.SaveMemory(
 		args.Memory, args.Category, oldMemory.Subject,
 		oldMemory.SourceMessageID, 5,
 		tagVec, textVec, args.Tags, args.Context, 0,
-		"", "", // hook/slug: Phase 2
+		hook, slug,
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving updated memory: %v", err)

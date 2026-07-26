@@ -18,7 +18,7 @@ Some cards are **protected** (seed cards) — they can never be deleted. You can
 - **update_card** — rewrite a card's summary based on its current children (provide slug, new summary, and delta)
 - **create_card** — create a new card if a topic needs to be split out
 - **remove_memory** — deactivate a stale or incorrect individual memory by ID
-- **merge_memories** — combine two near-duplicate memories within a card into one
+- **merge_memories** — combine two near-duplicate memories within a card into one. Requires a fresh `hook` for the merged memory — don't just concatenate the sources' old hooks, write one that fits the richer consolidated fact (see the tool's `hook` parameter for the convention)
 - **done** — signal you're finished
 
 ## What you see

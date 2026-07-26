@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"her/logger"
+	"her/memory"
 	"her/tools/memgate"
 )
 
@@ -46,6 +47,7 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		Tags       string `json:"tags"`
 		Importance int    `json:"importance"` // 1-10, defaults to 5 if omitted or out of range
 		Context    string `json:"context"`    // optional: why this memory matters
+		Hook       string `json:"hook"`       // single-line, trigger-oriented retrieval hint — see docs/plans/PLAN-memory-hooks-dual-recall.md
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -84,7 +86,11 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	})
 
 	if verdict.IsSplit && len(verdict.Splits) >= 2 {
-		return ExecSplitMemories(verdict.Splits, args.Category, subject, cardID, ctx)
+		facts := make([]SplitFact, len(verdict.Splits))
+		for i, s := range verdict.Splits {
+			facts[i] = SplitFact{Content: s} // classifier splits have no hook — naive fallback in ExecSplitMemories
+		}
+		return ExecSplitMemories(facts, args.Category, subject, cardID, ctx)
 	}
 	if !verdict.Allowed {
 		return verdict.Reason
@@ -104,8 +110,20 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 		importance = 5
 	}
 
-	// hook/slug wired up in feat/memory-hooks Phase 2 (save_memory tool.yaml)
-	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, importance, newVec, textVec, args.Tags, args.Context, cardID, "", "")
+	// Derive a slug from the hook's "label — trigger" convention and make it
+	// unique against existing memories. A hook without a label (no em-dash)
+	// still gets a reasonable slug — see memory.DeriveSlug.
+	hook := strings.TrimSpace(args.Hook)
+	var slug string
+	if hook != "" {
+		var slugErr error
+		slug, slugErr = ctx.Store.UniqueSlug(memory.DeriveSlug(hook))
+		if slugErr != nil {
+			memoryLog.Warn("slug derivation failed, saving without one", "err", slugErr)
+		}
+	}
+
+	id, err := ctx.Store.SaveMemory(args.Memory, args.Category, subject, 0, importance, newVec, textVec, args.Tags, args.Context, cardID, hook, slug)
 	if err != nil {
 		return fmt.Sprintf("error saving memory: %v", err)
 	}
@@ -120,21 +138,31 @@ func ExecSaveMemory(argsJSON, subject string, ctx *Context) string {
 	return fmt.Sprintf("saved %s ID=%d: %s", label, id, args.Memory)
 }
 
+// SplitFact pairs a sub-memory's content with its retrieval hook. Hook may
+// be empty — the classifier's SPLIT verdict doesn't produce per-fragment
+// hooks (that's a known gap; see docs/plans/PLAN-memory-hooks-dual-recall.md
+// "Future"), so a naive one gets derived from the content's first few words
+// instead of leaving the sub-memory hookless.
+type SplitFact struct {
+	Content string
+	Hook    string
+}
+
 // ExecSplitMemories saves each sub-memory produced by splitting a compound memory.
 //
 // Sub-memories skip the classifier — they're either classifier-generated (SPLIT
 // verdict) or user-requested (split_memory tool). Each gets its own embedding
 // (using the content text directly, since we don't have per-sub-memory tags)
 // and an autolink pass.
-func ExecSplitMemories(splits []string, category, subject string, cardID int64, ctx *Context) string {
+func ExecSplitMemories(splits []SplitFact, category, subject string, cardID int64, ctx *Context) string {
 	label := "user memory"
 	if subject == "self" {
 		label = "self memory"
 	}
 
 	var results []string
-	for _, content := range splits {
-		content = strings.TrimSpace(content)
+	for _, split := range splits {
+		content := strings.TrimSpace(split.Content)
 		if content == "" {
 			continue
 		}
@@ -150,7 +178,20 @@ func ExecSplitMemories(splits []string, category, subject string, cardID int64, 
 			}
 		}
 
-		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", cardID, "", "") // hook/slug: Phase 2
+		hook := strings.TrimSpace(split.Hook)
+		if hook == "" {
+			hook = naiveHookFromContent(content)
+		}
+		var slug string
+		if hook != "" {
+			var slugErr error
+			slug, slugErr = ctx.Store.UniqueSlug(memory.DeriveSlug(hook))
+			if slugErr != nil {
+				memoryLog.Warn("split memory: slug derivation failed", "err", slugErr)
+			}
+		}
+
+		id, err := ctx.Store.SaveMemory(content, category, subject, 0, 5, vec, vec, "", "", cardID, hook, slug)
 		if err != nil {
 			memoryLog.Error("split memory: save failed", "err", err)
 			continue
@@ -170,4 +211,17 @@ func ExecSplitMemories(splits []string, category, subject string, cardID int64, 
 		return "split failed: no sub-memories could be saved"
 	}
 	return fmt.Sprintf("split into %d memories:\n%s", len(results), strings.Join(results, "\n"))
+}
+
+// naiveHookFromContent derives a fallback hook from a memory's own content
+// when nothing better is available (classifier auto-splits). It's a plain
+// restatement, not trigger-oriented — worse than an agent-written hook, but
+// still gives the memory a slug and something to show in the card index,
+// rather than leaving it search-only.
+func naiveHookFromContent(content string) string {
+	words := strings.Fields(content)
+	if len(words) > 8 {
+		words = words[:8]
+	}
+	return strings.Join(words, " ")
 }

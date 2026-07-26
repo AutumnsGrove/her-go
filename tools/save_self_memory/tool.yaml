@@ -47,11 +47,27 @@ parameters:
       description: >-
         Optional 1-2 sentence note explaining WHY this self-memory matters or
         how it connects to other knowledge.
+    hook:
+      type: string
+      description: >-
+        A single line, "<label> — <trigger condition>", that helps a future
+        turn recognize when this self-observation should shape behavior. See
+        save_memory's `hook` parameter for the full convention. For self
+        memories the trigger is usually a KIND OF MOMENT, not a topic —
+        lean into that.
+
+        Example: memory = "I've noticed through introspection that I tend
+        to over-hedge and over-apologize when giving critical feedback,
+        softening it until the actual point gets lost — I've been
+        consciously practicing stating things more directly instead."
+        hook = "over-hedges feedback — say it straight when asked for
+        honesty"
   required:
     - card_slug
     - memory
     - category
     - tags
+    - hook
 trace:
   emoji: "🪞"
   format: "[{{.card_slug}}] {{.memory | escape}}\n    category={{.category}}"

@@ -100,9 +100,9 @@ func TestHandle_HappyPath(t *testing.T) {
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
 		"new_facts": [
-			"Autumn lives in Portland",
-			"Autumn works at Acme",
-			"Autumn has a dog named Biscuit"
+			{"fact": "Autumn lives in Portland", "hook": "lives in Portland"},
+			{"fact": "Autumn works at Acme", "hook": "works at Acme"},
+			{"fact": "Autumn has a dog named Biscuit", "hook": "has a dog named Biscuit"}
 		],
 		"reason": "compound memory"
 	}`, origID)
@@ -142,7 +142,10 @@ func TestHandle_OriginalDeactivated(t *testing.T) {
 
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
-		"new_facts": ["Autumn drinks coffee", "Autumn listens to jazz"],
+		"new_facts": [
+			{"fact": "Autumn drinks coffee", "hook": "drinks coffee"},
+			{"fact": "Autumn listens to jazz", "hook": "listens to jazz"}
+		],
 		"reason": "separate preferences"
 	}`, origID)
 
@@ -186,8 +189,8 @@ func TestHandle_InheritsMetadata(t *testing.T) {
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
 		"new_facts": [
-			"I feel most present when Autumn shares something vulnerable",
-			"I feel engaged when Autumn problem-solves out loud"
+			{"fact": "I feel most present when Autumn shares something vulnerable", "hook": "feels present during vulnerability"},
+			{"fact": "I feel engaged when Autumn problem-solves out loud", "hook": "feels engaged during problem-solving"}
 		],
 		"reason": "two distinct observations"
 	}`, origID)
@@ -229,7 +232,7 @@ func TestHandle_TooFewFacts(t *testing.T) {
 	origID := saveMemory(t, store, "Autumn likes sushi", "preference", "user")
 	before := activeMemoryCount(t, store)
 
-	argsJSON := fmt.Sprintf(`{"memory_id":%d,"new_facts":["Autumn likes sushi"],"reason":"only one"}`, origID)
+	argsJSON := fmt.Sprintf(`{"memory_id":%d,"new_facts":[{"fact":"Autumn likes sushi","hook":"likes sushi"}],"reason":"only one"}`, origID)
 	result := Handle(argsJSON, ctx)
 
 	if !strings.Contains(result, "need at least 2 new_facts") {
@@ -276,7 +279,7 @@ func TestHandle_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	ctx := &tools.Context{Store: store}
 
-	result := Handle(`{"memory_id":99999,"new_facts":["fact one","fact two"],"reason":"test"}`, ctx)
+	result := Handle(`{"memory_id":99999,"new_facts":[{"fact":"fact one","hook":"h1"},{"fact":"fact two","hook":"h2"}],"reason":"test"}`, ctx)
 
 	if !strings.Contains(result, "not found") {
 		t.Errorf("Handle result = %q, want 'not found'", result)
@@ -318,7 +321,11 @@ func TestHandle_EmptyStringsSkipped(t *testing.T) {
 	// structural minimum but is dropped by ExecSplitMemories before saving.
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
-		"new_facts": ["Autumn codes Go", "", "Autumn goes hiking"],
+		"new_facts": [
+			{"fact": "Autumn codes Go", "hook": "codes Go"},
+			{"fact": "", "hook": ""},
+			{"fact": "Autumn goes hiking", "hook": "goes hiking"}
+		],
 		"reason": "separate activities"
 	}`, origID)
 
@@ -350,7 +357,10 @@ func TestHandle_SavedMemoriesTracked(t *testing.T) {
 
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
-		"new_facts": ["Autumn reads sci-fi", "Autumn plays piano"],
+		"new_facts": [
+			{"fact": "Autumn reads sci-fi", "hook": "reads sci-fi"},
+			{"fact": "Autumn plays piano", "hook": "plays piano"}
+		],
 		"reason": "separate hobbies"
 	}`, origID)
 
@@ -393,7 +403,10 @@ func TestHandle_NilEmbedClient(t *testing.T) {
 
 	argsJSON := fmt.Sprintf(`{
 		"memory_id": %d,
-		"new_facts": ["Autumn codes Go", "Autumn drinks tea"],
+		"new_facts": [
+			{"fact": "Autumn codes Go", "hook": "codes Go"},
+			{"fact": "Autumn drinks tea", "hook": "drinks tea"}
+		],
 		"reason": "separate habits"
 	}`, origID)
 

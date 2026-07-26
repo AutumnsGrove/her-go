@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"her/logger"
+	"her/memory"
 	"her/tools"
 	"her/tools/memgate"
 )
@@ -34,6 +35,7 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		Category   string  `json:"category"`
 		Tags       string  `json:"tags"`
 		Reason     string  `json:"reason"`
+		Hook       string  `json:"hook"` // fresh retrieval hook for the consolidated memory
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf("error parsing arguments: %v", err)
@@ -122,11 +124,22 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
+	// --- Derive slug from the merged memory's hook ---
+	hook := strings.TrimSpace(args.Hook)
+	var slug string
+	if hook != "" {
+		var slugErr error
+		slug, slugErr = ctx.Store.UniqueSlug(memory.DeriveSlug(hook))
+		if slugErr != nil {
+			log.Warn("merge_memories: slug derivation failed", "err", slugErr)
+		}
+	}
+
 	// --- Save the consolidated memory ---
 	newID, err := ctx.Store.SaveMemory(
 		args.MergedText, args.Category, subject, 0, 5,
 		vec, vec, args.Tags, "", 0,
-		"", "", // hook/slug: Phase 2
+		hook, slug,
 	)
 	if err != nil {
 		return fmt.Sprintf("error saving merged memory: %v", err)

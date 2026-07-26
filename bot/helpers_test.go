@@ -79,6 +79,7 @@ func (s stubStore) SupersedeMemory(oldID, newID int64, reason string) error  { r
 func (s stubStore) GetMemory(memoryID int64) (*memory.Memory, error)         { return nil, nil }
 func (s stubStore) GetMemoryBySlug(slug string) (*memory.Memory, error)      { return nil, nil }
 func (s stubStore) ActiveSelfMemories() ([]memory.Memory, error)             { return nil, nil }
+func (s stubStore) UniqueSlug(base string) (string, error)                  { return base, nil }
 func (s stubStore) MemoryHistory(memoryID int64) ([]memory.Memory, error)    { return nil, nil }
 func (s stubStore) CountMemoryLinks() (int, error)                           { return 0, nil }
 func (s stubStore) AllActiveMemories() ([]memory.Memory, error)              { return nil, nil }

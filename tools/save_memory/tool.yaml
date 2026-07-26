@@ -56,11 +56,37 @@ parameters:
         it connects to other knowledge. Only include when the context isn't
         obvious from the memory itself. Example: 'Primary project language —
         she knows Python/TS but is new to Go. Teaching mode matters.'
+    hook:
+      type: string
+      description: >-
+        A single line that helps a future turn recognize this memory is
+        relevant — written as a SHORT LABEL, then an em-dash, then the
+        TRIGGER CONDITION for when it matters. Not a restatement of the
+        memory — the memory field already has the fact. The hook's job is
+        "when would I need this," not "what is this."
+
+        Format: "<label> — <trigger condition>"
+
+        Example 1: memory = "{{user}} told {{her}} about an inside joke:
+        if a stranger ever calls her 'babe' or 'sweetheart' while she's out,
+        she wants {{her}} to jokingly call her 'Donette' for the rest of the
+        night, like she's a mob boss's wife."
+        hook = "Donette bit — call her this when a stranger uses a pet name
+        on her in public"
+
+        Example 2: memory = "{{user}} gets migraines specifically triggered
+        by fluorescent lighting combined with long stretches in meetings."
+        hook = "migraine trigger — watch for this before long or
+        fluorescent-lit meetings"
+
+        The label becomes a slug automatically, so keep it short (2-5 words)
+        and avoid punctuation beyond spaces.
   required:
     - card_slug
     - memory
     - category
     - tags
+    - hook
 trace:
   emoji: "💾"
   format: "[{{.card_slug}}] {{.memory | escape}}\n    category={{.category}}"
