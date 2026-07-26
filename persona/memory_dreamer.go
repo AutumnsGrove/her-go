@@ -324,7 +324,11 @@ func writeCardEntry(b *strings.Builder, c memory.MemoryCard, children []memory.M
 		return
 	}
 	for _, m := range children {
-		fmt.Fprintf(b, "- [#%d] %s\n", m.ID, m.Content)
+		hook := m.Hook
+		if hook == "" {
+			hook = "(no hook yet)"
+		}
+		fmt.Fprintf(b, "- [#%d] %s\n  hook: %s\n", m.ID, m.Content, hook)
 	}
 	b.WriteString("\n")
 }

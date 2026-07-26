@@ -62,7 +62,11 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 	} else {
 		fmt.Fprintf(&b, "\n%d memories:\n", len(memories))
 		for _, m := range memories {
-			fmt.Fprintf(&b, "- [#%d] %s\n", m.ID, m.Content)
+			hook := m.Hook
+			if hook == "" {
+				hook = "(no hook yet)"
+			}
+			fmt.Fprintf(&b, "- [#%d] %s\n  hook: %s\n", m.ID, m.Content, hook)
 		}
 	}
 

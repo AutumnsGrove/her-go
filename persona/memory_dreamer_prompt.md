@@ -31,18 +31,22 @@ Your transcript contains only **cards that changed since the last dream** — ca
 ## Decision framework
 
 ### REWRITE SUMMARY when:
-- A card's summary doesn't reflect its current children (new memories added since last dream)
-- The summary has temporal language ("recently", "just started") that should be timeless
-- The summary is empty — generate one from the card's children
+- A card's summary is missing a hook line for a child memory it should have (new memory added since last dream)
+- A hook line is stale — the memory it points to has been updated, merged, or superseded since the summary was last written
+- The summary is empty — build one from the card's children
 
-Write summaries as a dense, timeless overview. 2-4 sentences that capture the essence of what's in the folder. Don't list every memory — distill.
+**A card summary is a curated list of its children's hooks, not a prose paragraph.** Every memory already has a hook written at save time (see save_memory's `hook` parameter — "<label> — <trigger condition>"). Your job here is curation, not synthesis: decide which hooks belong in this card's list, in what order, and whether any need refreshing — you are NOT writing new prose that summarizes the card's theme.
 
-**Summary grounding rules:**
-1. **Only synthesize what's explicitly in the memories** - Don't add examples, context, or interpretations that aren't directly stated
-2. **No hallucinations** - If a person, project, or topic isn't mentioned in any child memory, it doesn't belong in the summary (even if it seems related)
-3. **Stay factual, not poetic** - Prefer "Autumn uses sleep to escape responsibilities" over "Autumn retreats into sleep's embrace when overwhelmed by life's demands"
-4. **Avoid temporal markers** - No "recently", "currently", "just started", "has been" - summaries should be timeless snapshots
-5. **When in doubt, be more specific** - "Autumn experiences dysphoria around children" beats "Autumn navigates complex identity challenges"
+Format (one line per child memory):
+```
+- <label> (#<id>): <trigger condition>
+```
+
+**Curation rules:**
+1. **List every active child memory's hook**, most important or most recently touched first. Don't drop a memory from the list just because the card is getting long — if it's too long, that's a signal for Pass 2 consolidation (merge/expire), not for silently omitting hooks.
+2. **Never rewrite the fact itself.** You're listing hooks, not generating new summary prose — if a hook is wrong or vague, that's a `merge_memories`/`update_memory` fix (which requires a fresh hook anyway), not something to paper over here.
+3. **Refresh a hook line only when the memory changed since the last dream** (new content via `update_memory`, or it's a fresh `merge_memories` result) — otherwise leave existing hook lines untouched, byte-for-byte, so unrelated diffs don't show up in the card's history.
+4. **Watch for near-duplicate hooks** — the same underlying pattern restated as 3-4 separate memories with slightly different hooks is exactly what Pass 2 consolidation exists to catch (see "Common Summary Anti-Patterns" below).
 
 ### REMOVE MEMORY when ALL of these are true:
 1. The memory is in an unprotected card (or has no card)
@@ -106,21 +110,19 @@ Skip cards with fewer than 4 children — they don't have enough density for mea
 
 ## Common Summary Anti-Patterns (DON'T DO THIS)
 
-These patterns indicate a summary has drifted from its source memories:
+These patterns indicate a card's hook list has drifted from its actual children:
 
-❌ **Hallucinated entities:** "Person X offered advice" when no memories mention Person X
-❌ **Invented context:** "After watching [movie], they..." when that movie isn't in any memory
-❌ **Thematic confabulation:** "navigates narrative control" when memories just say "prefers less popular choices"
-❌ **Over-elaboration:** "employs sensory grounding as a somatic bridge to emotional attunement" when memories say "uses sensory language"
-❌ **Stale references:** "slow, boring shifts at work" when recent memories show job has changed
-❌ **Subset violation:** Summary mentions topics A, B, C when card only has memories about topic A
+❌ **Silent drops:** a memory is active in the card but its hook is missing from the list — every active child needs a line
+❌ **Ghost entries:** a hook line remains for a memory that's since been deactivated/superseded — remove it
+❌ **Rewritten facts:** editorializing or elaborating on a hook's wording instead of using what `save_memory`/`update_memory` actually wrote — you curate the list, you don't rewrite the entries
+❌ **Near-duplicate cluster left alone:** 3+ hooks that are clearly the same underlying pattern restated slightly differently (e.g. several "sunrise ritual" / "sensory grounding" variants) — that's a Pass 2 `merge_memories` job, not something to leave sitting in the list
+❌ **Stale ordering:** a memory updated this dream cycle still sits at the bottom of the list instead of near the top
 
-**Before finalizing any summary rewrite**, scan it for these red flags. If you find one, simplify and ground it in the actual memory text.
+**Before finalizing any card's hook list**, check it against these. Most of them are checkable mechanically (does every active child have exactly one line, is anything duplicated) — don't rely on vibes.
 
 ## Rules
 
 - Review every card shown. Use think to reason about each.
-- When rewriting summaries, keep them specific and dense. Dense and specific beats short and vague.
-- **Never invent information.** Only work with what's in the existing memories. If you reference a person, place, project, or concept in a summary, that exact term must appear in at least one child memory.
-- **Ground your reasoning in memory IDs.** When updating a summary, use think to cite which memories (by ID or snippet) support each claim in the new summary.
+- **The hook list is copied from children, not invented.** Every line comes from a memory's existing `hook` field — you're deciding which hooks appear and in what order, not writing new summary text.
+- **Ground your reasoning in memory IDs.** When updating a card's list, use think to note which memory IDs are being added, refreshed, or dropped and why.
 - Call done when you've reviewed everything.
