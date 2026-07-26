@@ -23,6 +23,8 @@ package layers
 import (
 	"fmt"
 	"strings"
+
+	"her/memory"
 )
 
 func init() {
@@ -38,6 +40,23 @@ func buildCardIndex(ctx *LayerContext) LayerResult {
 	cards, err := ctx.Store.AllCards()
 	if err != nil || len(cards) == 0 {
 		return LayerResult{}
+	}
+
+	return LayerResult{
+		Content: RenderCardIndex(cards),
+		Detail:  fmt.Sprintf("%d cards", len(cards)),
+	}
+}
+
+// RenderCardIndex formats the card list (slug, name, summary) the same way
+// for every consumer — the driver's always-visible layer above, and the
+// memory agent's hand-rolled transcript (agent/memory_agent.go), which
+// otherwise reimplemented this exact formatting separately. One rendering,
+// so a change here (e.g. Phase 5's hook-list summaries) reaches both without
+// the two views silently drifting apart.
+func RenderCardIndex(cards []memory.MemoryCard) string {
+	if len(cards) == 0 {
+		return ""
 	}
 
 	var b strings.Builder
@@ -73,8 +92,5 @@ func buildCardIndex(ctx *LayerContext) LayerResult {
 		b.WriteString(strings.Join(selfLines, "\n"))
 	}
 
-	return LayerResult{
-		Content: b.String(),
-		Detail:  fmt.Sprintf("%d cards", len(cards)),
-	}
+	return b.String()
 }

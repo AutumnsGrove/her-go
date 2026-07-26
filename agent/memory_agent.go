@@ -22,6 +22,7 @@ import (
 	engine "her/agent_engine"
 	"her/config"
 	"her/embed"
+	"her/layers"
 	"her/llm"
 	"her/memory"
 	"her/tools"
@@ -282,18 +283,14 @@ func buildMemoryTranscript(input MemoryAgentInput, store memory.Store) string {
 	}
 
 	// Inject the card landscape so the agent knows where to file memories
-	// without needing to call list_cards (saves a full LLM round-trip per turn).
+	// without needing to call list_cards (saves a full LLM round-trip per
+	// turn). Shared rendering with the driver's always-visible card-index
+	// layer (layers.RenderCardIndex) — one implementation, so this view
+	// can't silently drift from what the driver sees.
 	allCards, cardErr := store.AllCards()
 	if cardErr == nil && len(allCards) > 0 {
-		b.WriteString("## Card landscape\n")
-		for _, c := range allCards {
-			summary := c.Summary
-			if summary == "" {
-				summary = "(no summary yet)"
-			}
-			fmt.Fprintf(&b, "- **%s** [%s] %s\n", c.TopicSlug, c.Subject, summary)
-		}
-		b.WriteString("\nUse recall_memories with card_slug to check for duplicates before saving.\n")
+		b.WriteString(layers.RenderCardIndex(allCards))
+		b.WriteString("\n\nUse recall_memories with card_slug to check for duplicates before saving.\n")
 	}
 
 	return b.String()
