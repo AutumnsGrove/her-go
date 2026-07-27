@@ -49,8 +49,10 @@ The `her update` command:
 
 **Note:** The `update` command must exist on the remote machine first. Bootstrap it with one manual update:
 ```bash
-ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s -w\" -o her && systemctl --user restart her-go"
+ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s -w\" -o her && sudo systemctl restart her-go"
 ```
+
+`her-go.service` is a **system-level** unit (`/etc/systemd/system/her-go.service`), not a per-user one — restarting it needs `sudo systemctl restart her-go`, not `systemctl --user restart her-go`.
 
 After that, `./her update` handles all future updates.
 

@@ -108,11 +108,17 @@ func (m *SystemdManager) unitPath() string {
 	return filepath.Join("/etc/systemd/system", m.label+".service")
 }
 
-// systemctl runs a systemctl subcommand with optional arguments.
+// systemctl runs a systemctl subcommand with optional arguments, via sudo.
+// The unit file always lives in /etc/systemd/system (see unitPath) — a
+// system-level unit, not a per-user one — so every operation this helper
+// is used for (daemon-reload, enable, disable, start, stop, restart)
+// requires root. Read-only queries (IsManaged's `is-active`) don't need
+// sudo and call systemctl directly instead of going through this helper.
 func (m *SystemdManager) systemctl(args ...string) error {
-	out, err := exec.Command("systemctl", args...).CombinedOutput()
+	sudoArgs := append([]string{"systemctl"}, args...)
+	out, err := exec.Command("sudo", sudoArgs...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("systemctl %s (%s): %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("sudo systemctl %s (%s): %w", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
