@@ -35,6 +35,12 @@ func init() {
 // Handle delivers driver-authored text directly to the user. Same delivery
 // pipeline as the standard reply (Telegram send, pagination, TTS, DB save)
 // but skips the chat LLM call and layer assembly entirely.
+//
+// Handle is a thin wrapper around Deliver — it enforces the tool's config
+// gates (enabled + sim-only), parses/validates the JSON args, then hands off
+// to Deliver for the actual pipeline. Callers that already know direct
+// reply is enabled (e.g. the agent loop-exit fallback) can call Deliver
+// directly and skip re-parsing JSON.
 func Handle(argsJSON string, ctx *tools.Context) string {
 	// Gate check: direct reply must be enabled.
 	if ctx.Cfg != nil && !ctx.Cfg.Driver.DirectReply {
@@ -52,17 +58,6 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		}
 	}
 
-	// Reply count guard — same cap as the standard reply tool.
-	maxReplies := 2
-	if ctx.Cfg != nil && ctx.Cfg.Driver.MaxRepliesPerTurn > 0 {
-		maxReplies = ctx.Cfg.Driver.MaxRepliesPerTurn
-	}
-	if ctx.ReplyCount >= maxReplies {
-		return fmt.Sprintf(
-			"rejected: you already sent %d replies this turn (max %d). Call done now.",
-			ctx.ReplyCount, maxReplies)
-	}
-
 	var args struct {
 		Text      string  `json:"text"`
 		MemoryIDs []int64 `json:"memory_ids"`
@@ -75,14 +70,53 @@ func Handle(argsJSON string, ctx *tools.Context) string {
 		return "error: text cannot be empty"
 	}
 
+	return Deliver(ctx, args.Text, args.MemoryIDs)
+}
+
+// Deliver sends driver-authored text verbatim to the user, running the same
+// style/safety gates and delivery pipeline as the reply_direct tool, without
+// requiring the driver to have called reply_direct as a tool. This lets any
+// caller (the tool handler itself, or the agent's loop-exit fallback when
+// the driver returns plain text with no tool call) reuse the exact same
+// gates and plumbing instead of duplicating them.
+//
+// Deliver does NOT check the config gates (Driver.DirectReply,
+// Driver.DirectReplySimOnly) — those are Handle's responsibility. Any
+// caller invoking Deliver directly is asserting that direct-reply delivery
+// is appropriate in the current context.
+//
+// Design note: this is the "extract capability so a second caller can reuse
+// it" pattern the project's CLAUDE.md calls out under Standardized Function
+// Boundaries — reply_direct owns verbatim delivery, so both the tool path
+// and the fallback path go through the same exported function.
+//
+// Returns a human-readable status string (the same string the tool handler
+// returns to the driver), including any "rejected" or "error:" prefix on
+// failure. Callers that don't care about the string can discard it.
+func Deliver(ctx *tools.Context, text string, memoryIDs []int64) string {
+	// Reply count guard — same cap as the standard reply tool.
+	maxReplies := 2
+	if ctx.Cfg != nil && ctx.Cfg.Driver.MaxRepliesPerTurn > 0 {
+		maxReplies = ctx.Cfg.Driver.MaxRepliesPerTurn
+	}
+	if ctx.ReplyCount >= maxReplies {
+		return fmt.Sprintf(
+			"rejected: you already sent %d replies this turn (max %d). Call done now.",
+			ctx.ReplyCount, maxReplies)
+	}
+
+	if strings.TrimSpace(text) == "" {
+		return "error: text cannot be empty"
+	}
+
 	// Track memory usage for blended retrieval scoring.
-	if len(args.MemoryIDs) > 0 && ctx.Store != nil {
-		if err := ctx.Store.MarkMemoriesRecalled(args.MemoryIDs); err != nil {
+	if len(memoryIDs) > 0 && ctx.Store != nil {
+		if err := ctx.Store.MarkMemoriesRecalled(memoryIDs); err != nil {
 			log.Warn("reply_direct: failed to mark memories recalled", "err", err)
 		}
 	}
 
-	replyText := args.Text
+	replyText := text
 
 	// Style gate — same deterministic check as the standard reply.
 	// We don't have a chat model to retry with, so if the gate fires

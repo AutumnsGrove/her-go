@@ -4,3 +4,5 @@ You are writing the actual words the user will see. There is no separate convers
 
 Use reply_direct(text="your actual words") instead of reply(instruction="...").
 The text parameter is delivered verbatim to the user.
+
+You may also simply write your response as plain text with no tool call at all — the same verbatim-delivery pipeline (style gate, safety gate, PII deanonymization, send) picks it up automatically. Either path is fine; use whichever feels more natural for the turn. When you're done, call done.

@@ -47,7 +47,13 @@ import (
 	_ "her/tools/read_file"
 	_ "her/tools/recall_memories"
 	_ "her/tools/reply"
-	_ "her/tools/reply_direct"
+
+	// reply_direct is imported by name (not blank) because agent.go calls
+	// reply_direct.Deliver directly from the OnLoopExit fallback when the
+	// driver returns plain text with no tool call. The named import still
+	// triggers the package's init() (which registers the tool), so this
+	// replaces the previous blank import — don't add both.
+	reply_direct "her/tools/reply_direct"
 	_ "her/tools/search_books"
 	_ "her/tools/send_task"
 	_ "her/tools/set_location"
@@ -587,13 +593,30 @@ func Run(params RunParams) (*RunResult, error) {
 			// Fallback: ensure the user always gets a response.
 			if tctx.ReplyCount == 0 {
 				if agentFinalText != "" {
-					log.Warn("reply was never called, using agent text as instruction")
-					if params.LiteToolHook != nil {
-						params.LiteToolHook("reply")
+					// Two paths depending on whether the driver is opted
+					// into direct-reply mode. In direct mode the driver's
+					// own words ARE the reply, so we hand them straight
+					// to reply_direct.Deliver — same style/safety gates,
+					// same delivery pipeline, but no second model paraphrase.
+					// In classic mode we preserve the original behavior:
+					// wrap the text as an instruction to the standard reply
+					// tool, which asks the chat model to rewrite it.
+					if params.Cfg.Driver.DirectReply {
+						log.Warn("reply was never called, delivering agent text verbatim via reply_direct")
+						if params.LiteToolHook != nil {
+							params.LiteToolHook("reply_direct")
+						}
+						toolSeq = append(toolSeq, "reply_direct")
+						reply_direct.Deliver(tctx, agentFinalText, nil)
+					} else {
+						log.Warn("reply was never called, using agent text as instruction")
+						if params.LiteToolHook != nil {
+							params.LiteToolHook("reply")
+						}
+						instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
+						toolSeq = append(toolSeq, "reply")
+						tools.Execute("reply", instruction, tctx)
 					}
-					instruction := fmt.Sprintf(`{"instruction":%s}`, mustJSON(agentFinalText))
-					toolSeq = append(toolSeq, "reply")
-					tools.Execute("reply", instruction, tctx)
 				} else {
 					log.Warn("reply was never called, generating generic fallback")
 					if params.LiteToolHook != nil {

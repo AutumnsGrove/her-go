@@ -1,0 +1,114 @@
+name: "Reply Style Fidelity Test"
+description: >
+  Tests whether the driver honors seeded self-memories about REPLY STYLE
+  (not domain-specific content patterns like "uses cooking metaphors" —
+  literally how it writes: length, punctuation, question discipline) when
+  it is the one writing the final reply text, vs. when a separate chat
+  model writes it from an instruction.
+
+  This exists because of a discovered asymmetry: the chat model
+  (layers/chat_self_memory.go) auto-injects up to 5 FULL self-memories via
+  semantic search keyed on think traces, every single reply. The driver's
+  own context (layers/agent_self_memory_index.go) historically showed only
+  one-line hooks and required an explicit recall_memories(id/slug) call to
+  get full content — and historical data showed the driver recalls
+  self-memories in ~0% of turns. Under cfg.Driver.DirectReply, that layer
+  now renders full self-memory CONTENT unconditionally (not hooks) instead
+  of relying on the driver to recall or on semantic auto-injection (which
+  can miss relevant memories or surface irrelevant ones).
+
+  Run this suite TWICE and diff the reports:
+
+    her sim -s sims/reply-style-fidelity-test.yaml --no-fast-path
+    her sim -s sims/reply-style-fidelity-test.yaml --no-fast-path --direct-reply
+
+  --no-fast-path is required both runs — fast-path routes trivial messages
+  straight to the chat model, skipping the driver entirely, which would
+  contaminate this comparison (it's unrelated to what we're testing).
+
+  Each self-memory below encodes ONE checkable style rule. Read each
+  reply and check whether the rule visibly held:
+
+  - Rule A (turns 2, 8): short/low-content user messages get a short reply
+    (one sentence, no padding) — NOT a full paragraph.
+  - Rule B (turn 3): casual, low-stakes topic gets a lowercase reply,
+    mirroring the user's own texting register.
+  - Rule C (turns 5, 9): never more than ONE question in a single reply.
+  - Rule D (turn 4): genuinely funny message gets a short reaction, not an
+    immediate pivot to a follow-up question.
+  - Rule E (turn 6): avoid the "it's not X — it's Y" em-dash reframe
+    construction entirely.
+  - Rule F (turns 5, 8): when the user is venting, the first line responds
+    to the FEELING, not logistics/advice.
+
+  Failure mode: any of these rules holds in the standard-reply run but
+  breaks down in the direct-reply run — that would mean giving the driver
+  full self-memory content isn't enough, and something deeper about how
+  style rules transfer from "described in a memory" to "enacted in the
+  driver's own voice" needs work.
+
+tags: ["self-memory", "reply-style", "direct-reply", "persona", "regression"]
+seed_cards: true
+
+seed_persona: >
+  I'm warm, a little wry, and genuinely curious. I don't perform enthusiasm —
+  if something's funny I react like it's funny, if someone's short with me
+  I don't pad it out. I ask questions because I want to know the answer,
+  not to fill space.
+
+seed_memories:
+  - card: work
+    content: "User works a retail job and has been picking up extra closing shifts lately"
+  - card: interests
+    content: "User has a cat named Biscuit"
+  - card: interests
+    content: "User has been getting into houseplants, mostly pothos and snake plants"
+
+seed_self_memories:
+  - card: my-communication
+    content: "When Autumn sends a short, low-effort message — a few words, no real content — I match her energy and reply in one sentence or less. I don't pad short exchanges with a full paragraph just because I have more to say."
+  - card: my-communication
+    content: "During casual, low-stakes conversation I write in lowercase, mirroring how Autumn actually texts. Capitals show up when the topic turns serious, not as a constant habit."
+  - card: my-communication
+    content: "I never stack more than one question in a single reply. If I'm curious about several things at once, I pick the single best one and let the rest wait — piling on questions reads as an interrogation, not curiosity."
+  - card: my-communication
+    content: "When something Autumn says is genuinely funny, I let the joke land with a short, real reaction instead of immediately pivoting to a follow-up question. Not every laugh needs a hook attached to keep the conversation moving."
+  - card: my-communication
+    content: "I avoid the 'it's not X — it's Y' em-dash reframe construction in my replies. I say what something is directly instead of correcting an implied framing first."
+  - card: my-communication
+    content: "When Autumn is venting about something stressful, my first line responds to how it feels, not the logistics of the situation. I don't jump straight into advice or problem-solving before acknowledging the feeling first."
+
+messages:
+  # Turn 1: normal-length intro, no specific rule test — just establishes context.
+  - "ugh long day. closed the store again tonight, third time this week. biscuit was very unimpressed that i got home late"
+
+  # Turn 2: short, low-effort. Tests Rule A — should get ONE sentence back, not a paragraph.
+  - "yeah she's dramatic like that"
+
+  # Turn 3: casual, low-stakes, lowercase from the user. Tests Rule B.
+  - "anyway my pothos is doing so good rn, put out like three new leaves this week. thinking about getting another plant honestly"
+
+  # Turn 4: genuinely funny anecdote. Tests Rule D — reaction first, not an
+  # immediate pivot to "so what/when/how" follow-up question.
+  - "ok this is so stupid but biscuit tried to attack my snake plant and got startled by his own reflection in the window and full on fell off the shelf"
+
+  # Turn 5: venting, stressed, multiple possible threads. Tests Rule C
+  # (only one question) and Rule F (feeling first, not logistics/advice).
+  - "honestly the closing shifts are wearing me down. i keep saying yes because we're short-staffed but i'm exhausted and my manager hasn't even said thank you once. i don't know if i should just say no next time or if that makes me look bad"
+
+  # Turn 6: analytical/reflective topic — a natural trap for the
+  # "it's not X — it's Y" reframe habit. Tests Rule E.
+  - "i think the thing that actually bugs me is less the hours and more that nobody seems to notice i'm doing extra. like is it about the money or is it about being seen, i genuinely don't know anymore"
+
+  # Turn 7: short follow-up, low content. Retests Rule A.
+  - "yeah maybe"
+
+  # Turn 8: venting again, plus low-content framing. Retests Rule A + Rule F together.
+  - "tired. just tired"
+
+  # Turn 9: multiple curiosities available (plant, cat, work) in one message.
+  # Retests Rule C — should ask ONE thing, not stack several.
+  - "ok change of subject, i got paid today so i'm either getting a new plant or finally getting biscuit one of those cat trees. still deciding"
+
+  # Turn 10: casual close, no specific rule test.
+  - "anyway gonna go feed the menace and pick a plant. talk later"

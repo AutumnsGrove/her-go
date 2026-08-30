@@ -12,10 +12,20 @@ package layers
 // fix — the driver can't forget to consider what it already knows about
 // itself if that's just sitting in context.
 //
-// Like the Card Index, this only shows hooks — recall_memories(id=...) or
+// Normally this only shows hooks — recall_memories(id=...) or
 // recall_memories(slug=...) is still required to pull the full memory
-// content into the prompt.
-
+// content into the prompt. That's fine under the standard reply tool,
+// because the chat model gets full self-memory content anyway via a
+// separate semantic auto-injection (layers/chat_self_memory.go). But when
+// cfg.Driver.DirectReply is on, the driver's own words ARE the reply — there
+// is no second model to catch what the driver's hook-skimming missed. So in
+// that mode this layer renders full content instead of just hooks. We chose
+// "always full" over "semantically inject relevant ones" deliberately:
+// semantic matching can miss a memory that's relevant in a way the
+// embedding doesn't capture, or surface one that isn't actually relevant.
+// Since the self-memory set is small and curated, showing all of it in full
+// avoids that failure mode entirely — this is an experiment, gated behind
+// the same flag, so standard-reply-tool behavior is untouched.
 import (
 	"fmt"
 	"strings"
@@ -36,20 +46,30 @@ func buildSelfMemoryIndex(ctx *LayerContext) LayerResult {
 		return LayerResult{}
 	}
 
+	fullContent := ctx.Cfg != nil && ctx.Cfg.Driver.DirectReply
+
 	var b strings.Builder
 	b.WriteString("## What I Know About Myself\n\n")
-	b.WriteString("Self-observations from introspection. Skim for relevance, then call " +
-		"recall_memories with id or slug to pull one in — no need to search if you saw the hook here.\n\n")
+	if fullContent {
+		b.WriteString("Self-observations from introspection — shown in full because your words " +
+			"are the reply this turn, with no second model to catch what you don't recall.\n\n")
+	} else {
+		b.WriteString("Self-observations from introspection. Skim for relevance, then call " +
+			"recall_memories with id or slug to pull one in — no need to search if you saw the hook here.\n\n")
+	}
 
 	for _, m := range memories {
-		hook := strings.TrimSpace(m.Hook)
-		if hook == "" {
-			hook = "(no hook yet)"
+		label := strings.TrimSpace(m.Hook)
+		if fullContent {
+			label = strings.TrimSpace(m.Content)
+		}
+		if label == "" {
+			label = "(no hook yet)"
 		}
 		if m.Slug != "" {
-			fmt.Fprintf(&b, "- #%d [%s] %s\n", m.ID, m.Slug, hook)
+			fmt.Fprintf(&b, "- #%d [%s] %s\n", m.ID, m.Slug, label)
 		} else {
-			fmt.Fprintf(&b, "- #%d %s\n", m.ID, hook)
+			fmt.Fprintf(&b, "- #%d %s\n", m.ID, label)
 		}
 	}
 
