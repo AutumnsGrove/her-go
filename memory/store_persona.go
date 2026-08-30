@@ -266,23 +266,32 @@ func (s *SQLiteStore) GetPersonaState() (PersonaState, error) {
 
 // SetLastReflectionAt records when the most recent nightly reflection ran.
 // Uses INSERT OR REPLACE to upsert the single row while preserving the
-// last_rewrite_at column — SQLite's INSERT OR REPLACE deletes then inserts,
-// so we must COALESCE to carry the existing value forward.
+// other columns — SQLite's INSERT OR REPLACE deletes then inserts, so any
+// column left out of the VALUES list reverts to its default. All three
+// Set* functions on this table must therefore carry every other column
+// forward via subquery, not just the one they're touching. (This is exactly
+// how last_reflected_message_id used to get silently zeroed on every
+// persona rewrite — SetLastRewriteAt didn't list it, so it kept vanishing.)
 func (s *SQLiteStore) SetLastReflectionAt(t time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
-		 VALUES (1, ?, (SELECT last_rewrite_at FROM persona_state WHERE id = 1))`,
+		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at, last_reflected_message_id)
+		 VALUES (1, ?,
+		   (SELECT last_rewrite_at FROM persona_state WHERE id = 1),
+		   (SELECT last_reflected_message_id FROM persona_state WHERE id = 1))`,
 		t.Format("2006-01-02 15:04:05"),
 	)
 	return err
 }
 
 // SetLastRewriteAt records when the most recent persona rewrite ran.
-// Same COALESCE trick as SetLastReflectionAt to preserve last_reflection_at.
+// Same carry-forward trick as SetLastReflectionAt — see its comment.
 func (s *SQLiteStore) SetLastRewriteAt(t time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at)
-		 VALUES (1, (SELECT last_reflection_at FROM persona_state WHERE id = 1), ?)`,
+		`INSERT OR REPLACE INTO persona_state (id, last_reflection_at, last_rewrite_at, last_reflected_message_id)
+		 VALUES (1,
+		   (SELECT last_reflection_at FROM persona_state WHERE id = 1),
+		   ?,
+		   (SELECT last_reflected_message_id FROM persona_state WHERE id = 1))`,
 		t.Format("2006-01-02 15:04:05"),
 	)
 	return err
@@ -386,6 +395,22 @@ func (s *SQLiteStore) MessagesAfterID(afterID int64, limit int) ([]Message, erro
 		return nil, fmt.Errorf("iterating rows: %w", err)
 	}
 	return messages, nil
+}
+
+// LastMessageTime returns the timestamp of the most recent message of any
+// role. Returns the zero time (with no error) if no messages exist yet —
+// same "swallow it into a zero value" convention as GetPersonaState, since
+// an empty table isn't an error case here, just a fresh install.
+func (s *SQLiteStore) LastMessageTime() (time.Time, error) {
+	var ts sql.NullString
+	err := s.db.QueryRow(`SELECT MAX(timestamp) FROM messages`).Scan(&ts)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("querying last message time: %w", err)
+	}
+	if !ts.Valid {
+		return time.Time{}, nil
+	}
+	return parseTimestamp(ts.String), nil
 }
 
 // RecentReflections returns the N most recent reflections, newest first.

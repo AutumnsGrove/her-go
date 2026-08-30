@@ -131,6 +131,7 @@ func (s stubStore) SetLastReflectedMessageID(id int64) error                    
 func (s stubStore) MessagesAfterID(afterID int64, limit int) ([]memory.Message, error) {
 	return nil, nil
 }
+func (s stubStore) LastMessageTime() (time.Time, error) { return time.Time{}, nil }
 func (s stubStore) RecentReflections(limit int) ([]memory.Reflection, error)   { return nil, nil }
 func (s stubStore) UnconsumedReflectionCount() (int, error)                     { return 0, nil }
 func (s stubStore) GetTraitHistory(traitName string, limit int) ([]memory.Trait, error) {

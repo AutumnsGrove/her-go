@@ -129,6 +129,7 @@ type Store interface {
 	SetLastRewriteAt(t time.Time) error
 	SetLastReflectedMessageID(id int64) error
 	MessagesAfterID(afterID int64, limit int) ([]Message, error)
+	LastMessageTime() (time.Time, error)
 	RecentReflections(limit int) ([]Reflection, error)
 	UnconsumedReflectionCount() (int, error)
 	GetTraitHistory(traitName string, limit int) ([]Trait, error)

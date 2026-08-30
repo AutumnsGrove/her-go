@@ -319,6 +319,20 @@ func dampTrait(newVal float64, prevStr string, maxShift float64) float64 {
 //go:embed nightly_reflect_prompt.md
 var nightlyReflectPromptTmpl string
 
+// silenceReflectPromptTmpl is loaded from silence_reflect_prompt.md.
+// Parameters (in order): botName, userName, daysSilent.
+//
+//go:embed silence_reflect_prompt.md
+var silenceReflectPromptTmpl string
+
+// silenceMilestoneDays are the day-counts, since the user's last message,
+// at which the dreamer writes a single check-in reflection about the
+// silence instead of staying quiet forever or (the bug this replaces)
+// fabricating nightly "reflections" about conversations that never
+// happened. Each value fires exactly once, on the night daysSilent first
+// equals it.
+var silenceMilestoneDays = []int{3, 7, 15, 30}
+
 // NightlyReflect runs the dreaming system's reflection step. Unlike Reflect()
 // (which is triggered by fact density during a turn), this is time-triggered
 // and introspective — it looks at the bot's current persona, recent traits,
@@ -344,6 +358,10 @@ func NightlyReflect(
 	if len(recent) == 0 {
 		log.Info("nightly reflection: no new messages since last reflection, skipping")
 		store.SetLastReflectionAt(time.Now())
+
+		if err := maybeSilenceReflection(llmClient, store, botName, userName); err != nil {
+			log.Warn("silence milestone reflection failed", "err", err)
+		}
 		return nil
 	}
 
@@ -453,6 +471,66 @@ func NightlyReflect(
 	}
 
 	log.Info("nightly reflection saved", "preview", truncate(content, 120))
+	return nil
+}
+
+// maybeSilenceReflection checks whether the user has gone quiet long enough
+// to cross one of silenceMilestoneDays and, if so, writes a single short
+// reflection about the silence itself — instead of either (a) the dreamer
+// staying completely silent about something as notable as a month of no
+// contact, or (b) the previous bug where a stuck watermark made it
+// fabricate a fresh "reflection" on the same stale conversation every
+// single night regardless of how long the user had been gone.
+func maybeSilenceReflection(llmClient *llm.Client, store memory.Store, botName, userName string) error {
+	lastMsg, err := store.LastMessageTime()
+	if err != nil || lastMsg.IsZero() {
+		return nil
+	}
+
+	daysSilent := int(time.Since(lastMsg).Hours() / 24)
+	milestone := 0
+	for _, m := range silenceMilestoneDays {
+		if daysSilent == m {
+			milestone = m
+			break
+		}
+	}
+	if milestone == 0 {
+		return nil
+	}
+
+	// Guard against writing the milestone reflection twice on the same
+	// calendar day — a startup catch-up cycle and the regularly scheduled
+	// one can both fire within the same night.
+	prevReflections, _ := store.RecentReflections(1)
+	if len(prevReflections) > 0 && prevReflections[0].Timestamp.Format("2006-01-02") == time.Now().Format("2006-01-02") {
+		return nil
+	}
+
+	prompt := fmt.Sprintf(silenceReflectPromptTmpl, botName, userName, milestone)
+	messages := []llm.ChatMessage{
+		{Role: "system", Content: prompt},
+		{Role: "user", Content: "Write your reflection now."},
+	}
+
+	resp, err := llmClient.ChatCompletion(messages)
+	if err != nil {
+		return fmt.Errorf("silence milestone reflection LLM call: %w", err)
+	}
+
+	store.SaveMetric(memory.MetricInput{
+		Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
+		TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, IsFallback: resp.UsedFallback,
+		AgentRole: memory.RoleDream, CacheReadTokens: resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens, Provider: resp.Provider,
+	})
+
+	content := strings.TrimSpace(resp.Content)
+	if _, err := store.SaveReflection(content, 0, "", ""); err != nil {
+		return fmt.Errorf("saving silence milestone reflection: %w", err)
+	}
+
+	log.Info("nightly reflection: silence milestone reached", "days", milestone, "preview", truncate(content, 120))
 	return nil
 }
 
