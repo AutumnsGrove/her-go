@@ -191,3 +191,24 @@ func TestNovaChatCompletion_NoFallbackAfterTextWasStreamed(t *testing.T) {
 		t.Errorf("streamed text = %q", got)
 	}
 }
+
+// A config.yaml with no `llm:` section (every file written before the
+// migration, including the one on the host) must run the Nova transport.
+func TestSetBackend_NovaIsTheDefault(t *testing.T) {
+	previous := ActiveBackend()
+	t.Cleanup(func() { SetBackend(previous) })
+
+	for _, tc := range []struct{ in, want string }{
+		{"", BackendNova},
+		{"nova", BackendNova},
+		{" NOVA ", BackendNova},
+		{"legacy", BackendLegacy},
+		{"Legacy", BackendLegacy},
+		{"typo", BackendNova},
+	} {
+		SetBackend(tc.in)
+		if got := ActiveBackend(); got != tc.want {
+			t.Errorf("SetBackend(%q) → %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

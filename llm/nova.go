@@ -8,8 +8,8 @@
 // `llm.backend: nova` is set. That is the strangler-fig shape: one file's
 // internals change, callers do not notice.
 //
-// The old hand-written HTTP client stays in client.go and remains the default
-// until the loop has also been ported and soaked. Both backends answer the same
+// The old hand-written HTTP client stays in client.go as an opt-in escape hatch
+// (`llm.backend: legacy`); Nova is the default. Both backends answer the same
 // three methods:
 //
 //	ChatCompletion            no tools, non-streaming
@@ -39,7 +39,7 @@ import (
 //
 // It is read without a lock: cmd sets it once at startup, before any client is
 // used. That is the same contract as SetDebugMode above.
-var backend = BackendLegacy
+var backend = BackendNova
 
 // Backend names, as written in config.yaml.
 const (
@@ -47,14 +47,20 @@ const (
 	BackendNova   = "nova"
 )
 
-// SetBackend chooses the transport. Unknown or empty values keep the legacy
-// implementation, so a typo in config cannot silently disable the LLM.
+// SetBackend chooses the transport. Nova is the default: an empty value, an
+// absent `llm:` section in config.yaml, or a typo all select it, so a config
+// written before the migration runs on the same path the sims proved. Only the
+// explicit name "legacy" selects the hand-written client, which stays as an
+// escape hatch until it is deleted.
 func SetBackend(name string) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case BackendNova:
+	case BackendLegacy:
+		backend = BackendLegacy
+	case "", BackendNova:
 		backend = BackendNova
 	default:
-		backend = BackendLegacy
+		log.Warn("unknown llm.backend, using nova", "value", name)
+		backend = BackendNova
 	}
 }
 

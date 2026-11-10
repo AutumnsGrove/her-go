@@ -348,12 +348,12 @@ type LLMConfig struct {
 }
 
 // BackendConfig selects an implementation behind a project-owned seam. It is a
-// migration switch: "legacy" is the hand-written code, "nova" is the Nova
-// library. The zero value means legacy, so an absent section never changes
-// behaviour.
+// migration switch: "nova" is the Nova library, "legacy" is the hand-written
+// code kept as an escape hatch. The zero value means nova, so a config.yaml
+// written before the migration (no `llm:` section) runs the proven path.
 type BackendConfig struct {
-	// Backend is "legacy" (default) or "nova". Anything else is treated as
-	// legacy, because a typo must not silently pick an unproven path.
+	// Backend is "nova" (default) or "legacy". Anything else falls back to nova
+	// with a warning.
 	Backend string `yaml:"backend"`
 }
 

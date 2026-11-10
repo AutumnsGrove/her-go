@@ -2,7 +2,6 @@ package mood
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"her/llm"
+	"her/llm/llmtest"
 	"her/memory"
 )
 
@@ -49,20 +49,7 @@ func (s *scriptedServer) handle(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 
-	resp := map[string]any{
-		"id":    "test",
-		"model": "mood-test",
-		"choices": []map[string]any{{
-			"index":         0,
-			"finish_reason": "stop",
-			"message":       map[string]any{"role": "assistant", "content": reply},
-		}},
-		"usage": map[string]any{
-			"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2,
-		},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	llmtest.WriteTextCompletion(w, reply)
 }
 
 // newAgentTestStore opens a store with embedDim=0 — non-KNN paths.
