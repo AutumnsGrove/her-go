@@ -79,3 +79,29 @@ Running total against the **$10 hard cap**: **$0.00** (no live sim run yet).
 - **Deviation:** plan §2.5 wanted `embedding-a-thon`, `memory-a-thon`, `contradiction-canary`,
   `card-scoped-recall` run here. They are run in step 4 instead (same suites, cheaper, and on the MiMo 2.6
   stack the baselines are captured on) — running them twice would double the spend for no extra signal.
+
+### Step 3 — MiMo 2.6
+
+- **Prices verified live** (per 1M tokens, in/out/cache-read): `mimo-v2.6-pro` 0.435/0.87/**0.0036**,
+  `mimo-v2.6-flash` 0.14/0.28/**0.0028**. Both cheaper than the 2.5 models they replace
+  (`2.5-pro` 0.48/1.80/0.096, `2.5` 0.40/2.00/0.080), and cached reads drop ~25x. Both expose a
+  `xiaomi/fp8` endpoint, so `provider.order: [xiaomi/fp8]` still resolves.
+- **No local cost table exists** (step 3.2): every cost figure comes from the provider's `usage` block, so
+  there was nothing to move into config. Nothing to update.
+- **`tool_choice: "required"` check (step 3.4) — worth knowing before step 8.** Six trials each against
+  `xiaomi/fp8`, `tool_choice: "required"`, two trivial tools:
+  - `mimo-v2.6-pro`: 6/6 returned tool calls.
+  - `mimo-v2.6-flash`: **4/6** returned tool calls; one `finish_reason: length` (it burned the budget on
+    reasoning) and one `finish_reason: stop` with plain text and no tool call.
+  - `mimo-v2.5` (control): 6/6.
+  The `length` case is a max-tokens artifact, but the plain-text case is the failure that matters: a driver
+  turn with `require_tool_choice: true` and no tool call ends the run at `ExitNoToolCalls`. The laptop
+  `config.yaml` sets `driver.require_tool_choice: false`, which hides the problem locally; the Pi uses the
+  default (`true`). **Kept Flash for the driver** per plan Q5 and made this a watch item for the driver sims
+  in step 8 — if turn completion drops there, the fix is one config line (`driver.model: …-pro`, which is
+  still cheaper than the 2.5-pro it replaces), not a code change. Recorded rather than pre-emptively
+  deviating from a decision Autumn already made.
+- **Side observation:** `provider.order` is a *preference*, not a pin — with `allow_fallbacks` at its
+  default, the same request was served by Cohere, Makora and Venice across trials. Costs are still
+  attributed correctly (per-response `provider` field), but "pinned to xiaomi/fp8" is softer than the
+  config comment implies. Not changed here; noted in case cache-hit-rate work revisits it.
