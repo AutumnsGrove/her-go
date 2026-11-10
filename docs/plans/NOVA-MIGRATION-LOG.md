@@ -241,3 +241,29 @@ Total live sim spend for the whole migration: **≈ $0.62** (base1 $0.098, base2
 $0.125, base3 $0.084, base4 $0.031, nova3 partial ~$0.05, nova4 $0.042, plus ~$0.01 of one-call probes), against
 the $10 cap. The cap was never close; wall-clock was the real constraint, which is why `compaction-quick` and
 `mood-dedup-test` have legacy baselines but no Nova re-run.
+
+### Model follow-up (after the code was finished)
+
+Autumn's call, on the evidence above: **the driver and every aux agent move off MiMo 2.6 onto
+`deepseek/deepseek-v4.1-flash-1017`**. Replies stay on `xiaomi/mimo-v2.6-pro` — its voice is the one that was
+tuned, and it never had the tool-calling problem.
+
+The `-1017` build has ~1.05M context, text **and image** input (so it takes the vision role too), $0.006/M in,
+$0.50/M out, $0.005/M cache read at the model level.
+
+**Provider choice was measured, not guessed** (same tool-calling prompt, `tool_choice: "required"`, two trials
+each; the early "no tool call" results were reasoning tokens eating a 300-token budget, and every provider
+complied once the budget was 1500):
+
+| Endpoint | in / out / cache per M | latency | compliance |
+|---|---|---|---|
+| `deepinfra/fp8` | 0.098 / 0.294 / 0.0029 | **1.5–2.5s** | 4/4 |
+| `morph/fp8` | 0.022 / 0.400 / 0.0040 | 6–7s | 4/4 |
+| `relace/fp4` | 0.006 / 0.500 / 0.0050 | 5–6s | 4/4 (fp4 — quality risk) |
+| `particle-ai/us/flex` | 0.025 / 0.250 / 0.0030 | 3–4s | 4/4 |
+| `deepinfra/fp8/flex` | 0.078 / 0.235 / 0.0024 | 2–4s | 4/4 |
+
+Pin: **driver and vision `[deepinfra/fp8, morph/fp8]`** (latency matters on the foreground path; Morph is the
+cheap spillover), **background agents and worker tiers `[morph/fp8, deepinfra/fp8]`** (cost matters, nobody is
+looking at the clock). `provider.order` is a preference rather than a hard pin when `allow_fallbacks` is left at
+its default — noted earlier in this log — which is what makes the two-entry lists useful.
