@@ -291,3 +291,13 @@ Two things moved and are recorded rather than smoothed over:
   move first if something started invalidating the prefix.
 - The digest comparator's cost check is now one-sided (`not above +25%`); a run that costs less than its
   baseline was being reported as a failure.
+
+## PR
+
+Opened as [#103](https://github.com/AutumnsGrove/her-go/pull/103) into `main` from `feat/nova-migration`
+(21 commits, +6474/−491 across 42 files). Left open for Autumn to merge — the agent does not merge or approve.
+
+There is no `.github/` directory in her-go, so no CI or Pi-review workflow runs on the PR and there is nothing to
+poll; the evidence is in the PR body and in this log instead. If a review does arrive later, §10.4 of the plan
+still applies: verify each comment against the code, fix real issues with small commits plus a test, reply with
+what changed, and never cancel or re-run a review to make it go away.
