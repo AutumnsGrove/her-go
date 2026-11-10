@@ -211,16 +211,23 @@ type ReembedOptions struct {
 	// Progress, when set, is called after each successfully re-embedded row
 	// with a human-readable line. The CLI prints it; tests collect it.
 	Progress func(line string)
-	// EmbedMoodNotes controls whether mood entries are re-embedded too.
-	// Defaults true through the CLI; tests may turn it off for speed.
+	// SkipMoods leaves mood entries alone. The CLI re-embeds them; tests turn
+	// this on for speed.
 	SkipMoods bool
+	// SkipCurrent leaves rows alone that already hold vectors at the configured
+	// dimension (and are mirrored into the vec table). This is what makes a
+	// re-run resume instead of repaying for finished rows. Leave it off to
+	// recompute everything — needed when the model changed but the dimension did
+	// not, because the old vectors then look current but live in another space.
+	SkipCurrent bool
 }
 
 // ReembedStats counts what ReembedAll did, for the CLI summary and the log.
 type ReembedStats struct {
 	Memories      int // memories whose vectors were rewritten
 	Moods         int // mood entries whose vectors were rewritten
-	Failed        int // rows skipped because embedding failed
+	Failed        int // rows whose embedding or write failed (worth a re-run)
+	Skipped       int // rows left alone: already current, or nothing to embed
 	LastMemoryID  int64
 	LastMoodID    int64
 	TotalMemories int // rows found before starting
@@ -255,6 +262,13 @@ func (s *SQLiteStore) ReembedAll(e Embedder, opts ReembedOptions) (ReembedStats,
 	stats.TotalMemories = len(memories)
 
 	for _, m := range memories {
+		if opts.SkipCurrent &&
+			len(m.Embedding) == s.EmbedDimension && len(m.EmbeddingText) == s.EmbedDimension &&
+			s.hasVecRow("vec_memories", m.ID) {
+			stats.Skipped++
+			continue
+		}
+
 		// Tag vector input: tags when present, else the content — the same
 		// fallback the write path uses (`if embedText == "" { embedText = input.Text }`).
 		tagText := m.Tags
@@ -302,12 +316,19 @@ func (s *SQLiteStore) ReembedAll(e Embedder, opts ReembedOptions) (ReembedStats,
 	stats.TotalMoods = len(moods)
 
 	for _, entry := range moods {
+		if opts.SkipCurrent && len(entry.Embedding) == s.EmbedDimension && s.hasVecRow("vec_moods", entry.ID) {
+			stats.Skipped++
+			continue
+		}
+
 		embedText := entry.Note
 		if len(entry.Labels) > 0 {
 			embedText = embedText + " " + strings.Join(entry.Labels, " ")
 		}
+		// Nothing to embed is not a provider failure: don't report it as one, or
+		// the CLI would exit non-zero for a row no re-run can ever fix.
 		if strings.TrimSpace(embedText) == "" {
-			stats.Failed++
+			stats.Skipped++
 			continue
 		}
 		vec, err := e.Embed(embedText)
@@ -315,8 +336,7 @@ func (s *SQLiteStore) ReembedAll(e Embedder, opts ReembedOptions) (ReembedStats,
 			stats.Failed++
 			continue
 		}
-		entry.Embedding = vec
-		if err := s.UpdateMoodEntry(entry.ID, &entry); err != nil {
+		if err := s.setMoodEmbedding(entry.ID, vec); err != nil {
 			stats.Failed++
 			continue
 		}
@@ -328,6 +348,38 @@ func (s *SQLiteStore) ReembedAll(e Embedder, opts ReembedOptions) (ReembedStats,
 	}
 
 	return stats, nil
+}
+
+// hasVecRow reports whether a vec table already mirrors the given row id. table
+// is always one of vecTables (a constant from this file, never user input), which
+// is why it can be formatted into the SQL: identifiers cannot be bound as ?
+// parameters.
+func (s *SQLiteStore) hasVecRow(table string, id int64) bool {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM `+table+` WHERE rowid = ?`, id).Scan(&one)
+	return err == nil
+}
+
+// setMoodEmbedding rewrites a mood entry's cached vector and its vec_moods
+// mirror without touching any other column. UpdateMoodEntry would also stamp
+// updated_at, which consumers read as "this entry was refined" — and a re-embed
+// is bookkeeping, not an edit.
+func (s *SQLiteStore) setMoodEmbedding(id int64, vec []float32) error {
+	blob, err := serializeEmbedding(vec)
+	if err != nil {
+		return fmt.Errorf("serializing mood %d embedding: %w", id, err)
+	}
+	if _, err := s.db.Exec(`UPDATE mood_entries SET embedding = ? WHERE id = ?`, blob, id); err != nil {
+		return fmt.Errorf("updating mood %d embedding: %w", id, err)
+	}
+	// vec0 tables cannot UPDATE in place: DELETE then INSERT.
+	if _, err := s.db.Exec(`DELETE FROM vec_moods WHERE rowid = ?`, id); err != nil {
+		return fmt.Errorf("clearing vec_moods row %d: %w", id, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO vec_moods(rowid, embedding) VALUES (?, ?)`, id, blob); err != nil {
+		return fmt.Errorf("mirroring mood %d into vec_moods: %w", id, err)
+	}
+	return nil
 }
 
 // allMoodEntries returns every non-superseded mood entry, oldest first.
