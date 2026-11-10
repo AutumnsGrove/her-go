@@ -209,6 +209,12 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
 - **Agent architecture:** Multi-agent pipeline. The **driver agent** (Qwen3) orchestrates each turn via tool calls (think, reply, done, search, use_tools). **Kimi K2** (chat model) generates user-facing replies. After the reply is sent, three background agents run in sequence: the **memory agent** extracts facts, the **mood agent** logs emotional valence, and the **introspection agent** generates self-memories (the bot's own reflections about the relationship and its behavior). A nightly **dream cycle** runs the **dream agent** (memory consolidation — merge, expire, promote) and the **persona agent** (persona.md rewrite from accumulated reflections). Tools are YAML-driven with per-tool `agent:` fields controlling which agent can call them.
+- **Agent loop and LLM transport: `github.com/AutumnsGrove/nova`.** The five agents' shared tool-calling loop
+  (`agent_engine`) runs on Nova's `agent` package, and the LLM transport runs on Nova's
+  `provider/openrouter`. her-go keeps the contracts (`agent_engine.EngineConfig` / `LoopResult`, `llm.Client`)
+  so agents and tools did not change. Nova is read-only for us: gaps go in
+  `docs/plans/NOVA-GAPS.md`, not patches. See `docs/NOVA-BRIDGE.md` for the mapping and the known
+  behavioural deltas.
 - **Memory cards:** Hierarchical folder-like containers for memories. The dream agent maintains card summaries and links memories into thematic clusters. Cards enable structured recall and give the agent a "table of contents" for its knowledge.
 - **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Per-phase traces (think, use_tools, reply, memory) with TUI and Telegram rendering.
 - **Persona evolution:** Bot rewrites its own persona.md during the nightly dream cycle. Requires minimum accumulated reflections and a cooldown period. Changes are gradual (damped via max_trait_shift).

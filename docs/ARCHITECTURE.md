@@ -121,7 +121,9 @@ The same registry is used by runtime (`layers.BuildAll`) and the CLI
 
 **Purpose:** Orchestrate the response. Decide what tools to call, in what order.
 
-**Called from:** `agent/agent.go` — `params.DriverLLM.ChatCompletionWithTools()`
+**Called from:** `agent/agent.go` builds an `EngineConfig` and calls `agent_engine.RunLoop`, which runs the
+loop on Nova's `agent.Agent` (`agent_engine/nova.go`) and calls the model through `llm.Client`
+(`llm/nova.go` → Nova's `provider/openrouter`). See [NOVA-BRIDGE.md](NOVA-BRIDGE.md) for the mapping.
 
 **System prompt:** `driver_agent_prompt.md` (loaded by `loadAgentPrompt()`)
 - Hot-reloadable from disk (changes take effect next message)
