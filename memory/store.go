@@ -247,12 +247,17 @@ func (s *SQLiteStore) ApplyRecallConfig(rc config.RecallConfig) {
 // for nomic-embed-text-v1.5). Pass 0 to skip creating the vector table
 // (useful if embeddings aren't configured).
 //
+// opts are functional options (see vec.go). The only one today is
+// AllowVecDimensionMismatch, which `her reembed` needs to open a database it is
+// about to rebuild. Variadic options keep every existing two-argument call site
+// compiling unchanged.
+//
 // NOTE: The initial CREATE TABLE statements still create the legacy "facts",
 // "fact_links", and "vec_facts" tables for backward compatibility with older
 // databases. The migration block at the end creates the renamed "memories",
 // "memory_links", and "vec_memories" tables and copies data over. All runtime
 // queries use the new table names.
-func NewStore(dbPath string, embedDimension int) (*SQLiteStore, error) {
+func NewStore(dbPath string, embedDimension int, opts ...openOption) (*SQLiteStore, error) {
 	// Register sqlite-vec as an auto-extension BEFORE opening any connections.
 	// This uses sqlite3_auto_extension() under the hood — every new connection
 	// automatically loads the vec0 virtual table module. Think of it like
@@ -283,6 +288,20 @@ func NewStore(dbPath string, embedDimension int) (*SQLiteStore, error) {
 	// Run migrations to create/update schema
 	if err := store.initTables(); err != nil {
 		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Refuse to run against a vector index sized for a different embedding
+	// model. initTables above uses CREATE ... IF NOT EXISTS, which cannot
+	// notice the mismatch, so it has to be checked explicitly.
+	var cfg openConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if !cfg.allowVecDimensionMismatch {
+		if err := store.checkVecDimensions(); err != nil {
+			store.Close()
+			return nil, err
+		}
 	}
 
 	return store, nil
