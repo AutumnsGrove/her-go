@@ -30,9 +30,10 @@ import (
 	"her/config"
 )
 
-// novaSpeechTimeout bounds one synthesis. A long reply is chunked by the
-// caller today (not by this wrapper), and Novas's own adapter defaults to 120s.
-const novaSpeechTimeout = 120 * time.Second
+// novaAudioTimeout bounds one synthesis or transcription. A long reply is
+// chunked by the caller today (not by this wrapper), and Nova's adapter
+// defaults to 120s as well.
+const novaAudioTimeout = 120 * time.Second
 
 // newNovaVoiceClient builds Nova's OpenRouter voice client from her-go config.
 //
@@ -120,7 +121,7 @@ func NewOpenRouterTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *NovaT
 // the real cost; the Opus conversion for Telegram stays here because it is the
 // bot's requirement, not the provider's.
 func (c *NovaTTSClient) Synthesize(text string) (SynthesizeResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), novaSpeechTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), novaAudioTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -188,7 +189,7 @@ func (c *Client) transcribeWithNova(audioBytes []byte, filename, model string) (
 	// inheriting the difference.
 	timeout := c.httpClient.Timeout
 	if timeout <= 0 {
-		timeout = novaSpeechTimeout
+		timeout = novaAudioTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
