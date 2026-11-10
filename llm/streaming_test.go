@@ -309,7 +309,14 @@ func TestChatCompletionWithTools_SendsStreamTrue(t *testing.T) {
 
 // TestChatCompletion_NoStreamField verifies that plain ChatCompletion (no tools)
 // does NOT send stream:true — it still uses the non-streaming path.
+//
+// Legacy-only: the Nova transport always streams (a nil onChunk just discards
+// the deltas), so this property belongs to the opt-in legacy client.
 func TestChatCompletion_NoStreamField(t *testing.T) {
+	previous := ActiveBackend()
+	SetBackend(BackendLegacy)
+	t.Cleanup(func() { SetBackend(previous) })
+
 	var requestBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

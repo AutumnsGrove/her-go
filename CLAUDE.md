@@ -10,11 +10,12 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** driver_agent_prompt.md (driver agent orchestration rules, hot-reloadable)
-- **Chat model:** MiMo v2.5 Pro (xiaomi/mimo-v2.5-pro) via OpenRouter → xiaomi/fp8 (~80% prompt cache hit rate)
-- **Agent models:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8 — used for driver, memory, mood, introspection, persona, dream, and vision agents
+- **Chat model:** MiMo v2.6 Pro (xiaomi/mimo-v2.6-pro) via OpenRouter → xiaomi/fp8 (~80% prompt cache hit rate)
+- **Agent models:** DeepSeek V4.1 Flash 1017 (deepseek/deepseek-v4.1-flash-1017) via OpenRouter → deepinfra/fp8 then morph/fp8 — used for driver, memory, mood, introspection, persona, dream, vision and the worker tiers
 - **Classifier model:** Gemini 3.1 Flash Lite via OpenRouter (memory + reply safety gates)
-- **Vision model:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8
-- **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
+- **Embeddings:** `perplexity/pplx-embed-v1-0.6b` via OpenRouter, 1024 dimensions (was local nomic/768 — `her reembed` migrates an existing DB)
+- **Vision model:** DeepSeek V4.1 Flash 1017 (deepseek/deepseek-v4.1-flash-1017) — text+image input
+- **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT, local by default. The OpenRouter routes for both directions now run on Nova's `voice` module (`voice/nova.go`); Piper/ElevenLabs stay on her-go's own `TTSEngine` until nova#86 lands a local adapter.
 
 ## Running
 
@@ -55,6 +56,19 @@ ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s 
 `her-go.service` is a **system-level** unit (`/etc/systemd/system/her-go.service`), not a per-user one — restarting it needs `sudo systemctl restart her-go`, not `systemctl --user restart her-go`.
 
 After that, `./her update` handles all future updates.
+
+**Toolchain:** `go.mod` requires Go ≥ 1.27.3 (the Nova dependency's own floor is 1.26.6). Before the first `./her update`
+after a toolchain bump, check the host with `ssh potato-remote "go version"`. With `GOTOOLCHAIN=auto` (the
+default) the `go build` inside `her update` downloads the required toolchain itself, but that needs working
+network on the host for the first build.
+
+**Vector dimensions:** if `embed.dimension` changes (see `embed:` in `config.yaml`), the store refuses to open
+with a mismatched index rather than corrupting vectors. `./her update` builds *and* restarts in one step, so do
+the dimension change as its own sequence on the host: update first (the old `embed:` settings keep working),
+then edit `config.yaml`, run `./her reembed`, then `sudo systemctl restart her-go`. `her reembed` makes one test
+embedding before it drops anything, skips rows that are already current (so an interrupted run resumes), exits
+non-zero if any row failed, and takes `--dry-run` (cost estimate) and `--force` (recompute every row — use it when
+the model changed but the dimension did not).
 
 ## Telegraph Setup (for Worker Agent reports)
 
@@ -199,6 +213,12 @@ This is the behavioral sibling of Data Primacy. Where Data Primacy says *values 
 
 - **Privacy first:** Tiered PII scrubbing. Hard identifiers (SSN, cards) redacted. Contact info tokenized + deanonymized in responses. Names/context pass through.
 - **Agent architecture:** Multi-agent pipeline. The **driver agent** (Qwen3) orchestrates each turn via tool calls (think, reply, done, search, use_tools). **Kimi K2** (chat model) generates user-facing replies. After the reply is sent, three background agents run in sequence: the **memory agent** extracts facts, the **mood agent** logs emotional valence, and the **introspection agent** generates self-memories (the bot's own reflections about the relationship and its behavior). A nightly **dream cycle** runs the **dream agent** (memory consolidation — merge, expire, promote) and the **persona agent** (persona.md rewrite from accumulated reflections). Tools are YAML-driven with per-tool `agent:` fields controlling which agent can call them.
+- **Agent loop and LLM transport: `github.com/AutumnsGrove/nova`.** The five agents' shared tool-calling loop
+  (`agent_engine`) runs on Nova's `agent` package, and the LLM transport runs on Nova's
+  `provider/openrouter`. her-go keeps the contracts (`agent_engine.EngineConfig` / `LoopResult`, `llm.Client`)
+  so agents and tools did not change. Nova is read-only for us: gaps go in
+  `docs/plans/NOVA-GAPS.md`, not patches. See `docs/NOVA-BRIDGE.md` for the mapping and the known
+  behavioural deltas.
 - **Memory cards:** Hierarchical folder-like containers for memories. The dream agent maintains card summaries and links memories into thematic clusters. Cards enable structured recall and give the agent a "table of contents" for its knowledge.
 - **Thinking traces:** Optional `/traces` command shows the agent's decision-making in a separate Telegram message before each reply. Per-phase traces (think, use_tools, reply, memory) with TUI and Telegram rendering.
 - **Persona evolution:** Bot rewrites its own persona.md during the nightly dream cycle. Requires minimum accumulated reflections and a cooldown period. Changes are gradual (damped via max_trait_shift).

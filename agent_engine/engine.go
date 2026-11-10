@@ -1,16 +1,17 @@
 // Package agent_engine provides a shared tool-calling loop for all agentic
-// agents (driver, memory, introspection, worker, dream). Each agent builds
-// an EngineConfig with its dependencies and hook functions, then calls
-// RunLoop(). The engine owns the loop skeleton — iteration, continuation
-// windows, tracing, TUI events, metrics — while agents own their identity,
-// prompt construction, and behavioral hooks via nil-safe callbacks.
+// agents (driver, memory, introspection, worker, dream). Each agent builds an
+// EngineConfig with its dependencies and hook functions, then calls RunLoop().
+// The engine owns the loop skeleton — iteration, continuation windows, tracing,
+// TUI events, metrics — while agents own their identity, prompt construction, and
+// behavioral hooks via nil-safe callbacks.
 //
-// This eliminates ~950 lines of duplicated loop logic that was previously
-// copy-pasted across 5 agents in 4 packages.
+// The loop itself runs on github.com/AutumnsGrove/nova's agent package (see
+// nova.go). This package owns the contract, not the mechanics: EngineConfig and
+// LoopResult are her-go's, which is what let the implementation change without
+// touching any of the five agents.
 package agent_engine
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -172,6 +173,11 @@ type EngineConfig struct {
 
 	// -- Continuation Hooks (all nil-safe) --
 
+	// HookTimeout bounds each hook call. A hook that exceeds it is abandoned and
+	// its return value discarded, so it must comfortably cover the slowest hook
+	// (database writes under contention). 0 = defaultHookTimeout.
+	HookTimeout time.Duration
+
 	// ContinuationMsg builds the system message injected when a continuation
 	// window opens. Receives window index (1-based), max windows, and a
 	// plain-text summary of progress so far. nil = engine uses a sensible
@@ -213,7 +219,6 @@ const (
 	ExitMaxContinuations = "max_continuations"
 	ExitError            = "error"
 	ExitHookBreak        = "hook_break"
-	ExitFinishReasonStop = "finish_reason_stop"
 )
 
 // ---------------------------------------------------------------------------
@@ -225,6 +230,9 @@ const (
 	maxIterationsPerWindowCap  = 50
 	defaultMaxContinuations    = 2
 	maxContinuationsCap        = 10
+
+	// defaultHookTimeout bounds each hook call (see EngineConfig.HookTimeout).
+	defaultHookTimeout = 2 * time.Minute
 )
 
 // coerce returns val if it's in [1, cap], otherwise returns def.
@@ -242,369 +250,23 @@ func coerce(val, def, cap int) int {
 // RunLoop
 // ---------------------------------------------------------------------------
 
-// RunLoop executes the shared tool-calling loop. The caller builds an
-// EngineConfig with all dependencies and hooks, then RunLoop drives the
-// iteration: LLM call → tool execution → trace/event emission → repeat.
+// RunLoop executes the shared tool-calling loop for one agent run.
+//
+// The implementation lives in nova.go and runs on github.com/AutumnsGrove/nova's
+// agent loop. This wrapper is the seam the five agents were written against: they
+// build an EngineConfig and read a LoopResult, and nothing about that contract
+// changed when the loop body moved. Keeping it also keeps the loop's published
+// behaviour ("how many iterations, which exit reason, which trace lines") in one
+// place rather than spread through the agents.
 //
 // The loop exits when:
 //   - The done tool sets ToolCtx.DoneCalled
-//   - The LLM returns no tool calls (and OnNoToolCalls doesn't handle it)
+//   - The model returns no tool calls
 //   - All continuation windows are exhausted
-//   - An LLM error occurs
-//   - A hook requests a break
-//   - The LLM returns finish_reason="stop" after tool execution
+//   - An LLM error occurs (after the fallback model has been tried)
+//   - A hook asks to stop (honoured at the end of the tool batch)
 func RunLoop(cfg EngineConfig) (*LoopResult, error) {
-	iterationsPerWindow := coerce(cfg.IterationsPerWindow, defaultIterationsPerWindow, maxIterationsPerWindowCap)
-	maxContinuations := coerce(cfg.MaxContinuations, defaultMaxContinuations, maxContinuationsCap)
-
-	if cfg.LLM == nil {
-		return nil, fmt.Errorf("engine: LLM client is required")
-	}
-	if cfg.ToolCtx == nil {
-		return nil, fmt.Errorf("engine: ToolCtx is required")
-	}
-
-	messages := cfg.Messages
-	var totalCost float64
-	var totalTools int
-	var totalIters int
-	var traceLines []string
-	tracing := cfg.TraceCallback != nil
-
-	// sendTrace pushes accumulated trace lines to the callback.
-	// Called after every tool call so the user sees incremental progress.
-	sendTrace := func() {
-		if !tracing || len(traceLines) == 0 {
-			return
-		}
-		if err := cfg.TraceCallback(strings.Join(traceLines, "\n")); err != nil {
-			log.Warn("trace: failed to send/update", "err", err)
-		}
-	}
-
-	// emit sends a TUI event through Phase or EventBus (nil-safe).
-	emit := func(e tui.Event) {
-		if cfg.Phase != nil {
-			cfg.Phase.Emit(e)
-		} else if cfg.EventBus != nil {
-			cfg.EventBus.Emit(e)
-		}
-	}
-
-	exitReason := ExitMaxContinuations
-
-	// >> HOOK: OnLoopStart (fires once before first LLM call)
-	if cfg.OnLoopStart != nil {
-		log.Debug("hook fired", "agent", cfg.Name, "hook", "OnLoopStart")
-		cfg.OnLoopStart(messages)
-	}
-
-outer:
-	for window := 0; window <= maxContinuations; window++ {
-
-		// -- Continuation window injection --
-		if window > 0 {
-			summary := BuildContinuationSummary(traceLines)
-			var contMsg string
-			if cfg.ContinuationMsg != nil {
-				contMsg = cfg.ContinuationMsg(window, maxContinuations, summary)
-			} else {
-				contMsg = fmt.Sprintf(
-					"You have used all %d iterations in the previous window without calling done. "+
-						"Continuation window %d of %d. Your progress so far:\n%s\n\n"+
-						"Continue your work and call done when finished.",
-					iterationsPerWindow, window, maxContinuations, summary,
-				)
-			}
-			messages = append(messages, llm.ChatMessage{
-				Role:    "system",
-				Content: contMsg,
-			})
-			log.Infof("  [%s] continuation window %d/%d", cfg.Name, window, maxContinuations)
-
-			if tracing {
-				traceLines = append(traceLines, fmt.Sprintf(
-					"🔄 <i>continuation window %d/%d</i>", window, maxContinuations))
-				sendTrace()
-			}
-		}
-
-		for i := 0; i < iterationsPerWindow; i++ {
-			totalIters++
-
-			// >> HOOK: PreIteration
-			if cfg.PreIteration != nil {
-				log.Debug("hook fired", "agent", cfg.Name, "hook", "PreIteration", "iter", i, "window", window)
-				cfg.PreIteration(i, window)
-			}
-
-			// Tool choice — ToolChoiceFirst on the very first iteration only.
-			var toolChoice interface{}
-			if i == 0 && window == 0 && cfg.ToolChoiceFirst != nil {
-				toolChoice = cfg.ToolChoiceFirst
-			}
-
-			// -- LLM call --
-			resp, err := cfg.LLM.ChatCompletionWithTools(messages, cfg.ToolDefs, toolChoice)
-			if err != nil {
-				log.Error("LLM error (primary + fallback both failed)",
-					"agent", cfg.Name, "err", err)
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf(
-						"❌ <b>error:</b> %s", TruncateLog(err.Error(), 100)))
-					sendTrace()
-				}
-
-				// >> HOOK: OnError (can suppress the default break)
-				if cfg.OnError != nil {
-					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnError", "err", err)
-					if cfg.OnError(err, i, window) {
-						continue // hook suppressed — retry or recover
-					}
-				}
-
-				exitReason = ExitError
-				break outer
-			}
-
-			// -- Metrics --
-			if cfg.Store != nil {
-				_ = cfg.Store.SaveMetric(memory.MetricInput{
-					Model: resp.Model, PromptTokens: resp.PromptTokens, CompletionTokens: resp.CompletionTokens,
-					TotalTokens: resp.TotalTokens, CostUSD: resp.CostUSD, MessageID: cfg.TriggerMsgID,
-					IsFallback: resp.UsedFallback, AgentRole: cfg.MetricRole,
-					CacheReadTokens: resp.CacheReadTokens, CacheWriteTokens: resp.CacheWriteTokens,
-					Provider: resp.Provider,
-				})
-			}
-			totalCost += resp.CostUSD
-			log.Infof("  [%s] tokens: %d prompt + %d completion | $%.6f | finish=%s",
-				cfg.Name, resp.PromptTokens, resp.CompletionTokens,
-				resp.CostUSD, resp.FinishReason)
-
-			// -- Emit iteration event --
-			emit(tui.AgentIterEvent{
-				Time:             time.Now(),
-				TurnID:           cfg.TriggerMsgID,
-				Iteration:        totalIters - 1,
-				PromptTokens:     resp.PromptTokens,
-				CompletionTokens: resp.CompletionTokens,
-				CostUSD:          resp.CostUSD,
-				FinishReason:     resp.FinishReason,
-				CacheReadTokens:  resp.CacheReadTokens,
-				CacheWriteTokens: resp.CacheWriteTokens,
-				Provider:         resp.Provider,
-			})
-
-			// Surface model fallback in traces.
-			if tracing && resp.UsedFallback {
-				traceLines = append(traceLines, fmt.Sprintf(
-					"⚡ <i>fallback: %s</i>", resp.Model))
-				sendTrace()
-			}
-
-			// >> HOOK: PostIteration (before tool execution)
-			if cfg.PostIteration != nil {
-				log.Debug("hook fired", "agent", cfg.Name, "hook", "PostIteration", "iter", i, "window", window)
-				if cfg.PostIteration(i, window, resp) {
-					log.Info("hook break", "agent", cfg.Name, "hook", "PostIteration")
-					exitReason = ExitHookBreak
-					break outer
-				}
-			}
-
-			// -- Surface reasoning model <think> blocks --
-			// Models like MiMo wrap internal reasoning in <think>...</think>
-			// tags. Extract the thinking text and emit it as a synthetic
-			// think tool call so it appears in traces, TUI, and sim reports
-			// — same visibility as the explicit think tool that instruct
-			// models use.
-			if thought, cleaned, ok := extractThinkBlock(resp.Content); ok {
-				resp.Content = cleaned
-
-				if tracing {
-					traceLines = append(traceLines, fmt.Sprintf(
-						"🧠 <i>%s</i>", TruncateLog(thought, 300)))
-					sendTrace()
-				}
-				if cfg.Phase != nil {
-					cfg.Phase.EmitToolCall("think", TruncateLog(thought, 200), "", false)
-				} else {
-					emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						TurnID:   cfg.TriggerMsgID,
-						Source:   cfg.Name,
-						ToolName: "think",
-						Args:     fmt.Sprintf(`{"thought":"%s"}`, TruncateLog(thought, 200)),
-						Result:   "(internal reasoning)",
-					})
-				}
-			}
-
-			// -- No tool calls → exit (unless hook handles it) --
-			if len(resp.ToolCalls) == 0 {
-				if cfg.OnNoToolCalls != nil {
-					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnNoToolCalls")
-					if cfg.OnNoToolCalls(resp) {
-						continue
-					}
-				}
-				exitReason = ExitNoToolCalls
-				break outer
-			}
-
-			// -- Append assistant message with tool calls --
-			messages = append(messages, llm.ChatMessage{
-				Role:      "assistant",
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-
-			// -- Execute each tool call --
-			for _, tc := range resp.ToolCalls {
-				// Guard: skip tool calls with empty names. Some providers
-				// occasionally emit phantom tool call deltas.
-				if tc.Function.Name == "" {
-					log.Warn("skipping tool call with empty name",
-						"agent", cfg.Name, "id", tc.ID)
-					continue
-				}
-
-				// >> HOOK: ActiveToolGuard
-				if cfg.ActiveToolGuard != nil {
-					if errResult, reject := cfg.ActiveToolGuard(tc); reject {
-						log.Debug("hook rejected tool", "agent", cfg.Name, "hook", "ActiveToolGuard", "tool", tc.Function.Name)
-						messages = append(messages, llm.ChatMessage{
-							Role:       "tool",
-							Content:    errResult,
-							ToolCallID: tc.ID,
-						})
-						continue
-					}
-				}
-
-				// >> HOOK: PreTool (dry-run interception, safety caps)
-				var result string
-				if cfg.PreTool != nil {
-					if skipResult, skip := cfg.PreTool(tc, cfg.ToolCtx); skip {
-						log.Debug("hook skipped tool", "agent", cfg.Name, "hook", "PreTool", "tool", tc.Function.Name)
-						result = skipResult
-					} else {
-						result = tools.Execute(tc.Function.Name, tc.Function.Arguments, cfg.ToolCtx)
-					}
-				} else {
-					result = tools.Execute(tc.Function.Name, tc.Function.Arguments, cfg.ToolCtx)
-				}
-
-				totalTools++
-				isError := strings.HasPrefix(result, "error:") ||
-					strings.HasPrefix(result, "rejected:")
-
-				// == BUILT-IN: Trace emission ==
-				// Every agent gets consistent formatting via tools.FormatTrace.
-				if tracing {
-					line := tools.FormatTrace(tc.Function.Name, tc.Function.Arguments, result)
-					traceLines = append(traceLines, line)
-					sendTrace()
-				}
-
-				// == BUILT-IN: Lite trace ==
-				if cfg.LiteToolHook != nil {
-					cfg.LiteToolHook(tc.Function.Name)
-				}
-
-				// == BUILT-IN: TUI event emission ==
-				if cfg.Phase != nil {
-					cfg.Phase.EmitToolCall(
-						tc.Function.Name,
-						TruncateLog(tc.Function.Arguments, 200),
-						TruncateLog(result, 200),
-						isError,
-					)
-				} else {
-					emit(tui.ToolCallEvent{
-						Time:     time.Now(),
-						TurnID:   cfg.TriggerMsgID,
-						Source:   cfg.Name,
-						ToolName: tc.Function.Name,
-						Args:     TruncateLog(tc.Function.Arguments, 200),
-						Result:   TruncateLog(result, 200),
-						IsError:  isError,
-					})
-				}
-
-				// >> HOOK: PostToolResult (MUTABLE — can transform the result)
-				// This is the only hook that can change what goes into
-				// the message history. Fires before message append.
-				if cfg.PostToolResult != nil {
-					log.Debug("hook fired", "agent", cfg.Name, "hook", "PostToolResult", "tool", tc.Function.Name)
-					result = cfg.PostToolResult(tc, result, isError)
-					// Re-check error status since the transform may have changed it.
-					isError = strings.HasPrefix(result, "error:") ||
-						strings.HasPrefix(result, "rejected:")
-				}
-
-				// >> HOOK: PostTool (observe-only: SaveAgentTurn, think capture, etc.)
-				if cfg.PostTool != nil {
-					log.Debug("hook fired", "agent", cfg.Name, "hook", "PostTool", "tool", tc.Function.Name)
-					cfg.PostTool(tc, result, isError)
-				}
-
-				// Append tool result to message history.
-				messages = append(messages, llm.ChatMessage{
-					Role:       "tool",
-					Content:    result,
-					ToolCallID: tc.ID,
-				})
-			}
-
-			// Exit when the agent explicitly signals done.
-			if cfg.ToolCtx.DoneCalled {
-				// >> HOOK: OnDone (fires specifically on done signal)
-				if cfg.OnDone != nil {
-					log.Debug("hook fired", "agent", cfg.Name, "hook", "OnDone")
-					cfg.OnDone(messages)
-				}
-				exitReason = ExitDone
-				break outer
-			}
-
-			// Also exit on finish_reason=stop after tool execution —
-			// some providers do this (the OpenCode #14972 pattern).
-			if resp.FinishReason == "stop" {
-				exitReason = ExitFinishReasonStop
-				break outer
-			}
-		}
-
-		// Inner loop exhausted without done. If at the hard cap, give up.
-		if window == maxContinuations {
-			log.Warn("hit max continuations without done signal",
-				"agent", cfg.Name,
-				"total_calls", iterationsPerWindow*(window+1))
-			if tracing {
-				traceLines = append(traceLines, "⚠️ <i>max continuations reached</i>")
-				sendTrace()
-			}
-			exitReason = ExitMaxContinuations
-			break outer
-		}
-	}
-
-	// >> HOOK: OnLoopExit
-	if cfg.OnLoopExit != nil {
-		log.Debug("hook fired", "agent", cfg.Name, "hook", "OnLoopExit", "reason", exitReason)
-		cfg.OnLoopExit(exitReason, messages)
-	}
-
-	return &LoopResult{
-		Messages:   messages,
-		TotalCost:  totalCost,
-		ToolCalls:  totalTools,
-		Iterations: totalIters,
-		ExitReason: exitReason,
-		TraceLines: traceLines,
-	}, nil
+	return runNova(cfg)
 }
 
 // ---------------------------------------------------------------------------

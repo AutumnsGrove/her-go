@@ -79,22 +79,22 @@ For a deep dive into model calls, data flow, and the dual compaction system, see
 
 ## The Gang (agents + models)
 
-Mira uses a mix of agents (autonomous LLM loops with their own decision-making) and tool LLMs (one-shot calls for specific tasks). The five agents — driver, memory, mood, introspection, and dream — each have their own prompt, tools, and trace stream. The tool LLMs (reply, classifier, vision) are simpler: they get called by agents, return one answer, and that's it. Local models handle embeddings (for semantic search), speech-to-text, and text-to-speech, so your voice data never leaves your machine.
+Mira uses a mix of agents (autonomous LLM loops with their own decision-making) and tool LLMs (one-shot calls for specific tasks). The five agents — driver, memory, mood, introspection, and dream — each have their own prompt, tools, and trace stream. The tool LLMs (reply, classifier, vision) are simpler: they get called by agents, return one answer, and that's it. Speech-to-text and text-to-speech run locally, so voice recordings never leave your machine; LLM and embedding inference run remotely on OpenRouter.
 
 | Role | Type | Model | Via | When it runs |
 |---|---|---|---|---|
-| **driver** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | every turn (foreground) |
-| **memory** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | after each reply (background) |
-| **mood** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | after memory (background) |
-| **introspection** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | after mood (background) |
-| **dream** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | nightly dream cycle (04:00 local) |
-| **persona** | agent | Qwen3 235B (`qwen/qwen3-235b-a22b-2507`) | OpenRouter | nightly dream cycle (after dream) |
-| reply | tool LLM | Kimi K2 (`moonshotai/kimi-k2-0905`) | OpenRouter → Groq | called by driver via the `reply` tool |
+| **driver** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → DeepInfra/Morph | every turn (foreground) |
+| **memory** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → Morph/DeepInfra | after each reply (background) |
+| **mood** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → Morph/DeepInfra | after memory (background) |
+| **introspection** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → Morph/DeepInfra | after mood (background) |
+| **dream** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → Morph/DeepInfra | nightly dream cycle (04:00 local) |
+| **persona** | agent | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → Morph/DeepInfra | nightly dream cycle (after dream) |
+| reply | tool LLM | MiMo V2.6 Pro (`xiaomi/mimo-v2.6-pro`) | OpenRouter → xiaomi/fp8 | called by driver via the `reply` tool |
 | classifier | tool LLM | Gemini 3.1 Flash Lite (`google/gemini-3.1-flash-lite`) | OpenRouter | called by memory + mood to gate writes (fail-open) |
-| vision | tool LLM | Gemini 3 Flash (`google/gemini-3-flash-preview`) | OpenRouter | called by driver via `view_image` |
-| embeddings | local | Nomic Embed Text | Local (Ollama) | semantic dedup for memories + moods |
+| vision | tool LLM | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → DeepInfra/Morph | called by driver via `view_image` |
+| embeddings | remote | Perplexity pplx-embed (`perplexity/pplx-embed-v1-0.6b`, 1024-dim) | OpenRouter | semantic dedup for memories + moods |
 | STT | local | Parakeet | Local | voice memo → text |
-| TTS | local | Piper | Local | text → voice reply |
+| TTS | local | Piper (or OpenRouter / ElevenLabs, config) | Local by default | text → voice reply |
 
 Each agent registers itself with the **trace inbox** (`trace/`) at init time — adding a new agent is one `trace.Register(...)` call from its package.
 
@@ -166,7 +166,7 @@ her setup     # Interactive first-run setup
 
 ## Resource Requirements
 
-Mira runs on surprisingly modest hardware. The main process uses about 35–50 MB of RAM, and Ollama (for embeddings) adds another 50 MB. You can run the entire stack on a Raspberry Pi or similar single-board computer with as little as 1 GB of RAM.
+Mira runs on surprisingly modest hardware. The main process uses about 35–50 MB of RAM and needs no local model server at all — LLM calls, embeddings and voice-model choices all come from configuration. You can run the entire stack on a Raspberry Pi or similar single-board computer with as little as 1 GB of RAM.
 
 ### Minimal Setup (1 GB RAM / Low-Power SBC)
 
@@ -174,7 +174,6 @@ This configuration runs successfully on a Le Potato (ARM64, 2 GB RAM, similar to
 
 **What runs locally:**
 - `her-go` binary (35 MB RAM)
-- Ollama + nomic-embed-text (50 MB RAM)
 
 **What runs remotely:**
 - All LLM calls (driver, chat, memory agents) → OpenRouter
@@ -193,15 +192,15 @@ voice:
     enabled: false  # disable TTS to save RAM, or use a remote service
 
 embed:
-  base_url: "http://localhost:11434/v1"
-  model: "nomic-embed-text"  # lightweight 768-dim embeddings (50 MB)
+  base_url: "https://openrouter.ai/api/v1"
+  model: "perplexity/pplx-embed-v1-0.6b"
+  dimension: 1024
 ```
 
 ### Standard Setup (8+ GB RAM / Desktop/Laptop)
 
 **What runs locally:**
 - `her-go` binary
-- Ollama + nomic-embed-text
 - Parakeet STT (Apple Silicon only, ~200 MB)
 - Piper TTS (~100 MB)
 
@@ -215,10 +214,9 @@ This gives you full privacy for voice processing while keeping the heavy lifting
 | Component | RAM | Notes |
 |---|---|---|
 | `her-go` binary | 35–50 MB | Main process |
-| Ollama (nomic-embed-text) | 50 MB | Semantic search embeddings |
 | Parakeet STT (local) | ~200 MB | Apple Silicon only, optional |
 | Piper TTS (local) | ~100 MB | Optional, can use remote TTS instead |
-| **Total (minimal)** | **~100 MB** | Remote voice via OpenRouter |
+| **Total (minimal)** | **~50 MB** | Remote voice and embeddings via OpenRouter |
 | **Total (full local voice)** | **~400 MB** | All voice processing on-device |
 
 LLM inference happens remotely via OpenRouter, so even a tiny SBC can run a fully-featured instance. The only constraint is network latency — each turn makes 1–3 LLM calls depending on whether the driver agent needs to think, search, or use tools.
@@ -255,7 +253,7 @@ voice:
 
 ### Text-to-Speech (TTS)
 
-Mira uses **Piper** for TTS — a fast, privacy-first local engine with natural-sounding voices.
+Mira uses **Piper** by default for TTS — a fast, privacy-first local engine with natural-sounding voices. Two remote engines are also supported (OpenRouter and ElevenLabs) and both speak through the same `TTSEngine` interface, so you can switch engines, or fail over between them, with config alone. The OpenRouter engine runs on [Nova's voice module](docs/NOVA-BRIDGE.md); Piper stays local until Nova can drive it (nova#86).
 
 **Setup:**
 
@@ -315,13 +313,13 @@ That's it. The defaults for everything else (models, thresholds, etc.) are alrea
 
 ### Model Configuration
 
-Mira uses different models for different jobs. The defaults use MiMo v2.5 for most tasks (via the `xiaomi/fp8` provider for excellent prompt caching — ~80% cache hit rate). You can change these if you want different cost/quality tradeoffs:
+Mira uses different models for different jobs. Replies come from MiMo v2.6 Pro (its voice is the one that was tuned); the driver and every background agent run on DeepSeek V4.1 Flash, pinned to `deepinfra/fp8` with `morph/fp8` as spillover. Both routes cache heavily — watch `cache_read_tokens` in the metrics table if cost moves. You can change these if you want different cost/quality tradeoffs:
 
-- **`chat.model`** — Generates the natural-language replies you see in Telegram (default: `xiaomi/mimo-v2.5-pro`)
-- **`driver.model`** — Orchestrates each turn, decides when to think/search/recall/reply (default: `xiaomi/mimo-v2.5`)
-- **`memory_agent.model`** — Extracts facts in the background after each reply (default: `xiaomi/mimo-v2.5`)
+- **`chat.model`** — Generates the natural-language replies you see in Telegram (default: `xiaomi/mimo-v2.6-pro`)
+- **`driver.model`** — Orchestrates each turn, decides when to think/search/recall/reply (default: `deepseek/deepseek-v4.1-flash-1017`)
+- **`memory_agent.model`** — Extracts facts in the background after each reply (default: `deepseek/deepseek-v4.1-flash-1017`)
 - **`classifier.model`** — Fast safety gate for memory/mood writes (default: `google/gemini-3.1-flash-lite`)
-- **`vision.model`** — Describes images (default: `xiaomi/mimo-v2.5`)
+- **`vision.model`** — Describes images (default: `deepseek/deepseek-v4.1-flash-1017`)
 
 The other agents (`mood_agent`, `introspection_agent`, `dream_agent`, `persona_agent`) fall back to the memory agent model if you don't specify them explicitly.
 
@@ -329,7 +327,7 @@ The other agents (`mood_agent`, `introspection_agent`, `dream_agent`, `persona_a
 
 These run on your machine for privacy-first processing:
 
-- **`embed.base_url`** — Embedding server for semantic search. Defaults to Ollama at `http://localhost:11434/v1`. Run `ollama pull nomic-embed-text` to download the model.
+- **`embed.base_url`** — Embeddings for semantic search and duplicate detection. Defaults to OpenRouter (`perplexity/pplx-embed-v1-0.6b`, 1024 dimensions), so nothing runs locally. A local Ollama or LM Studio server works too — set `base_url`, `model`, and `dimension` to match, then run `her reembed` once to rebuild the index.
 - **`voice.stt` / `voice.tts`** — Speech engines. See [Voice Setup](#voice-setup) above.
 
 ### Feature Toggles

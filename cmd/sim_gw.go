@@ -42,6 +42,10 @@ Example:
 	RunE: runSimGW,
 }
 
+// llmBackendFlag lets one sim run on the legacy LLM transport without editing
+// config.yaml. (The agent loop has no such flag: it only has one implementation.)
+var llmBackendFlag string
+
 func init() {
 	f := simGWCmd.Flags()
 	f.StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
@@ -73,6 +77,7 @@ func init() {
 	f.BoolVar(&directReplyFlag, "direct-reply", false, "enable reply_direct tool — driver writes reply text directly (experimental)")
 	f.BoolVar(&fastPathFlag, "fast-path", false, "enable fast-path classifier — route simple messages directly to chat model, skip driver")
 	f.BoolVar(&noFastPathFlag, "no-fast-path", false, "disable fast-path classifier (overrides config.yaml)")
+	f.StringVar(&llmBackendFlag, "llm-backend", "", "override llm.backend for this run (legacy|nova)")
 	simGWCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(simGWCmd)
 }
@@ -110,6 +115,12 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	// --- Apply CLI flag overrides ---
 	applySimModelOverrides(cfg)
+
+	// Lets one sim run on the legacy LLM transport without editing config.yaml.
+	if llmBackendFlag != "" {
+		llm.SetBackend(llmBackendFlag)
+		log.Infof("sim: llm backend → %s", llmBackendFlag)
+	}
 
 	// --- Load suite YAML ---
 	suiteData, err := os.ReadFile(suiteFlag)
@@ -602,7 +613,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			SearXNGClient: searxngClient,
 			TavilyClient:  tavilyClient,
 			Cfg:           cfg,
-			RootDir:      simRootDir,
+			RootDir:       simRootDir,
 			// Route fired schedule messages into the sim's actual conversation
 			// (not a synthetic tg_0_<ts> ID) so schedule_context can find them.
 			GetConversationID: func(chatID int64) string {

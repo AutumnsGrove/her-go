@@ -1,0 +1,89 @@
+{
+  "suite": "Worker Agent — Research Report",
+  "date": "2026-11-10 14:08",
+  "duration": "7m14s",
+  "cost_usd": 0.0089,
+  "turns": 2,
+  "total_tools": 18,
+  "tool_set": {
+    "done": 3,
+    "read_file": 1,
+    "recall_memories": 4,
+    "reply": 2,
+    "safety→gate": 2,
+    "save_memory": 3,
+    "send_task": 1,
+    "style→gate": 2
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "duration_s": 340.7,
+      "cost_usd": 0.0034,
+      "tool_calls": 9,
+      "tools": [
+        "recall_memories",
+        "recall_memories",
+        "send_task",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories"
+      ],
+      "cache_read_tokens": 43136,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 2,
+      "duration_s": 63.1,
+      "cost_usd": 0.0055,
+      "tool_calls": 9,
+      "tools": [
+        "save_memory",
+        "read_file",
+        "save_memory",
+        "save_memory",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "done"
+      ],
+      "cache_read_tokens": 60032,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 3,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    }
+  ],
+  "memories_post_run": 2,
+  "moods_post_run": 0,
+  "memory_saves_total": 3,
+  "error_tool_results": 1,
+  "fallback_calls": 0,
+  "cache_hit_pct": 84,
+  "models": {
+    "Chat": "xiaomi/mimo-v2.6-pro",
+    "Classifier": "google/gemini-3.1-flash-lite",
+    "Dream": "xiaomi/mimo-v2.6-flash",
+    "Driver": "xiaomi/mimo-v2.6-pro",
+    "Embed": "perplexity/pplx-embed-v1-0.6b",
+    "Introspection": "xiaomi/mimo-v2.6-flash",
+    "Memory": "xiaomi/mimo-v2.6-flash",
+    "Mood": "xiaomi/mimo-v2.6-flash",
+    "Vision": "xiaomi/mimo-v2.6-flash"
+  }
+}

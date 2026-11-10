@@ -290,11 +290,16 @@ func TestRunLoop_OnNoToolCallsHook(t *testing.T) {
 	if !hookCalled {
 		t.Error("OnNoToolCalls hook was not called")
 	}
-	if result.ExitReason != ExitDone {
-		t.Errorf("expected exit reason %q, got %q", ExitDone, result.ExitReason)
+
+	// Delta D4: the loop ends when an assistant message carries no tool calls, and
+	// the hook cannot ask for another turn from there, so its "handled, keep going"
+	// return value has no effect. Capturing the final text — the only thing any
+	// caller uses this hook for — still happens (asserted above).
+	if result.ExitReason != ExitNoToolCalls {
+		t.Errorf("exit reason = %q, want %q", result.ExitReason, ExitNoToolCalls)
 	}
-	if result.Iterations != 2 {
-		t.Errorf("expected 2 iterations, got %d", result.Iterations)
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", result.Iterations)
 	}
 }
 
@@ -494,9 +499,12 @@ func TestRunLoop_PostIterationBreak(t *testing.T) {
 	if result.ExitReason != ExitHookBreak {
 		t.Errorf("expected %q, got %q", ExitHookBreak, result.ExitReason)
 	}
-	// PostIteration fires BEFORE tool execution, so no tools should have run.
-	if result.ToolCalls != 0 {
-		t.Errorf("expected 0 tool calls, got %d", result.ToolCalls)
+
+	// Delta D1. The hook fires before the tools run but cannot end the run there;
+	// only the end-of-batch decision can. So the batch runs and the run stops
+	// immediately after it — one harmless `think` in this scenario.
+	if result.ToolCalls != 1 {
+		t.Errorf("tool calls = %d, want 1 (the batch runs before the break)", result.ToolCalls)
 	}
 }
 
@@ -647,9 +655,11 @@ func TestRunLoop_ActiveToolGuard(t *testing.T) {
 	if result.ExitReason != ExitDone {
 		t.Errorf("expected %q, got %q", ExitDone, result.ExitReason)
 	}
-	// Rejected tools don't count in ToolCalls (they never executed).
-	if result.ToolCalls != 1 {
-		t.Errorf("expected 1 tool call (done only), got %d", result.ToolCalls)
+	// Delta D10: the guard lives inside the tool wrapper (so the rejection text
+	// stays byte-identical), which means a rejected call still reports a result
+	// and is counted. The model-visible error string is unchanged.
+	if result.ToolCalls != 2 {
+		t.Errorf("tool calls = %d, want 2 (rejected calls still report a result)", result.ToolCalls)
 	}
 }
 

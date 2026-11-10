@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"her/llm"
+	"her/llm/llmtest"
 	"her/memory"
 )
 
@@ -180,17 +181,8 @@ func TestRejectionMessage(t *testing.T) {
 func mockClassifierServer(t *testing.T, response string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The llm client expects an OpenAI-compatible response body.
-		// We only need the choices[0].message.content field.
-		body := map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{"message": map[string]string{"content": response}, "finish_reason": "stop"},
-			},
-			"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-			"model": "test-model",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(body)
+		// The llm client streams; llmtest serves the matching SSE answer.
+		llmtest.WriteTextCompletion(w, response)
 	}))
 }
 
@@ -264,15 +256,7 @@ func TestCheck(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&req)
 			b, _ := json.Marshal(req)
 			capturedBody = string(b)
-			body := map[string]interface{}{
-				"choices": []map[string]interface{}{
-					{"message": map[string]string{"content": "SAVE"}, "finish_reason": "stop"},
-				},
-				"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
-				"model": "test-model",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(body)
+			llmtest.WriteTextCompletion(w, "SAVE")
 		}))
 		defer srv.Close()
 		client := llm.NewClient(srv.URL, "test-key", "test-model", 0, 64)

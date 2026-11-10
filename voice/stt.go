@@ -16,15 +16,18 @@ package voice
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/AutumnsGrove/nova/provider"
+	"github.com/AutumnsGrove/nova/voice/openrouter"
 
 	"her/config"
 	"her/logger"
@@ -42,6 +45,10 @@ type Client struct {
 	apiKey        string // auth token for remote engines; empty for local (parakeet)
 	fallbackModel string // fallback model for retries; empty = no fallback
 	httpClient    *http.Client
+
+	// Nova's OpenRouter adapter, built on first remote transcription (see nova.go).
+	novaOnce sync.Once
+	novaSTT  *openrouter.Client
 }
 
 // NewClient creates an STT client from config. Returns nil if voice is
@@ -146,10 +153,19 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (TranscribeResul
 }
 
 // isRetriable checks whether an error should trigger a fallback retry.
-// Retriable: timeouts, 503 (service unavailable), 502 (bad gateway), 504 (gateway timeout).
+// Retriable: timeouts, rate limits and server errors (429, 5xx).
+//
+// Nova's adapter returns a typed *provider.Error that already classifies the
+// status, so ask it first (errors.As is Go's "isinstance" for wrapped errors).
+// The string checks remain for the local multipart path and for transport
+// errors, which carry no status.
 func isRetriable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var perr *provider.Error
+	if errors.As(err, &perr) {
+		return perr.Retryable
 	}
 	errStr := err.Error()
 	return strings.Contains(errStr, "timeout") ||
@@ -163,7 +179,10 @@ func isRetriable(err error) bool {
 // Extracted from Transcribe to enable fallback retries.
 func (c *Client) transcribeWithModel(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
 	if isOpenRouter(c.baseURL) {
-		return c.transcribeJSON(audioBytes, filename, model)
+		// Nova's adapter owns the OpenRouter wire shape (multipart, the file part
+		// named clip.<format>) and the cost. The base64-JSON shape this file used
+		// to carry is gone with it.
+		return c.transcribeWithNova(audioBytes, filename, model)
 	}
 	return c.transcribeMultipart(audioBytes, filename, model)
 }
@@ -171,47 +190,6 @@ func (c *Client) transcribeWithModel(audioBytes []byte, filename string, model s
 // isOpenRouter checks whether the base URL points to OpenRouter's API.
 func isOpenRouter(baseURL string) bool {
 	return strings.Contains(baseURL, "openrouter.ai")
-}
-
-// audioFormatFromFilename extracts the format string OpenRouter expects
-// from the filename extension. Falls back to "ogg" if unrecognized.
-func audioFormatFromFilename(filename string) string {
-	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
-	switch ext {
-	case "ogg", "wav", "mp3", "flac", "webm":
-		return ext
-	default:
-		return "ogg"
-	}
-}
-
-// transcribeJSON uses OpenRouter's JSON+base64 format.
-func (c *Client) transcribeJSON(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
-	payload := map[string]any{
-		"model": model,
-		"input_audio": map[string]string{
-			"data":   base64.StdEncoding.EncodeToString(audioBytes),
-			"format": audioFormatFromFilename(filename),
-		},
-		"language": "en",
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("marshaling JSON: %w", err)
-	}
-
-	url := c.baseURL + "/audio/transcriptions"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	return c.doTranscribe(req)
 }
 
 // transcribeMultipart uses the standard OpenAI Whisper multipart/form-data format.

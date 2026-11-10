@@ -12,8 +12,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/AutumnsGrove/nova/provider"
+
+	"her/config"
 	"her/logger"
 )
 
@@ -25,6 +29,12 @@ var log = logger.WithPrefix("llm")
 // logs the entire messages array and response details to the file logger.
 // This is verbose but essential for debugging prompt issues.
 var debugMode bool
+
+// streamTimeout is the ceiling on one streaming provider call. The regular
+// httpClient.Timeout (60s unless configured) is too short for long streams, so
+// streaming requests carry their own context deadline instead. One constant so
+// the legacy and Nova transports cannot drift apart.
+const streamTimeout = 3 * time.Minute
 
 // SetDebugMode enables or disables full API request/response logging.
 // Called from cmd/run.go based on the config.Debug setting.
@@ -63,6 +73,12 @@ type Client struct {
 	// same session_id are pinned to the same provider endpoint, maximizing
 	// prompt cache hits across a conversation. Max 256 chars.
 	sessionID string
+
+	// Nova transport, built on first use and only when llm.backend is "nova".
+	// See nova.go: the two backends answer the same three methods, which is what
+	// makes them swappable by config and comparable by test.
+	novaOnce             sync.Once
+	novaProviderInstance provider.Provider
 }
 
 // ReasoningControl maps to OpenRouter's `reasoning` parameter object.
@@ -106,7 +122,7 @@ type ChatMessage struct {
 // text or an image URL (which can be a data: URI with base64 content).
 // This maps to the OpenAI "content parts" format used for vision models.
 type ContentPart struct {
-	Type     string    `json:"type"`               // "text" or "image_url"
+	Type     string    `json:"type"`                // "text" or "image_url"
 	Text     string    `json:"text,omitempty"`      // set when Type is "text"
 	ImageURL *ImageURL `json:"image_url,omitempty"` // set when Type is "image_url"
 }
@@ -177,7 +193,7 @@ type FunctionCall struct {
 // "tools" parameter format. In Python's OpenAI SDK you'd pass these as
 // dicts — in Go we use structs that marshal to the same JSON shape.
 type ToolDef struct {
-	Type     string         `json:"type"` // always "function"
+	Type     string          `json:"type"` // always "function"
 	Function ToolFunctionDef `json:"function"`
 }
 
@@ -192,6 +208,7 @@ type ToolFunctionDef struct {
 // ChatResponse holds the LLM's reply plus token usage data for metrics.
 type ChatResponse struct {
 	Content          string
+	Reasoning        string     // model thinking, when the provider reports it separately (Nova backend)
 	ToolCalls        []ToolCall // populated if the model wants to call tools
 	FinishReason     string     // "stop", "tool_calls", "length", etc. — drives the agent loop
 	PromptTokens     int
@@ -279,7 +296,7 @@ type chatAPIResponse struct {
 // promptTokensDetails holds OpenRouter's cache token breakdown,
 // nested inside the usage object.
 type promptTokensDetails struct {
-	CachedTokens    int `json:"cached_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
@@ -401,6 +418,9 @@ func (c *Client) WithFallback(model string, temperature float64, maxTokens int) 
 // ChatCompletion sends a conversation to the LLM and returns its response.
 // For regular conversation — no tools.
 func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
+	if backend == BackendNova {
+		return c.novaChatCompletion(messages, nil, nil, nil)
+	}
 	return c.chatCompletion(messages, nil)
 }
 
@@ -414,6 +434,11 @@ func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
 // still capturing the full response for style gating, length guards, PII
 // deanonymization, TTS, and DB persistence.
 func (c *Client) ChatCompletionStreaming(messages []ChatMessage, onChunk func(string)) (*ChatResponse, error) {
+	if backend == BackendNova {
+		// Nova always streams, so the fallback path streams too instead of
+		// replaying the whole answer in one callback.
+		return c.novaChatCompletion(messages, nil, nil, onChunk)
+	}
 	resp, err := c.doStreamingChat(c.model, c.temperature, c.maxTokens, messages, onChunk)
 	if err != nil && c.fallbackModel != "" && isRetriable(err) {
 		log.Warn("streaming chat failed, falling back to non-streaming",
@@ -443,6 +468,9 @@ func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef
 	var choice interface{}
 	if len(toolChoice) > 0 {
 		choice = toolChoice[0]
+	}
+	if backend == BackendNova {
+		return c.novaChatCompletion(messages, tools, choice, nil)
 	}
 	return c.chatCompletion(messages, tools, choice)
 }
@@ -609,8 +637,8 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	// Opt in to OpenRouter routing metadata — gives us the provider name.
 	req.Header.Set("X-OpenRouter-Metadata", "enabled")
 
@@ -732,7 +760,7 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	// httpClient.Timeout (60s) is too short for long streaming responses
 	// but too coarse to catch stuck connections. This context guarantees
 	// we never block longer than 3 minutes on a single streaming call.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), streamTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
@@ -741,8 +769,8 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -943,8 +971,8 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)

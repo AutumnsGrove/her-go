@@ -17,10 +17,13 @@ import (
 	"time"
 )
 
-// Dimension is the vector size the embedding model produces.
-// nomic-embed-text-v1.5 → 768, OpenAI text-embedding-3-small → 1536, etc.
-// Set this based on your model; it's used to size the sqlite-vec virtual table.
-const DefaultDimension = 768
+// DefaultDimension is the fallback vector size when a caller passes 0.
+//
+// The real value always comes from config.yaml (`embed.dimension`) and is passed
+// explicitly to NewClient — this constant only keeps a misconfigured caller from
+// producing a zero-length table. Current default model,
+// perplexity/pplx-embed-v1-0.6b, produces 1024 dimensions.
+const DefaultDimension = 1024
 
 // Threshold constants for different similarity use cases.
 // These define the cosine similarity cutoffs (0.0-1.0, where 1.0 = identical)

@@ -1,4 +1,23 @@
+---
+title: "Agent Engine Extraction Plan"
+status: superseded
+created: 2026-04-23
+updated: 2026-11-10
+category: refactor
+priority: medium
+superseded_by:
+  - PLAN-nova-migration.md
+related:
+  - PLAN-nova-migration.md
+---
+
 # Agent Engine Extraction Plan
+
+> **Status: superseded for the loop itself.** The `agent_engine` package and its
+> `EngineConfig`/`LoopResult` contract are still the seam this document created — that part was a success
+> and is what made the Nova migration a one-file change. The hand-rolled loop *body* now lives in
+> `agent_engine/nova.go` and runs on `github.com/AutumnsGrove/nova/agent`. See
+> [PLAN-nova-migration.md](PLAN-nova-migration.md) and [NOVA-MIGRATION-LOG.md](NOVA-MIGRATION-LOG.md).
 
 ## 1. Context
 

@@ -27,6 +27,7 @@ type Config struct {
 	Identity           IdentityConfig           `yaml:"identity"`
 	Telegram           TelegramConfig           `yaml:"telegram"`
 	OpenRouter         LLMConfig                `yaml:"openrouter"`
+	LLM                BackendConfig            `yaml:"llm"`
 	Chat               ChatConfig               `yaml:"chat"`
 	Driver             DriverConfig             `yaml:"driver"`
 	Vision             VisionConfig             `yaml:"vision"`
@@ -344,6 +345,24 @@ type ReasoningConfig struct {
 type LLMConfig struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
+}
+
+// Attribution sent to OpenRouter on every request (HTTP-Referer / X-Title), so
+// usage shows up under the project in OpenRouter's dashboard. Defined once here
+// because the chat client and the voice client both send them.
+const (
+	OpenRouterReferer = "https://github.com/AutumnsGrove/her-go"
+	OpenRouterTitle   = "her-go"
+)
+
+// BackendConfig selects an implementation behind a project-owned seam. It is a
+// migration switch: "nova" is the Nova library, "legacy" is the hand-written
+// code kept as an escape hatch. The zero value means nova, so a config.yaml
+// written before the migration (no `llm:` section) runs the proven path.
+type BackendConfig struct {
+	// Backend is "nova" (default) or "legacy". Anything else falls back to nova
+	// with a warning.
+	Backend string `yaml:"backend"`
 }
 
 // ChatConfig holds settings for the chat (reply) model — the model that
@@ -834,16 +853,17 @@ type STTConfig struct {
 // good for chat replies) if left empty.
 type TTSConfig struct {
 	Enabled       bool               `yaml:"enabled"`
-	Engine        string             `yaml:"engine"`             // TTSEnginePiper or TTSEngineElevenLabs
-	BaseURL       string             `yaml:"base_url"`           // piper only, e.g. "http://localhost:8766"
-	Model         string             `yaml:"model"`              // piper: HuggingFace model ID/local path. elevenlabs: model ID, e.g. "eleven_flash_v2_5"
-	VoiceID       string             `yaml:"voice_id"`           // piper: same as model. elevenlabs: voice ID from the voice library
-	APIKey        string             `yaml:"api_key"`            // elevenlabs only; unused for piper (local, no auth)
-	Speed         float64            `yaml:"speed"`              // speaking rate (1.0 = normal) — piper only
-	ReplyMode     string             `yaml:"reply_mode"`         // "voice" (always reply with voice) or "match" (mirror input format)
-	Pauses        TTSPauseConfig     `yaml:"pauses"`             // piper only
-	IdleUnloadSec int                `yaml:"idle_unload_sec"`    // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload
-	Fallback      *TTSFallbackConfig `yaml:"fallback,omitempty"` // optional: auto-retry with this engine if the primary fails (e.g. ElevenLabs quota exhausted)
+	Engine        string             `yaml:"engine"`                // TTSEnginePiper or TTSEngineElevenLabs
+	BaseURL       string             `yaml:"base_url"`              // piper only, e.g. "http://localhost:8766"
+	Model         string             `yaml:"model"`                 // piper: HuggingFace model ID/local path. elevenlabs: model ID, e.g. "eleven_flash_v2_5"
+	VoiceID       string             `yaml:"voice_id"`              // piper: same as model. elevenlabs: voice ID from the voice library
+	APIKey        string             `yaml:"api_key"`               // elevenlabs only; unused for piper (local, no auth)
+	Speed         float64            `yaml:"speed"`                 // speaking rate (1.0 = normal) — piper only
+	CostLookup    *bool              `yaml:"cost_lookup,omitempty"` // openrouter only: ask for the exact cost of each synthesis (nil = false). Costs one extra request per call and, as of Nova v0.4.0, resolves nothing for speech (nova#91).
+	ReplyMode     string             `yaml:"reply_mode"`            // "voice" (always reply with voice) or "match" (mirror input format)
+	Pauses        TTSPauseConfig     `yaml:"pauses"`                // piper only
+	IdleUnloadSec int                `yaml:"idle_unload_sec"`       // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload
+	Fallback      *TTSFallbackConfig `yaml:"fallback,omitempty"`    // optional: auto-retry with this engine if the primary fails (e.g. ElevenLabs quota exhausted)
 }
 
 // TTSFallbackConfig configures an automatic fallback TTS engine, used when

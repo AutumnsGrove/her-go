@@ -17,21 +17,33 @@ openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
 
+llm:
+  # Which transport implementation the LLM client uses. Both speak the same
+  # OpenRouter wire protocol and answer the same three methods; this is a
+  # migration switch, not a feature toggle.
+  #   nova   — github.com/AutumnsGrove/nova's provider layer (default)
+  #   legacy — her-go's hand-written HTTP client, kept as a rollback lever until
+  #            the Nova path has soaked in production. The agent loop always uses
+  #            the Nova provider (it has no legacy implementation left), so this
+  #            switch only affects non-loop calls: reply streaming, classifier,
+  #            mood, vision, compaction, fast path.
+  backend: "nova"
+
 chat:
-  model: "xiaomi/mimo-v2.5-pro"    # reply model — MiMo v2.5 Pro via xiaomi/fp8: excellent cache rate, natural voice
+  model: "xiaomi/mimo-v2.6-pro"    # reply model — MiMo v2.6 Pro via xiaomi/fp8: excellent cache rate, natural voice
   temperature: 0.85
   max_tokens: 4096
   timeout: 30
   streaming: false                   # set true to stream reply tokens to Telegram (live typing effect)
   provider:
-    order: ["xiaomi/fp8"]            # pin to xiaomi/fp8 for ~80% prompt cache hit rate
+    order: ["xiaomi/fp8"]            # chat stays on MiMo: its voice is the one we tuned
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.85
     max_tokens: 4096
 
 driver:
-  model: "xiaomi/mimo-v2.5"                      # MiMo v2.5 — reasoning model with internal chain-of-thought, excellent cache rate on xiaomi/fp8
+  model: "deepseek/deepseek-v4.1-flash-1017"     # DeepSeek V4.1 Flash (1017) — reliable tool-calling and reasoning, ~70x cheaper input than MiMo 2.6 Pro
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
@@ -40,7 +52,9 @@ driver:
   max_replies_per_turn: 2                        # hard cap on reply calls per user message (default 2)
   fast_path: false                               # route simple messages (greetings, reactions) directly to chat model, skipping driver agent
   provider:
-    order: ["xiaomi/fp8"]
+    # Latency first for the driver: DeepInfra answered in ~1.5-2.5s in the
+    # provider probe, Morph in ~6-7s at a lower price. Morph is the spillover.
+    order: ["deepinfra/fp8", "morph/fp8"]
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.1
@@ -52,45 +66,55 @@ classifier:
   max_tokens: 64                                  # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — reliable tool-calling, excellent cache rate on xiaomi/fp8
+  model: "deepseek/deepseek-v4.1-flash-1017"     # DeepSeek V4.1 Flash (1017)
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
   timeout: 120                        # 120s — memory agent processes long transcripts
   provider:
-    order: ["xiaomi/fp8"]
+    order: ["morph/fp8", "deepinfra/fp8"]
 
 persona_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — persona evolution. Falls back to memory_agent if empty.
+  model: "deepseek/deepseek-v4.1-flash-1017"     # DeepSeek V4.1 Flash (1017) — persona evolution. Falls back to memory_agent if empty.
   temperature: 0.5                     # moderate creativity for persona prose
   max_tokens: 2048                     # persona output is short — 2K is plenty
   timeout: 120                         # reflections process long context
 
 dream_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — memory dreamer consolidation. Falls back to memory_agent if empty.
+  model: "deepseek/deepseek-v4.1-flash-1017"     # DeepSeek V4.1 Flash (1017) — memory dreamer consolidation. Falls back to memory_agent if empty.
   temperature: 0.3                     # low temp for analytical merge/expire decisions
   max_tokens: 4096                     # needs room for tool call sequences
   timeout: 120                         # processes all active memories
   provider:
-    order: ["xiaomi/fp8"]
+    order: ["morph/fp8", "deepinfra/fp8"]
 
 vision:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — multimodal, handles image understanding
+  model: "deepseek/deepseek-v4.1-flash-1017"     # DeepSeek V4.1 Flash (1017) — multimodal (text+image), handles image understanding
   temperature: 0.3                         # low temp for accurate descriptions
   max_tokens: 512
   provider:
-    order: ["xiaomi/fp8"]
+    order: ["deepinfra/fp8", "morph/fp8"]
   fallback:
     model: "google/gemini-3.1-flash-lite"
     temperature: 0.3
     max_tokens: 512
 
 embed:
-  base_url: "http://localhost:11434/v1"                         # Ollama (recommended) or any OpenAI-compatible embedding server
-  model: "nomic-embed-text"                                    # Ollama model name (run: ollama pull nomic-embed-text)
-  dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
+  # Embeddings are OpenAI-compatible. The default is OpenRouter, which needs no
+  # local model server and costs a fraction of a cent per thousand memories.
+  base_url: "https://openrouter.ai/api/v1"
+  model: "perplexity/pplx-embed-v1-0.6b"
+  api_key: "${OPENROUTER_API_KEY}"                               # same key as openrouter.api_key
+  dimension: 1024                                               # must match the model exactly — the store refuses to open on a mismatch
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
   max_semantic_distance: 0.45                                   # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter.
-  # For LM Studio instead: base_url: "http://localhost:1234/v1", model: "text-embedding-nomic-embed-text-v1.5@q8_0"
+
+  # Local alternatives (no API key, works offline, needs the model downloaded):
+  #   Ollama:    base_url: "http://localhost:11434/v1", model: "nomic-embed-text", dimension: 768
+  #   LM Studio: base_url: "http://localhost:1234/v1", model: "text-embedding-nomic-embed-text-v1.5@q8_0", dimension: 768
+  #   start_command: "ollama serve"   # optional: launched automatically if the server isn't already up
+  #
+  # Changing dimension on an existing database? Run `her reembed` once — it
+  # rebuilds vec_memories/vec_moods at the new width and re-embeds every row.
 
 search:
   # SearXNG is a free, self-hosted meta-search engine. If configured, web_search
@@ -113,27 +137,27 @@ polaris:
   base_url: "http://localhost:8899"
 
 mood_agent:
-  # MiMo v2.5 — structured JSON output for mood schema.
+  # MiMo v2.6 Flash — structured JSON output for mood schema.
   # Reasoning is auto-disabled for mood (plain JSON extraction task).
   # Empty model disables the post-turn mood agent entirely.
-  model: "xiaomi/mimo-v2.5"
+  model: "deepseek/deepseek-v4.1-flash-1017"
   temperature: 0.2
   max_tokens: 512
   timeout: 60
   provider:
-    order: ["xiaomi/fp8"]
+    order: ["morph/fp8", "deepinfra/fp8"]
 
 introspection_agent:
-  # MiMo v2.5 — self-reflection agent, runs after memory + mood.
+  # MiMo v2.6 Flash — self-reflection agent, runs after memory + mood.
   # Empty model falls back to memory_agent model.
-  model: "xiaomi/mimo-v2.5"
+  model: "deepseek/deepseek-v4.1-flash-1017"
   temperature: 0.3
   max_tokens: 2048
   timeout: 60
   iterations_per_window: 5   # smaller than other agents — should be fast
   max_continuations: 1       # one window is enough, skip or save and move on
   provider:
-    order: ["xiaomi/fp8"]
+    order: ["morph/fp8", "deepinfra/fp8"]
 
 mood:
   # Point at a custom vocab file to override Apple's embedded lists.
@@ -265,11 +289,14 @@ voice:
       comma_ms: 50
       semi_ms: 30
 
-    # ─── ENGINE 2: OPENROUTER (REMOTE, COST TRACKED) ───
-    # Better quality than Piper, cost tracking built-in, 54 Kokoro voices
+    # ─── ENGINE 2: OPENROUTER (REMOTE) ───
+    # Better quality than Piper, ~54 Kokoro voices, runs on Nova's voice module.
+    # Synthesis cost: OpenRouter's /generation returns nulls for TTS ids, so
+    # speech cost reads $0 today; watch her-go#104 for the follow-up.
     # To use: uncomment these 4 lines and comment out the "piper" lines above
     # engine: "openrouter"
     # base_url: "https://openrouter.ai/api/v1"
+    # cost_lookup: false                                        # openrouter only: resolve the exact cost per synthesis (one extra request). Off by default: OpenRouter's /generation returns nulls for TTS ids, so it resolves nothing for speech today (nova#91). Transcription cost is inline and always resolves.
     # model: "hexgrad/kokoro-82m"                                 # $0.62/1M input chars (~$0.0006 per 1K chars)
     # voice_id: "af_sarah"                                        # af_sarah, bf_lily, am_adam — see docs/guides/TTS_ENGINES.md for full list
     # api_key: ""                                                 # leave empty to use openrouter.api_key
@@ -412,18 +439,20 @@ worker_agent:
   reports_dir: "reports"           # relative to project root
   tiers:
     low:
-      model: "xiaomi/mimo-v2.5"
+      model: "deepseek/deepseek-v4.1-flash-1017"
       temperature: 0.7
       max_tokens: 8192
       provider:
-        order: ["xiaomi/fp8"]
+        order: ["morph/fp8", "deepinfra/fp8"]
     medium:
-      model: "deepseek/deepseek-v4-flash"
+      model: "deepseek/deepseek-v4.1-flash-1017"
       temperature: 0.7
       max_tokens: 16384
+      provider:
+        order: ["morph/fp8", "deepinfra/fp8"]
     high:
-      model: "xiaomi/mimo-v2.5-pro"
+      model: "deepseek/deepseek-v4.1-flash-1017"
       temperature: 0.7
       max_tokens: 32768
       provider:
-        order: ["xiaomi/fp8"]
+        order: ["deepinfra/fp8", "morph/fp8"]

@@ -13,9 +13,14 @@
 // OpenRouter, OpenAI) and returns float32 vectors. These vectors are stored in
 // SQLite using the sqlite-vec extension for fast KNN queries.
 //
-//	client := embed.NewClient("http://localhost:1234/v1", "nomic-embed-text-v1.5", "", 768)
+//	client := embed.NewClient("https://openrouter.ai/api/v1", "perplexity/pplx-embed-v1-0.6b", key, 1024)
 //	vec, err := client.Embed("User has a dog named Max")
-//	// vec is []float32 with 768 dimensions
+//	// vec is []float32 with 1024 dimensions
+//
+// The dimension always comes from config.yaml (`embed.dimension`) — it is not
+// inferred from the model name, because the store sizes its sqlite-vec tables
+// from it and a mismatch there is silent data loss. Local OpenAI-compatible
+// servers (Ollama, LM Studio) work the same way; only base_url/model/key change.
 //
 // # Similarity Comparison
 //
@@ -122,7 +127,7 @@
 //
 // ## Similarity Computation
 //
-// CosineSimilarity is O(n) where n is the vector dimension (typically 768).
+// CosineSimilarity is O(n) where n is the vector dimension (typically 1024).
 // For large-scale similarity search (thousands of candidates):
 //   - Use sqlite-vec's KNN queries instead of in-memory comparison
 //   - Set earlyExit=true on FindBestMatch for performance-sensitive paths
