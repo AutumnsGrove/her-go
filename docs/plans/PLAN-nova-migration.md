@@ -13,7 +13,9 @@ related:
 
 # Plan: Migrate her-go's agent loop onto Nova (and bump to MiMo 2.6)
 
-> Status: **v2: decisions resolved (see §9). Execution started — see [NOVA-MIGRATION-LOG.md](NOVA-MIGRATION-LOG.md).**
+> Status: **executed. The legacy loop is deleted and the Nova path is the only loop; the legacy LLM transport
+> survives as a rollback lever. See [NOVA-MIGRATION-LOG.md](NOVA-MIGRATION-LOG.md) for what actually happened,
+> including the deviations (driver model is 2.6 Pro, step 8's staged cutover folded into one cut).**
 > Written 2026-11-10 against her-go `316a748` and Nova `v0.3.5`.
 
 ## 0. How to use this document (read first, executing agent)

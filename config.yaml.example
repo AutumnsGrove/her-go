@@ -21,9 +21,13 @@ llm:
   # Which transport implementation the LLM client uses. Both speak the same
   # OpenRouter wire protocol and answer the same three methods; this is a
   # migration switch, not a feature toggle.
-  #   legacy — her-go's hand-written HTTP client (stable default)
-  #   nova   — github.com/AutumnsGrove/nova's provider layer
-  backend: "legacy"
+  #   nova   — github.com/AutumnsGrove/nova's provider layer (default)
+  #   legacy — her-go's hand-written HTTP client, kept as a rollback lever until
+  #            the Nova path has soaked in production. The agent loop always uses
+  #            the Nova provider (it has no legacy implementation left), so this
+  #            switch only affects non-loop calls: reply streaming, classifier,
+  #            mood, vision, compaction, fast path.
+  backend: "nova"
 
 chat:
   model: "xiaomi/mimo-v2.6-pro"    # reply model — MiMo v2.6 Pro via xiaomi/fp8: excellent cache rate, natural voice

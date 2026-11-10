@@ -36,14 +36,15 @@ Two project-owned contracts absorb the migration:
 
 ```yaml
 llm:
-  backend: "nova"    # nova | legacy — the LLM transport
-engine:
-  backend: "nova"    # nova | legacy — the agent loop
-  backend_overrides: {}   # e.g. {worker: nova} during a staged rollout
+  backend: "nova"    # nova | legacy — the LLM transport for non-loop calls
 ```
 
-`legacy` is a rollback lever, not a supported long-term mode: it is the pre-migration hand-written
-implementation, kept until the Nova path has soaked in production.
+The agent loop has no switch: `agent_engine` runs on Nova, full stop, and it always talks to the model through
+Nova's provider (`llm.Client.Stream`). `llm.backend` therefore only selects the transport for the calls that do
+not go through the loop — reply streaming, classifier, mood, vision, compaction, fast path.
+
+`legacy` is a rollback lever, not a supported long-term mode: it is the pre-migration hand-written client, kept
+until the Nova path has soaked in production. Deleting it is the follow-up once that soak is done.
 
 ## How the pieces map
 
