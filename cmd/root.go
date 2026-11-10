@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"her/agent_engine"
 	"her/config"
 	"her/llm"
 )
@@ -43,6 +44,7 @@ func init() {
 			// built. llm.SetBackend is process-wide by design: every client in a
 			// run must speak the same dialect or the logs and metrics mix.
 			llm.SetBackend(cfg.LLM.Backend)
+			agent_engine.SetLoopBackend(cfg.Engine.Backend, cfg.Engine.BackendOverrides)
 
 			rootCmd.Short = cfg.Identity.Her + " — personal companion bot"
 			rootCmd.Long = cfg.Identity.Her + " is a personal companion bot that runs on Telegram.\nUse subcommands to run, manage, and monitor the service."

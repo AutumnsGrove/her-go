@@ -391,3 +391,134 @@ func (c *Client) novaChatCompletion(messages []ChatMessage, tools []ToolDef, too
 	}
 	return resp, err
 }
+
+// ---------------------------------------------------------------------------
+// Export surface for the agent-loop seam (agent_engine/nova.go)
+// ---------------------------------------------------------------------------
+
+// ResponseInfo is the per-call metadata her-go records in its metrics table.
+//
+// It exists so the loop can save one metric row per provider call without
+// importing Nova's provider types: Nova's loop only reports usage summed over a
+// run, but her-go's cost dashboards break spend down per call, per model and per
+// provider, and flag fallbacks.
+type ResponseInfo struct {
+	Model            string
+	Provider         string
+	FinishReason     string
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CacheReadTokens  int
+	CacheWriteTokens int
+	CostUSD          float64
+	UsedFallback     bool
+}
+
+// Model returns the primary model name this client was built for.
+func (c *Client) Model() string { return c.model }
+
+// MaxTokens returns the completion budget this client was built with.
+func (c *Client) MaxTokens() int { return c.maxTokens }
+
+// TemperaturePtr returns the temperature as the pointer Nova's request wants.
+// A pointer, because "unset" and "0.0" mean different things on the wire.
+func (c *Client) TemperaturePtr() *float64 {
+	t := c.temperature
+	return &t
+}
+
+// Name implements provider.Provider. A *llm.Client is usable anywhere Nova wants
+// a provider, which is how the agent loop reaches the real transport (with
+// her-go's retry, fallback and metrics semantics) instead of Nova's.
+func (c *Client) Name() string { return "her-go" }
+
+// Stream implements provider.Provider on top of the Nova transport, adding the
+// two behaviours her-go owns: fallback to a second model on a retriable failure,
+// and the per-call ResponseHook the loop uses for metrics.
+//
+// Nova's own retry policy is disabled for these runs (agent.Config.Retry.Max =
+// -1): retrying belongs to the retry capability, and a fallback already re-tried.
+func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(provider.StreamEvent)) (*provider.Response, error) {
+	// her-go runs tool calls one at a time in one-assistant-message order, and a
+	// second call in the same message could see a stale picture of the world. The
+	// hand-written client enforced that by aborting the SSE stream the moment a
+	// second call appeared; here the stream is read to the end and only the first
+	// call is surfaced. Both the events and the response are filtered, so the
+	// loop cannot see or run the extra call.
+	var toolCallEvents int
+	guarded := func(ev provider.StreamEvent) {
+		if onEvent == nil {
+			return
+		}
+		if ev.Type == provider.StreamToolCall {
+			toolCallEvents++
+			if toolCallEvents > 1 {
+				return
+			}
+		}
+		onEvent(ev)
+	}
+
+	resp, err := c.novaProvider().Stream(ctx, req, guarded)
+	usedFallback := false
+
+	if err != nil && c.fallbackModel != "" && isRetriableNova(err) {
+		log.Warn("nova: primary model failed, trying fallback",
+			"primary", req.Model,
+			"fallback", c.fallbackModel,
+			"err", err,
+		)
+		fbReq := req
+		fbReq.Model = c.fallbackModel
+		fbReq.ModelID = ""
+		if c.fallbackMaxTokens > 0 {
+			fbReq.MaxTokens = c.fallbackMaxTokens
+		}
+		fbTemp := c.fallbackTemperature
+		fbReq.Temperature = &fbTemp
+
+		toolCallEvents = 0
+		fbResp, fbErr := c.novaProvider().Stream(ctx, fbReq, guarded)
+		if fbErr == nil {
+			resp, err = fbResp, nil
+			usedFallback = true
+		} else {
+			err = fbErr
+		}
+	}
+
+	if resp != nil && len(resp.Message.ToolCalls) > 1 {
+		log.Warn("nova: model returned parallel tool calls — keeping the first",
+			"total", len(resp.Message.ToolCalls),
+			"kept", resp.Message.ToolCalls[0].Function.Name,
+		)
+		resp.Message.ToolCalls = resp.Message.ToolCalls[:1]
+	}
+
+	if resp != nil && c.ResponseHook != nil {
+		c.ResponseHook(ResponseInfo{
+			Model:            resp.Model,
+			Provider:         resp.Provider,
+			FinishReason:     resp.FinishReason,
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+			CacheReadTokens:  resp.Usage.CachedTokens,
+			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+			CostUSD:          resp.Usage.CostUSD,
+			UsedFallback:     usedFallback,
+		})
+	}
+	return resp, err
+}
+
+// NovaMessages converts her-go's transcript to Nova's. Exported for the loop
+// seam, which needs the same conversion the transport uses (one implementation,
+// two callers).
+func NovaMessages(msgs []ChatMessage) ([]message.Message, error) { return toNovaMessages(msgs) }
+
+// NovaToolDefs converts her-go tool definitions to Nova's wire shape. Exported
+// for the loop seam's deferred-tool refresh; identical to what the transport
+// sends, so a refresh cannot change the schema by accident.
+func NovaToolDefs(defs []ToolDef) ([]provider.ToolDef, error) { return toNovaTools(defs) }

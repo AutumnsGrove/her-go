@@ -254,6 +254,14 @@ func coerce(val, def, cap int) int {
 //   - A hook requests a break
 //   - The LLM returns finish_reason="stop" after tool execution
 func RunLoop(cfg EngineConfig) (*LoopResult, error) {
+	// The loop implementation is a config choice (engine.backend, with per-agent
+	// overrides), so both implementations answer this one signature. The legacy
+	// body below is unchanged; nova.go implements the same contract on Nova's
+	// agent loop.
+	if backendFor(cfg.Name) == backendNova {
+		return runNova(cfg)
+	}
+
 	iterationsPerWindow := coerce(cfg.IterationsPerWindow, defaultIterationsPerWindow, maxIterationsPerWindowCap)
 	maxContinuations := coerce(cfg.MaxContinuations, defaultMaxContinuations, maxContinuationsCap)
 

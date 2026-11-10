@@ -67,6 +67,11 @@ type Client struct {
 	// prompt cache hits across a conversation. Max 256 chars.
 	sessionID string
 
+	// ResponseHook, when set, receives one ResponseInfo per completed provider
+	// request. The agent-loop seam installs it to record per-call metrics, which
+	// Nova's loop does not report itself. Nil-safe; set and cleared around a run.
+	ResponseHook func(ResponseInfo)
+
 	// Nova transport, built on first use and only when llm.backend is "nova".
 	// See nova.go: the two backends answer the same three methods, which is what
 	// makes them swappable by config and comparable by test.
