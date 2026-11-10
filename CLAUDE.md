@@ -56,6 +56,15 @@ ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s 
 
 After that, `./her update` handles all future updates.
 
+**Toolchain:** `go.mod` requires Go ≥ 1.26.6 (the Nova dependency's floor). Before the first `./her update`
+after a toolchain bump, check the host with `ssh potato-remote "go version"`. With `GOTOOLCHAIN=auto` (the
+default) the `go build` inside `her update` downloads the required toolchain itself, but that needs working
+network on the host for the first build.
+
+**Vector dimensions:** if `embed.dimension` changes (see `embed:` in `config.yaml`), run `./her reembed` **once**
+on the host after updating, *before* restarting. The store refuses to open with a mismatch rather than
+corrupting vectors.
+
 ## Telegraph Setup (for Worker Agent reports)
 
 The worker agent publishes reports to [Telegraph](https://telegra.ph) for rich rendering in Telegram. One-time setup:
