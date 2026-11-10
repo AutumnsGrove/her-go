@@ -315,13 +315,13 @@ That's it. The defaults for everything else (models, thresholds, etc.) are alrea
 
 ### Model Configuration
 
-Mira uses different models for different jobs. The defaults use MiMo v2.5 for most tasks (via the `xiaomi/fp8` provider for excellent prompt caching — ~80% cache hit rate). You can change these if you want different cost/quality tradeoffs:
+Mira uses different models for different jobs. The defaults use MiMo v2.6 for most tasks (via the `xiaomi/fp8` provider for excellent prompt caching — ~80% cache hit rate, and cached reads are ~25x cheaper than v2.5's). You can change these if you want different cost/quality tradeoffs:
 
-- **`chat.model`** — Generates the natural-language replies you see in Telegram (default: `xiaomi/mimo-v2.5-pro`)
-- **`driver.model`** — Orchestrates each turn, decides when to think/search/recall/reply (default: `xiaomi/mimo-v2.5`)
-- **`memory_agent.model`** — Extracts facts in the background after each reply (default: `xiaomi/mimo-v2.5`)
+- **`chat.model`** — Generates the natural-language replies you see in Telegram (default: `xiaomi/mimo-v2.6-pro`)
+- **`driver.model`** — Orchestrates each turn, decides when to think/search/recall/reply (default: `xiaomi/mimo-v2.6-flash`)
+- **`memory_agent.model`** — Extracts facts in the background after each reply (default: `xiaomi/mimo-v2.6-flash`)
 - **`classifier.model`** — Fast safety gate for memory/mood writes (default: `google/gemini-3.1-flash-lite`)
-- **`vision.model`** — Describes images (default: `xiaomi/mimo-v2.5`)
+- **`vision.model`** — Describes images (default: `xiaomi/mimo-v2.6-flash`)
 
 The other agents (`mood_agent`, `introspection_agent`, `dream_agent`, `persona_agent`) fall back to the memory agent model if you don't specify them explicitly.
 
@@ -329,7 +329,7 @@ The other agents (`mood_agent`, `introspection_agent`, `dream_agent`, `persona_a
 
 These run on your machine for privacy-first processing:
 
-- **`embed.base_url`** — Embedding server for semantic search. Defaults to Ollama at `http://localhost:11434/v1`. Run `ollama pull nomic-embed-text` to download the model.
+- **`embed.base_url`** — Embeddings for semantic search and duplicate detection. Defaults to OpenRouter (`perplexity/pplx-embed-v1-0.6b`, 1024 dimensions), so nothing runs locally. A local Ollama or LM Studio server works too — set `base_url`, `model`, and `dimension` to match, then run `her reembed` once to rebuild the index.
 - **`voice.stt` / `voice.tts`** — Speech engines. See [Voice Setup](#voice-setup) above.
 
 ### Feature Toggles

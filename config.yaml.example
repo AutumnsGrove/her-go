@@ -18,7 +18,7 @@ openrouter:
   api_key: "${OPENROUTER_API_KEY}"
 
 chat:
-  model: "xiaomi/mimo-v2.5-pro"    # reply model — MiMo v2.5 Pro via xiaomi/fp8: excellent cache rate, natural voice
+  model: "xiaomi/mimo-v2.6-pro"    # reply model — MiMo v2.6 Pro via xiaomi/fp8: excellent cache rate, natural voice
   temperature: 0.85
   max_tokens: 4096
   timeout: 30
@@ -31,7 +31,7 @@ chat:
     max_tokens: 4096
 
 driver:
-  model: "xiaomi/mimo-v2.5"                      # MiMo v2.5 — reasoning model with internal chain-of-thought, excellent cache rate on xiaomi/fp8
+  model: "xiaomi/mimo-v2.6-flash"                      # MiMo v2.6 Flash — reasoning model with internal chain-of-thought, excellent cache rate on xiaomi/fp8
   temperature: 0.4                               # standard transformer, moderate temp for varied but controlled tool calling
   max_tokens: 4096                               # raised from 2048 — streaming abort prevents batched tool calls but this is a safety net
   timeout: 60                                    # HTTP timeout in seconds (default 60)
@@ -52,7 +52,7 @@ classifier:
   max_tokens: 64                                  # only needs ~20 tokens, 64 for safety margin
 
 memory_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — reliable tool-calling, excellent cache rate on xiaomi/fp8
+  model: "xiaomi/mimo-v2.6-flash"           # MiMo v2.6 Flash — reliable tool-calling, excellent cache rate on xiaomi/fp8
   temperature: 0.3                    # moderate temp for varied but controlled fact extraction
   max_tokens: 4096                    # generous headroom for tool call sequences
   timeout: 120                        # 120s — memory agent processes long transcripts
@@ -60,13 +60,13 @@ memory_agent:
     order: ["xiaomi/fp8"]
 
 persona_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — persona evolution. Falls back to memory_agent if empty.
+  model: "xiaomi/mimo-v2.6-flash"           # MiMo v2.6 Flash — persona evolution. Falls back to memory_agent if empty.
   temperature: 0.5                     # moderate creativity for persona prose
   max_tokens: 2048                     # persona output is short — 2K is plenty
   timeout: 120                         # reflections process long context
 
 dream_agent:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — memory dreamer consolidation. Falls back to memory_agent if empty.
+  model: "xiaomi/mimo-v2.6-flash"           # MiMo v2.6 Flash — memory dreamer consolidation. Falls back to memory_agent if empty.
   temperature: 0.3                     # low temp for analytical merge/expire decisions
   max_tokens: 4096                     # needs room for tool call sequences
   timeout: 120                         # processes all active memories
@@ -74,7 +74,7 @@ dream_agent:
     order: ["xiaomi/fp8"]
 
 vision:
-  model: "xiaomi/mimo-v2.5"           # MiMo v2.5 — multimodal, handles image understanding
+  model: "xiaomi/mimo-v2.6-flash"           # MiMo v2.6 Flash — multimodal, handles image understanding
   temperature: 0.3                         # low temp for accurate descriptions
   max_tokens: 512
   provider:
@@ -123,10 +123,10 @@ polaris:
   base_url: "http://localhost:8899"
 
 mood_agent:
-  # MiMo v2.5 — structured JSON output for mood schema.
+  # MiMo v2.6 Flash — structured JSON output for mood schema.
   # Reasoning is auto-disabled for mood (plain JSON extraction task).
   # Empty model disables the post-turn mood agent entirely.
-  model: "xiaomi/mimo-v2.5"
+  model: "xiaomi/mimo-v2.6-flash"
   temperature: 0.2
   max_tokens: 512
   timeout: 60
@@ -134,9 +134,9 @@ mood_agent:
     order: ["xiaomi/fp8"]
 
 introspection_agent:
-  # MiMo v2.5 — self-reflection agent, runs after memory + mood.
+  # MiMo v2.6 Flash — self-reflection agent, runs after memory + mood.
   # Empty model falls back to memory_agent model.
-  model: "xiaomi/mimo-v2.5"
+  model: "xiaomi/mimo-v2.6-flash"
   temperature: 0.3
   max_tokens: 2048
   timeout: 60
@@ -422,7 +422,7 @@ worker_agent:
   reports_dir: "reports"           # relative to project root
   tiers:
     low:
-      model: "xiaomi/mimo-v2.5"
+      model: "xiaomi/mimo-v2.6-flash"
       temperature: 0.7
       max_tokens: 8192
       provider:
@@ -432,7 +432,7 @@ worker_agent:
       temperature: 0.7
       max_tokens: 16384
     high:
-      model: "xiaomi/mimo-v2.5-pro"
+      model: "xiaomi/mimo-v2.6-pro"
       temperature: 0.7
       max_tokens: 32768
       provider:

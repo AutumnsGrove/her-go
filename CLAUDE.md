@@ -10,10 +10,11 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **System prompt:** prompt.md (static base template)
 - **Persona:** persona.md (evolving, bot-authored)
 - **Agent prompt:** driver_agent_prompt.md (driver agent orchestration rules, hot-reloadable)
-- **Chat model:** MiMo v2.5 Pro (xiaomi/mimo-v2.5-pro) via OpenRouter → xiaomi/fp8 (~80% prompt cache hit rate)
-- **Agent models:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8 — used for driver, memory, mood, introspection, persona, dream, and vision agents
+- **Chat model:** MiMo v2.6 Pro (xiaomi/mimo-v2.6-pro) via OpenRouter → xiaomi/fp8 (~80% prompt cache hit rate)
+- **Agent models:** MiMo v2.6 Flash (xiaomi/mimo-v2.6-flash) via OpenRouter → xiaomi/fp8 — used for driver, memory, mood, introspection, persona, dream, and vision agents
 - **Classifier model:** Gemini 3.1 Flash Lite via OpenRouter (memory + reply safety gates)
-- **Vision model:** MiMo v2.5 (xiaomi/mimo-v2.5) via OpenRouter → xiaomi/fp8
+- **Embeddings:** `perplexity/pplx-embed-v1-0.6b` via OpenRouter, 1024 dimensions (was local nomic/768 — `her reembed` migrates an existing DB)
+- **Vision model:** MiMo v2.6 Flash (xiaomi/mimo-v2.6-flash) via OpenRouter → xiaomi/fp8
 - **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
 
 ## Running
