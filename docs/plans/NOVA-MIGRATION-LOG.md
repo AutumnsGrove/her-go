@@ -47,3 +47,35 @@ Running total against the **$10 hard cap**: **$0.00** (no live sim run yet).
 | — | — | — | $0.00 |
 
 ## Step log
+
+### Step 2 — embeddings on OpenRouter (`a1e…`, see `git log`)
+
+- **Live check, not docs:** `POST https://openrouter.ai/api/v1/embeddings` with
+  `perplexity/pplx-embed-v1-0.6b` returns **1024** dimensions (Nova's docs happen to agree, but the
+  call is the evidence). Real `embed.Client` against it: `IsAvailable()` true, `SimilarText` on a
+  paraphrase scored 0.888 vs 0.032 for an unrelated sentence.
+- **Dimension guard** (`memory/vec.go`): opening a store whose `vec_memories`/`vec_moods` were created at a
+  different width now fails with `*VecDimensionMismatchError` and the fix in the message. Escape hatch is
+  `memory.AllowVecDimensionMismatch()`, used only by `her reembed`. Functional options keep all 28 existing
+  `NewStore` call sites untouched.
+- **`her reembed`** (`cmd/reembed.go` + `memory.ReembedAll`): drop+recreate both vec tables at the configured
+  width (one transaction), then re-embed every active memory (tags vector + text vector) and every
+  non-superseded mood entry (note + labels, the same string `mood/agent.go` embeds). Idempotent, resumable,
+  failures counted and skipped rather than fatal, `--dry-run` prints counts + an estimated token cost.
+- **Verified end to end on a seeded temp DB** (`/tmp/reembed-probe.db`, never a real `her.db`):
+  768-dim DB → guard fires on a plain command → `reembed --dry-run` reports `float[768]` → `reembed`
+  rebuilds to `float[1024]` and re-embeds 2/2 → reopening passes the guard. Sim details in the log below.
+- **Threshold calibration (step 2.4) — measured, then left alone.** Real calls against the new model:
+  - *content* paraphrase pairs (duplicates): 0.70, 0.70, 0.77, 0.87, 0.95
+  - *content* distinct-but-related pairs: 0.51, 0.55, 0.55, 0.62, 0.66, 0.69
+  - *tag* vectors (the primary dedup input): identical 1.00, same tags reordered 0.834, same topic different
+    noun (cats/pets vs dogs/pets) 0.833, unrelated 0.25–0.61
+  At 0.85 the tag path misses a reordered-tag duplicate (0.834) but the text path catches high-similarity
+  paraphrases; dropping to 0.80 would start rejecting *legitimately different* same-topic memories
+  (cats/pets/names vs dogs/pets/names is 0.833). **Kept `similarity_threshold: 0.85` and
+  `max_semantic_distance: 0.45` unchanged.** The dream-cycle merge already cleans up whatever slips
+  through, and rejecting a true new memory is the worse error. Flagged for revisiting against
+  `memory-a-thon` / `contradiction-canary` on real data — not hand-tuned off an 11-pair sample.
+- **Deviation:** plan §2.5 wanted `embedding-a-thon`, `memory-a-thon`, `contradiction-canary`,
+  `card-scoped-recall` run here. They are run in step 4 instead (same suites, cheaper, and on the MiMo 2.6
+  stack the baselines are captured on) — running them twice would double the spend for no extra signal.

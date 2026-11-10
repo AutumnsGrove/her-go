@@ -85,12 +85,22 @@ vision:
     max_tokens: 512
 
 embed:
-  base_url: "http://localhost:11434/v1"                         # Ollama (recommended) or any OpenAI-compatible embedding server
-  model: "nomic-embed-text"                                    # Ollama model name (run: ollama pull nomic-embed-text)
-  dimension: 768                                                # vector size — must match your model (768 for nomic, 1536 for OpenAI, etc.)
+  # Embeddings are OpenAI-compatible. The default is OpenRouter, which needs no
+  # local model server and costs a fraction of a cent per thousand memories.
+  base_url: "https://openrouter.ai/api/v1"
+  model: "perplexity/pplx-embed-v1-0.6b"
+  api_key: "${OPENROUTER_API_KEY}"                               # same key as openrouter.api_key
+  dimension: 1024                                               # must match the model exactly — the store refuses to open on a mismatch
   similarity_threshold: 0.85                                    # above this = duplicate fact (0.0-1.0)
   max_semantic_distance: 0.45                                   # facts farther than this skip auto-injection into context (0=identical, 1=unrelated). Lower is stricter.
-  # For LM Studio instead: base_url: "http://localhost:1234/v1", model: "text-embedding-nomic-embed-text-v1.5@q8_0"
+
+  # Local alternatives (no API key, works offline, needs the model downloaded):
+  #   Ollama:    base_url: "http://localhost:11434/v1", model: "nomic-embed-text", dimension: 768
+  #   LM Studio: base_url: "http://localhost:1234/v1", model: "text-embedding-nomic-embed-text-v1.5@q8_0", dimension: 768
+  #   start_command: "ollama serve"   # optional: launched automatically if the server isn't already up
+  #
+  # Changing dimension on an existing database? Run `her reembed` once — it
+  # rebuilds vec_memories/vec_moods at the new width and re-embeds every row.
 
 search:
   # SearXNG is a free, self-hosted meta-search engine. If configured, web_search
