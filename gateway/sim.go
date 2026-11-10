@@ -526,7 +526,9 @@ func (a *simAdapter) handleCaptureEvent(evt tui.Event) {
 				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s → ERROR: %s", e.Source, icon, e.ToolName, truncateSimText(e.Result, 60)))
 			} else if e.ToolName == "think" {
 				thought := extractThought(e.Args)
-				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s", e.Source, icon, truncateSimText(thought, 80)))
+				// Include the tool name so the line is machine-readable: the digest
+				// extractor (cmd/digest.go) reads `[source] icon tool → detail`.
+				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s think → %s", e.Source, icon, truncateSimText(thought, 80)))
 			} else {
 				tc.toolLog = append(tc.toolLog, fmt.Sprintf("[%s] %s %s → %s", e.Source, icon, e.ToolName, truncateSimText(e.Result, 60)))
 			}
