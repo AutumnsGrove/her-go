@@ -223,8 +223,8 @@ func TestCompareDigests(t *testing.T) {
 
 	t.Run("cost blowout fails", func(t *testing.T) {
 		next := base
-		next.CostUSD = 0.06 // +50%, over the ±25% band
-		if checkOK(CompareDigests(base, next), "cost (±25%)") {
+		next.CostUSD = 0.06 // +50%, over the +25% ceiling
+		if checkOK(CompareDigests(base, next), "cost not above +25%") {
 			t.Error("a 50% cost increase should fail the cost check")
 		}
 	})
@@ -232,8 +232,16 @@ func TestCompareDigests(t *testing.T) {
 	t.Run("cost within band passes", func(t *testing.T) {
 		next := base
 		next.CostUSD = 0.048 // +20%
-		if !checkOK(CompareDigests(base, next), "cost (±25%)") {
+		if !checkOK(CompareDigests(base, next), "cost not above +25%") {
 			t.Error("a 20% cost increase should pass")
+		}
+	})
+
+	t.Run("cheaper run passes", func(t *testing.T) {
+		next := base
+		next.CostUSD = 0.02 // -50%: spending less is never a regression
+		if !checkOK(CompareDigests(base, next), "cost not above +25%") {
+			t.Error("a run that costs half as much should pass")
 		}
 	})
 
@@ -288,7 +296,7 @@ func checkOK(checks []DigestCheck, name string) bool {
 func TestSlugifySuite(t *testing.T) {
 	cases := map[string]string{
 		"Schedule CRUD — create, list, update, delete recurring tasks": "schedule-crud-create-list-update-delete-recurring-tasks",
-		"2026-11-10 10:24": "2026-11-10-10-24",
+		"2026-11-10 10:24":    "2026-11-10-10-24",
 		"  weird   spacing  ": "weird-spacing",
 	}
 	for in, want := range cases {

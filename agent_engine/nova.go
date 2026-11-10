@@ -273,12 +273,17 @@ func (s *novaRunState) messageEnd(_ context.Context, m message.Message) message.
 	hasCalls := len(m.ToolCalls) > 0
 	s.mu.Unlock()
 
-	// <think> blocks: some MiMo builds put reasoning inline instead of in a
-	// separate reasoning channel. Surface it as a synthetic think tool call so it
-	// appears in traces exactly like the explicit think tool.
+	// Reasoning visibility. Two shapes arrive: some models put it inline as a
+	// <think> block, newer reasoning models (DeepSeek V4.1, MiMo 2.6) return it in
+	// a separate reasoning channel that Nova hands over as Message.Reasoning.
+	// Either way it becomes the same synthetic think trace the explicit think tool
+	// used to produce, so /traces shows the model's thinking instead of going
+	// silent when a model stops calling think().
 	if thought, cleaned, ok := extractThinkBlock(m.Content); ok {
 		m.Content = cleaned
 		s.emitThink(thought)
+	} else if m.Reasoning != "" {
+		s.emitThink(m.Reasoning)
 	}
 
 	if s.cfg.PostIteration != nil {

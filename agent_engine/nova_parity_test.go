@@ -481,3 +481,29 @@ func TestNova_RegistryIncludesCodeOnlyTools(t *testing.T) {
 		}
 	}
 }
+
+// TestNova_ReasoningChannelBecomesTrace pins the second half of the <think>
+// story: a model that returns its reasoning in a separate channel (DeepSeek
+// V4.1, MiMo 2.6) never calls the explicit think tool, so without this the
+// driver's trace panel would simply go quiet.
+func TestNova_ReasoningChannelBecomesTrace(t *testing.T) {
+	reasoning := rawChunk(`{"choices":[{"delta":{"reasoning":"considering the schedule"},"finish_reason":null}],"model":"test-model"}`)
+	text := rawChunk(`{"choices":[{"delta":{"content":"done"},"finish_reason":null}],"model":"test-model"}`)
+	client := newRawMockLLM(t, [][]string{{reasoning, text, finishFrame("stop")}})
+
+	tctx := &tools.Context{AgentName: "test"}
+	var traces []string
+	cfg := EngineConfig{
+		Name: "test", LLM: client, ToolDefs: stubToolDefs(), ToolCtx: tctx,
+		Messages:            []llm.ChatMessage{{Role: "system", Content: "s"}, {Role: "user", Content: "u"}},
+		IterationsPerWindow: 3,
+		TraceCallback:       func(s string) error { traces = append(traces, s); return nil },
+	}
+	if _, err := RunLoop(cfg); err != nil {
+		t.Fatalf("RunLoop: %v", err)
+	}
+	joined := strings.Join(traces, "\n")
+	if !strings.Contains(joined, "considering the schedule") {
+		t.Errorf("traces = %q, want the reasoning text surfaced as a think trace", joined)
+	}
+}

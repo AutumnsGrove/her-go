@@ -1,0 +1,197 @@
+{
+  "suite": "Schedule CRUD — create, list, update, delete recurring tasks",
+  "date": "2026-11-10 14:45",
+  "duration": "3m4s",
+  "cost_usd": 0.0238,
+  "turns": 6,
+  "total_tools": 53,
+  "tool_set": {
+    "create_schedule": 2,
+    "delete_schedule": 1,
+    "done": 9,
+    "list_schedules": 4,
+    "recall_memories": 7,
+    "reply": 6,
+    "safety→gate": 6,
+    "save_memory": 3,
+    "skip": 1,
+    "style→gate": 6,
+    "update_memory": 1,
+    "update_schedule": 1,
+    "use_tools": 6
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "duration_s": 15.4,
+      "cost_usd": 0.0088,
+      "tool_calls": 15,
+      "tools": [
+        "recall_memories",
+        "recall_memories",
+        "use_tools",
+        "list_schedules",
+        "create_schedule",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 40832,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 2,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 2,
+      "duration_s": 13.5,
+      "cost_usd": 0.0029,
+      "tool_calls": 10,
+      "tools": [
+        "recall_memories",
+        "use_tools",
+        "create_schedule",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "save_memory",
+        "done"
+      ],
+      "cache_read_tokens": 48000,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 3,
+      "duration_s": 7.1,
+      "cost_usd": 0.0014,
+      "tool_calls": 6,
+      "tools": [
+        "use_tools",
+        "list_schedules",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done"
+      ],
+      "cache_read_tokens": 30976,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 4,
+      "duration_s": 8.8,
+      "cost_usd": 0.0064,
+      "tool_calls": 10,
+      "tools": [
+        "use_tools",
+        "list_schedules",
+        "update_schedule",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "update_memory",
+        "done"
+      ],
+      "cache_read_tokens": 27648,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 5,
+      "duration_s": 8.4,
+      "cost_usd": 0.0018,
+      "tool_calls": 6,
+      "tools": [
+        "use_tools",
+        "delete_schedule",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done"
+      ],
+      "cache_read_tokens": 30848,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 6,
+      "duration_s": 8.1,
+      "cost_usd": 0.0024,
+      "tool_calls": 6,
+      "tools": [
+        "use_tools",
+        "list_schedules",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done"
+      ],
+      "cache_read_tokens": 28160,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    }
+  ],
+  "memories_post_run": 3,
+  "moods_post_run": 0,
+  "memory_saves_total": 4,
+  "error_tool_results": 0,
+  "fallback_calls": 0,
+  "cache_hit_pct": 66,
+  "models": {
+    "Chat": "xiaomi/mimo-v2.6-pro",
+    "Classifier": "google/gemini-3.1-flash-lite",
+    "Dream": "deepseek/deepseek-v4.1-flash-1017",
+    "Driver": "deepseek/deepseek-v4.1-flash-1017",
+    "Embed": "perplexity/pplx-embed-v1-0.6b",
+    "Introspection": "deepseek/deepseek-v4.1-flash-1017",
+    "Memory": "deepseek/deepseek-v4.1-flash-1017",
+    "Mood": "deepseek/deepseek-v4.1-flash-1017",
+    "Vision": "deepseek/deepseek-v4.1-flash-1017"
+  }
+}

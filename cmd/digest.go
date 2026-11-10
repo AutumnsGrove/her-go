@@ -51,21 +51,21 @@ type DigestTurn struct {
 
 // Digest is one sim run, reduced to structure.
 type Digest struct {
-	Suite        string            `json:"suite"`
-	Date         string            `json:"date"`
-	DurationS    string            `json:"duration"`
-	CostUSD      float64           `json:"cost_usd"`
-	Turns        int               `json:"turns"`
-	TotalTools   int               `json:"total_tools"`
-	ToolSet      map[string]int    `json:"tool_set"`
-	PerTurn      []DigestTurn      `json:"per_turn"`
-	MemoriesPost int               `json:"memories_post_run"`
-	MoodsPost    int               `json:"moods_post_run"`
-	MemoriesSaved int              `json:"memory_saves_total"`
-	ErrorToolResults int           `json:"error_tool_results"`
-	FallbackCalls int              `json:"fallback_calls"`
-	CacheHitPct  float64           `json:"cache_hit_pct"`
-	Models       map[string]string `json:"models"`
+	Suite            string            `json:"suite"`
+	Date             string            `json:"date"`
+	DurationS        string            `json:"duration"`
+	CostUSD          float64           `json:"cost_usd"`
+	Turns            int               `json:"turns"`
+	TotalTools       int               `json:"total_tools"`
+	ToolSet          map[string]int    `json:"tool_set"`
+	PerTurn          []DigestTurn      `json:"per_turn"`
+	MemoriesPost     int               `json:"memories_post_run"`
+	MoodsPost        int               `json:"moods_post_run"`
+	MemoriesSaved    int               `json:"memory_saves_total"`
+	ErrorToolResults int               `json:"error_tool_results"`
+	FallbackCalls    int               `json:"fallback_calls"`
+	CacheHitPct      float64           `json:"cache_hit_pct"`
+	Models           map[string]string `json:"models"`
 }
 
 // Regular expressions for the report's stable lines. Each one is anchored to
@@ -73,13 +73,13 @@ type Digest struct {
 // against a real report excerpt so a format change fails a test instead of
 // silently producing empty digests.
 var (
-	digestTitleRE   = regexp.MustCompile(`^# Simulation Report: (.+)$`)
-	digestStatsRE   = regexp.MustCompile(`\*\*Duration:\*\* (\S+) \| \*\*Cost:\*\* \$([0-9.]+) \| \*\*Turns:\*\* (\d+)`)
-	digestDateRE    = regexp.MustCompile(`\*\*Date:\*\* ([0-9: -]+) \|`)
-	digestTurnRE    = regexp.MustCompile(`^### Turn (\d+) \*\((.*)\)\*`)
-	digestMemoryRE  = regexp.MustCompile(`^> 🧩 \*\*memory:\*\* saved (\d+)`)
-	digestTraceRE   = regexp.MustCompile(`^\[([^\]]+)\] \S+ (.+)$`)
-	digestMemPostRE = regexp.MustCompile(`^\*\*(\d+) active memories:\*\*`)
+	digestTitleRE    = regexp.MustCompile(`^# Simulation Report: (.+)$`)
+	digestStatsRE    = regexp.MustCompile(`\*\*Duration:\*\* (\S+) \| \*\*Cost:\*\* \$([0-9.]+) \| \*\*Turns:\*\* (\d+)`)
+	digestDateRE     = regexp.MustCompile(`\*\*Date:\*\* ([0-9: -]+) \|`)
+	digestTurnRE     = regexp.MustCompile(`^### Turn (\d+) \*\((.*)\)\*`)
+	digestMemoryRE   = regexp.MustCompile(`^> 🧩 \*\*memory:\*\* saved (\d+)`)
+	digestTraceRE    = regexp.MustCompile(`^\[([^\]]+)\] \S+ (.+)$`)
+	digestMemPostRE  = regexp.MustCompile(`^\*\*(\d+) active memories:\*\*`)
 	digestMoodPostRE = regexp.MustCompile(`^\*\*(\d+) mood entries`)
 	digestFallbackRE = regexp.MustCompile(`^\*\*(\d+) of (\d+) calls`)
 	digestHitRE      = regexp.MustCompile(`\*\*Cache hit rate\*\* \| \*\*([0-9.]+)%\*\*`)
@@ -91,7 +91,7 @@ func ExtractDigest(report string) (Digest, error) {
 	d := Digest{ToolSet: map[string]int{}, Models: map[string]string{}}
 
 	lines := strings.Split(report, "\n")
-	section := ""       // current "## " heading
+	section := ""        // current "## " heading
 	inTrace := false     // inside a ``` code block
 	var turn *DigestTurn // turn being filled
 
@@ -344,11 +344,14 @@ func CompareDigests(base, next Digest) []DigestCheck {
 	check.Detail = fmt.Sprintf("baseline %d, new %d", base.MemoriesSaved, next.MemoriesSaved)
 	checks = append(checks, check)
 
-	// 6. Cost within ±25% — the silent-regression detector (a prompt-cache drop
-	// shows up here first).
-	check = DigestCheck{Name: "cost (±25%)"}
-	check.OK = withinFraction(base.CostUSD, next.CostUSD, 0.25, 0)
-	check.Detail = fmt.Sprintf("baseline $%.4f, new $%.4f", base.CostUSD, next.CostUSD)
+	// 6. Cost no worse than +25% — the silent-regression detector (a prompt-cache
+	// drop shows up here first). One-sided on purpose: spending less than the
+	// baseline is never a failure, and a symmetric band would flag a cheaper run
+	// as broken.
+	check = DigestCheck{Name: "cost not above +25%"}
+	check.OK = next.CostUSD <= base.CostUSD*1.25+0.0001
+	check.Detail = fmt.Sprintf("baseline $%.4f, new $%.4f (%+.0f%%)", base.CostUSD, next.CostUSD,
+		pctChange(base.CostUSD, next.CostUSD))
 	checks = append(checks, check)
 
 	// 7. No new fallback usage.
@@ -372,6 +375,15 @@ func CompareDigests(base, next Digest) []DigestCheck {
 	checks = append(checks, check)
 
 	return checks
+}
+
+// pctChange reports next relative to base as a percentage. Base zero reports 0
+// rather than an infinity nobody wants to read in a PASS line.
+func pctChange(base, next float64) float64 {
+	if base == 0 {
+		return 0
+	}
+	return (next - base) / base * 100
 }
 
 func countTrue(d Digest, pred func(DigestTurn) bool) int {

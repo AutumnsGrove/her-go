@@ -1,0 +1,188 @@
+{
+  "suite": "Vision Pipeline Test",
+  "date": "2026-11-10 14:45",
+  "duration": "2m39s",
+  "cost_usd": 0.018,
+  "turns": 5,
+  "total_tools": 64,
+  "tool_set": {
+    "done": 7,
+    "fast-path": 1,
+    "recall_memories": 9,
+    "reply": 28,
+    "safety→gate": 5,
+    "save_memory": 1,
+    "skip": 3,
+    "style→gate": 5,
+    "think": 1,
+    "view_image": 4
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "duration_s": 11.9,
+      "cost_usd": 0.0053,
+      "tool_calls": 12,
+      "tools": [
+        "view_image",
+        "recall_memories",
+        "recall_memories",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 46080,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 2,
+      "duration_s": 92.8,
+      "cost_usd": 0.0071,
+      "tool_calls": 34,
+      "tools": [
+        "view_image",
+        "view_image",
+        "recall_memories",
+        "recall_memories",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "reply",
+        "reply",
+        "reply",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done"
+      ],
+      "cache_read_tokens": 254080,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 3,
+      "duration_s": 9.5,
+      "cost_usd": 0.0027,
+      "tool_calls": 9,
+      "tools": [
+        "recall_memories",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "done",
+        "think",
+        "skip"
+      ],
+      "cache_read_tokens": 41728,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 4,
+      "duration_s": 9,
+      "cost_usd": 0.0029,
+      "tool_calls": 8,
+      "tools": [
+        "view_image",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 38528,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 5,
+      "duration_s": 4.1,
+      "cost_usd": 0,
+      "tool_calls": 1,
+      "tools": [
+        "fast-path"
+      ],
+      "cache_read_tokens": 1536,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": false,
+      "reached_reply": false
+    }
+  ],
+  "memories_post_run": 0,
+  "moods_post_run": 0,
+  "memory_saves_total": 1,
+  "error_tool_results": 24,
+  "fallback_calls": 4,
+  "cache_hit_pct": 88.8,
+  "models": {
+    "Chat": "xiaomi/mimo-v2.6-pro",
+    "Classifier": "google/gemini-3.1-flash-lite",
+    "Dream": "deepseek/deepseek-v4.1-flash-1017",
+    "Driver": "deepseek/deepseek-v4.1-flash-1017",
+    "Embed": "perplexity/pplx-embed-v1-0.6b",
+    "Introspection": "deepseek/deepseek-v4.1-flash-1017",
+    "Memory": "deepseek/deepseek-v4.1-flash-1017",
+    "Mood": "deepseek/deepseek-v4.1-flash-1017",
+    "Vision": "deepseek/deepseek-v4.1-flash-1017"
+  }
+}

@@ -24,6 +24,19 @@ driver, `perplexity/pplx-embed-v1-0.6b` @ 1024 dims) on either side of the migra
 | schedule-crud | 6 turns, $0.0433, 83 tools, 1/6 reached `done`, 6 fallbacks | 6 turns, $0.0333, 73 tools, **5/6** reached `done`, 0 fallbacks |
 | worker-agent-test | 2 turns, $0.0087, 20 tools, 2/2 `done`, 1 fallback | 2 turns, $0.0089, 18 tools, 2/2 `done`, 0 fallbacks |
 
+`shipping/` holds the same two suites again on the **final** configuration (Nova loop + Nova transport + the
+DeepSeek V4.1 Flash agent models):
+
+| Suite | shipping |
+|---|---|
+| schedule-crud | 6 turns, $0.0238, 53 tools, **6/6** reached `done`, 0 fallbacks, 66.0% cache |
+| vision-test | 5 turns, $0.0180, 64 tools, 4/5 `done`, 88.8% cache |
+
+Against `legacy/`, schedule-crud improves on every axis that matters: `done` 6/6 vs 1/6, fallbacks 0 vs 6, cost
+−45%. The one remaining `FAIL` line is `think` no longer appearing in the tool set — DeepSeek returns its
+reasoning in a separate channel rather than calling the explicit think tool, and the loop turns that channel into
+the same trace line (`agent_engine/nova.go`), so the trace panel keeps showing the model's thinking.
+
 `compaction-quick` and `mood-dedup-test` have legacy baselines only (the Nova re-runs did not fit the session).
 Cache hit rate was the number that mattered most (a dropped prompt cache is the costliest silent regression):
 schedule-crud 88.9% legacy vs 87.3% Nova, worker 84.0% both.

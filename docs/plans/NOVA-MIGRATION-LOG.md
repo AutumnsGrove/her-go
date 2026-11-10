@@ -267,3 +267,27 @@ Pin: **driver and vision `[deepinfra/fp8, morph/fp8]`** (latency matters on the 
 cheap spillover), **background agents and worker tiers `[morph/fp8, deepinfra/fp8]`** (cost matters, nobody is
 looking at the clock). `provider.order` is a preference rather than a hard pin when `allow_fallbacks` is left at
 its default — noted earlier in this log — which is what makes the two-entry lists useful.
+
+### Final verification on the shipping config
+
+Two suites on the finished tree (Nova loop + Nova transport + DeepSeek V4.1 Flash agents, MiMo 2.6 Pro replies),
+digests in `docs/plans/baselines/shipping/`:
+
+| Suite | result |
+|---|---|
+| schedule-crud | 6 turns, $0.0238, 53 tools, **6/6 done**, 6/6 replies, 0 fallbacks, 66.0% cache |
+| vision-test | 5 turns, $0.0180, 64 tools, 4/5 done, 88.8% cache, image descriptions correct |
+
+Against the `legacy/` baseline: `done` 6/6 vs 1/6, fallbacks 0 vs 6, cost −45%, error tool results 0 vs 1.
+Two things moved and are recorded rather than smoothed over:
+
+- **`think` stops appearing in the tool set.** DeepSeek reasons in its own channel instead of calling the
+  explicit tool. The loop now turns `Message.Reasoning` into the same synthetic think trace (`<think>` blocks
+  still take precedence), so `/traces` keeps showing the model's thinking — new test
+  `TestNova_ReasoningChannelBecomesTrace`.
+- **Cache hit rate drops from 88.9% to 66.0%** on this suite. DeepSeek's cache is cheaper per token ($0.005/M
+  vs MiMo's $0.0036/M) but warms less predictably on this prompt shape, and its input is 70x cheaper
+  uncached, so the total is still −45%. Watch `cache_read_tokens` after deploy: this is the number that would
+  move first if something started invalidating the prefix.
+- The digest comparator's cost check is now one-sided (`not above +25%`); a run that costs less than its
+  baseline was being reported as a failure.
