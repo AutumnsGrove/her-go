@@ -56,8 +56,8 @@ func newNovaVoiceClient(cfg *config.TTSConfig, fallbackAPIKey string, costLookup
 	return openrouter.New(openrouter.Config{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
-		Referer: "https://github.com/AutumnsGrove/her-go",
-		Title:   "her-go",
+		Referer: config.OpenRouterReferer,
+		Title:   config.OpenRouterTitle,
 		// One extra request per synthesis buys the exact cost OpenRouter charged.
 		// The hand-rolled client guessed 0 for every raw-bytes response, which
 		// made the voice cost invisible in the metrics table.
@@ -176,12 +176,17 @@ func (c *NovaTTSClient) IsAvailable() bool { return true }
 // stays on the existing multipart path until nova#86 lands an OpenAI-shaped
 // adapter that can serve it.
 func (c *Client) transcribeWithNova(audioBytes []byte, filename, model string) (TranscribeResult, error) {
-	client := openrouter.New(openrouter.Config{
-		APIKey:  c.apiKey,
-		BaseURL: c.baseURL,
-		Referer: "https://github.com/AutumnsGrove/her-go",
-		Title:   "her-go",
+	// Built once and reused: the adapter owns an http.Client, and a fresh one per
+	// call would throw away its pooled connection to OpenRouter every time.
+	c.novaOnce.Do(func() {
+		c.novaSTT = openrouter.New(openrouter.Config{
+			APIKey:  c.apiKey,
+			BaseURL: c.baseURL,
+			Referer: config.OpenRouterReferer,
+			Title:   config.OpenRouterTitle,
+		})
 	})
+	client := c.novaSTT
 
 	format := novaAudioFormat(filename)
 	// A zero http.Client.Timeout means "no deadline" to net/http, but

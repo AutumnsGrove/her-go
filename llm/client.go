@@ -17,6 +17,7 @@ import (
 
 	"github.com/AutumnsGrove/nova/provider"
 
+	"her/config"
 	"her/logger"
 )
 
@@ -636,8 +637,8 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	// Opt in to OpenRouter routing metadata — gives us the provider name.
 	req.Header.Set("X-OpenRouter-Metadata", "enabled")
 
@@ -768,8 +769,8 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -970,8 +971,8 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)

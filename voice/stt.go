@@ -17,12 +17,17 @@ package voice
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/AutumnsGrove/nova/provider"
+	"github.com/AutumnsGrove/nova/voice/openrouter"
 
 	"her/config"
 	"her/logger"
@@ -40,6 +45,10 @@ type Client struct {
 	apiKey        string // auth token for remote engines; empty for local (parakeet)
 	fallbackModel string // fallback model for retries; empty = no fallback
 	httpClient    *http.Client
+
+	// Nova's OpenRouter adapter, built on first remote transcription (see nova.go).
+	novaOnce sync.Once
+	novaSTT  *openrouter.Client
 }
 
 // NewClient creates an STT client from config. Returns nil if voice is
@@ -144,10 +153,19 @@ func (c *Client) Transcribe(audioBytes []byte, filename string) (TranscribeResul
 }
 
 // isRetriable checks whether an error should trigger a fallback retry.
-// Retriable: timeouts, 503 (service unavailable), 502 (bad gateway), 504 (gateway timeout).
+// Retriable: timeouts, rate limits and server errors (429, 5xx).
+//
+// Nova's adapter returns a typed *provider.Error that already classifies the
+// status, so ask it first (errors.As is Go's "isinstance" for wrapped errors).
+// The string checks remain for the local multipart path and for transport
+// errors, which carry no status.
 func isRetriable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var perr *provider.Error
+	if errors.As(err, &perr) {
+		return perr.Retryable
 	}
 	errStr := err.Error()
 	return strings.Contains(errStr, "timeout") ||

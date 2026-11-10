@@ -10,10 +10,14 @@ package voice
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"testing"
+
+	"github.com/AutumnsGrove/nova/provider"
 
 	"her/config"
 )
@@ -153,5 +157,60 @@ func TestNovaAudioFormat(t *testing.T) {
 		if got := string(novaAudioFormat(name)); got != want {
 			t.Errorf("novaAudioFormat(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+// A constructor that returns a nil *NovaTTSClient and is assigned to a TTSEngine
+// interface produces a non-nil interface holding a nil pointer — `engine == nil`
+// is false, and the first Synthesize call dereferences nil. (Go interfaces are
+// a (type, value) pair; only the pair (nil, nil) compares equal to nil.)
+// A misconfigured engine must come out of the factory as a real nil.
+func TestNewTTSClient_MisconfiguredEngineIsNil(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.TTSConfig
+	}{
+		{"openrouter without voice_id", config.TTSConfig{Enabled: true, Engine: TTSEngineOpenRouter, APIKey: "k"}},
+		{"openrouter without any api key", config.TTSConfig{Enabled: true, Engine: TTSEngineOpenRouter, VoiceID: "alloy"}},
+		{"elevenlabs without credentials", config.TTSConfig{Enabled: true, Engine: config.TTSEngineElevenLabs}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NewTTSClient(&tc.cfg, ""); got != nil {
+				t.Fatalf("NewTTSClient returned %#v, want nil for a misconfigured engine", got)
+			}
+		})
+	}
+}
+
+// A fallback that cannot be built must be skipped, not wrapped as a nil engine
+// that panics the first time the primary fails.
+func TestNewTTSClient_BrokenFallbackIsSkipped(t *testing.T) {
+	cfg := config.TTSConfig{
+		Enabled: true, Engine: TTSEngineOpenRouter, APIKey: "k", VoiceID: "alloy",
+		Fallback: &config.TTSFallbackConfig{Engine: TTSEngineOpenRouter}, // no voice_id
+	}
+	client := NewTTSClient(&cfg, "")
+	if client == nil {
+		t.Fatal("primary engine is fine; client must not be nil")
+	}
+	if _, wrapped := client.engine.(*FallbackTTSClient); wrapped {
+		t.Error("a fallback that failed to initialise was wrapped around the primary")
+	}
+}
+
+// Nova reports a classified *provider.Error; the fallback decision must follow
+// its Retryable flag even when the message carries no status text, and must
+// survive wrapping (fmt.Errorf with %w), which is how transcribeWithNova returns it.
+func TestIsRetriable_UsesNovaClassification(t *testing.T) {
+	retryable := fmt.Errorf("STT request failed: %w", &provider.Error{Status: 429, Retryable: true, Message: "slow down"})
+	if !isRetriable(retryable) {
+		t.Error("a retryable provider error (429) should trigger the fallback model")
+	}
+	fatal := fmt.Errorf("STT request failed: %w", &provider.Error{Status: 401, Message: "bad key"})
+	if isRetriable(fatal) {
+		t.Error("a 401 would fail on the fallback model too; it must not be retried")
+	}
+	if !isRetriable(errors.New("context deadline exceeded")) {
+		t.Error("transport timeouts stay retriable")
 	}
 }

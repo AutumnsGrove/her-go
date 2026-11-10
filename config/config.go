@@ -347,6 +347,14 @@ type LLMConfig struct {
 	APIKey  string `yaml:"api_key"`
 }
 
+// Attribution sent to OpenRouter on every request (HTTP-Referer / X-Title), so
+// usage shows up under the project in OpenRouter's dashboard. Defined once here
+// because the chat client and the voice client both send them.
+const (
+	OpenRouterReferer = "https://github.com/AutumnsGrove/her-go"
+	OpenRouterTitle   = "her-go"
+)
+
 // BackendConfig selects an implementation behind a project-owned seam. It is a
 // migration switch: "nova" is the Nova library, "legacy" is the hand-written
 // code kept as an escape hatch. The zero value means nova, so a config.yaml

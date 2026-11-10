@@ -50,15 +50,26 @@ func NewTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *TTSClient {
 		return nil
 	}
 
+	// Each constructor returns a concrete pointer type (*PiperTTSClient, ...).
+	// Assigning a nil pointer straight into the TTSEngine interface would make
+	// `engine == nil` false — an interface is a (type, value) pair, and only
+	// (nil, nil) equals nil — and the first Synthesize would dereference nil.
+	// So check the pointer before it becomes an interface.
 	var engine TTSEngine
 
 	switch cfg.Engine {
 	case config.TTSEnginePiper:
-		engine = NewPiperTTSClient(cfg)
+		if c := NewPiperTTSClient(cfg); c != nil {
+			engine = c
+		}
 	case config.TTSEngineElevenLabs:
-		engine = NewElevenLabsTTSClient(cfg)
+		if c := NewElevenLabsTTSClient(cfg); c != nil {
+			engine = c
+		}
 	case TTSEngineOpenRouter:
-		engine = NewOpenRouterTTSClient(cfg, fallbackAPIKey)
+		if c := NewOpenRouterTTSClient(cfg, fallbackAPIKey); c != nil {
+			engine = c
+		}
 	default:
 		log.Warn("Unknown TTS engine — TTS disabled", "engine", cfg.Engine)
 		return nil
@@ -95,7 +106,11 @@ func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig, f
 			ReplyMode: cfg.ReplyMode,
 			Pauses:    cfg.Pauses,
 		}
-		return NewPiperTTSClient(piperCfg)
+		// Same typed-nil guard as NewTTSClient: return a real nil interface.
+		if c := NewPiperTTSClient(piperCfg); c != nil {
+			return c
+		}
+		return nil
 	case TTSEngineOpenRouter:
 		orCfg := &config.TTSConfig{
 			BaseURL:   fb.BaseURL,
@@ -103,7 +118,10 @@ func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig, f
 			VoiceID:   fb.VoiceID,
 			ReplyMode: cfg.ReplyMode,
 		}
-		return NewOpenRouterTTSClient(orCfg, fallbackAPIKey)
+		if c := NewOpenRouterTTSClient(orCfg, fallbackAPIKey); c != nil {
+			return c
+		}
+		return nil
 	default:
 		log.Warn("Unknown TTS fallback engine", "engine", fb.Engine)
 		return nil

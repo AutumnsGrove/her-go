@@ -30,6 +30,8 @@ import (
 	"github.com/AutumnsGrove/nova/message"
 	"github.com/AutumnsGrove/nova/provider"
 	"github.com/AutumnsGrove/nova/provider/openrouter"
+
+	"her/config"
 )
 
 // backend selects the transport implementation. Package-level because the flag
@@ -83,8 +85,8 @@ func (c *Client) novaProvider() provider.Provider {
 		c.novaProviderInstance = openrouter.New(openrouter.Config{
 			APIKey:  c.apiKey,
 			BaseURL: c.baseURL,
-			Referer: "https://github.com/AutumnsGrove/her-go",
-			Title:   "her-go",
+			Referer: config.OpenRouterReferer,
+			Title:   config.OpenRouterTitle,
 			// Reuse the client's http.Client so WithTimeout keeps working.
 			HTTPClient: httpClient,
 			// The legacy client always serialised `"content": ""` on an
