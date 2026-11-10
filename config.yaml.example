@@ -289,8 +289,10 @@ voice:
       comma_ms: 50
       semi_ms: 30
 
-    # ─── ENGINE 2: OPENROUTER (REMOTE, COST TRACKED) ───
-    # Better quality than Piper, cost tracking built-in, 54 Kokoro voices
+    # ─── ENGINE 2: OPENROUTER (REMOTE) ───
+    # Better quality than Piper, ~54 Kokoro voices, runs on Nova's voice module.
+    # Synthesis cost: OpenRouter's /generation returns nulls for TTS ids, so
+    # speech cost reads $0 today; watch her-go#104 for the follow-up.
     # To use: uncomment these 4 lines and comment out the "piper" lines above
     # engine: "openrouter"
     # base_url: "https://openrouter.ai/api/v1"

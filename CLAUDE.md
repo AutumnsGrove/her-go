@@ -15,7 +15,7 @@ Personal companion chatbot built in Go. See SPEC.md for full architecture and de
 - **Classifier model:** Gemini 3.1 Flash Lite via OpenRouter (memory + reply safety gates)
 - **Embeddings:** `perplexity/pplx-embed-v1-0.6b` via OpenRouter, 1024 dimensions (was local nomic/768 — `her reembed` migrates an existing DB)
 - **Vision model:** DeepSeek V4.1 Flash 1017 (deepseek/deepseek-v4.1-flash-1017) — text+image input
-- **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT
+- **Voice:** Piper TTS (en_GB-southern_english_female-low) + Parakeet STT, local by default. The OpenRouter routes for both directions now run on Nova's `voice` module (`voice/nova.go`); Piper/ElevenLabs stay on her-go's own `TTSEngine` until nova#86 lands a local adapter.
 
 ## Running
 
