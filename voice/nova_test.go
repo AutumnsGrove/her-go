@@ -214,3 +214,23 @@ func TestIsRetriable_UsesNovaClassification(t *testing.T) {
 		t.Error("transport timeouts stay retriable")
 	}
 }
+
+// TestNovaTTS_CostLookupDefaultsOff pins the default: the lookup costs one extra
+// request per synthesis and, as of Nova v0.4.0, resolves nothing for speech
+// (OpenRouter returns nulls for gen-tts ids — nova#91). Turning it on is a
+// config line when that changes.
+func TestNovaTTS_CostLookupDefaultsOff(t *testing.T) {
+	cfg := &config.TTSConfig{BaseURL: "https://openrouter.ai/api/v1", APIKey: "k", Model: "m", VoiceID: "v"}
+	engine := NewOpenRouterTTSClient(cfg, "")
+	if engine == nil {
+		t.Fatal("engine did not build")
+	}
+	if engine.costLookup {
+		t.Error("cost_lookup is on by default; it pays for a lookup that resolves nothing")
+	}
+	on := true
+	cfg.CostLookup = &on
+	if engine := NewOpenRouterTTSClient(cfg, ""); engine == nil || !engine.costLookup {
+		t.Error("cost_lookup: true did not enable the lookup")
+	}
+}

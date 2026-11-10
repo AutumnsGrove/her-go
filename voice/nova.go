@@ -58,9 +58,8 @@ func newNovaVoiceClient(cfg *config.TTSConfig, fallbackAPIKey string, costLookup
 		BaseURL: baseURL,
 		Referer: config.OpenRouterReferer,
 		Title:   config.OpenRouterTitle,
-		// One extra request per synthesis buys the exact cost OpenRouter charged.
-		// The hand-rolled client guessed 0 for every raw-bytes response, which
-		// made the voice cost invisible in the metrics table.
+		// See the default comment in NewOpenRouterTTSClient: the lookup is off
+		// unless asked for, because a speech generation id resolves to nothing.
 		CostLookup: costLookup,
 	})
 }
@@ -76,6 +75,9 @@ type NovaTTSClient struct {
 	model     string
 	voiceID   string
 	replyMode string
+	// costLookup records the configured choice so a test (and a log line) can
+	// tell "off" from "on but unanswered".
+	costLookup bool
 }
 
 // NewOpenRouterTTSClient creates the OpenRouter TTS engine on Nova.
@@ -83,8 +85,10 @@ type NovaTTSClient struct {
 // The name is kept from the pre-migration client so config wiring, the fallback
 // engine table and the bot keep referring to one thing; only the internals moved.
 func NewOpenRouterTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *NovaTTSClient {
-	// Exact cost, unless config says otherwise: nil means "on".
-	costLookup := cfg.CostLookup == nil || *cfg.CostLookup
+	// Off by default: OpenRouter's /generation returns nulls for TTS ids, so the
+	// lookup adds a request per synthesis and resolves nothing (see nova#91).
+	// Turn it on with voice.tts.cost_lookup: true if that changes.
+	costLookup := cfg.CostLookup != nil && *cfg.CostLookup
 	model := cfg.Model
 	if model == "" {
 		model = openrouter.DefaultSpeechModel
@@ -112,7 +116,7 @@ func NewOpenRouterTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *NovaT
 		"reply_mode", replyMode,
 		"cost_lookup", costLookup,
 	)
-	return &NovaTTSClient{speaker: speaker, model: model, voiceID: voiceID, replyMode: replyMode}
+	return &NovaTTSClient{speaker: speaker, model: model, voiceID: voiceID, replyMode: replyMode, costLookup: costLookup}
 }
 
 // Synthesize converts text to OGG/Opus audio for Telegram.

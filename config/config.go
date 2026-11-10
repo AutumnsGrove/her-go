@@ -859,7 +859,7 @@ type TTSConfig struct {
 	VoiceID       string             `yaml:"voice_id"`              // piper: same as model. elevenlabs: voice ID from the voice library
 	APIKey        string             `yaml:"api_key"`               // elevenlabs only; unused for piper (local, no auth)
 	Speed         float64            `yaml:"speed"`                 // speaking rate (1.0 = normal) — piper only
-	CostLookup    *bool              `yaml:"cost_lookup,omitempty"` // openrouter only: ask for the exact cost of each synthesis (nil = true). Costs one extra request per call.
+	CostLookup    *bool              `yaml:"cost_lookup,omitempty"` // openrouter only: ask for the exact cost of each synthesis (nil = false). Costs one extra request per call and, as of Nova v0.4.0, resolves nothing for speech (nova#91).
 	ReplyMode     string             `yaml:"reply_mode"`            // "voice" (always reply with voice) or "match" (mirror input format)
 	Pauses        TTSPauseConfig     `yaml:"pauses"`                // piper only
 	IdleUnloadSec int                `yaml:"idle_unload_sec"`       // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload

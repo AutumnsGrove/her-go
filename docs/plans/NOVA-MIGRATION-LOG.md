@@ -357,6 +357,7 @@ A read-through of the whole branch found seven things worth fixing; each has a t
   call; no fallback after text was already streamed (it would replay the reply); `HookTimeout` is 2 minutes
   because Nova abandons a hook at 5s and drops its return value; STT retry reads Nova's typed error; the
   OpenRouter Referer/Title live in `config`.
-- **Not changed, worth a decision:** `tts.cost_lookup` defaults on, but the entry above shows OpenRouter
-  returns no cost for speech, so each synthesis pays an extra request for nothing.
+- **Decided:** `tts.cost_lookup` now defaults **off**. The review left it as an open question, and nova#91
+  answers it — OpenRouter returns no cost for a speech generation id, so the lookup is a paid request that
+  resolves nothing. One config line turns it back on if that changes; a test pins the default.
 
