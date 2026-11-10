@@ -47,59 +47,6 @@ import (
 	"her/tui"
 )
 
-// Loop backends, as written in config.yaml.
-const (
-	backendLegacy = "legacy"
-	backendNova   = "nova"
-)
-
-var (
-	// loopBackend is the process-wide default loop implementation.
-	loopBackend = backendLegacy
-
-	// loopBackendOverrides maps an agent name (EngineConfig.Name) to a backend,
-	// which is how the staged cutover runs one agent on Nova while the rest stay
-	// on the legacy loop.
-	loopBackendMu        sync.RWMutex
-	loopBackendOverrides = map[string]string{}
-)
-
-// SetLoopBackend chooses the loop implementation. Unknown names fall back to
-// legacy so a typo cannot silently change behaviour.
-func SetLoopBackend(name string, overrides map[string]string) {
-	loopBackendMu.Lock()
-	defer loopBackendMu.Unlock()
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case backendNova:
-		loopBackend = backendNova
-	default:
-		loopBackend = backendLegacy
-	}
-	loopBackendOverrides = make(map[string]string, len(overrides))
-	for agentName, backend := range overrides {
-		if strings.ToLower(strings.TrimSpace(backend)) == backendNova {
-			loopBackendOverrides[agentName] = backendNova
-		}
-	}
-}
-
-// backendFor reports which loop implementation cfg should use.
-func backendFor(name string) string {
-	loopBackendMu.RLock()
-	defer loopBackendMu.RUnlock()
-	if b, ok := loopBackendOverrides[name]; ok {
-		return b
-	}
-	return loopBackend
-}
-
-// ActiveLoopBackend reports the process-wide default, for logs and /status.
-func ActiveLoopBackend() string {
-	loopBackendMu.RLock()
-	defer loopBackendMu.RUnlock()
-	return loopBackend
-}
-
 // runNova executes one agent run on Nova's loop.
 func runNova(cfg EngineConfig) (*LoopResult, error) {
 	iterationsPerWindow := coerce(cfg.IterationsPerWindow, defaultIterationsPerWindow, maxIterationsPerWindowCap)

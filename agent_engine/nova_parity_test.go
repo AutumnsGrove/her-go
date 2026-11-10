@@ -24,6 +24,10 @@ import (
 	"her/tools"
 )
 
+// runOnce runs a test body immediately. It exists so these cases kept their
+// shape from when every case ran against two loop implementations.
+func runOnce(t *testing.T, fn func(t *testing.T)) { fn(t) }
+
 // rawChunk builds one SSE data frame from a JSON body.
 func rawChunk(body string) string { return "data: " + body + "\n\n" }
 
@@ -118,7 +122,7 @@ func TestParity_MalformedArgsBecomeErrorResult(t *testing.T) {
 	//
 	// The important invariant for both: no handler ever runs on unparseable
 	// arguments.
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		registerTestTool(t, "parity_malformed", func(argsJSON string, ctx *tools.Context) string {
 			return "should not run"
 		})
@@ -145,32 +149,22 @@ func TestParity_MalformedArgsBecomeErrorResult(t *testing.T) {
 			t.Fatalf("RunLoop: %v", err)
 		}
 
-		if currentBackend(t) == backendLegacy {
-			if result.ExitReason != ExitError {
-				t.Errorf("legacy: exit reason = %q, want %q (truncated args fail the call)", result.ExitReason, ExitError)
-			}
-			if firstResult != "" {
-				t.Errorf("legacy: a tool ran with unparseable arguments: %q", firstResult)
-			}
-			return
-		}
-
 		// Nova validates arguments against the tool schema before dispatch, so its
 		// wording is what the model sees here — "error: invalid arguments: ..." —
 		// not her-go's "malformed JSON in arguments" line (delta D5, recorded in
 		// NOVA-GAPS.md). What matters is unchanged: an error result, and the loop
 		// carrying on.
 		if !strings.HasPrefix(firstResult, "error:") {
-			t.Errorf("nova: result = %q, want an error result", firstResult)
+			t.Errorf("result = %q, want an error result", firstResult)
 		}
 		if result.ExitReason == ExitError {
-			t.Error("nova: a malformed-argument tool result must not fail the run")
+			t.Error("a malformed-argument tool result must not fail the run")
 		}
 	})
 }
 
 func TestParity_ErrorToolResultDoesNotAbort(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		registerTestTool(t, "parity_error", func(string, *tools.Context) string {
 			return "error: simulated tool failure"
 		})
@@ -204,7 +198,7 @@ func TestParity_ErrorToolResultDoesNotAbort(t *testing.T) {
 }
 
 func TestParity_PostToolResultCanChangeErrorStatus(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		registerTestTool(t, "parity_rewrite", func(string, *tools.Context) string {
 			return "error: raw failure"
 		})
@@ -238,7 +232,7 @@ func TestParity_PostToolResultCanChangeErrorStatus(t *testing.T) {
 }
 
 func TestParity_BatchedToolCallsRunOnlyTheFirst(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		registerTestTool(t, "parity_first", func(string, *tools.Context) string { return "first ran" })
 		registerTestTool(t, "parity_second", func(string, *tools.Context) string { return "second ran" })
 
@@ -275,7 +269,7 @@ func TestParity_BatchedToolCallsRunOnlyTheFirst(t *testing.T) {
 // message has no tool calls and the run ends. Both terminate and neither
 // dispatches a nameless call.
 func TestParity_EmptyToolNameTerminates(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		client := newRawMockLLM(t, [][]string{
 			{toolCallFrame("c1", "", `{}`), finishFrame("tool_calls")},
 			{finishFrame("stop")},
@@ -304,9 +298,6 @@ func TestParity_EmptyToolNameTerminates(t *testing.T) {
 // takes the process down. Nova recovers it into that call's error result, which
 // is strictly safer and worth pinning.
 func TestNova_PanicInHandlerBecomesErrorResult(t *testing.T) {
-	SetLoopBackend(backendNova, nil)
-	t.Cleanup(func() { SetLoopBackend(backendLegacy, nil) })
-
 	registerTestTool(t, "parity_panic", func(string, *tools.Context) string {
 		panic("simulated handler panic")
 	})
@@ -337,7 +328,7 @@ func TestNova_PanicInHandlerBecomesErrorResult(t *testing.T) {
 // guarantee a tool call (models ignore it), and a provider that answers with
 // text must not wedge the loop.
 func TestParity_NoToolCallsWithRequiredChoice(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		text := rawChunk(`{"choices":[{"delta":{"content":"plain answer"},"finish_reason":null}],"model":"test-model"}`)
 		client := newRawMockLLM(t, [][]string{{text, finishFrame("stop")}})
 
@@ -365,7 +356,7 @@ func TestParity_NoToolCallsWithRequiredChoice(t *testing.T) {
 // reasoning block must come out of the content and show up as a trace line,
 // without changing the exit reason.
 func TestParity_ThinkBlockBecomesTrace(t *testing.T) {
-	forEachLoopBackend(t, func(t *testing.T) {
+	runOnce(t, func(t *testing.T) {
 		text := rawChunk(`{"choices":[{"delta":{"content":"<think>considering</think>the answer"},"finish_reason":null}],"model":"test-model"}`)
 		client := newRawMockLLM(t, [][]string{{text, finishFrame("stop")}})
 
@@ -396,9 +387,6 @@ func TestParity_ThinkBlockBecomesTrace(t *testing.T) {
 // enlarged schema. The legacy loop sent its starting set for ever, which is why
 // this test is Nova-only.
 func TestNova_DeferredToolsAreReadvertised(t *testing.T) {
-	SetLoopBackend(backendNova, nil)
-	t.Cleanup(func() { SetLoopBackend(backendLegacy, nil) })
-
 	// Start with one advertised tool; the "loader" stands in for use_tools and
 	// appends the deferred one, exactly as tools/use_tools does.
 	active := []llm.ToolDef{{Type: "function", Function: llm.ToolFunctionDef{Name: "think", Parameters: map[string]any{"type": "object"}}}}

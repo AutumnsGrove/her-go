@@ -28,7 +28,6 @@ type Config struct {
 	Telegram           TelegramConfig           `yaml:"telegram"`
 	OpenRouter         LLMConfig                `yaml:"openrouter"`
 	LLM                BackendConfig            `yaml:"llm"`
-	Engine             EngineBackendConfig      `yaml:"engine"`
 	Chat               ChatConfig               `yaml:"chat"`
 	Driver             DriverConfig             `yaml:"driver"`
 	Vision             VisionConfig             `yaml:"vision"`
@@ -346,17 +345,6 @@ type ReasoningConfig struct {
 type LLMConfig struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
-}
-
-// EngineBackendConfig selects the agent-loop implementation, and optionally does
-// so per agent so the migration can move one agent at a time.
-type EngineBackendConfig struct {
-	// Backend is "legacy" (default) or "nova".
-	Backend string `yaml:"backend"`
-	// BackendOverrides maps an agent name (the engine's Name: "driver",
-	// "memory", "introspection", "worker", "dream") to a backend. Only "nova" is
-	// honoured; anything else leaves that agent on the default.
-	BackendOverrides map[string]string `yaml:"backend_overrides"`
 }
 
 // BackendConfig selects an implementation behind a project-owned seam. It is a

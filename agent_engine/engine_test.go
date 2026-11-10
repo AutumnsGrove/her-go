@@ -145,16 +145,7 @@ func toolCall(id, name, args string) llm.ToolCall {
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestRunLoop_BasicDoneSignal runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_BasicDoneSignal(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_BasicDoneSignalBody(t)
-		})
-	})
-}
-
-func TestRunLoop_BasicDoneSignalBody(t *testing.T) {
 	// Scenario: model calls think, then done. Loop exits with "done".
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"hello"}`)}},
@@ -220,16 +211,7 @@ func TestRunLoop_BasicDoneSignalBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_NoToolCallsExit runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_NoToolCallsExit(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_NoToolCallsExitBody(t)
-		})
-	})
-}
-
-func TestRunLoop_NoToolCallsExitBody(t *testing.T) {
 	// Scenario: model returns text with no tool calls.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{content: "I'm done thinking.", finishReason: "stop"},
@@ -266,16 +248,7 @@ func TestRunLoop_NoToolCallsExitBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_OnNoToolCallsHook runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_OnNoToolCallsHook(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_OnNoToolCallsHookBody(t)
-		})
-	})
-}
-
-func TestRunLoop_OnNoToolCallsHookBody(t *testing.T) {
 	// Scenario: model returns text, but OnNoToolCalls handles it (returns true).
 	// Then the model returns a tool call with done on the next iteration.
 	srv, client := newMockLLM(t, []scriptedResponse{
@@ -318,40 +291,19 @@ func TestRunLoop_OnNoToolCallsHookBody(t *testing.T) {
 		t.Error("OnNoToolCalls hook was not called")
 	}
 
-	if currentBackend(t) == backendNova {
-		// Delta D4. Nova ends a run when an assistant message carries no tool
-		// calls, and no hook can ask for another turn from that point, so the
-		// "handled, keep going" return value has no effect. The capture of the
-		// final text — the only thing any caller uses this hook for — still
-		// happens (asserted above). Asserting the different outcome here beats a
-		// skip: the behaviour is known and pinned, not ignored.
-		if result.ExitReason != ExitNoToolCalls {
-			t.Errorf("nova: exit reason = %q, want %q", result.ExitReason, ExitNoToolCalls)
-		}
-		if result.Iterations != 1 {
-			t.Errorf("nova: iterations = %d, want 1", result.Iterations)
-		}
-		return
+	// Delta D4: the loop ends when an assistant message carries no tool calls, and
+	// the hook cannot ask for another turn from there, so its "handled, keep going"
+	// return value has no effect. Capturing the final text — the only thing any
+	// caller uses this hook for — still happens (asserted above).
+	if result.ExitReason != ExitNoToolCalls {
+		t.Errorf("exit reason = %q, want %q", result.ExitReason, ExitNoToolCalls)
 	}
-
-	if result.ExitReason != ExitDone {
-		t.Errorf("expected exit reason %q, got %q", ExitDone, result.ExitReason)
-	}
-	if result.Iterations != 2 {
-		t.Errorf("expected 2 iterations, got %d", result.Iterations)
+	if result.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", result.Iterations)
 	}
 }
 
-// TestRunLoop_ContinuationWindow runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_ContinuationWindow(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_ContinuationWindowBody(t)
-		})
-	})
-}
-
-func TestRunLoop_ContinuationWindowBody(t *testing.T) {
 	// Scenario: exhaust 2 iterations per window, then done in the continuation.
 	// Window 0: think, think (exhausted)
 	// Window 1: done
@@ -406,16 +358,7 @@ func TestRunLoop_ContinuationWindowBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_MaxContinuationsExhausted runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_MaxContinuationsExhausted(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_MaxContinuationsExhaustedBody(t)
-		})
-	})
-}
-
-func TestRunLoop_MaxContinuationsExhaustedBody(t *testing.T) {
 	// Scenario: 1 iter per window, 1 continuation. 2 thinks = exhausted.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"one"}`)}},
@@ -445,16 +388,7 @@ func TestRunLoop_MaxContinuationsExhaustedBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_ToolChoiceFirst runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_ToolChoiceFirst(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_ToolChoiceFirstBody(t)
-		})
-	})
-}
-
-func TestRunLoop_ToolChoiceFirstBody(t *testing.T) {
 	// Verify ToolChoiceFirst is passed on the first call.
 	// We can't directly inspect the request from here, but we can verify
 	// the config field is respected (the mock server doesn't care about
@@ -489,16 +423,7 @@ func TestRunLoop_ToolChoiceFirstBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_PreToolSkip runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_PreToolSkip(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_PreToolSkipBody(t)
-		})
-	})
-}
-
-func TestRunLoop_PreToolSkipBody(t *testing.T) {
 	// Scenario: PreTool returns skip=true for think, allowing done through.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"skip me"}`)}},
@@ -546,16 +471,7 @@ func TestRunLoop_PreToolSkipBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_PostIterationBreak runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_PostIterationBreak(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_PostIterationBreakBody(t)
-		})
-	})
-}
-
-func TestRunLoop_PostIterationBreakBody(t *testing.T) {
 	// Scenario: PostIteration returns true on first iteration = loop breaks.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"one"}`)}},
@@ -584,32 +500,15 @@ func TestRunLoop_PostIterationBreakBody(t *testing.T) {
 		t.Errorf("expected %q, got %q", ExitHookBreak, result.ExitReason)
 	}
 
-	if currentBackend(t) == backendNova {
-		// Delta D1. Nova's equivalent hook (`MessageEnd`) fires before the tools
-		// but cannot end the run; only the end-of-batch hook can. So the batch
-		// runs and the run stops immediately after it — one harmless `think` in
-		// this scenario. The parity test below proves the run still terminates.
-		if result.ToolCalls != 1 {
-			t.Errorf("nova: tool calls = %d, want 1 (the batch runs before the break)", result.ToolCalls)
-		}
-		return
-	}
-	// PostIteration fires BEFORE tool execution, so no tools should have run.
-	if result.ToolCalls != 0 {
-		t.Errorf("expected 0 tool calls, got %d", result.ToolCalls)
+	// Delta D1. The hook fires before the tools run but cannot end the run there;
+	// only the end-of-batch decision can. So the batch runs and the run stops
+	// immediately after it — one harmless `think` in this scenario.
+	if result.ToolCalls != 1 {
+		t.Errorf("tool calls = %d, want 1 (the batch runs before the break)", result.ToolCalls)
 	}
 }
 
-// TestRunLoop_TracingBuiltIn runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_TracingBuiltIn(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_TracingBuiltInBody(t)
-		})
-	})
-}
-
-func TestRunLoop_TracingBuiltInBody(t *testing.T) {
 	// Verify that traces are automatically generated via FormatTrace.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"hmm"}`)}},
@@ -645,16 +544,7 @@ func TestRunLoop_TracingBuiltInBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_LiteToolHook runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_LiteToolHook(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_LiteToolHookBody(t)
-		})
-	})
-}
-
-func TestRunLoop_LiteToolHookBody(t *testing.T) {
 	// Verify LiteToolHook fires with tool names.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"x"}`)}},
@@ -689,16 +579,7 @@ func TestRunLoop_LiteToolHookBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_OnLoopExit runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_OnLoopExit(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_OnLoopExitBody(t)
-		})
-	})
-}
-
-func TestRunLoop_OnLoopExitBody(t *testing.T) {
 	// Verify OnLoopExit fires with the correct exit reason.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{content: "nothing to do"},
@@ -732,16 +613,7 @@ func TestRunLoop_OnLoopExitBody(t *testing.T) {
 	}
 }
 
-// TestRunLoop_ActiveToolGuard runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_ActiveToolGuard(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_ActiveToolGuardBody(t)
-		})
-	})
-}
-
-func TestRunLoop_ActiveToolGuardBody(t *testing.T) {
 	// Scenario: ActiveToolGuard rejects think, allows done.
 	srv, client := newMockLLM(t, []scriptedResponse{
 		{toolCalls: []llm.ToolCall{toolCall("tc1", "think", `{"thought":"blocked"}`)}},
@@ -783,32 +655,15 @@ func TestRunLoop_ActiveToolGuardBody(t *testing.T) {
 	if result.ExitReason != ExitDone {
 		t.Errorf("expected %q, got %q", ExitDone, result.ExitReason)
 	}
-	if currentBackend(t) == backendNova {
-		// Delta D10. The guard lives inside the tool wrapper (so the rejection
-		// text stays byte-identical), which means a rejected call still passes
-		// through Nova's per-call result hook and is counted. The model-visible
-		// result is the same error string either way.
-		if result.ToolCalls != 2 {
-			t.Errorf("nova: tool calls = %d, want 2 (rejected calls still report a result)", result.ToolCalls)
-		}
-		return
-	}
-	// Rejected tools don't count in ToolCalls (they never executed).
-	if result.ToolCalls != 1 {
-		t.Errorf("expected 1 tool call (done only), got %d", result.ToolCalls)
+	// Delta D10: the guard lives inside the tool wrapper (so the rejection text
+	// stays byte-identical), which means a rejected call still reports a result
+	// and is counted. The model-visible error string is unchanged.
+	if result.ToolCalls != 2 {
+		t.Errorf("tool calls = %d, want 2 (rejected calls still report a result)", result.ToolCalls)
 	}
 }
 
-// TestRunLoop_LLMError runs against both loop backends; see loopBackend_test.go.
 func TestRunLoop_LLMError(t *testing.T) {
-	t.Run("both-backends", func(t *testing.T) {
-		forEachLoopBackend(t, func(t *testing.T) {
-			TestRunLoop_LLMErrorBody(t)
-		})
-	})
-}
-
-func TestRunLoop_LLMErrorBody(t *testing.T) {
 	// Scenario: mock server returns 500 = LLM error.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)

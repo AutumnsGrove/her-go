@@ -25,16 +25,6 @@ llm:
   #   nova   — github.com/AutumnsGrove/nova's provider layer
   backend: "legacy"
 
-engine:
-  # Which tool-calling loop the five agents run on. Same EngineConfig contract
-  # either way; see docs/plans/PLAN-nova-migration.md.
-  #   legacy — her-go's own agent_engine loop (stable default)
-  #   nova   — github.com/AutumnsGrove/nova's agent loop
-  backend: "legacy"
-  # Move one agent at a time during the cutover, e.g. {worker: nova}.
-  # Agent names: driver, memory, introspection, worker, dream.
-  backend_overrides: {}
-
 chat:
   model: "xiaomi/mimo-v2.6-pro"    # reply model — MiMo v2.6 Pro via xiaomi/fp8: excellent cache rate, natural voice
   temperature: 0.85
