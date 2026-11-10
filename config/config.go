@@ -845,16 +845,17 @@ type STTConfig struct {
 // good for chat replies) if left empty.
 type TTSConfig struct {
 	Enabled       bool               `yaml:"enabled"`
-	Engine        string             `yaml:"engine"`             // TTSEnginePiper or TTSEngineElevenLabs
-	BaseURL       string             `yaml:"base_url"`           // piper only, e.g. "http://localhost:8766"
-	Model         string             `yaml:"model"`              // piper: HuggingFace model ID/local path. elevenlabs: model ID, e.g. "eleven_flash_v2_5"
-	VoiceID       string             `yaml:"voice_id"`           // piper: same as model. elevenlabs: voice ID from the voice library
-	APIKey        string             `yaml:"api_key"`            // elevenlabs only; unused for piper (local, no auth)
-	Speed         float64            `yaml:"speed"`              // speaking rate (1.0 = normal) — piper only
-	ReplyMode     string             `yaml:"reply_mode"`         // "voice" (always reply with voice) or "match" (mirror input format)
-	Pauses        TTSPauseConfig     `yaml:"pauses"`             // piper only
-	IdleUnloadSec int                `yaml:"idle_unload_sec"`    // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload
-	Fallback      *TTSFallbackConfig `yaml:"fallback,omitempty"` // optional: auto-retry with this engine if the primary fails (e.g. ElevenLabs quota exhausted)
+	Engine        string             `yaml:"engine"`                // TTSEnginePiper or TTSEngineElevenLabs
+	BaseURL       string             `yaml:"base_url"`              // piper only, e.g. "http://localhost:8766"
+	Model         string             `yaml:"model"`                 // piper: HuggingFace model ID/local path. elevenlabs: model ID, e.g. "eleven_flash_v2_5"
+	VoiceID       string             `yaml:"voice_id"`              // piper: same as model. elevenlabs: voice ID from the voice library
+	APIKey        string             `yaml:"api_key"`               // elevenlabs only; unused for piper (local, no auth)
+	Speed         float64            `yaml:"speed"`                 // speaking rate (1.0 = normal) — piper only
+	CostLookup    *bool              `yaml:"cost_lookup,omitempty"` // openrouter only: ask for the exact cost of each synthesis (nil = true). Costs one extra request per call.
+	ReplyMode     string             `yaml:"reply_mode"`            // "voice" (always reply with voice) or "match" (mirror input format)
+	Pauses        TTSPauseConfig     `yaml:"pauses"`                // piper only
+	IdleUnloadSec int                `yaml:"idle_unload_sec"`       // piper only: unload the model after this many idle seconds to free RAM (~120MB); 0 = never unload
+	Fallback      *TTSFallbackConfig `yaml:"fallback,omitempty"`    // optional: auto-retry with this engine if the primary fails (e.g. ElevenLabs quota exhausted)
 }
 
 // TTSFallbackConfig configures an automatic fallback TTS engine, used when

@@ -294,6 +294,7 @@ voice:
     # To use: uncomment these 4 lines and comment out the "piper" lines above
     # engine: "openrouter"
     # base_url: "https://openrouter.ai/api/v1"
+    # cost_lookup: true                                         # openrouter only: resolve the exact cost per synthesis (one extra request). NOTE: as of Nova v0.4.0 OpenRouter's /generation returns nulls for TTS ids, so speech cost still reads 0; transcription cost is inline and does resolve.
     # model: "hexgrad/kokoro-82m"                                 # $0.62/1M input chars (~$0.0006 per 1K chars)
     # voice_id: "af_sarah"                                        # af_sarah, bf_lily, am_adam — see docs/guides/TTS_ENGINES.md for full list
     # api_key: ""                                                 # leave empty to use openrouter.api_key

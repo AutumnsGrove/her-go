@@ -16,13 +16,11 @@ package voice
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -163,7 +161,10 @@ func isRetriable(err error) bool {
 // Extracted from Transcribe to enable fallback retries.
 func (c *Client) transcribeWithModel(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
 	if isOpenRouter(c.baseURL) {
-		return c.transcribeJSON(audioBytes, filename, model)
+		// Nova's adapter owns the OpenRouter wire shape (multipart, the file part
+		// named clip.<format>) and the cost. The base64-JSON shape this file used
+		// to carry is gone with it.
+		return c.transcribeWithNova(audioBytes, filename, model)
 	}
 	return c.transcribeMultipart(audioBytes, filename, model)
 }
@@ -171,47 +172,6 @@ func (c *Client) transcribeWithModel(audioBytes []byte, filename string, model s
 // isOpenRouter checks whether the base URL points to OpenRouter's API.
 func isOpenRouter(baseURL string) bool {
 	return strings.Contains(baseURL, "openrouter.ai")
-}
-
-// audioFormatFromFilename extracts the format string OpenRouter expects
-// from the filename extension. Falls back to "ogg" if unrecognized.
-func audioFormatFromFilename(filename string) string {
-	ext := strings.TrimPrefix(filepath.Ext(filename), ".")
-	switch ext {
-	case "ogg", "wav", "mp3", "flac", "webm":
-		return ext
-	default:
-		return "ogg"
-	}
-}
-
-// transcribeJSON uses OpenRouter's JSON+base64 format.
-func (c *Client) transcribeJSON(audioBytes []byte, filename string, model string) (TranscribeResult, error) {
-	payload := map[string]any{
-		"model": model,
-		"input_audio": map[string]string{
-			"data":   base64.StdEncoding.EncodeToString(audioBytes),
-			"format": audioFormatFromFilename(filename),
-		},
-		"language": "en",
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("marshaling JSON: %w", err)
-	}
-
-	url := c.baseURL + "/audio/transcriptions"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return TranscribeResult{}, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	return c.doTranscribe(req)
 }
 
 // transcribeMultipart uses the standard OpenAI Whisper multipart/form-data format.
