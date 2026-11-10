@@ -27,6 +27,7 @@ type Config struct {
 	Identity           IdentityConfig           `yaml:"identity"`
 	Telegram           TelegramConfig           `yaml:"telegram"`
 	OpenRouter         LLMConfig                `yaml:"openrouter"`
+	LLM                BackendConfig            `yaml:"llm"`
 	Chat               ChatConfig               `yaml:"chat"`
 	Driver             DriverConfig             `yaml:"driver"`
 	Vision             VisionConfig             `yaml:"vision"`
@@ -344,6 +345,16 @@ type ReasoningConfig struct {
 type LLMConfig struct {
 	BaseURL string `yaml:"base_url"`
 	APIKey  string `yaml:"api_key"`
+}
+
+// BackendConfig selects an implementation behind a project-owned seam. It is a
+// migration switch: "legacy" is the hand-written code, "nova" is the Nova
+// library. The zero value means legacy, so an absent section never changes
+// behaviour.
+type BackendConfig struct {
+	// Backend is "legacy" (default) or "nova". Anything else is treated as
+	// legacy, because a typo must not silently pick an unproven path.
+	Backend string `yaml:"backend"`
 }
 
 // ChatConfig holds settings for the chat (reply) model — the model that

@@ -17,6 +17,14 @@ openrouter:
   base_url: "https://openrouter.ai/api/v1"
   api_key: "${OPENROUTER_API_KEY}"
 
+llm:
+  # Which transport implementation the LLM client uses. Both speak the same
+  # OpenRouter wire protocol and answer the same three methods; this is a
+  # migration switch, not a feature toggle.
+  #   legacy — her-go's hand-written HTTP client (stable default)
+  #   nova   — github.com/AutumnsGrove/nova's provider layer
+  backend: "legacy"
+
 chat:
   model: "xiaomi/mimo-v2.6-pro"    # reply model — MiMo v2.6 Pro via xiaomi/fp8: excellent cache rate, natural voice
   temperature: 0.85

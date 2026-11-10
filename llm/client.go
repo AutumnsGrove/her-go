@@ -12,7 +12,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/AutumnsGrove/nova/provider"
 
 	"her/logger"
 )
@@ -63,6 +66,12 @@ type Client struct {
 	// same session_id are pinned to the same provider endpoint, maximizing
 	// prompt cache hits across a conversation. Max 256 chars.
 	sessionID string
+
+	// Nova transport, built on first use and only when llm.backend is "nova".
+	// See nova.go: the two backends answer the same three methods, which is what
+	// makes them swappable by config and comparable by test.
+	novaOnce             sync.Once
+	novaProviderInstance provider.Provider
 }
 
 // ReasoningControl maps to OpenRouter's `reasoning` parameter object.
@@ -106,7 +115,7 @@ type ChatMessage struct {
 // text or an image URL (which can be a data: URI with base64 content).
 // This maps to the OpenAI "content parts" format used for vision models.
 type ContentPart struct {
-	Type     string    `json:"type"`               // "text" or "image_url"
+	Type     string    `json:"type"`                // "text" or "image_url"
 	Text     string    `json:"text,omitempty"`      // set when Type is "text"
 	ImageURL *ImageURL `json:"image_url,omitempty"` // set when Type is "image_url"
 }
@@ -177,7 +186,7 @@ type FunctionCall struct {
 // "tools" parameter format. In Python's OpenAI SDK you'd pass these as
 // dicts — in Go we use structs that marshal to the same JSON shape.
 type ToolDef struct {
-	Type     string         `json:"type"` // always "function"
+	Type     string          `json:"type"` // always "function"
 	Function ToolFunctionDef `json:"function"`
 }
 
@@ -192,6 +201,7 @@ type ToolFunctionDef struct {
 // ChatResponse holds the LLM's reply plus token usage data for metrics.
 type ChatResponse struct {
 	Content          string
+	Reasoning        string     // model thinking, when the provider reports it separately (Nova backend)
 	ToolCalls        []ToolCall // populated if the model wants to call tools
 	FinishReason     string     // "stop", "tool_calls", "length", etc. — drives the agent loop
 	PromptTokens     int
@@ -279,7 +289,7 @@ type chatAPIResponse struct {
 // promptTokensDetails holds OpenRouter's cache token breakdown,
 // nested inside the usage object.
 type promptTokensDetails struct {
-	CachedTokens    int `json:"cached_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
@@ -401,6 +411,9 @@ func (c *Client) WithFallback(model string, temperature float64, maxTokens int) 
 // ChatCompletion sends a conversation to the LLM and returns its response.
 // For regular conversation — no tools.
 func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
+	if backend == BackendNova {
+		return c.novaChatCompletion(messages, nil, nil, nil)
+	}
 	return c.chatCompletion(messages, nil)
 }
 
@@ -414,6 +427,11 @@ func (c *Client) ChatCompletion(messages []ChatMessage) (*ChatResponse, error) {
 // still capturing the full response for style gating, length guards, PII
 // deanonymization, TTS, and DB persistence.
 func (c *Client) ChatCompletionStreaming(messages []ChatMessage, onChunk func(string)) (*ChatResponse, error) {
+	if backend == BackendNova {
+		// Nova always streams, so the fallback path streams too instead of
+		// replaying the whole answer in one callback.
+		return c.novaChatCompletion(messages, nil, nil, onChunk)
+	}
 	resp, err := c.doStreamingChat(c.model, c.temperature, c.maxTokens, messages, onChunk)
 	if err != nil && c.fallbackModel != "" && isRetriable(err) {
 		log.Warn("streaming chat failed, falling back to non-streaming",
@@ -443,6 +461,9 @@ func (c *Client) ChatCompletionWithTools(messages []ChatMessage, tools []ToolDef
 	var choice interface{}
 	if len(toolChoice) > 0 {
 		choice = toolChoice[0]
+	}
+	if backend == BackendNova {
+		return c.novaChatCompletion(messages, tools, choice, nil)
 	}
 	return c.chatCompletion(messages, tools, choice)
 }
