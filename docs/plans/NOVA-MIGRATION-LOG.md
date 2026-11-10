@@ -105,3 +105,85 @@ Running total against the **$10 hard cap**: **$0.00** (no live sim run yet).
   default, the same request was served by Cohere, Makora and Venice across trials. Costs are still
   attributed correctly (per-response `provider` field), but "pinned to xiaomi/fp8" is softer than the
   config comment implies. Not changed here; noted in case cache-hit-rate work revisits it.
+
+### Step 4 — baselines (in progress, see "Sim spend" table)
+
+- Digest extractor: `her digest <report.md> --out docs/plans/baselines` and
+  `her digest --compare <baseline.json> <new.json>`. It parses the report that `cmd/sim_gw.go` writes,
+  keeping only structure: per-turn tool sequence, whether the *driver* reached `done`/`reply`, cost, cache
+  reads, provider names, memory/mood counts, error-prefixed results, fallbacks, cache hit rate. Comparison
+  applies the §4.3 tolerances and prints PASS/FAIL per check (exits non-zero on failure, so CI can use it).
+- `gateway/sim.go` gained one fix so the digest could exist: a `think` line now reads
+  `[main] 🧠 think → <thought>` instead of `[main] 🧠 <thought>`. Without the tool name the parser could not
+  tell a think call from noise. Report-only change, no behaviour change.
+- Fixture test (`cmd/digest_test.go`) pins the extractor against a real report excerpt, so a change to either
+  writer or parser fails a test instead of emptying every baseline.
+
+### Step 5 — `llm.Client` on Nova's provider
+
+- `llm/nova.go`: the client keeps its three public methods and dispatches on `llm.backend`. Conversions:
+  `ChatMessage`⇄`message.Message` (images become `Parts`, data URIs split into mime+base64), `ToolDef`⇄
+  `provider.ToolDef`, `ProviderRouting`→`openrouter.Routing.Options()`, `session_id`/`reasoning`→
+  `ProviderOptions`, `EmptyToolCallContent: true` to keep `"content": ""` on tool-call-only assistant
+  messages (delta D7 — prompt-cache bytes).
+- Deliberately preserved at the client level: her-go's `isRetriable` policy plus the fallback model, and the
+  truncate-to-one-tool-call defence. Nova's own retry loop is not used.
+- `llm/parity_test.go` runs one table against both backends: usage/cache/cost mapping, request body shape
+  (model, temperature, max_tokens, tool_choice, parallel_tool_calls, provider.order, session_id, reasoning),
+  empty content on tool-call messages, batched tool calls, streaming callback, fallback on 500, no fallback
+  on 401. All green on both.
+- **Live check:** real call through the Nova backend against OpenRouter — text completion, tool call, usage,
+  cost, reasoning channel all populated. Two consecutive probes showed the *same* `tool_choice: required`
+  flakiness on both backends (interleaved legacy/nova runs, ~2/3 failures each on a two-word prompt), which
+  confirms step 3's finding belongs to the model, not the transport.
+- **Delta D8 (accepted):** `metrics.provider` now records `"openrouter"` instead of the upstream provider
+  name (`Cohere`, `Xiaomi`, …). Nova's OpenAI-compatible dialect does not parse the per-chunk `provider`
+  field, so the infrastructure name never reaches `Response.Provider`. Recorded in `NOVA-GAPS.md`. Cost,
+  model, tokens, cache and fallback attribution are unaffected.
+
+### Step 6 — tool bridge
+
+- `tools/nova.go`: `NovaTools(defs) []tool.Tool`, where `Run` delegates to `tools.Execute` (so the
+  malformed-JSON guard, the unknown-tool message and every handler are the same code as before) and
+  `Info()` reuses the manifest schema with `Parallel: false`. `IsErrorResult` moved into the tools package
+  and the legacy engine now calls it, so the `error:`/`rejected:` convention has one definition.
+- `tools/nova_test.go` asserts the bridged `Info().Def()` serialises **byte-identically** to the legacy
+  `llm.ToolDef` for all 48 loaded tools — the prompt-cache guard from delta D7.
+
+### Step 7 — `RunLoop` on Nova's agent
+
+- `agent_engine/nova.go` implements the same `EngineConfig`→`LoopResult` contract on `agent.New(cfg).Run`.
+  `engine.backend` (plus `engine.backend_overrides` per agent) selects it; the legacy body is untouched.
+- Hooks mapped: `PreIteration`→`BeforeTurn`, `PostIteration`/`<think>`/`OnNoToolCalls`→`MessageEnd`,
+  `PostToolResult`/`PostTool`/trace/lite/TUI→`ToolResult`, done + continuation windows→`TurnEnd`,
+  `ToolChoiceFirst`+deferred tools→`BeforeProviderRequest`, `OnLoopStart`/`OnLoopExit` around the run.
+- `ActiveToolGuard` and `PreTool` live in a `guardedTool` wrapper, not in Nova's permission layer, because
+  Nova's blocks return different wording and prompts/sims depend on the exact her-go strings.
+- **Metrics:** `llm.Client.Stream` (added so a `*llm.Client` *is* a `provider.Provider`) calls a
+  `ResponseHook` after every response, which is how one metric row per provider call — model, provider,
+  tokens, cache, cost, fallback — survives Nova only reporting per-run totals.
+- **Parity suite:** every existing `engine_test.go` case now runs against both backends (`forEachLoopBackend`).
+  Twelve of thirteen pass with no assertion changes. The three that differ are pinned per-backend with a
+  comment rather than skipped — see D1, D4, D10 below. `agent_engine/nova_parity_test.go` adds eight cases
+  the old suite lacked: malformed args, error results not aborting, `PostToolResult` changing the error flag,
+  batched calls running only the first, phantom (empty-name) calls, recovered panics, `tool_choice: required`
+  answered with text, and inline `<think>` extraction.
+- **Deltas found while testing (recorded, not hidden):**
+  - **D1** (as predicted): `PostIteration` cannot break before the tool batch. The run ends right after one
+    harmless batch instead. Pinned.
+  - **D4** (as predicted): `OnNoToolCalls` cannot ask for another iteration; the text is still captured.
+    Pinned. No caller uses the return value.
+  - **D5** (stronger than expected): Nova validates tool arguments against the schema *before* dispatch, so
+    a truncated argument list produces Nova's `error: invalid arguments: ...` rather than her-go's
+    `error: malformed JSON in arguments ... (likely truncated by token limit)`. Same outcome (error result,
+    loop continues), different words to the model. Recorded in `NOVA-GAPS.md`.
+  - **D9** (improvement): the legacy loop advertised only its starting tool set, so `use_tools` loaded a tool
+    that was callable but not in the schema. The Nova path re-advertises `ActiveTools` every turn, so loaded
+    tools now appear in the schema too. Deliberate; flagged for Autumn in the PR.
+  - **D10**: a guarded/rejected call counts as a tool call in `LoopResult.ToolCalls` and produces a trace
+    line, because it passes through Nova's per-call result hook. Same model-visible error string.
+  - **D11**: truncated tool arguments are a retriable transport error in the legacy client (fallback model
+    gets a try) but a normal tool error result in the Nova path (the model retries itself). Safe either way.
+  - **Out of reach:** `ExitFinishReasonStop` (the OpenCode #14972 pattern) cannot be detected, because Nova
+    rewrites a `stop` that arrives with tool calls to `tool_calls`. The run then ends on the next turn, which
+    is the same observable outcome as the legacy loop for the same input.
