@@ -497,8 +497,7 @@ outer:
 				}
 
 				totalTools++
-				isError := strings.HasPrefix(result, "error:") ||
-					strings.HasPrefix(result, "rejected:")
+				isError := tools.IsErrorResult(result)
 
 				// == BUILT-IN: Trace emission ==
 				// Every agent gets consistent formatting via tools.FormatTrace.
@@ -540,8 +539,7 @@ outer:
 					log.Debug("hook fired", "agent", cfg.Name, "hook", "PostToolResult", "tool", tc.Function.Name)
 					result = cfg.PostToolResult(tc, result, isError)
 					// Re-check error status since the transform may have changed it.
-					isError = strings.HasPrefix(result, "error:") ||
-						strings.HasPrefix(result, "rejected:")
+					isError = tools.IsErrorResult(result)
 				}
 
 				// >> HOOK: PostTool (observe-only: SaveAgentTurn, think capture, etc.)
