@@ -57,14 +57,18 @@ ssh potato-remote "cd /home/autumn/her-go && git pull && go build -ldflags=\"-s 
 
 After that, `./her update` handles all future updates.
 
-**Toolchain:** `go.mod` requires Go ≥ 1.26.6 (the Nova dependency's floor). Before the first `./her update`
+**Toolchain:** `go.mod` requires Go ≥ 1.27.3 (the Nova dependency's own floor is 1.26.6). Before the first `./her update`
 after a toolchain bump, check the host with `ssh potato-remote "go version"`. With `GOTOOLCHAIN=auto` (the
 default) the `go build` inside `her update` downloads the required toolchain itself, but that needs working
 network on the host for the first build.
 
-**Vector dimensions:** if `embed.dimension` changes (see `embed:` in `config.yaml`), run `./her reembed` **once**
-on the host after updating, *before* restarting. The store refuses to open with a mismatch rather than
-corrupting vectors.
+**Vector dimensions:** if `embed.dimension` changes (see `embed:` in `config.yaml`), the store refuses to open
+with a mismatched index rather than corrupting vectors. `./her update` builds *and* restarts in one step, so do
+the dimension change as its own sequence on the host: update first (the old `embed:` settings keep working),
+then edit `config.yaml`, run `./her reembed`, then `sudo systemctl restart her-go`. `her reembed` makes one test
+embedding before it drops anything, skips rows that are already current (so an interrupted run resumes), exits
+non-zero if any row failed, and takes `--dry-run` (cost estimate) and `--force` (recompute every row — use it when
+the model changed but the dimension did not).
 
 ## Telegraph Setup (for Worker Agent reports)
 

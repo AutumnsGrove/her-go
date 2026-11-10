@@ -332,3 +332,31 @@ Separate branch (`feat/nova-voice`), because it stacks on the migration PR rathe
   rather than a duplicate local-engine issue, and [her-go#105](https://github.com/AutumnsGrove/her-go/issues/105)
   — "move Piper and the parakeet sidecar onto Nova once nova#86 lands", which is where `TTSEngine` finally
   disappears.
+
+## Branch review follow-ups
+
+A read-through of the whole branch found seven things worth fixing; each has a test that failed first.
+
+- **Metrics hook was shared state.** `RunLoop` set `ResponseHook` on the shared `*llm.Client` and restored it
+  with a `defer`. The memory, mood and introspection agents overlap on one client, so concurrent runs
+  overwrote each other (race detector confirmed it; lost and misattributed metric rows). The hook now rides
+  on a per-run wrapper, `Client.WithResponseHook`, and the client field is gone.
+- **Provider failures were silent.** `runNova` threw away the error from `Run`, and `OnError` was never
+  called. It now logs the cause and calls `OnError`; the return contract (nil error + `ExitError`) is
+  unchanged.
+- **Nova was the default only in the example config.** The code still defaulted to legacy, so an existing
+  `config.yaml` ran a mixed setup nobody had tested. Absent/empty/typo now means Nova; only `legacy` opts out.
+  Sixteen tests in `agent`, `classifier` and `mood` had been covering legacy through that default — they now
+  mock the streamed format via `llm/llmtest`.
+- **TTS factory typed-nil.** A misconfigured engine came back as a non-nil interface holding a nil pointer
+  (Piper and ElevenLabs too, before this branch) and would panic on first use.
+- **`her reembed`** dropped the index before checking the provider and exited 0 on failure; "resumable" was not
+  true. It now probes first, skips current rows, takes `--force`, exits non-zero on failure, and no longer
+  stamps `updated_at` on mood rows.
+- **Smaller:** each Nova streaming attempt gets its own 3-minute ceiling; a fallback answer is cut to one tool
+  call; no fallback after text was already streamed (it would replay the reply); `HookTimeout` is 2 minutes
+  because Nova abandons a hook at 5s and drops its return value; STT retry reads Nova's typed error; the
+  OpenRouter Referer/Title live in `config`.
+- **Not changed, worth a decision:** `tts.cost_lookup` defaults on, but the entry above shows OpenRouter
+  returns no cost for speech, so each synthesis pays an extra request for nothing.
+

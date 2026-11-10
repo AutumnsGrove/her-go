@@ -219,7 +219,6 @@ const (
 	ExitMaxContinuations = "max_continuations"
 	ExitError            = "error"
 	ExitHookBreak        = "hook_break"
-	ExitFinishReasonStop = "finish_reason_stop"
 )
 
 // ---------------------------------------------------------------------------
