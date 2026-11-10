@@ -419,20 +419,20 @@ Baselines for the Nova migration live in docs/plans/baselines/.
 
 Examples:
   her digest sims/results/core-loop-and-dream-*.md --out docs/plans/baselines
-  her digest --compare docs/plans/baselines/core-loop-a.json docs/plans/baselines/core-loop-b.json`,
+  her digest --compare docs/plans/baselines/core-loop-a.json --compare docs/plans/baselines/core-loop-b.json`,
 	RunE: runDigest,
 }
 
 func init() {
 	digestCmd.Flags().StringVar(&digestOutFlag, "out", "", "directory to write <suite>-<timestamp>.json (default: print to stdout)")
-	digestCmd.Flags().StringSliceVar(&digestCompareFlag, "compare", nil, "compare two digest JSON files (baseline, new)")
+	digestCmd.Flags().StringArrayVar(&digestCompareFlag, "compare", nil, "compare two digest JSON files: pass --compare <baseline> --compare <new>")
 	rootCmd.AddCommand(digestCmd)
 }
 
 func runDigest(cmd *cobra.Command, args []string) error {
 	if len(digestCompareFlag) > 0 {
 		if len(digestCompareFlag) != 2 {
-			return fmt.Errorf("--compare takes exactly two files: <baseline.json> <new.json>")
+			return fmt.Errorf("--compare takes exactly two files: --compare <baseline.json> --compare <new.json>")
 		}
 		base, err := loadDigest(digestCompareFlag[0])
 		if err != nil {
