@@ -9,6 +9,7 @@ package agent_engine
 // calls in one message — the exact shapes a real provider occasionally sends.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/AutumnsGrove/nova/provider"
 
 	"her/llm"
 	"her/tools"
@@ -386,4 +389,72 @@ func TestParity_ThinkBlockBecomesTrace(t *testing.T) {
 			t.Error("LoopResult.TraceLines should contain the think text")
 		}
 	})
+}
+
+// TestNova_DeferredToolsAreReadvertised covers delta D9: when a tool appends to
+// ToolCtx.ActiveTools (what use_tools does), the next request must carry the
+// enlarged schema. The legacy loop sent its starting set for ever, which is why
+// this test is Nova-only.
+func TestNova_DeferredToolsAreReadvertised(t *testing.T) {
+	SetLoopBackend(backendNova, nil)
+	t.Cleanup(func() { SetLoopBackend(backendLegacy, nil) })
+
+	// Start with one advertised tool; the "loader" stands in for use_tools and
+	// appends the deferred one, exactly as tools/use_tools does.
+	active := []llm.ToolDef{{Type: "function", Function: llm.ToolFunctionDef{Name: "think", Parameters: map[string]any{"type": "object"}}}}
+	registerTestTool(t, "parity_loader", func(string, *tools.Context) string {
+		active = append(active, llm.ToolDef{
+			Type:     "function",
+			Function: llm.ToolFunctionDef{Name: "parity_deferred", Parameters: map[string]any{"type": "object"}},
+		})
+		return "loaded: parity_deferred"
+	})
+	registerTestTool(t, "parity_deferred", func(string, *tools.Context) string {
+		return "deferred ran"
+	})
+
+	client := newRawMockLLM(t, [][]string{
+		{toolCallFrame("c1", "parity_loader", `{}`), finishFrame("tool_calls")},
+		{toolCallFrame("c2", "parity_deferred", `{}`), finishFrame("tool_calls")},
+		stopText("done"),
+	})
+
+	tctx := &tools.Context{AgentName: "test", ActiveTools: &active}
+	cfg := EngineConfig{
+		Name: "test", LLM: client, ToolCtx: tctx,
+		// Registry holds everything the agent could call; only ActiveTools is
+		// advertised.
+		ToolDefs: []llm.ToolDef{
+			{Type: "function", Function: llm.ToolFunctionDef{Name: "think", Parameters: map[string]any{"type": "object"}}},
+			{Type: "function", Function: llm.ToolFunctionDef{Name: "parity_loader", Parameters: map[string]any{"type": "object"}}},
+			{Type: "function", Function: llm.ToolFunctionDef{Name: "parity_deferred", Parameters: map[string]any{"type": "object"}}},
+		},
+		Messages:            []llm.ChatMessage{{Role: "system", Content: "s"}, {Role: "user", Content: "u"}},
+		IterationsPerWindow: 5,
+	}
+
+	var ran []string
+	cfg.PostTool = func(tc llm.ToolCall, result string, isError bool) {
+		ran = append(ran, tc.Function.Name)
+	}
+	if _, err := RunLoop(cfg); err != nil {
+		t.Fatalf("RunLoop: %v", err)
+	}
+
+	// The deferred tool was advertised after the loader grew ActiveTools and the
+	// model could call it — Nova would have rejected it as unknown otherwise.
+	if len(ran) != 2 || ran[1] != "parity_deferred" {
+		t.Fatalf("ran %v, want [parity_loader parity_deferred]", ran)
+	}
+
+	// And the hook advertises the grown set on its own.
+	s := &novaRunState{cfg: cfg}
+	req := provider.Request{}
+	s.beforeProviderRequest(context.Background(), &req)
+	if len(req.Tools) != 2 {
+		t.Fatalf("advertised %d tools, want 2", len(req.Tools))
+	}
+	if req.Tools[1].Function.Name != "parity_deferred" {
+		t.Errorf("second tool = %q, want parity_deferred", req.Tools[1].Function.Name)
+	}
 }

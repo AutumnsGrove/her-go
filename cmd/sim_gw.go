@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"her/agent_engine"
 	"her/calendar"
 	"her/config"
 	"her/embed"
@@ -42,6 +43,14 @@ Example:
 	RunE: runSimGW,
 }
 
+// Backend flags: which loop and transport this run uses. Empty keeps whatever
+// config.yaml says. Declared here rather than in cmd/sim.go because these belong
+// to `her sim` (simGWCmd); cmd/sim.go's flags are shared by `her sim-legacy`.
+var (
+	engineBackendFlag string
+	llmBackendFlag    string
+)
+
 func init() {
 	f := simGWCmd.Flags()
 	f.StringVarP(&suiteFlag, "suite", "s", "", "path to suite YAML file (required)")
@@ -73,6 +82,8 @@ func init() {
 	f.BoolVar(&directReplyFlag, "direct-reply", false, "enable reply_direct tool — driver writes reply text directly (experimental)")
 	f.BoolVar(&fastPathFlag, "fast-path", false, "enable fast-path classifier — route simple messages directly to chat model, skip driver")
 	f.BoolVar(&noFastPathFlag, "no-fast-path", false, "disable fast-path classifier (overrides config.yaml)")
+	f.StringVar(&engineBackendFlag, "engine-backend", "", "override engine.backend for this run (legacy|nova)")
+	f.StringVar(&llmBackendFlag, "llm-backend", "", "override llm.backend for this run (legacy|nova)")
 	simGWCmd.MarkFlagRequired("suite")
 	rootCmd.AddCommand(simGWCmd)
 }
@@ -110,6 +121,17 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 
 	// --- Apply CLI flag overrides ---
 	applySimModelOverrides(cfg)
+
+	// Backend overrides let one sim run on the Nova loop or transport without
+	// editing config.yaml — that is how the staged cutover is measured.
+	if engineBackendFlag != "" {
+		agent_engine.SetLoopBackend(engineBackendFlag, cfg.Engine.BackendOverrides)
+		log.Infof("sim: engine backend → %s", engineBackendFlag)
+	}
+	if llmBackendFlag != "" {
+		llm.SetBackend(llmBackendFlag)
+		log.Infof("sim: llm backend → %s", llmBackendFlag)
+	}
 
 	// --- Load suite YAML ---
 	suiteData, err := os.ReadFile(suiteFlag)
@@ -602,7 +624,7 @@ func runSimGW(cmd *cobra.Command, args []string) error {
 			SearXNGClient: searxngClient,
 			TavilyClient:  tavilyClient,
 			Cfg:           cfg,
-			RootDir:      simRootDir,
+			RootDir:       simRootDir,
 			// Route fired schedule messages into the sim's actual conversation
 			// (not a synthetic tg_0_<ts> ID) so schedule_context can find them.
 			GetConversationID: func(chatID int64) string {

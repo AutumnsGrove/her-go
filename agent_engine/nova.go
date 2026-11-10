@@ -124,9 +124,15 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 	// history as well would send it twice.
 	system, history, prompt := splitMessages(cfg.Messages)
 
+	// The registry must hold every tool this agent could ever call, not just the
+	// ones advertised now: Nova dispatches through the registry, and use_tools
+	// can only advertise a tool it can also run. The advertised subset is decided
+	// per turn in beforeProviderRequest from ActiveTools.
 	toolsForRun := cfg.ToolDefs
-	if cfg.ToolCtx != nil && cfg.ToolCtx.ActiveTools != nil {
-		toolsForRun = *cfg.ToolCtx.ActiveTools
+	if cfg.ToolCtx != nil && cfg.ToolCtx.Cfg != nil {
+		if all := tools.ToolDefsForAgent(cfg.ToolCtx.AgentName, cfg.ToolCtx.Cfg); len(all) > 0 {
+			toolsForRun = all
+		}
 	}
 
 	reg := tool.NewRegistry()
@@ -134,6 +140,13 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 		if err := reg.Register(guardedTool{inner: t, state: s}); err != nil {
 			return nil, fmt.Errorf("engine: registering tool %q: %w", t.Info().Name, err)
 		}
+	}
+	// The first request advertises exactly what the caller offered; later
+	// requests follow ActiveTools (which use_tools grows).
+	if cfg.ToolCtx != nil && cfg.ToolCtx.ActiveTools != nil && len(*cfg.ToolCtx.ActiveTools) > 0 {
+		s.advertised = append([]llm.ToolDef(nil), (*cfg.ToolCtx.ActiveTools)...)
+	} else {
+		s.advertised = append([]llm.ToolDef(nil), cfg.ToolDefs...)
 	}
 
 	// Per-call metrics and iteration events. her-go records one metric row per
@@ -234,9 +247,12 @@ type novaRunState struct {
 	// honoured at the end of the batch instead (delta D1).
 	hookBreakRequested bool
 	lastNoTool         bool // the latest assistant message carried no tool calls
-	lastText           string
-	exitReason         string
-	result             *agent.Result
+	// advertised is the tool set the next request should offer. Seeded from the
+	// caller's ActiveTools (or ToolDefs) and refreshed from ActiveTools each turn.
+	advertised []llm.ToolDef
+	lastText   string
+	exitReason string
+	result     *agent.Result
 }
 
 // beforeTurn implements PreIteration: it fires before each provider request.
@@ -261,6 +277,27 @@ func (s *novaRunState) beforeProviderRequest(_ context.Context, req *provider.Re
 	isFirst := s.iterations == 0
 	s.mu.Unlock()
 
+	// Deferred tool loading. use_tools appends to *ToolCtx.ActiveTools; the
+	// legacy loop advertised only the tools it started with, so a loaded tool was
+	// callable but invisible in the schema. Nova recomputes the tool list every
+	// turn, so the freshly loaded schemas go out with the next request. This is
+	// an intentional improvement — see the migration log, delta D9.
+	//
+	// Refresh first, then advertise, so a tool loaded during this turn's batch is
+	// offered on the very next request.
+	if s.cfg.ToolCtx != nil && s.cfg.ToolCtx.ActiveTools != nil && len(*s.cfg.ToolCtx.ActiveTools) > 0 {
+		s.mu.Lock()
+		s.advertised = append([]llm.ToolDef(nil), (*s.cfg.ToolCtx.ActiveTools)...)
+		s.mu.Unlock()
+	}
+
+	s.mu.Lock()
+	defs := s.advertised
+	s.mu.Unlock()
+	if converted, err := llm.NovaToolDefs(defs); err == nil && len(converted) > 0 {
+		req.Tools = converted
+	}
+
 	if len(req.Tools) > 0 {
 		// parallel_tool_calls:false on the wire, so a model that ignores the
 		// parameter and batches calls anyway is still handled by the loop.
@@ -269,17 +306,6 @@ func (s *novaRunState) beforeProviderRequest(_ context.Context, req *provider.Re
 
 		if isFirst && s.cfg.ToolChoiceFirst != nil {
 			req.ToolChoice = s.cfg.ToolChoiceFirst
-		}
-	}
-
-	// Deferred tool loading. use_tools appends to *ToolCtx.ActiveTools; the
-	// legacy loop advertised only the tools it started with, so a loaded tool was
-	// callable but invisible in the schema. Nova recomputes the tool list every
-	// turn, so the freshly loaded schemas go out with the next request. This is
-	// an intentional improvement — see the migration log, delta D9.
-	if s.cfg.ToolCtx != nil && s.cfg.ToolCtx.ActiveTools != nil {
-		if defs, err := llm.NovaToolDefs(*s.cfg.ToolCtx.ActiveTools); err == nil && len(defs) > 0 {
-			req.Tools = defs
 		}
 	}
 }
