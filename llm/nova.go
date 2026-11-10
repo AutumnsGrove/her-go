@@ -166,10 +166,23 @@ func (c *Client) novaRequest(model string, temperature float64, maxTokens int, m
 		req.Tools = converted
 	}
 
-	// OpenRouter-specific knobs travel as provider options, which Nova merges
-	// into the top level of the wire body. That is how provider.order,
-	// session_id and reasoning reach OpenRouter without Nova knowing them.
+	c.applyProviderOptions(&req)
+	return req, nil
+}
+
+// applyProviderOptions merges her-go's OpenRouter knobs into a Nova request.
+// Nova merges ProviderOptions into the top level of the wire body, which is how
+// provider.order, session_id and reasoning reach OpenRouter without Nova knowing
+// about any of them.
+//
+// Shared by both entry points (the direct calls and the provider interface the
+// agent loop uses) so pinning and sticky routing cannot apply on one path and
+// silently not the other.
+func (c *Client) applyProviderOptions(req *provider.Request) {
 	opts := map[string]any{}
+	for k, v := range req.ProviderOptions {
+		opts[k] = v
+	}
 	if c.provider != nil {
 		// Routing.Options renders exactly one entry, {"provider": {...}}.
 		if rendered := (openrouter.Routing{
@@ -191,8 +204,6 @@ func (c *Client) novaRequest(model string, temperature float64, maxTokens int, m
 	if len(opts) > 0 {
 		req.ProviderOptions = opts
 	}
-
-	return req, nil
 }
 
 // novaResponse maps Nova's finalized response onto her-go's ChatResponse.
@@ -459,6 +470,14 @@ func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(
 		}
 		onEvent(ev)
 	}
+
+	c.applyProviderOptions(&req)
+	// An explicit "no marker" keeps the request free of the automatic
+	// cache_control field Nova would add for a catalogued model. OpenRouter
+	// caches implicitly; a marker it does not expect risks invalidating the
+	// prompt cache we are trying to protect (delta D7).
+	noCache := false
+	req.PromptCache = &noCache
 
 	resp, err := c.novaProvider().Stream(ctx, req, guarded)
 	usedFallback := false
