@@ -94,6 +94,14 @@ Running total against the **$10 hard cap**: **$0.00** (no live sim run yet).
   - `mimo-v2.6-flash`: **4/6** returned tool calls; one `finish_reason: length` (it burned the budget on
     reasoning) and one `finish_reason: stop` with plain text and no tool call.
   - `mimo-v2.5` (control): 6/6.
+  - **Follow-up evidence (step 4 baselines):** two identical-stack `schedule-crud` runs, legacy loop, both on Flash.
+    Run 1 completed all 6 turns in 11–19 tool calls each. Run 2 had three turns stall for ~250s, one turn burn
+    48–49 tool calls, and all three end without a `done` (the gateway's fallback reply covered the user).
+    June's 2.5-era reports of the same suite top out at 12 tools per turn. **Conclusion: `driver.model` is now
+    `xiaomi/mimo-v2.6-pro`** in `config.yaml.example` and the laptop config — Flash stays the background-agent
+    model. Pro is ~3x Flash per token but still cheaper than the 2.5 Pro it replaces. This is a deviation from
+    plan Q5, made on measured evidence, and it changes the baselines: runs `base1`/`base2` are kept only as
+    evidence of the Flash instability, and `base3`+ are the authoritative baselines.
   The `length` case is a max-tokens artifact, but the plain-text case is the failure that matters: a driver
   turn with `require_tool_choice: true` and no tool call ends the run at `ExitNoToolCalls`. The laptop
   `config.yaml` sets `driver.require_tool_choice: false`, which hides the problem locally; the Pi uses the
