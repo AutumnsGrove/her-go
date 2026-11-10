@@ -195,3 +195,49 @@ Running total against the **$10 hard cap**: **$0.00** (no live sim run yet).
   - **Out of reach:** `ExitFinishReasonStop` (the OpenCode #14972 pattern) cannot be detected, because Nova
     rewrites a `stop` that arrives with tool calls to `tool_calls`. The run then ends on the next turn, which
     is the same observable outcome as the legacy loop for the same input.
+
+### Step 8+9 — single cut, and the legacy loop deleted
+
+- **Staged per-agent cutover (step 8) folded into one cut**, at Autumn's direction: with one loop implementation
+  there is no per-agent switch to stage with. The per-agent risk the plan worried about — does *this* agent use a
+  hook Nova cannot reproduce? — is covered by the parity suite instead, which exercises every hook the five
+  agents actually register. Rollback is per-process (`llm.backend: legacy` for the transport), not per-agent.
+- **Legacy loop deleted** (`agent_engine/engine.go` −394 lines, plus the backend flag, the `engine:` config
+  section, the per-agent overrides and the `--engine-backend` sim flag). `RunLoop` survives as a one-line
+  wrapper and the package still owns `EngineConfig`/`LoopResult`/exit reasons/`BuildContinuationSummary`/
+  `TruncateLog`, because those are the contract the five agents were written against.
+- **Legacy LLM transport kept**, defaulted to `nova`, as the rollback lever the plan allowed for: deleting it was
+  conditional on soaking, and the 28 non-loop call sites (reply streaming, classifier, mood, vision, compaction,
+  fast path) have parity tests but no production soak yet. Deleting it is the follow-up.
+- **Bug the sims caught (this is why they exist):** the Nova registry was built from the YAML manifests alone,
+  but `use_tools` never appears in a manifest — `HotToolDefs` synthesises it. The driver therefore got
+  `unknown tool "use_tools"` on every call, could not load a single deferred tool, told the user it had no way to
+  schedule anything, and the chat model filled the gap with invented `<tool_call>` markup. Fixed by registering
+  the *union* of the caller's defs and the agent's manifest defs, with a regression test
+  (`TestNova_RegistryIncludesCodeOnlyTools`). The first Nova `schedule-crud` digest was discarded because of it.
+
+### Sim results (final state)
+
+| Suite | legacy | nova | verdict |
+|---|---|---|---|
+| schedule-crud | 6 turns, $0.0433, 1/6 done, 6 fallbacks, 88.9% cache | 6 turns, $0.0333, 5/6 done, 0 fallbacks, 87.3% cache | pass (cheaper, more reliable, same cache) |
+| worker-agent-test | 2 turns, $0.0087, 2/2 done, 1 fallback, 84.0% cache | 2 turns, $0.0089, 2/2 done, 0 fallbacks, 84.0% cache | pass (+2% cost, identical cache) |
+
+The Nova schedule-crud run also *did the work* the legacy run failed at: it created, listed, updated and deleted
+schedules with clean replies, while the legacy run answered "I don't have a way to schedule things". The
+"error tool results 4 vs 1" difference in that comparison is three pre-existing `recall_memories`-called-with-no-
+arguments attempts by the memory agent plus one classifier rejection — not a new failure mode.
+
+**Model note:** MiMo 2.6 Pro as the chat model produced invented `<tool_call><function=cron_create>` markup in
+three of the runs above (both loops, so not a transport issue; 1 of 219 historical reports shows the same). It
+happens when the driver has failed and the fallback reply asks the chat model to narrate a tool result it does
+not have. The driver-model change to Pro fixed the *cause* (fewer failed driver turns); the chat model itself is
+unchanged from the plan's Q5 and is worth watching on the Pi. A reply-side sanitizer for pseudo tool-call markup
+is the follow-up if it recurs.
+
+### Spend
+
+Total live sim spend for the whole migration: **≈ $0.62** (base1 $0.098, base2 partial $0.038, base1core partial
+$0.125, base3 $0.084, base4 $0.031, nova3 partial ~$0.05, nova4 $0.042, plus ~$0.01 of one-call probes), against
+the $10 cap. The cap was never close; wall-clock was the real constraint, which is why `compaction-quick` and
+`mood-dedup-test` have legacy baselines but no Nova re-run.

@@ -14,20 +14,40 @@ failed check, so it can gate CI or a deploy. Digests contain no prompts, no
 replies and no secrets — only turn counts, tool names, costs, token counts,
 provider names and memory/mood counts.
 
-## What was captured, and on what stack
+## What is here
 
-| Run | Suites | Stack |
+`legacy/` and `nova/` hold the same suites captured on the same stack (Go 1.27.3, MiMo 2.6 Pro chat **and**
+driver, `perplexity/pplx-embed-v1-0.6b` @ 1024 dims) on either side of the migration:
+
+| Suite | legacy loop + legacy transport | Nova loop + Nova transport |
 |---|---|---|
-| `base1` | smoke: schedule-crud, worker-agent-test, vision-test, compaction-quick, mood-dedup-test | Go 1.27.3, MiMo 2.6 (pro chat / flash agents), OpenRouter `pplx-embed-v1-0.6b` @ 1024 dims, legacy loop, legacy transport |
-| `base2` | same five, second run | same |
-| `base1core` | core additions: core-loop-and-dream, memory-a-thon, card-lifecycle, introspection-test, dream-consolidation | same |
+| schedule-crud | 6 turns, $0.0433, 83 tools, 1/6 reached `done`, 6 fallbacks | 6 turns, $0.0333, 73 tools, **5/6** reached `done`, 0 fallbacks |
+| worker-agent-test | 2 turns, $0.0087, 20 tools, 2/2 `done`, 1 fallback | 2 turns, $0.0089, 18 tools, 2/2 `done`, 0 fallbacks |
 
-Two runs of the smoke set exist because LLM output is not deterministic: the
-spread between `base1` and `base2` is the noise floor, and it is what makes the
-"within ±25% cost / ±30% memories" bands meaningful rather than invented. The
-core set was captured once, for wall-clock and budget reasons — recorded as a
-deviation in [NOVA-MIGRATION-LOG.md](../NOVA-MIGRATION-LOG.md).
+`compaction-quick` and `mood-dedup-test` have legacy baselines only (the Nova re-runs did not fit the session).
+Cache hit rate was the number that mattered most (a dropped prompt cache is the costliest silent regression):
+schedule-crud 88.9% legacy vs 87.3% Nova, worker 84.0% both.
 
-The baselines are the *pre-migration* stack: they include the Go bump, the
-OpenRouter embeddings and the MiMo 2.6 model bump, so any difference after them
-is attributable to the Nova seams rather than to a model change.
+## Why two runs of the smoke set existed, and what happened
+
+The plan asked for the whole set twice to measure nondeterminism. Doing that was itself informative: two
+identical-stack `schedule-crud` runs differed by +70% cost, in tool sets, and in completion (6/6 vs 3/6
+`done`), because the driver occasionally stalls or wanders. That spread is why the comparison treats *structural*
+signals (did turns complete, did the tools that matter run, did cost stay within a quarter) as the gate rather
+than exact numbers — and why `her digest` prints PASS/FAIL lines instead of a diff.
+
+An earlier set (`base1`/`base2`, MiMo 2.6 **Flash** as driver) is not committed: it exists only as evidence in
+[NOVA-MIGRATION-LOG.md](../NOVA-MIGRATION-LOG.md) that Flash was the wrong driver model.
+
+## Reproducing
+
+```bash
+her sim -s sims/schedule-crud.yaml                        # on whatever config.yaml says
+her sim -s sims/schedule-crud.yaml --llm-backend legacy   # the transport rollback
+her digest <report.md> --out docs/plans/baselines/nova
+her digest --compare docs/plans/baselines/legacy/schedule-crud.json \
+           --compare docs/plans/baselines/nova/schedule-crud.json
+```
+
+Digests contain no prompts, replies or secrets — only turn counts, tool names, costs, token counts, provider
+names and memory/mood counts.

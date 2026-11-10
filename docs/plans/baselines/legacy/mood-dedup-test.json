@@ -1,0 +1,264 @@
+{
+  "suite": "Mood Dedup Test",
+  "date": "2026-11-10 14:02",
+  "duration": "4m49s",
+  "cost_usd": 0.0225,
+  "turns": 8,
+  "total_tools": 87,
+  "tool_set": {
+    "done": 16,
+    "fast-path": 2,
+    "memory→chat": 8,
+    "recall_memories": 26,
+    "reply": 6,
+    "safety→gate": 6,
+    "save_memory": 6,
+    "save_self_memory": 3,
+    "skip": 2,
+    "style→gate": 6,
+    "think": 3,
+    "update_memory": 3
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "duration_s": 18.3,
+      "cost_usd": 0.0043,
+      "tool_calls": 15,
+      "tools": [
+        "recall_memories",
+        "recall_memories",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "save_memory",
+        "done",
+        "think",
+        "recall_memories",
+        "save_self_memory",
+        "done"
+      ],
+      "cache_read_tokens": 59136,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 2,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 2,
+      "duration_s": 25,
+      "cost_usd": 0.0041,
+      "tool_calls": 13,
+      "tools": [
+        "recall_memories",
+        "memory→chat",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "update_memory",
+        "done",
+        "recall_memories",
+        "update_memory",
+        "done"
+      ],
+      "cache_read_tokens": 49472,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 3,
+      "duration_s": 25.8,
+      "cost_usd": 0.0033,
+      "tool_calls": 13,
+      "tools": [
+        "recall_memories",
+        "memory→chat",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "done",
+        "recall_memories",
+        "save_self_memory",
+        "done"
+      ],
+      "cache_read_tokens": 54144,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 4,
+      "duration_s": 16.9,
+      "cost_usd": 0.0034,
+      "tool_calls": 14,
+      "tools": [
+        "memory→chat",
+        "memory→chat",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 56640,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 2,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 5,
+      "duration_s": 8.8,
+      "cost_usd": 0,
+      "tool_calls": 1,
+      "tools": [
+        "fast-path"
+      ],
+      "cache_read_tokens": 1536,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": false,
+      "reached_reply": false
+    },
+    {
+      "turn": 6,
+      "duration_s": 32.2,
+      "cost_usd": 0.0029,
+      "tool_calls": 13,
+      "tools": [
+        "recall_memories",
+        "recall_memories",
+        "memory→chat",
+        "memory→chat",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 55296,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 7,
+      "duration_s": 35.3,
+      "cost_usd": 0.0044,
+      "tool_calls": 17,
+      "tools": [
+        "recall_memories",
+        "recall_memories",
+        "memory→chat",
+        "memory→chat",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "update_memory",
+        "done",
+        "think",
+        "recall_memories",
+        "think",
+        "save_self_memory",
+        "done"
+      ],
+      "cache_read_tokens": 72960,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 8,
+      "duration_s": 3.8,
+      "cost_usd": 0,
+      "tool_calls": 1,
+      "tools": [
+        "fast-path"
+      ],
+      "cache_read_tokens": 1536,
+      "cache_write_tokens": 0,
+      "providers": [
+        "openrouter"
+      ],
+      "memory_saves": 0,
+      "error": false,
+      "reached_done": false,
+      "reached_reply": false
+    }
+  ],
+  "memories_post_run": 6,
+  "moods_post_run": 0,
+  "memory_saves_total": 8,
+  "error_tool_results": 9,
+  "fallback_calls": 0,
+  "cache_hit_pct": 82.6,
+  "models": {
+    "Chat": "xiaomi/mimo-v2.6-pro",
+    "Classifier": "google/gemini-3.1-flash-lite",
+    "Dream": "xiaomi/mimo-v2.6-flash",
+    "Driver": "xiaomi/mimo-v2.6-pro",
+    "Embed": "perplexity/pplx-embed-v1-0.6b",
+    "Introspection": "xiaomi/mimo-v2.6-flash",
+    "Memory": "xiaomi/mimo-v2.6-flash",
+    "Mood": "xiaomi/mimo-v2.6-flash",
+    "Vision": "xiaomi/mimo-v2.6-flash"
+  }
+}

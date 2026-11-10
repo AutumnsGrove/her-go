@@ -1,0 +1,95 @@
+{
+  "suite": "Worker Agent — Research Report",
+  "date": "2026-11-10 13:57",
+  "duration": "4m1s",
+  "cost_usd": 0.0087,
+  "turns": 2,
+  "total_tools": 20,
+  "tool_set": {
+    "done": 4,
+    "recall_memories": 4,
+    "reply": 2,
+    "safety→gate": 2,
+    "save_memory": 2,
+    "send_task": 1,
+    "skip": 2,
+    "style→gate": 3
+  },
+  "per_turn": [
+    {
+      "turn": 1,
+      "duration_s": 168.6,
+      "cost_usd": 0.0057,
+      "tool_calls": 11,
+      "tools": [
+        "recall_memories",
+        "send_task",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "recall_memories",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 19264,
+      "cache_write_tokens": 0,
+      "providers": [
+        "Makora",
+        "GMICloud",
+        "Google",
+        "Xiaomi"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    },
+    {
+      "turn": 2,
+      "duration_s": 48,
+      "cost_usd": 0.003,
+      "tool_calls": 9,
+      "tools": [
+        "style→gate",
+        "style→gate",
+        "safety→gate",
+        "reply",
+        "done",
+        "recall_memories",
+        "save_memory",
+        "done",
+        "skip"
+      ],
+      "cache_read_tokens": 21376,
+      "cache_write_tokens": 0,
+      "providers": [
+        "Xiaomi",
+        "Makora"
+      ],
+      "memory_saves": 1,
+      "error": false,
+      "reached_done": true,
+      "reached_reply": true
+    }
+  ],
+  "memories_post_run": 1,
+  "moods_post_run": 0,
+  "memory_saves_total": 2,
+  "error_tool_results": 2,
+  "fallback_calls": 1,
+  "cache_hit_pct": 84,
+  "models": {
+    "Chat": "xiaomi/mimo-v2.6-pro",
+    "Classifier": "google/gemini-3.1-flash-lite",
+    "Dream": "xiaomi/mimo-v2.6-flash",
+    "Driver": "xiaomi/mimo-v2.6-pro",
+    "Embed": "perplexity/pplx-embed-v1-0.6b",
+    "Introspection": "xiaomi/mimo-v2.6-flash",
+    "Memory": "xiaomi/mimo-v2.6-flash",
+    "Mood": "xiaomi/mimo-v2.6-flash",
+    "Vision": "xiaomi/mimo-v2.6-flash"
+  }
+}
