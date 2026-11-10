@@ -20,6 +20,7 @@ import (
 
 	"github.com/AutumnsGrove/nova/provider"
 
+	"her/config"
 	"her/llm"
 	"her/tools"
 )
@@ -444,5 +445,39 @@ func TestNova_DeferredToolsAreReadvertised(t *testing.T) {
 	}
 	if req.Tools[1].Function.Name != "parity_deferred" {
 		t.Errorf("second tool = %q, want parity_deferred", req.Tools[1].Function.Name)
+	}
+}
+
+// TestNova_RegistryIncludesCodeOnlyTools is the regression test for a real
+// outage-shaped bug: use_tools is not in any tool.yaml (HotToolDefs synthesises
+// it), so building the registry from the manifests alone left the driver unable
+// to load a single deferred tool — every use_tools call came back
+// `unknown tool "use_tools"`, and the agent then told the user it could not
+// schedule anything.
+func TestNova_RegistryIncludesCodeOnlyTools(t *testing.T) {
+	cfg := &config.Config{}
+	driverDefs := tools.HotToolDefs("main", cfg) // includes use_tools
+	manifestDefs := tools.ToolDefsForAgent("main", cfg)
+
+	if len(driverDefs) == 0 || len(manifestDefs) == 0 {
+		t.Fatal("tool loader returned nothing — check the embedded manifests")
+	}
+
+	merged := unionToolDefs(driverDefs, agentToolDefs(EngineConfig{
+		ToolCtx: &tools.Context{AgentName: "main", Cfg: cfg},
+	}))
+
+	names := map[string]bool{}
+	for _, def := range merged {
+		names[def.Function.Name] = true
+	}
+	if !names["use_tools"] {
+		t.Error("use_tools missing from the registry — deferred tools would be unreachable")
+	}
+	// Every manifest tool the agent may call must be runnable, not just offerable.
+	for _, def := range manifestDefs {
+		if !names[def.Function.Name] {
+			t.Errorf("manifest tool %q missing from the registry", def.Function.Name)
+		}
 	}
 }

@@ -75,12 +75,15 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 	// ones advertised now: Nova dispatches through the registry, and use_tools
 	// can only advertise a tool it can also run. The advertised subset is decided
 	// per turn in beforeProviderRequest from ActiveTools.
-	toolsForRun := cfg.ToolDefs
-	if cfg.ToolCtx != nil && cfg.ToolCtx.Cfg != nil {
-		if all := tools.ToolDefsForAgent(cfg.ToolCtx.AgentName, cfg.ToolCtx.Cfg); len(all) > 0 {
-			toolsForRun = all
-		}
-	}
+	//
+	// The union matters in both directions. cfg.ToolDefs carries the tools that
+	// exist only in code rather than in a manifest — use_tools itself, and
+	// reply_direct when the experiment flag is on — while ToolDefsForAgent carries
+	// every deferred tool the agent is allowed to load. Using either alone broke
+	// something real: the manifest-only set lost use_tools (the driver could never
+	// load a tool), and the caller's set lost the deferred tools (Nova rejected
+	// them as unknown the moment they were advertised).
+	toolsForRun := unionToolDefs(cfg.ToolDefs, agentToolDefs(cfg))
 
 	reg := tool.NewRegistry()
 	for _, t := range tools.NovaTools(toolsForRun) {
@@ -680,4 +683,31 @@ func finishReasonFor(m message.Message) string {
 		return "tool_calls"
 	}
 	return "stop"
+}
+
+// agentToolDefs returns every tool the agent may call according to the YAML
+// manifests, or nil when the config is not reachable.
+func agentToolDefs(cfg EngineConfig) []llm.ToolDef {
+	if cfg.ToolCtx == nil || cfg.ToolCtx.Cfg == nil {
+		return nil
+	}
+	return tools.ToolDefsForAgent(cfg.ToolCtx.AgentName, cfg.ToolCtx.Cfg)
+}
+
+// unionToolDefs merges definition lists, first mention of a name winning and
+// order preserved. Registration order is the order the model sees, so keeping the
+// caller's order first also keeps the prompt bytes stable across runs.
+func unionToolDefs(lists ...[]llm.ToolDef) []llm.ToolDef {
+	seen := map[string]bool{}
+	var out []llm.ToolDef
+	for _, list := range lists {
+		for _, def := range list {
+			if seen[def.Function.Name] {
+				continue
+			}
+			seen[def.Function.Name] = true
+			out = append(out, def)
+		}
+	}
+	return out
 }
