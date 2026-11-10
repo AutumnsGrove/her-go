@@ -86,9 +86,9 @@ func TestClientStream_ReportsResponseInfoAndFallback(t *testing.T) {
 	client.WithFallback("backup", 0.1, 128)
 
 	var infos []ResponseInfo
-	client.ResponseHook = func(info ResponseInfo) { infos = append(infos, info) }
+	hooked := client.WithResponseHook(func(info ResponseInfo) { infos = append(infos, info) })
 
-	if _, err := client.Stream(context.Background(), provider.Request{
+	if _, err := hooked.Stream(context.Background(), provider.Request{
 		Model:    "primary",
 		Messages: []message.Message{message.User("hi")},
 	}, nil); err != nil {
@@ -106,5 +106,88 @@ func TestClientStream_ReportsResponseInfoAndFallback(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Errorf("attempts = %d, want 2 (primary then fallback)", attempts)
+	}
+}
+
+// useNovaBackend switches the process-wide transport for one test. The backend
+// is package state (see SetBackend), so the test must put it back.
+func useNovaBackend(t *testing.T) {
+	t.Helper()
+	previous := ActiveBackend()
+	SetBackend(BackendNova)
+	t.Cleanup(func() { SetBackend(previous) })
+}
+
+// A fallback answer that carries two tool calls must be cut to the first, like
+// the primary's answer is. her-go runs tool calls one at a time, so a second
+// call would run against a stale picture of the world.
+func TestNovaChatCompletion_FallbackAnswerKeepsOnlyFirstToolCall(t *testing.T) {
+	useNovaBackend(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
+		if reqBody["model"] == "primary" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"busy"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, toolCallChunk(0, "call-a", "alpha", `{}`))
+		writeSSE(w, toolCallChunk(1, "call-b", "beta", `{}`))
+		writeSSE(w, finishChunk("tool_calls"))
+		writeSSEDone(w)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "key", "primary", 0.4, 256)
+	client.WithFallback("backup", 0.1, 128)
+
+	tools := []ToolDef{{Type: "function", Function: ToolFunctionDef{
+		Name: "alpha", Parameters: map[string]any{"type": "object"},
+	}}}
+	resp, err := client.ChatCompletionWithTools([]ChatMessage{{Role: "user", Content: "hi"}}, tools)
+	if err != nil {
+		t.Fatalf("ChatCompletionWithTools: %v", err)
+	}
+	if !resp.UsedFallback {
+		t.Fatal("expected the fallback model to answer")
+	}
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Function.Name != "alpha" {
+		t.Errorf("tool calls = %+v, want only the first (alpha)", resp.ToolCalls)
+	}
+}
+
+// If the primary dies after the user already saw part of the reply, a fallback
+// would replay the answer from the start. Keep the partial text and surface the
+// error instead.
+func TestNovaChatCompletion_NoFallbackAfterTextWasStreamed(t *testing.T) {
+	useNovaBackend(t)
+
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(w, contentChunk("The beginning of a"))
+		w.(http.Flusher).Flush()
+		// Drop the connection mid-stream: no finish frame, no [DONE].
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "key", "primary", 0.4, 256)
+	client.WithFallback("backup", 0.1, 128)
+
+	var got string
+	_, err := client.ChatCompletionStreaming([]ChatMessage{{Role: "user", Content: "hi"}}, func(chunk string) { got += chunk })
+	if err == nil {
+		t.Fatal("expected the mid-stream failure to be reported")
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a fallback would replay the streamed text", attempts)
+	}
+	if got != "The beginning of a" {
+		t.Errorf("streamed text = %q", got)
 	}
 }

@@ -22,7 +22,8 @@
 //	OnDone, ToolCtx.DoneCalled Hooks.TurnEnd → End: true
 //	OnNoToolCalls             Hooks.MessageEnd                     cannot continue (delta D4)
 //	OnLoopStart/OnLoopExit    before Run / Hooks.AgentEnd
-//	SaveMetric, iterations    llm.Client ResponseHook              per provider call
+//	OnError                   after Run, when the provider failed
+//	SaveMetric, iterations    llm.Client.WithResponseHook          per provider call
 //
 // Reading order: novaRun (setup), then novaRunState's hook methods, then the
 // small converters at the bottom.
@@ -99,16 +100,13 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 		s.advertised = append([]llm.ToolDef(nil), cfg.ToolDefs...)
 	}
 
-	// Per-call metrics and iteration events. her-go records one metric row per
-	// provider call; Nova's loop only sums usage per run, so the client hands
-	// each finished response back through this hook. Restored afterwards
-	// because a client can outlive one agent run.
-	previousHook := cfg.LLM.ResponseHook
-	cfg.LLM.ResponseHook = s.onResponse
-	defer func() { cfg.LLM.ResponseHook = previousHook }()
-
 	ag := agent.New(agent.Config{
-		Provider: cfg.LLM, // *llm.Client implements provider.Provider (see llm/nova.go)
+		// Per-call metrics and iteration events. her-go records one metric row per
+		// provider call; Nova's loop only sums usage per run, so a per-run view of
+		// the client hands each finished response to onResponse. The hook rides on
+		// this wrapper rather than on the client, because the client is shared by
+		// concurrent runs (see llm.Client.WithResponseHook).
+		Provider: cfg.LLM.WithResponseHook(s.onResponse),
 		Model:    cfg.LLM.Model(),
 		System:   system,
 		Tools:    reg,
@@ -122,7 +120,11 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 		// capability's owner). Nova retrying too would multiply attempts.
 		Retry: agent.RetryPolicy{Max: -1},
 		// No wrap-up request: the old loop simply stopped when the budget ran out.
-		WrapUp:      nil,
+		WrapUp: nil,
+		// Nova abandons a hook that outlives its deadline (default 5s) and drops
+		// its return value, which would silently lose a PostToolResult rewrite.
+		// Her-go hooks write to SQLite and update traces, so give them room.
+		HookTimeout: hookTimeoutOrDefault(cfg.HookTimeout),
 		Temperature: cfg.LLM.TemperaturePtr(),
 		MaxTokens:   cfg.LLM.MaxTokens(),
 		Hooks: agent.Hooks{
@@ -168,11 +170,18 @@ func runNova(cfg EngineConfig) (*LoopResult, error) {
 		cfg.OnLoopExit(s.exitReason, out.Messages)
 	}
 
-	// A provider failure that exhausted the fallback is returned as an error, as
-	// the legacy loop returned nil after calling OnError. Callers treat both as
-	// "the turn failed", and the metrics/exit reason are already recorded.
+	// A provider failure that exhausted the fallback ends the run with ExitError.
+	// The loop reports it as a nil error plus an exit reason (as the legacy loop
+	// did), so this is the only place the cause is visible: log it, and give the
+	// agent's OnError hook its chance, as the old loop did.
 	if err != nil {
-		return out, nil
+		s.mu.Lock()
+		iteration, window := s.iterations, s.window
+		s.mu.Unlock()
+		log.Error("agent run failed", "agent", cfg.Name, "reason", res.Reason, "err", err)
+		if cfg.OnError != nil {
+			cfg.OnError(err, iteration, window)
+		}
 	}
 	return out, nil
 }
@@ -211,10 +220,13 @@ func (s *novaRunState) beforeTurn(_ context.Context, _ []message.Message) ([]mes
 	iteration := s.iterations
 	s.mu.Unlock()
 
-	s.window = iteration / s.iterationsPerWindow
+	window := iteration / s.iterationsPerWindow
+	s.mu.Lock()
+	s.window = window
+	s.mu.Unlock()
 	if s.cfg.PreIteration != nil {
-		log.Debug("hook fired", "agent", s.cfg.Name, "hook", "PreIteration", "iter", iteration%s.iterationsPerWindow, "window", s.window)
-		s.cfg.PreIteration(iteration%s.iterationsPerWindow, s.window)
+		log.Debug("hook fired", "agent", s.cfg.Name, "hook", "PreIteration", "iter", iteration%s.iterationsPerWindow, "window", window)
+		s.cfg.PreIteration(iteration%s.iterationsPerWindow, window)
 	}
 	return nil, nil // nil keeps the transcript
 }
@@ -688,6 +700,14 @@ func finishReasonFor(m message.Message) string {
 		return "tool_calls"
 	}
 	return "stop"
+}
+
+// hookTimeoutOrDefault applies the engine default when a run does not set one.
+func hookTimeoutOrDefault(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultHookTimeout
+	}
+	return d
 }
 
 // agentToolDefs returns every tool the agent may call according to the YAML

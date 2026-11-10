@@ -102,7 +102,7 @@ func (c *Client) novaProvider() provider.Provider {
 func (c *Client) novaComplete(model string, temperature float64, maxTokens int, messages []ChatMessage, tools []ToolDef, toolChoice any, onChunk func(string)) (*ChatResponse, error) {
 	timeout := c.httpClient.Timeout
 	if len(tools) > 0 {
-		timeout = 3 * time.Minute
+		timeout = streamTimeout
 	}
 	ctx := context.Background()
 	if timeout > 0 {
@@ -375,24 +375,39 @@ func boolPtr(b bool) *bool { return &b }
 // then the fallback model on a retriable failure, with the same
 // truncate-to-one-tool-call defence the legacy path applies.
 func (c *Client) novaChatCompletion(messages []ChatMessage, tools []ToolDef, toolChoice any, onChunk func(string)) (*ChatResponse, error) {
-	resp, err := c.novaComplete(c.model, c.temperature, c.maxTokens, messages, tools, toolChoice, onChunk)
-	if err != nil && c.fallbackModel != "" && isRetriableNova(err) {
+	// Remember whether any text already reached the caller. A fallback replays
+	// the whole answer from the start, so after a mid-stream failure it would
+	// show the user the beginning of the reply twice. In that case keep the
+	// partial text and report the error instead of falling back.
+	streamed := false
+	var forward func(string)
+	if onChunk != nil {
+		forward = func(chunk string) {
+			if chunk != "" {
+				streamed = true
+			}
+			onChunk(chunk)
+		}
+	}
+
+	resp, err := c.novaComplete(c.model, c.temperature, c.maxTokens, messages, tools, toolChoice, forward)
+	if err != nil && c.fallbackModel != "" && !streamed && isRetriableNova(err) {
 		log.Warn("nova: primary model failed, trying fallback",
 			"primary", c.model,
 			"fallback", c.fallbackModel,
 			"err", err,
 		)
-		fallbackResp, fallbackErr := c.novaComplete(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, toolChoice, onChunk)
-		if fallbackErr == nil {
-			fallbackResp.UsedFallback = true
+		var fbErr error
+		resp, fbErr = c.novaComplete(c.fallbackModel, c.fallbackTemperature, c.fallbackMaxTokens, messages, tools, toolChoice, forward)
+		if fbErr == nil {
+			resp.UsedFallback = true
 		}
-		return fallbackResp, fallbackErr
+		err = fbErr
 	}
 
 	// Nova's collector assembles every tool call the model asked for. her-go's
 	// loop executes them one at a time and its transcripts assume the same, so
-	// keep only the first — the same defence-in-depth the legacy path applies
-	// after aborting the stream on a second call.
+	// keep only the first. This applies to the fallback's answer too.
 	if resp != nil && len(resp.ToolCalls) > 1 {
 		log.Warn("nova: model returned parallel tool calls — truncating to first",
 			"total", len(resp.ToolCalls),
@@ -444,13 +459,61 @@ func (c *Client) TemperaturePtr() *float64 {
 // her-go's retry, fallback and metrics semantics) instead of Nova's.
 func (c *Client) Name() string { return "her-go" }
 
-// Stream implements provider.Provider on top of the Nova transport, adding the
-// two behaviours her-go owns: fallback to a second model on a retriable failure,
-// and the per-call ResponseHook the loop uses for metrics.
+// Stream implements provider.Provider on top of the Nova transport, adding
+// her-go's fallback to a second model on a retriable failure.
 //
 // Nova's own retry policy is disabled for these runs (agent.Config.Retry.Max =
 // -1): retrying belongs to the retry capability, and a fallback already re-tried.
 func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(provider.StreamEvent)) (*provider.Response, error) {
+	resp, _, err := c.stream(ctx, req, onEvent)
+	return resp, err
+}
+
+// WithResponseHook returns a provider that behaves like c but reports every
+// completed provider call to hook, which is how the agent loop records one
+// metric row per call (Nova's loop only sums usage per run).
+//
+// The hook lives on the returned value, not on the client. A *Client is shared:
+// the memory, mood and introspection agents each keep one for the life of the
+// process and run in goroutines, so two runs can overlap on the same client.
+// Installing the hook by assigning to a client field made those runs overwrite
+// each other (and tripped the race detector). A per-run wrapper has no shared
+// state — in Python terms, it is the difference between a module-level global
+// and a value passed into the call.
+func (c *Client) WithResponseHook(hook func(ResponseInfo)) provider.Provider {
+	return hookedProvider{client: c, hook: hook}
+}
+
+// hookedProvider is the per-run view of a Client created by WithResponseHook.
+type hookedProvider struct {
+	client *Client
+	hook   func(ResponseInfo)
+}
+
+func (p hookedProvider) Name() string { return p.client.Name() }
+
+func (p hookedProvider) Stream(ctx context.Context, req provider.Request, onEvent func(provider.StreamEvent)) (*provider.Response, error) {
+	resp, usedFallback, err := p.client.stream(ctx, req, onEvent)
+	if resp != nil && p.hook != nil {
+		p.hook(ResponseInfo{
+			Model:            resp.Model,
+			Provider:         resp.Provider,
+			FinishReason:     resp.FinishReason,
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+			CacheReadTokens:  resp.Usage.CachedTokens,
+			CacheWriteTokens: resp.Usage.CacheWriteTokens,
+			CostUSD:          resp.Usage.CostUSD,
+			UsedFallback:     usedFallback,
+		})
+	}
+	return resp, err
+}
+
+// stream is the shared implementation behind Stream and the hooked provider.
+// It also reports whether the fallback model produced the response.
+func (c *Client) stream(ctx context.Context, req provider.Request, onEvent func(provider.StreamEvent)) (*provider.Response, bool, error) {
 	// her-go runs tool calls one at a time in one-assistant-message order, and a
 	// second call in the same message could see a stale picture of the world. The
 	// hand-written client enforced that by aborting the SSE stream the moment a
@@ -479,7 +542,21 @@ func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(
 	noCache := false
 	req.PromptCache = &noCache
 
-	resp, err := c.novaProvider().Stream(ctx, req, guarded)
+	// Each attempt gets its own ceiling (the legacy client applied it per call
+	// too), so a primary that burns the whole budget cannot starve the fallback.
+	// The agent loop passes a background context with no deadline of its own, and
+	// the http.Client timeout alone is a per-client number.
+	attempt := func(r provider.Request) (*provider.Response, error) {
+		actx := ctx
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			actx, cancel = context.WithTimeout(ctx, streamTimeout)
+			defer cancel()
+		}
+		return c.novaProvider().Stream(actx, r, guarded)
+	}
+
+	resp, err := attempt(req)
 	usedFallback := false
 
 	if err != nil && c.fallbackModel != "" && isRetriableNova(err) {
@@ -498,7 +575,7 @@ func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(
 		fbReq.Temperature = &fbTemp
 
 		toolCallEvents = 0
-		fbResp, fbErr := c.novaProvider().Stream(ctx, fbReq, guarded)
+		fbResp, fbErr := attempt(fbReq)
 		if fbErr == nil {
 			resp, err = fbResp, nil
 			usedFallback = true
@@ -514,22 +591,7 @@ func (c *Client) Stream(ctx context.Context, req provider.Request, onEvent func(
 		)
 		resp.Message.ToolCalls = resp.Message.ToolCalls[:1]
 	}
-
-	if resp != nil && c.ResponseHook != nil {
-		c.ResponseHook(ResponseInfo{
-			Model:            resp.Model,
-			Provider:         resp.Provider,
-			FinishReason:     resp.FinishReason,
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-			CacheReadTokens:  resp.Usage.CachedTokens,
-			CacheWriteTokens: resp.Usage.CacheWriteTokens,
-			CostUSD:          resp.Usage.CostUSD,
-			UsedFallback:     usedFallback,
-		})
-	}
-	return resp, err
+	return resp, usedFallback, err
 }
 
 // NovaMessages converts her-go's transcript to Nova's. Exported for the loop

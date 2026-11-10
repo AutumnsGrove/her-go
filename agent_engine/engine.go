@@ -13,6 +13,7 @@ package agent_engine
 
 import (
 	"strings"
+	"time"
 
 	"her/llm"
 	"her/logger"
@@ -172,6 +173,11 @@ type EngineConfig struct {
 
 	// -- Continuation Hooks (all nil-safe) --
 
+	// HookTimeout bounds each hook call. A hook that exceeds it is abandoned and
+	// its return value discarded, so it must comfortably cover the slowest hook
+	// (database writes under contention). 0 = defaultHookTimeout.
+	HookTimeout time.Duration
+
 	// ContinuationMsg builds the system message injected when a continuation
 	// window opens. Receives window index (1-based), max windows, and a
 	// plain-text summary of progress so far. nil = engine uses a sensible
@@ -225,6 +231,9 @@ const (
 	maxIterationsPerWindowCap  = 50
 	defaultMaxContinuations    = 2
 	maxContinuationsCap        = 10
+
+	// defaultHookTimeout bounds each hook call (see EngineConfig.HookTimeout).
+	defaultHookTimeout = 2 * time.Minute
 )
 
 // coerce returns val if it's in [1, cap], otherwise returns def.
