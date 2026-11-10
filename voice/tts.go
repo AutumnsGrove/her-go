@@ -12,7 +12,6 @@ package voice
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,15 +50,26 @@ func NewTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *TTSClient {
 		return nil
 	}
 
+	// Each constructor returns a concrete pointer type (*PiperTTSClient, ...).
+	// Assigning a nil pointer straight into the TTSEngine interface would make
+	// `engine == nil` false — an interface is a (type, value) pair, and only
+	// (nil, nil) equals nil — and the first Synthesize would dereference nil.
+	// So check the pointer before it becomes an interface.
 	var engine TTSEngine
 
 	switch cfg.Engine {
 	case config.TTSEnginePiper:
-		engine = NewPiperTTSClient(cfg)
+		if c := NewPiperTTSClient(cfg); c != nil {
+			engine = c
+		}
 	case config.TTSEngineElevenLabs:
-		engine = NewElevenLabsTTSClient(cfg)
+		if c := NewElevenLabsTTSClient(cfg); c != nil {
+			engine = c
+		}
 	case TTSEngineOpenRouter:
-		engine = NewOpenRouterTTSClient(cfg, fallbackAPIKey)
+		if c := NewOpenRouterTTSClient(cfg, fallbackAPIKey); c != nil {
+			engine = c
+		}
 	default:
 		log.Warn("Unknown TTS engine — TTS disabled", "engine", cfg.Engine)
 		return nil
@@ -96,7 +106,11 @@ func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig, f
 			ReplyMode: cfg.ReplyMode,
 			Pauses:    cfg.Pauses,
 		}
-		return NewPiperTTSClient(piperCfg)
+		// Same typed-nil guard as NewTTSClient: return a real nil interface.
+		if c := NewPiperTTSClient(piperCfg); c != nil {
+			return c
+		}
+		return nil
 	case TTSEngineOpenRouter:
 		orCfg := &config.TTSConfig{
 			BaseURL:   fb.BaseURL,
@@ -104,7 +118,10 @@ func newFallbackTTSEngine(cfg *config.TTSConfig, fb *config.TTSFallbackConfig, f
 			VoiceID:   fb.VoiceID,
 			ReplyMode: cfg.ReplyMode,
 		}
-		return NewOpenRouterTTSClient(orCfg, fallbackAPIKey)
+		if c := NewOpenRouterTTSClient(orCfg, fallbackAPIKey); c != nil {
+			return c
+		}
+		return nil
 	default:
 		log.Warn("Unknown TTS fallback engine", "engine", fb.Engine)
 		return nil
@@ -158,207 +175,11 @@ func (c *TTSClient) IsAvailable() bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// OpenRouter TTS Client (remote engine)
+// OpenRouter TTS engine (remote engine, implemented on Nova in nova.go)
 // ─────────────────────────────────────────────────────────────────────────
 
-const (
-	// TTSEngineOpenRouter is the config identifier for OpenRouter TTS.
-	TTSEngineOpenRouter = "openrouter"
-)
-
-// OpenRouterTTSClient talks to OpenRouter's TTS API for text-to-speech.
-// Uses the OpenAI-compatible /api/v1/audio/speech endpoint with cost
-// tracking via a usage block in the response headers or body.
-type OpenRouterTTSClient struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	voiceID    string
-	replyMode  string
-	httpClient *http.Client
-}
-
-// NewOpenRouterTTSClient creates a new OpenRouter TTS client from config.
-// Returns nil if required fields are missing.
-func NewOpenRouterTTSClient(cfg *config.TTSConfig, fallbackAPIKey string) *OpenRouterTTSClient {
-	baseURL := strings.TrimRight(cfg.BaseURL, "/")
-	if baseURL == "" {
-		log.Warn("TTS enabled with openrouter but tts.base_url is empty — TTS disabled")
-		return nil
-	}
-
-	apiKey := cfg.APIKey
-	if apiKey == "" {
-		apiKey = fallbackAPIKey
-	}
-	if apiKey == "" {
-		log.Warn("TTS enabled with openrouter but no api_key — TTS disabled")
-		return nil
-	}
-
-	model := cfg.Model
-	if model == "" {
-		log.Warn("TTS enabled with openrouter but model is empty — TTS disabled")
-		return nil
-	}
-
-	voiceID := cfg.VoiceID
-	if voiceID == "" {
-		log.Warn("TTS enabled with openrouter but voice_id is empty — TTS disabled")
-		return nil
-	}
-
-	replyMode := cfg.ReplyMode
-	if replyMode == "" {
-		replyMode = "voice"
-	}
-
-	log.Info("OpenRouter TTS client initialized",
-		"engine", "openrouter",
-		"base_url", baseURL,
-		"model", model,
-		"voice", voiceID,
-		"reply_mode", replyMode,
-	)
-
-	return &OpenRouterTTSClient{
-		baseURL:   baseURL,
-		apiKey:    apiKey,
-		model:     model,
-		voiceID:   voiceID,
-		replyMode: replyMode,
-		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
-		},
-	}
-}
-
-// openRouterTTSRequest is the JSON body for OpenRouter's /api/v1/audio/speech endpoint.
-// Follows the OpenAI TTS API shape.
-type openRouterTTSRequest struct {
-	Model string `json:"model"`
-	Input string `json:"input"`
-	Voice string `json:"voice"`
-}
-
-// openRouterTTSResponse is the JSON response wrapper when the API returns
-// usage info. OpenRouter can return either raw audio bytes or a JSON envelope
-// with a `data` field containing base64-encoded audio + usage metadata.
-type openRouterTTSResponse struct {
-	Data  string `json:"data,omitempty"`  // base64-encoded audio
-	Usage *struct {
-		Cost float64 `json:"cost"`
-	} `json:"usage,omitempty"`
-}
-
-// Synthesize converts text to audio bytes via OpenRouter's TTS API.
-// Returns OGG/Opus audio suitable for sending as a Telegram voice memo.
-//
-// OpenRouter's TTS API returns either:
-//   - Raw audio bytes (MP3 or PCM) with cost in a response header
-//   - JSON with base64-encoded audio + usage.cost field
-//
-// We handle both formats: check Content-Type to distinguish.
-func (c *OpenRouterTTSClient) Synthesize(text string) (SynthesizeResult, error) {
-	reqBody := openRouterTTSRequest{
-		Model: c.model,
-		Input: text,
-		Voice: c.voiceID,
-	}
-	jsonBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return SynthesizeResult{}, fmt.Errorf("marshaling TTS request: %w", err)
-	}
-
-	url := c.baseURL + "/audio/speech"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(jsonBytes))
-	if err != nil {
-		return SynthesizeResult{}, fmt.Errorf("creating TTS request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	start := time.Now()
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return SynthesizeResult{}, fmt.Errorf("TTS request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return SynthesizeResult{}, fmt.Errorf("OpenRouter TTS returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return SynthesizeResult{}, fmt.Errorf("reading TTS response: %w", err)
-	}
-	ttsElapsed := time.Since(start)
-
-	var audioBytes []byte
-	var cost float64
-
-	// Check Content-Type to determine response format.
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") {
-		// JSON envelope with base64 audio + usage.
-		var parsed openRouterTTSResponse
-		if err := json.Unmarshal(respBody, &parsed); err != nil {
-			return SynthesizeResult{}, fmt.Errorf("parsing JSON TTS response: %w", err)
-		}
-		if parsed.Data == "" {
-			return SynthesizeResult{}, fmt.Errorf("TTS response missing data field")
-		}
-		audioBytes, err = base64.StdEncoding.DecodeString(parsed.Data)
-		if err != nil {
-			return SynthesizeResult{}, fmt.Errorf("decoding base64 audio: %w", err)
-		}
-		if parsed.Usage != nil {
-			cost = parsed.Usage.Cost
-		}
-	} else {
-		// Raw audio bytes (MP3 or PCM).
-		audioBytes = respBody
-		// Cost might be in a header like X-OpenRouter-Cost (check docs).
-		// For now, we'll leave it at 0 unless we find the header.
-		if costHeader := resp.Header.Get("X-OpenRouter-Cost"); costHeader != "" {
-			fmt.Sscanf(costHeader, "%f", &cost)
-		}
-	}
-
-	// Convert to OGG/Opus for Telegram. ffmpeg auto-detects MP3/PCM input.
-	oggBytes, err := convertToOpusOGG(audioBytes)
-	if err != nil {
-		return SynthesizeResult{}, err
-	}
-
-	log.Info("TTS synthesis complete",
-		"engine", "openrouter",
-		"model", c.model,
-		"tts_duration", ttsElapsed.Round(time.Millisecond),
-		"total_duration", time.Since(start).Round(time.Millisecond),
-		"text_len", len(text),
-		"audio_bytes", len(audioBytes),
-		"ogg_bytes", len(oggBytes),
-		"cost", fmt.Sprintf("$%.6f", cost),
-	)
-
-	return SynthesizeResult{Audio: oggBytes, Cost: cost}, nil
-}
-
-// ReplyMode returns whether the bot should always reply with voice
-// ("voice") or only when the user sends a voice memo ("match").
-func (c *OpenRouterTTSClient) ReplyMode() string {
-	return c.replyMode
-}
-
-// IsAvailable always returns true for the remote OpenRouter engine — there's
-// no local process to health-check. Any failure surfaces on the first
-// Synthesize call instead (mirrors ElevenLabs and remote STT behavior).
-func (c *OpenRouterTTSClient) IsAvailable() bool {
-	return true
-}
+// TTSEngineOpenRouter is the config identifier for OpenRouter TTS.
+const TTSEngineOpenRouter = "openrouter"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Piper TTS Client (local engine)

@@ -60,7 +60,8 @@ until the Nova path has soaked in production. Deleting it is the follow-up once 
 | `PostToolResult`, `PostTool`, traces, TUI events | `Hooks.ToolResult` | |
 | `ToolCtx.DoneCalled` | `Hooks.TurnEnd` → `End` | |
 | `OnLoopStart` / `OnLoopExit` | around `Run` | |
-| `SaveMetric` per LLM call | `llm.Client.ResponseHook` | Nova reports per-run usage only |
+| `SaveMetric` per LLM call | `llm.Client.WithResponseHook` | per-run wrapper, not a client field; Nova reports per-run usage only |
+| `OnError` | after `Run`, when the provider failed | the cause is also logged |
 | `tool.yaml` manifests | `tools.NovaTools` | schema bytes unchanged (prompt cache) |
 
 ## Things that are deliberately different

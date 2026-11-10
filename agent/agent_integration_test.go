@@ -21,7 +21,6 @@ package agent
 // vault.Entries() on the receiver, so we always pass scrub.NewVault().
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,36 +30,10 @@ import (
 
 	"her/config"
 	"her/llm"
+	"her/llm/llmtest"
 	"her/memory"
 	"her/scrub"
 )
-
-// mockChatResponse builds the JSON body the chat mock server sends back.
-// Unlike mockToolCallResponse (which makes the model call a tool), this
-// is a regular assistant message — the format ChatCompletion expects.
-//
-// content must be at least 10 characters to pass the isDegenerate check
-// in execReply. Anything shorter causes a retry (and a second mock call).
-func mockChatResponse(content string) map[string]any {
-	return map[string]any{
-		"choices": []map[string]any{
-			{
-				"message": map[string]any{
-					"content": content,
-					"role":    "assistant",
-				},
-				"finish_reason": "stop",
-			},
-		},
-		"usage": map[string]any{
-			"prompt_tokens":     10,
-			"completion_tokens": 5,
-			"total_tokens":      15,
-			"cost":              0.0001,
-		},
-		"model": "test-model",
-	}
-}
 
 // minimalCfg returns the minimum Config needed for agent.Run() to proceed
 // without panicking. Memory fields are set to typical values to avoid
@@ -69,8 +42,8 @@ func minimalCfg() *config.Config {
 	return &config.Config{
 		Identity: config.IdentityConfig{Her: "Mira", User: "Autumn"},
 		Memory: config.MemoryConfig{
-			RecentMessages:   6,
-			MaxHistoryTokens: 8000,
+			RecentMessages:    6,
+			MaxHistoryTokens:  8000,
 			MaxFactsInContext: 5,
 		},
 	}
@@ -128,8 +101,7 @@ func TestRun_BasicTurn(t *testing.T) {
 	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockChatResponse("Hey, good to hear from you! How are things going?"))
+		llmtest.WriteTextCompletion(w, "Hey, good to hear from you! How are things going?")
 	}))
 	defer chatSrv.Close()
 
@@ -178,8 +150,7 @@ func TestRun_ToolFailureTurn(t *testing.T) {
 	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockChatResponse("Here is my response to you!"))
+		llmtest.WriteTextCompletion(w, "Here is my response to you!")
 	}))
 	defer chatSrv.Close()
 
@@ -223,8 +194,7 @@ func TestRun_ContinuationTurn(t *testing.T) {
 	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockChatResponse("Okay, I worked through all the steps. Here's what I found!"))
+		llmtest.WriteTextCompletion(w, "Okay, I worked through all the steps. Here's what I found!")
 	}))
 	defer chatSrv.Close()
 
@@ -272,8 +242,7 @@ func TestRun_DeferredSearchLoad(t *testing.T) {
 	defer driverSrv.Close()
 
 	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockChatResponse("I searched but didn't find specific results for that."))
+		llmtest.WriteTextCompletion(w, "I searched but didn't find specific results for that.")
 	}))
 	defer chatSrv.Close()
 

@@ -6,7 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/AutumnsGrove/nova v0.3.5
+	github.com/AutumnsGrove/nova v0.4.0
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/log v1.0.0

@@ -301,3 +301,63 @@ There is no `.github/` directory in her-go, so no CI or Pi-review workflow runs 
 poll; the evidence is in the PR body and in this log instead. If a review does arrive later, §10.4 of the plan
 still applies: verify each comment against the code, fix real issues with small commits plus a test, reply with
 what changed, and never cancel or re-run a review to make it go away.
+
+## Voice: issue #104 (Nova v0.4.0's speaking module)
+
+Separate branch (`feat/nova-voice`), because it stacks on the migration PR rather than growing it.
+
+- **Nova bumped to v0.4.0.** The upgrade notes are additive for her-go's current use (agent/tool gain
+  optional `Speak`/`Transcribe`, `agent/sub` now passes a parent's `Embed`/`Decide`, the protocol line cap
+  rises to 64 MiB). Build, vet and the full test suite stayed green with no code change — that alone was worth
+  checking before touching voice.
+- **The OpenRouter half moved onto Nova** (`voice/nova.go`, −254 lines from `tts.go`/`stt.go`):
+  - TTS: `NovaTTSClient` implements the existing `TTSEngine`, so `TTSClient`, `FallbackTTSClient` and every
+    bot call site are untouched. Nova returns the clip as the provider made it; `convertToOpusOGG` stays
+    because Telegram needs Opus.
+  - STT: the OpenRouter path is Nova's `Transcriber`; the hand-rolled base64-JSON shape is gone. Routing is
+    still by base URL — a self-hosted Whisper server expects a `file` part, not OpenRouter's
+    `clip.<format>`, and that distinction is exactly what nova#86 will remove.
+- **Piper, ElevenLabs and cross-engine fallback stay.** Nova v0.4.0 has no local adapter (nova#86), and
+  cross-vendor failover cannot be expressed as a Nova role fallback anyway. Per-engine, reversible.
+- **Live round trip through her-go's own code** (not a probe): config → `NewTTSClient` → `Synthesize` →
+  `Transcribe`. `"Reminder set for seven in the morning."` came back as
+  `"Reminder set for seven in the morning."` — 40 KB mp3 → 22.5 KB Opus in 1.19s, transcription in 486 ms at
+  `$0.00004138`.
+- **One claim from the issue did not hold, and the docs say so:** `CostLookup` cannot resolve speech cost.
+  OpenRouter's `/generation` returns an all-null record for `gen-tts-*` ids (checked by hand with curl), so
+  TTS still records `$0` — transcription does report inline cost. Filed as
+  [nova#91](https://github.com/AutumnsGrove/nova/issues/91), with the catalog-price fallback suggested.
+- **Issues filed:** [nova#91](https://github.com/AutumnsGrove/nova/issues/91) (speech cost), a
+  [field-notes comment on nova#86](https://github.com/AutumnsGrove/nova/issues/86#issuecomment-6778794195)
+  rather than a duplicate local-engine issue, and [her-go#105](https://github.com/AutumnsGrove/her-go/issues/105)
+  — "move Piper and the parakeet sidecar onto Nova once nova#86 lands", which is where `TTSEngine` finally
+  disappears.
+
+## Branch review follow-ups
+
+A read-through of the whole branch found seven things worth fixing; each has a test that failed first.
+
+- **Metrics hook was shared state.** `RunLoop` set `ResponseHook` on the shared `*llm.Client` and restored it
+  with a `defer`. The memory, mood and introspection agents overlap on one client, so concurrent runs
+  overwrote each other (race detector confirmed it; lost and misattributed metric rows). The hook now rides
+  on a per-run wrapper, `Client.WithResponseHook`, and the client field is gone.
+- **Provider failures were silent.** `runNova` threw away the error from `Run`, and `OnError` was never
+  called. It now logs the cause and calls `OnError`; the return contract (nil error + `ExitError`) is
+  unchanged.
+- **Nova was the default only in the example config.** The code still defaulted to legacy, so an existing
+  `config.yaml` ran a mixed setup nobody had tested. Absent/empty/typo now means Nova; only `legacy` opts out.
+  Sixteen tests in `agent`, `classifier` and `mood` had been covering legacy through that default — they now
+  mock the streamed format via `llm/llmtest`.
+- **TTS factory typed-nil.** A misconfigured engine came back as a non-nil interface holding a nil pointer
+  (Piper and ElevenLabs too, before this branch) and would panic on first use.
+- **`her reembed`** dropped the index before checking the provider and exited 0 on failure; "resumable" was not
+  true. It now probes first, skips current rows, takes `--force`, exits non-zero on failure, and no longer
+  stamps `updated_at` on mood rows.
+- **Smaller:** each Nova streaming attempt gets its own 3-minute ceiling; a fallback answer is cut to one tool
+  call; no fallback after text was already streamed (it would replay the reply); `HookTimeout` is 2 minutes
+  because Nova abandons a hook at 5s and drops its return value; STT retry reads Nova's typed error; the
+  OpenRouter Referer/Title live in `config`.
+- **Decided:** `tts.cost_lookup` now defaults **off**. The review left it as an open question, and nova#91
+  answers it — OpenRouter returns no cost for a speech generation id, so the lookup is a paid request that
+  resolves nothing. One config line turns it back on if that changes; a test pins the default.
+

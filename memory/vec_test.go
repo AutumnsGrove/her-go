@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -301,4 +302,130 @@ func fakeVec(dims int) []float32 {
 		vec[i] = 0.5
 	}
 	return vec
+}
+
+// countingEmbedder wraps fakeEmbedder and counts calls, so a test can assert how
+// much (paid) embedding work a run actually did.
+func countingEmbedder(dims int, calls *int) Embedder {
+	inner := fakeEmbedder(dims)
+	return embedderFunc(func(text string) ([]float32, error) {
+		*calls++
+		return inner.Embed(text)
+	})
+}
+
+// With SkipCurrent, a re-run only pays for rows that still hold vectors from
+// the old model. This is what makes `her reembed` resumable after a crash: rows
+// finished by the first run are recognised and left alone.
+func TestReembedAll_SkipCurrentResumesWhereItStopped(t *testing.T) {
+	store, _ := vecTestStore(t, 1024)
+	vec := fakeVec(1024)
+
+	// One row already current (1024-dim vectors, mirrored), one with no vectors
+	// at all (what a row from the old model looks like to this check).
+	if _, err := store.SaveMemory("already current", "fact", "user", 0, 3, vec, vec, "tags", "", 0, "", ""); err != nil {
+		t.Fatalf("SaveMemory current: %v", err)
+	}
+	if _, err := store.SaveMemory("still stale", "fact", "user", 0, 3, nil, nil, "tags", "", 0, "", ""); err != nil {
+		t.Fatalf("SaveMemory stale: %v", err)
+	}
+
+	calls := 0
+	stats, err := store.ReembedAll(countingEmbedder(1024, &calls), ReembedOptions{SkipMoods: true, SkipCurrent: true})
+	if err != nil {
+		t.Fatalf("ReembedAll: %v", err)
+	}
+	if stats.Memories != 1 || stats.Skipped != 1 {
+		t.Errorf("memories=%d skipped=%d, want 1 re-embedded and 1 skipped", stats.Memories, stats.Skipped)
+	}
+	if calls != 2 { // two vectors (tags + text) for the one stale row, none for the current one
+		t.Errorf("embedder called %d times, want 2", calls)
+	}
+
+	// Second pass: everything is current now, so no embedding work at all.
+	calls = 0
+	stats, err = store.ReembedAll(countingEmbedder(1024, &calls), ReembedOptions{SkipMoods: true, SkipCurrent: true})
+	if err != nil {
+		t.Fatalf("second ReembedAll: %v", err)
+	}
+	if calls != 0 || stats.Skipped != 2 {
+		t.Errorf("second run: calls=%d skipped=%d, want 0 calls and 2 skipped", calls, stats.Skipped)
+	}
+}
+
+// A row whose BLOB cache is current but whose vec_memories mirror row is missing
+// (a crash between the two writes) must not be skipped: it would never show up
+// in KNN search.
+func TestReembedAll_SkipCurrentRepairsMissingMirror(t *testing.T) {
+	store, _ := vecTestStore(t, 1024)
+	vec := fakeVec(1024)
+	id, err := store.SaveMemory("mirror went missing", "fact", "user", 0, 3, vec, vec, "tags", "", 0, "", "")
+	if err != nil {
+		t.Fatalf("SaveMemory: %v", err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM vec_memories WHERE rowid = ?`, id); err != nil {
+		t.Fatalf("deleting mirror row: %v", err)
+	}
+
+	calls := 0
+	stats, err := store.ReembedAll(countingEmbedder(1024, &calls), ReembedOptions{SkipMoods: true, SkipCurrent: true})
+	if err != nil {
+		t.Fatalf("ReembedAll: %v", err)
+	}
+	if stats.Memories != 1 || stats.Skipped != 0 {
+		t.Errorf("memories=%d skipped=%d, want the row repaired, not skipped", stats.Memories, stats.Skipped)
+	}
+	hits, err := store.SemanticSearch(vec, 5)
+	if err != nil || len(hits) == 0 {
+		t.Fatalf("row is not searchable after repair: hits=%d err=%v", len(hits), err)
+	}
+}
+
+// Re-embedding is bookkeeping, not an edit: it must not stamp updated_at, which
+// consumers read as "this mood entry was refined".
+func TestReembedAll_LeavesMoodUpdatedAtAlone(t *testing.T) {
+	store, _ := vecTestStore(t, 1024)
+	id, err := store.SaveMoodEntry(&MoodEntry{
+		Valence: 5, Labels: []string{"calm"}, Note: "settled evening",
+		Confidence: 0.9, Embedding: fakeVec(1024),
+	})
+	if err != nil {
+		t.Fatalf("SaveMoodEntry: %v", err)
+	}
+	var before sql.NullString
+	if err := store.db.QueryRow(`SELECT updated_at FROM mood_entries WHERE id = ?`, id).Scan(&before); err != nil {
+		t.Fatalf("reading updated_at: %v", err)
+	}
+
+	stats, err := store.ReembedAll(fakeEmbedder(1024), ReembedOptions{})
+	if err != nil {
+		t.Fatalf("ReembedAll: %v", err)
+	}
+	if stats.Moods != 1 {
+		t.Fatalf("Moods = %d, want 1", stats.Moods)
+	}
+
+	var after sql.NullString
+	if err := store.db.QueryRow(`SELECT updated_at FROM mood_entries WHERE id = ?`, id).Scan(&after); err != nil {
+		t.Fatalf("reading updated_at: %v", err)
+	}
+	if before != after {
+		t.Errorf("updated_at changed from %v to %v; a re-embed must not mark the entry as refined", before, after)
+	}
+}
+
+// A mood entry with no text has nothing to embed. That is not a provider
+// failure, so it must not be counted as one (the CLI exits non-zero on Failed).
+func TestReembedAll_EmptyMoodNoteIsSkippedNotFailed(t *testing.T) {
+	store, _ := vecTestStore(t, 1024)
+	if _, err := store.SaveMoodEntry(&MoodEntry{Valence: 4, Labels: nil, Note: "", Confidence: 0.5}); err != nil {
+		t.Fatalf("SaveMoodEntry: %v", err)
+	}
+	stats, err := store.ReembedAll(fakeEmbedder(1024), ReembedOptions{})
+	if err != nil {
+		t.Fatalf("ReembedAll: %v", err)
+	}
+	if stats.Failed != 0 || stats.Skipped != 1 {
+		t.Errorf("failed=%d skipped=%d, want 0 failed and 1 skipped", stats.Failed, stats.Skipped)
+	}
 }

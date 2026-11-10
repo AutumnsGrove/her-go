@@ -17,6 +17,7 @@ import (
 
 	"github.com/AutumnsGrove/nova/provider"
 
+	"her/config"
 	"her/logger"
 )
 
@@ -28,6 +29,12 @@ var log = logger.WithPrefix("llm")
 // logs the entire messages array and response details to the file logger.
 // This is verbose but essential for debugging prompt issues.
 var debugMode bool
+
+// streamTimeout is the ceiling on one streaming provider call. The regular
+// httpClient.Timeout (60s unless configured) is too short for long streams, so
+// streaming requests carry their own context deadline instead. One constant so
+// the legacy and Nova transports cannot drift apart.
+const streamTimeout = 3 * time.Minute
 
 // SetDebugMode enables or disables full API request/response logging.
 // Called from cmd/run.go based on the config.Debug setting.
@@ -66,11 +73,6 @@ type Client struct {
 	// same session_id are pinned to the same provider endpoint, maximizing
 	// prompt cache hits across a conversation. Max 256 chars.
 	sessionID string
-
-	// ResponseHook, when set, receives one ResponseInfo per completed provider
-	// request. The agent-loop seam installs it to record per-call metrics, which
-	// Nova's loop does not report itself. Nil-safe; set and cleared around a run.
-	ResponseHook func(ResponseInfo)
 
 	// Nova transport, built on first use and only when llm.backend is "nova".
 	// See nova.go: the two backends answer the same three methods, which is what
@@ -635,8 +637,8 @@ func (c *Client) doRequest(model string, temperature float64, maxTokens int, mes
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	// Opt in to OpenRouter routing metadata — gives us the provider name.
 	req.Header.Set("X-OpenRouter-Metadata", "enabled")
 
@@ -758,7 +760,7 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	// httpClient.Timeout (60s) is too short for long streaming responses
 	// but too coarse to catch stuck connections. This context guarantees
 	// we never block longer than 3 minutes on a single streaming call.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), streamTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(jsonData))
@@ -767,8 +769,8 @@ func (c *Client) doStreamRequest(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)
@@ -969,8 +971,8 @@ func (c *Client) doStreamingChat(model string, temperature float64, maxTokens in
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("HTTP-Referer", "https://github.com/AutumnsGrove/her-go")
-	req.Header.Set("X-Title", "her-go")
+	req.Header.Set("HTTP-Referer", config.OpenRouterReferer)
+	req.Header.Set("X-Title", config.OpenRouterTitle)
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.httpClient.Do(req)

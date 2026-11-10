@@ -94,7 +94,7 @@ Mira uses a mix of agents (autonomous LLM loops with their own decision-making) 
 | vision | tool LLM | DeepSeek V4.1 Flash 1017 (`deepseek/deepseek-v4.1-flash-1017`) | OpenRouter → DeepInfra/Morph | called by driver via `view_image` |
 | embeddings | remote | Perplexity pplx-embed (`perplexity/pplx-embed-v1-0.6b`, 1024-dim) | OpenRouter | semantic dedup for memories + moods |
 | STT | local | Parakeet | Local | voice memo → text |
-| TTS | local | Piper | Local | text → voice reply |
+| TTS | local | Piper (or OpenRouter / ElevenLabs, config) | Local by default | text → voice reply |
 
 Each agent registers itself with the **trace inbox** (`trace/`) at init time — adding a new agent is one `trace.Register(...)` call from its package.
 
@@ -253,7 +253,7 @@ voice:
 
 ### Text-to-Speech (TTS)
 
-Mira uses **Piper** for TTS — a fast, privacy-first local engine with natural-sounding voices.
+Mira uses **Piper** by default for TTS — a fast, privacy-first local engine with natural-sounding voices. Two remote engines are also supported (OpenRouter and ElevenLabs) and both speak through the same `TTSEngine` interface, so you can switch engines, or fail over between them, with config alone. The OpenRouter engine runs on [Nova's voice module](docs/NOVA-BRIDGE.md); Piper stays local until Nova can drive it (nova#86).
 
 **Setup:**
 

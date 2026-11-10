@@ -35,17 +35,27 @@ local 768-dimension model to a 1024-dimension remote one). The store refuses to
 open with a mismatched index, so this is the documented fix.
 
 Existing memories and mood entries are the source of truth; their text is
-re-embedded, not regenerated. Safe to re-run, and it resumes where it stopped if
-interrupted.
+re-embedded, not regenerated. Before anything is dropped it makes one test
+embedding, so a bad key, an outage, or an embed.dimension that does not match
+the model stops the run with the old index intact.
+
+Safe to re-run: rows that already hold vectors at the configured dimension are
+skipped, so an interrupted run resumes instead of paying again. Use --force to
+recompute every row regardless — needed when the model changed but the
+dimension did not.
+
+Exits non-zero if any row failed to embed, so a script or deploy notices.
 
 Examples:
   her reembed --dry-run   # count rows and estimate the cost, change nothing
-  her reembed             # rebuild the index and re-embed everything`,
+  her reembed             # rebuild the index if needed and re-embed what is stale
+  her reembed --force     # rebuild and recompute every row`,
 	RunE: runReembed,
 }
 
 func init() {
 	reembedCmd.Flags().Bool("dry-run", false, "report row counts and estimated cost without changing anything")
+	reembedCmd.Flags().Bool("force", false, "recompute every row even if it already has vectors at the configured dimension")
 	rootCmd.AddCommand(reembedCmd)
 }
 
@@ -53,6 +63,11 @@ func runReembed(cmd *cobra.Command, args []string) error {
 	dryRun, err := cmd.Flags().GetBool("dry-run")
 	if err != nil {
 		return fmt.Errorf("reading --dry-run: %w", err)
+	}
+
+	force, err := cmd.Flags().GetBool("force")
+	if err != nil {
+		return fmt.Errorf("reading --force: %w", err)
 	}
 
 	cfg, err := config.Load(cfgFile)
@@ -110,18 +125,41 @@ func runReembed(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := store.RebuildVecIndex(); err != nil {
-		return fmt.Errorf("rebuilding vector index: %w", err)
+	// Probe before touching anything. The index is dropped before re-embedding,
+	// so a provider that is down (or a dimension that does not match the model)
+	// would otherwise leave an empty index and exit "successfully".
+	if err := probeEmbedder(embedClient, cfg.Embed.Dimension); err != nil {
+		return fmt.Errorf("%w — nothing was changed", err)
 	}
-	fmt.Printf("Vector index rebuilt at %d dimensions.\n\n", cfg.Embed.Dimension)
+
+	// Rebuild only when the on-disk tables are the wrong width, or when asked to.
+	// A re-run after an interruption finds the tables already right and must not
+	// drop the rows the first run finished.
+	needRebuild := force
+	if existing, err := store.VecIndexDimensions(); err == nil {
+		for _, dim := range existing {
+			if dim != 0 && dim != cfg.Embed.Dimension {
+				needRebuild = true
+			}
+		}
+	}
+	if needRebuild {
+		if err := store.RebuildVecIndex(); err != nil {
+			return fmt.Errorf("rebuilding vector index: %w", err)
+		}
+		fmt.Printf("Vector index rebuilt at %d dimensions.\n\n", cfg.Embed.Dimension)
+	} else {
+		fmt.Printf("Vector index already at %d dimensions; keeping it and skipping finished rows.\n\n", cfg.Embed.Dimension)
+	}
 
 	// Progress goes to stderr so a caller can pipe the summary on stdout.
 	next := 0
 	stats, err := store.ReembedAll(embedClient, memory.ReembedOptions{
+		SkipCurrent: !force,
 		Progress: func(string) {
 			next++
 			if next%25 == 0 {
-				fmt.Fprintf(os.Stderr, "  ... %d/%d memories\n", next, len(memories))
+				fmt.Fprintf(os.Stderr, "  ... %d re-embedded\n", next)
 			}
 		},
 	})
@@ -132,8 +170,28 @@ func runReembed(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nDone.\n")
 	fmt.Printf("  memories re-embedded: %d/%d\n", stats.Memories, stats.TotalMemories)
 	fmt.Printf("  moods re-embedded:    %d/%d\n", stats.Moods, stats.TotalMoods)
+	if stats.Skipped > 0 {
+		fmt.Printf("  left alone:           %d (already current, or nothing to embed)\n", stats.Skipped)
+	}
 	if stats.Failed > 0 {
-		fmt.Printf("  skipped (errors):     %d — re-run to retry\n", stats.Failed)
+		// A non-nil error becomes a non-zero exit status, which is how a script
+		// or deploy step learns the run was incomplete.
+		return fmt.Errorf("%d rows failed to embed; re-run `her reembed` to retry just those", stats.Failed)
+	}
+	return nil
+}
+
+// probeEmbedder makes one real embedding call and checks the width of the
+// answer. It is the guard that lets `her reembed` fail before it drops anything:
+// it catches a wrong key, a provider outage, a wrong base URL, and an
+// embed.dimension that disagrees with the model's actual output.
+func probeEmbedder(e memory.Embedder, dimension int) error {
+	vec, err := e.Embed("dimension probe")
+	if err != nil {
+		return fmt.Errorf("embedding provider check failed: %w", err)
+	}
+	if len(vec) != dimension {
+		return fmt.Errorf("the embedding model returned %d dimensions but embed.dimension is %d; fix embed.dimension in config.yaml", len(vec), dimension)
 	}
 	return nil
 }

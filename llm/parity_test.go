@@ -27,8 +27,9 @@ func forEachBackend(t *testing.T, run func(t *testing.T)) {
 	t.Helper()
 	for _, name := range []string{BackendLegacy, BackendNova} {
 		t.Run(name, func(t *testing.T) {
+			previous := ActiveBackend()
 			SetBackend(name)
-			t.Cleanup(func() { SetBackend(BackendLegacy) })
+			t.Cleanup(func() { SetBackend(previous) })
 			run(t)
 		})
 	}
