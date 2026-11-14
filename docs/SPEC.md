@@ -116,14 +116,12 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                    her-go binary (Go)                      │  │
 │  │                                                           │  │
-│  │  Agent loop (Kimi K2.5)  ←→  Skills harness (4-tier)     │  │
-│  │  Chat model (DSv3.2)     ←→  Memory (SQLite + KNN)       │  │
-│  │  Vision (Gemini Flash)   ←→  PII scrubber (3-tier)       │  │
-│  │  Classifier (Haiku)      ←→  Scheduler (local cron)      │  │
-│  │  STT (Parakeet, local)   ←→  Persona evolution            │  │
-│  │  TTS (Piper, local)      ←→  Telegram WebApp server       │  │
-│  │  Embeddings (nomic, local)                                │  │
-│  │  OCR (Vision OCR, local)                                  │  │
+│  │  Driver (DeepSeek V4.1 Flash) ←→ Memory (SQLite+vec)      │  │
+│  │  Chat model (MiMo v2.6 Pro)   ←→ PII scrubber (3-tier)    │  │
+│  │  Classifier (Gemini Lite)     ←→ Scheduler (local cron)   │  │
+│  │  Vision (DeepSeek V4.1 Flash) ←→ Persona evolution        │  │
+│  │  STT (Parakeet, local)        ←→ TTS (Piper / Nova)       │  │
+│  │  Embeddings (pplx-embed)      ←→ Dream cycle + traces     │  │
 │  └────────────────────────────────┬──────────────────────────┘  │
 │                                   │                             │
 │                                   ▼                             │
@@ -180,12 +178,14 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 
 ### Milestones — In Progress / Future
 
-- **[v0.6 — She Reaches Out](docs/spec/v0.6.md)** — Scheduler phase 2 (mostly done), weather (done), mood tracking (done), Todoist (done), GitHub (done), morning briefing (done). Remaining: proactive follow-ups
-- **[v0.7 — She Adapts](docs/spec/v0.7.md)** — Model fallbacks (done), cloud sync via D1
-- **[v0.8 — She Has a Face](docs/spec/v0.8.md)** — Telegram Mini Apps infrastructure
-- **[v0.9 — She Collects](docs/spec/v0.9.md)** — Link saving, Mini Shutter, reader view, book highlights. OCR already implemented
-- **[v1.0 — She Helps](docs/spec/v1.0.md)** — Receipt scanner (done), grocery list, job tracker, auto-journaling, code sandbox
-- **[v1.1 — She Reads Your World](docs/spec/v1.1.md)** — Obsidian vault integration, IMAP email, local Wikipedia
+> **Status note (2026-11):** the roadmap below is aspirational. Several items were closed as not-pursued during an issue sweep (#16 Mini Apps, #25 code sandbox, #30 Kiwix, #31 HealthKit, #65 Apple Reminders), and the Todoist/GitHub integrations were removed rather than shipped. Treat "done" claims in the v0.6+ files with suspicion; the linked issue tracker is the real source of truth.
+
+- **[v0.6 — She Reaches Out](docs/spec/v0.6.md)** — Scheduler phase 2 ✅, weather ✅, mood tracking ✅ (redesigned, see `plans/PLAN-mood-tracking-redesign.md`), morning briefing → **superseded by scheduled worker briefings**. Todoist / GitHub issues: **removed**, not shipped
+- **[v0.7 — She Adapts](docs/spec/v0.7.md)** — Model fallbacks ✅, cloud sync via D1 ✅
+- **[v0.8 — She Has a Face](docs/spec/v0.8.md)** — Telegram Mini Apps: **not pursued**. The browser UI shipped as `gateway/chat.html` instead
+- **[v0.9 — She Collects](docs/spec/v0.9.md)** — Link saving, Mini Shutter, reader view, highlights: **not pursued**
+- **[v1.0 — She Helps](docs/spec/v1.0.md)** — Receipt scanning / expenses ✅. Grocery list ✅. Auto-journaling and code sandbox: **not pursued**
+- **[v1.1 — She Reads Your World](docs/spec/v1.1.md)** — Obsidian vault, IMAP email (Gmail bridge shipped instead), local Wikipedia: **not pursued**
 
 ### Architecture Vision
 
@@ -197,103 +197,53 @@ A privacy-first personal companion chatbot built in Go. Communicates via Telegra
 
 ```
 her-go/
-├── main.go              # Entry point: init config, DB, start bot + scheduler
-├── bot/
-│   └── telegram.go      # Telegram bot setup, message handlers, commands
-├── llm/
-│   └── client.go        # OpenRouter / OpenAI-compatible client
-├── agent/
-│   ├── agent.go         # Agent loop, tool dispatch, reply generation
-│   └── tools.go         # Tool definitions for the agent
-├── memory/
-│   ├── store.go         # SQLite operations (read/write messages, facts, summaries)
-│   ├── extract.go       # LLM-based fact extraction
-│   └── context.go       # Builds memory context string for prompt injection
-├── persona/
-│   ├── evolution.go     # Reflection + persona rewrite logic
-│   └── traits.go        # Trait score tracking + updates
-├── compact/
-│   └── compact.go       # Conversation history compaction (summary + sliding window)
-├── scrub/
-│   ├── scrub.go         # Tiered PII detection + redaction/tokenization
-│   └── vault.go         # Session-scoped token↔original mapping for deanonymization
-├── search/
-│   ├── tavily.go        # Tavily web search + URL extraction client
-│   └── books.go         # Open Library book search
-├── embed/
-│   └── embed.go         # Local embedding model client for semantic similarity
-├── logger/
-│   └── logger.go        # Shared charmbracelet/log base logger
-├── scheduler/
-│   ├── scheduler.go     # Task runner loop (tick every minute, execute due tasks)
-│   ├── tasks.go         # Built-in task type executors (send_message, run_prompt, etc.)
-│   └── cron.go          # Cron expression parsing + next_run computation (wraps robfig/cron)
-├── config/
-│   └── config.go        # Config loading (YAML + env vars)
-├── cmd/
-│   ├── root.go          # Cobra CLI root command
-│   ├── run.go           # Bot startup (her run)
-│   ├── setup.go         # Launchd service installation (her setup)
-│   ├── start.go         # Service start (her start)
-│   ├── stop.go          # Service stop (her stop)
-│   ├── status.go        # Service status (her status)
-│   ├── logs.go          # Tail service logs (her logs)
-│   └── install.go       # Build from source (her install)
-├── vision/              # (v0.2.5+) Image understanding via VLM
-│   └── vision.go       # Gemini Flash client, base64 encoding, description extraction
-├── ocr/                 # (v0.9+) Text extraction from photos
-│   └── ocr.go          # Apple Vision CLI (primary) + GLM-OCR via LM Studio (fallback)
-├── voice/               # (v0.3+)
-│   ├── stt.go           # Speech-to-text: Parakeet / CF Workers AI
-│   └── tts.go           # Text-to-speech: Kokoro local TTS (v0.5+)
-├── integrate/           # (v0.6+) External service integrations
-│   ├── todoist.go       # Todoist task management
-│   ├── github.go        # GitHub issues
-│   ├── weather.go       # Weather via Open-Meteo (no API key needed)
-│   ├── obsidian.go      # Obsidian vault reader
-│   └── health.go        # Apple HealthKit bridge (calls her-health Swift CLI)
-├── mood/                # (v0.6+) Mood tracking + check-in scheduler
-│   └── mood.go          # Check-in logic, inline keyboards, mood storage
-├── sync/                # (v0.7+) D1 cloud sync
-│   ├── push.go          # Local → D1 sync
-│   ├── pull.go          # D1 → local sync
-│   └── merge.go         # Smart merge with embedding-based dedup
-├── webapp/              # (v0.8+) Telegram Mini Apps server
-│   ├── server.go        # HTTP server, routes, initData HMAC validation
-│   ├── templates/       # Go html/template files
-│   ├── static/          # CSS + JS
-│   └── handlers/        # Per-feature HTTP handlers
-├── shutter/             # (v0.9+) Mini Shutter content distillation
-│   └── shutter.go       # URL fetch + goquery extraction + LLM summarization
-├── links/               # (v0.9+) Link collection, highlights, reader
-│   ├── links.go         # CRUD, tagging, search, serendipity
-│   ├── highlights.go    # Highlight storage, text anchors, photo highlights
-│   └── import.go        # Raindrop CSV import
-├── tools/               # (v1.0+) Daily life tools
-│   ├── expenses.go      # Receipt scanning + expense tracking
-│   ├── grocery.go       # Grocery list management
-│   ├── jobs.go          # Job application tracker
-│   ├── journal.go       # Auto-journaling (end-of-day narratives)
-│   ├── sandbox.go       # Local code execution sandbox
-│   └── transit.go       # Transit / directions lookup
-├── index/               # (v1.1+) External data source indexing
-│   ├── obsidian.go      # Obsidian vault watcher + FTS indexer
-│   ├── email.go         # IMAP sync + email search
-│   └── kiwix.go         # Kiwix local Wikipedia client
-├── her-health/          # (future) Swift CLI for optional HealthKit bridge
-│   ├── main.swift       # Read/write Apple Health data as JSON
-│   └── Makefile         # Build the Swift binary
-├── thumbnails/          # (v0.9+, gitignored) Cached link thumbnails
+├── main.go              # Entry point → cobra root
+├── cmd/                 # CLI: run, setup, start/stop/status, sim, sync, reembed, logs, tunnel, …
+├── gateway/             # Pipeline + Telegram/Gradio adapters (SSE web UI, sim adapter)
+├── bot/                 # Telegram handler, frontends, per-turn orchestration (run_agent.go)
+├── agent/               # Driver, memory, mood, introspection, persona, dream agents
+├── agent_engine/        # Bridge onto Nova's agent loop (her-go keeps the contracts)
+├── llm/                 # OpenRouter client on Nova's provider layer (fallback, cost)
+├── layers/              # Prompt layer registry (facts, persona, time, weather, …)
+├── memory/              # SQLite store, SyncedStore (D1), cards, context assembly, vec index
+├── mood/                # Mood agent, vocab loader, daily rollup, graphs
+├── persona/             # Reflections, persona evolution, traits, dream cycle
+├── classifier/          # Memory + reply classifiers (classifiers.yaml)
+├── compact/             # Conversation + agent-history compaction
+├── scrub/               # Tiered PII detection + deanonymization
+├── embed/               # Embedding client (OpenRouter pplx-embed)
+├── search/              # Web search (Tavily / SearXNG) + Open Library
+├── integrate/           # Geocoding (Nominatim), Foursquare places, timezone
+├── calendar/            # Apple EventKit bridge (Swift CLI + Bridge/CLIBridge/FakeBridge)
+├── gmail/               # Gmail bridge (API client + FakeBridge) and MIME parsing
+├── weather/             # Current conditions via Open-Meteo (no API key)
+├── vision/              # Image understanding via VLM
+├── voice/               # STT (Parakeet) + TTS (Piper / ElevenLabs / OpenRouter via Nova)
+├── scheduler/           # Extension-based cron system (registry, runner, retry policy)
+├── tools/               # Tool YAML manifests + handlers (per-tool dirs, agent routing)
+├── trace/               # Trace streams + board (agents share one Telegram message)
+├── turn/                # Turn phase tracking + per-turn cost/metrics
+├── tui/                 # Event bus + terminal UI
+├── workeragent/         # Background research/report worker (Telegraph publishing)
+├── telegraph/           # Telegraph API client
+├── d1/                  # Cloudflare D1 HTTP client (outbox + sync)
+├── procmgr/             # Process supervision (start/stop/status)
+├── calendar/bridge/     # Swift package: her-calendar EventKit CLI
+├── sims/                # Simulation suites (YAML scenarios)
+├── scripts/             # Piper TTS server and helpers
+├── web/                 # Svelte chat scaffold — not wired into the Go server
+├── docs/                # Architecture, specs, plans
 ├── prompt.md            # Base system prompt (static, user-authored, hot-reloadable)
+├── driver_agent_prompt.md
+├── memory_agent_prompt.md
+├── mood_agent_prompt.md
+├── introspection_agent_prompt.md
 ├── persona.md           # Evolving personality (bot-authored, versioned in DB)
-├── config.yaml          # Configuration (gitignored)
 ├── config.yaml.example  # Template config
 ├── her.db               # SQLite database (created at runtime, gitignored)
+├── config.yaml          # Configuration (gitignored)
 ├── go.mod
-├── go.sum
-├── .gitignore
-├── SPEC.md              # This file
-└── CLAUDE.md            # Instructions for Claude Code
+└── CLAUDE.md            # Instructions for the agent harness
 ```
 
 ---
@@ -304,14 +254,16 @@ her-go/
 |---|---|---|
 | `gopkg.in/telebot.v4` | Telegram bot framework | v0.1 |
 | `github.com/mattn/go-sqlite3` | SQLite driver (CGo) | v0.1 |
+| `github.com/asg017/sqlite-vec-go-bindings/cgo` | Vector search (KNN) for memory + mood recall | v0.4 |
 | `gopkg.in/yaml.v3` | Config parsing | v0.1 |
 | `github.com/robfig/cron/v3` | Cron expression parsing for scheduler (next_run computation) | v0.6 |
-| `github.com/PuerkitoBio/goquery` | jQuery-style HTML parsing (Mini Shutter content extraction) | v0.9 |
-| `macos-vision-ocr` (CLI binary) | Apple Vision OCR — primary engine for book highlights, receipt scanning (no Go module — called via `os/exec`) | v0.9 |
-| `github.com/fsnotify/fsnotify` | Filesystem event watcher (Obsidian vault indexing) | v1.1 |
-| `github.com/emersion/go-imap/v2` | IMAP4rev2 client (email sync) | v1.1 |
+| `github.com/AutumnsGrove/nova` | Agent loop and OpenRouter transport (agent, provider, voice) | v1.0 |
+| `charm.land/bubbletea/v2` | Terminal UI | v0.5 |
+| `github.com/spf13/cobra` | CLI commands | v0.1 |
+| `github.com/golang-migrate/migrate/v4` | Forward-only embedded migrations | v0.3 |
+| `golang.org/x/oauth2`, `google.golang.org/api` | Gmail bridge credentials | v1.0 |
 
-Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). Memory system is custom. PII scrubber is custom-built with tiered regex patterns — no external dependency needed for the scope of detection we're doing. New dependencies are added only when they solve a problem that can't be reasonably hand-rolled (CGo bindings, protocol implementations).
+Minimal dependency footprint for the scope. The memory system, PII scrubber and every tool handler are custom. New dependencies are added only when they solve a problem that can't be reasonably hand-rolled (CGo bindings, protocol implementations). Earlier drafts of this table listed `goquery`, `fsnotify`, `go-imap` and the `macos-vision-ocr` binary for planned features that were never built — dropped during the 2026-11 sweep.
 
 ---
 
@@ -323,13 +275,9 @@ Minimal dependency footprint. The LLM client is hand-rolled (just HTTP + JSON). 
 - **PII vault** (token↔original mappings) is stored locally and never transmitted
 - **Telegram bot token** has access only to messages sent directly to the bot
 - **No telemetry, no analytics, no external logging** — everything is local
-- The only external network calls are: Telegram API (receiving/sending messages), OpenRouter API (LLM inference — with hard identifiers stripped and contact info tokenized; names and conversational context are sent intact for coherence), and optionally: Todoist, GitHub, IMAP, weather, and transit APIs
+- The only external network calls are: Telegram API (receiving/sending messages), OpenRouter API (LLM inference — with hard identifiers stripped and contact info tokenized; names and conversational context are sent intact for coherence), and optionally: weather (Open-Meteo), geocoding (Nominatim), places (Foursquare), web search (Tavily / SearXNG), Gmail, Apple Calendar via the local XPC bridge, and Telegraph for publishing reports
 - **Email content** gets stricter scrubbing than personal messages — other people's PII is Tier 2 tokenized, not Tier 3 passthrough
-- **Mini Shutter fetches** are outbound HTTP to URLs the user explicitly provides — no background crawling
-- **Saved links, highlights, receipts, and journal entries** all live in the same local SQLite database — same privacy guarantees as messages
-- **Mini Apps** are served over HTTPS from the same Mac Mini — no third-party hosting. The WebView communicates only with your own server
-- **Thumbnails** are cached locally, never uploaded anywhere
-- **Kiwix** runs entirely local — Wikipedia lookups never leave the machine
+- **Node modules / build output** are gitignored; no personal data is written outside `her.db`, the vault, and `reports/`
 
 ### v2 Security Properties
 

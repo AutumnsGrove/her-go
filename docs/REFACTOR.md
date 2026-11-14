@@ -84,7 +84,9 @@ Search is on-demand, not every turn. Keeping it deferred saves token overhead on
 
 ## Junk Drawer
 
-Everything below moves to `_junkdrawer/` at the repo root. It stays in the repo, just out of the build path. Git history is preserved. These can be brought back individually once the core harness is rock-solid.
+Everything below moved to `_junkdrawer/` at the repo root: out of the build path, but still in the repo and in git history, so it could be brought back individually once the core harness was rock-solid.
+
+> **Update 2026-11:** the junk drawer is gone. Nothing in it was ever revived, so the whole directory was deleted during an issue sweep — recover anything from git history (last present in the commit before the sweep). The lists below are kept as a record of what was retired and why.
 
 ### Entire packages
 - `skills/` — Skill discovery, runner, sandbox, trust tiers, proxied DB/web, skillkit SDK

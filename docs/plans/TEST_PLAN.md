@@ -78,9 +78,7 @@ All tests pass with `-race`.
 | `turn/` | 2 files | Registry, tracker |
 | `weather/` | 1 file | Weather tests |
 
-**Archived (in `_junkdrawer/`, excluded from build):**
-- `skills/loader/` — 6 test files
-- `skills/skillkit/go/` — 4 test files
+**Archived, and since deleted:** `skills/loader/` (6 test files) and `skills/skillkit/go/` (4 test files) lived in `_junkdrawer/` until the whole directory was removed in the 2026-11 sweep. They never came back into the build path.
 
 ---
 

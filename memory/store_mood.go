@@ -10,7 +10,8 @@ import (
 
 // ─── Mood Entries (v2 — Apple State-of-Mind style) ─────────────────
 //
-// Replaces the old 1-5 rating schema (now in _junkdrawer/store_mood.go).
+// Replaces the old 1-5 rating schema, which was retired to the junk
+// drawer and has since been deleted entirely.
 // See docs/plans/PLAN-mood-tracking-redesign.md for the design. The
 // table has two kinds: "momentary" for a single captured moment,
 // "daily" for an end-of-day rollup. Source tracks provenance:
