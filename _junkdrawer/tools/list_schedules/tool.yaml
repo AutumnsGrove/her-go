@@ -1,8 +1,0 @@
-name: list_schedules
-description: >-
-  List all active scheduled tasks with next run times.
-hot: false
-category: scheduling
-parameters:
-  type: object
-  properties: {}

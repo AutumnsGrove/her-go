@@ -30,18 +30,20 @@ A `create_briefing_schedule` tool (or extend the existing junkdrawered `create_s
 
 ### Architecture
 
-The pieces that exist:
-- **Scheduler system** (`scheduler/`) — fully functional cron-based task runner with retry, damping, quiet hours
-- **`scheduler_tasks` table** — already stores kind, cron_expr, payload, enabled flag
-- **Worker briefing handler** (`workeragent/briefing_handler.go`) — already reads `instruction` and `topics` from the payload
-- **Junkdrawered schedule tools** — `_junkdrawer/tools/create_schedule/`, `_junkdrawer/tools/list_schedules/`, `_junkdrawer/tools/update_schedule/` — these were built for the old v0.2 scheduler but have the right shape
+> **Status (2026-11): shipped.** `create_schedule`, `list_schedules`, `update_schedule` and `delete_schedule` are live first-party tools in `tools/`, and `create_schedule` accepts `task_type: worker_briefing` with a `topics`/`depth`/`detail` payload. The schedule tools were revived from the junk drawer (since deleted) rather than pulled at runtime; the list below is kept as the original plan of record.
 
-The pieces that need building:
-1. **Revive `create_schedule` tool** — pull from junkdrawer, update to support `task_type: "worker_briefing"` with custom payloads
-2. **Extend payload schema** — briefing payloads need `topics`, `depth` ("brief"/"deep"), and optionally `model_tier` override
-3. **Briefing handler reads payload** — already partially done (`briefing_handler.go` reads `instruction` and `topics` from payload), but needs to support the `depth` → model tier mapping
-4. **List/update/delete schedule tools** — revive from junkdrawer for managing existing schedules
-5. **Driver prompt update** — teach the driver about scheduling briefings
+The pieces that existed:
+- **Scheduler system** (`scheduler/`) — fully functional cron-based task runner with retry, damping, quiet hours
+- **`scheduler_tasks` table** — stores kind, cron_expr, payload, enabled flag
+- **Worker briefing handler** (`workeragent/briefing_handler.go`) — reads `instruction` and `topics` from the payload
+- **Junkdrawered schedule tools** — `create_schedule`, `list_schedules`, `update_schedule`, built for the old v0.2 scheduler but with the right shape
+
+The pieces that needed building (all done):
+1. **Revive `create_schedule` tool** — pulled out and extended to support `task_type: "worker_briefing"` with custom payloads
+2. **Extend payload schema** — briefing payloads carry `topics`, `depth` ("brief"/"deep"), `detail` and an optional `model_tier` override
+3. **Briefing handler reads payload** — `depth` → model tier mapping implemented
+4. **List/update/delete schedule tools** — revived for managing existing schedules
+5. **Driver prompt update** — driver knows the scheduling flows
 
 ### Key Decisions
 
@@ -54,9 +56,7 @@ The pieces that need building:
 - `scheduler/` — the full scheduler system
 - `scheduler/types.go` — Handler interface, Deps, TaskConfig
 - `workeragent/briefing_handler.go` — existing handler that reads payload
-- `_junkdrawer/tools/create_schedule/handler.go` — old create_schedule tool
-- `_junkdrawer/tools/list_schedules/handler.go` — old list_schedules tool  
-- `_junkdrawer/tools/update_schedule/handler.go` — old update_schedule tool
-- `_junkdrawer/store_tasks.go` — old ScheduledTask CRUD methods
+- `tools/create_schedule/` — reversible task including `worker_briefing` (topics/depth/detail)
+- `tools/list_schedules/`, `tools/update_schedule/`, `tools/delete_schedule/` — schedule management
 - `docs/spec/scheduler.md` — full scheduler spec with all task types documented
-- `driver_agent_prompt.md` — needs scheduling flows added
+- `driver_agent_prompt.md` — scheduling flows

@@ -398,7 +398,6 @@ her-go/
 ├── worker/           # Cloudflare Worker for webhook routing (Wrangler project)
 ├── sims/             # Simulation suites + results
 ├── docs/             # Architecture docs
-├── _junkdrawer/      # Archived code (old skills system, deprecated tools)
 ├── prompt.md                    # Mira's personality
 ├── driver_agent_prompt.md       # Driver agent behavior rules
 ├── memory_agent_prompt.md       # Memory agent instructions
