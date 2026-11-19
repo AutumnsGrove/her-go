@@ -529,8 +529,9 @@ func (b *Bot) Start() {
 	b.CheckRestartPending()
 
 	// Notify systemd that we're ready to accept messages. This must be
-	// called when using Type=notify, otherwise systemd waits indefinitely
-	// and times out after 90 seconds (DefaultTimeoutStartSec).
+	// called when using Type=notify, otherwise systemd waits until
+	// TimeoutStartSec elapses and kills the start (240s in our unit; 90s
+	// is systemd's DefaultTimeoutStartSec when the unit doesn't set one).
 	b.healthMonitor.NotifyReady()
 
 	log.Info("Bot is running. Listening for messages...")
