@@ -13,8 +13,8 @@ import (
 // Supports all 5 bridge commands: list_calendars, list, create, update, delete.
 type FakeBridge struct {
 	events    map[string]*FakeEvent // keyed by event ID
-	calendars []string               // available calendar names
-	counter   int                    // for generating FAKE-001, FAKE-002...
+	calendars []string              // available calendar names
+	counter   int                   // for generating FAKE-001, FAKE-002...
 	mu        sync.Mutex
 }
 

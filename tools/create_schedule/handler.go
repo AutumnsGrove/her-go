@@ -147,4 +147,3 @@ func unwrapStringifiedJSON(payload json.RawMessage) json.RawMessage {
 
 	return json.RawMessage(innerTrimmed)
 }
-

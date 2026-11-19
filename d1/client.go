@@ -82,9 +82,9 @@ type Row map[string]any
 
 // QueryResult holds the result of a single SQL statement.
 type QueryResult struct {
-	Results []Row  `json:"results"`
-	Success bool   `json:"success"`
-	Meta    Meta   `json:"meta"`
+	Results []Row `json:"results"`
+	Success bool  `json:"success"`
+	Meta    Meta  `json:"meta"`
 }
 
 // Meta contains execution metadata returned by D1 for each statement.

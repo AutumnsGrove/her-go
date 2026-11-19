@@ -34,12 +34,12 @@ type Section struct {
 
 	// Turn-specific: structured content groups instead of flat lines.
 	// Each group gets its own bordered box when rendered.
-	ContextLines []string // fact counts, semantic search results
-	ToolLines    []string // agent iterations + tool calls
-	ReplyLines   []string // reply metrics + mira's response
-	PersonaLines []string // reflection/rewrite events
-	MemoryLines  []string // memory agent tool calls (background)
-	MoodLines    []string // mood agent results (background)
+	ContextLines       []string // fact counts, semantic search results
+	ToolLines          []string // agent iterations + tool calls
+	ReplyLines         []string // reply metrics + mira's response
+	PersonaLines       []string // reflection/rewrite events
+	MemoryLines        []string // memory agent tool calls (background)
+	MoodLines          []string // mood agent results (background)
 	DreamerLines       []string // memory dreamer consolidation (dream cycle)
 	IntrospectionLines []string // introspection agent self-reflection (background)
 

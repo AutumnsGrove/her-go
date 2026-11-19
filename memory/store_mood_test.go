@@ -547,7 +547,7 @@ func TestDuePendingMoodProposals_OnlyReturnsExpiredPending(t *testing.T) {
 	// already-confirmed. Only the first should come back.
 	now := time.Now()
 	expired, err := store.SavePendingMoodProposal(&PendingMoodProposal{
-		TelegramChatID:    1, TelegramMessageID: 100,
+		TelegramChatID: 1, TelegramMessageID: 100,
 		ProposalJSON: json.RawMessage(`{}`),
 		ExpiresAt:    now.Add(-5 * time.Minute),
 	})
@@ -555,7 +555,7 @@ func TestDuePendingMoodProposals_OnlyReturnsExpiredPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.SavePendingMoodProposal(&PendingMoodProposal{
-		TelegramChatID:    1, TelegramMessageID: 101,
+		TelegramChatID: 1, TelegramMessageID: 101,
 		ProposalJSON: json.RawMessage(`{}`),
 		ExpiresAt:    now.Add(10 * time.Minute),
 	})
@@ -563,7 +563,7 @@ func TestDuePendingMoodProposals_OnlyReturnsExpiredPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	already, err := store.SavePendingMoodProposal(&PendingMoodProposal{
-		TelegramChatID:    1, TelegramMessageID: 102,
+		TelegramChatID: 1, TelegramMessageID: 102,
 		ProposalJSON: json.RawMessage(`{}`),
 		ExpiresAt:    now.Add(-10 * time.Minute),
 	})

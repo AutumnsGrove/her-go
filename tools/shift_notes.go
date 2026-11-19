@@ -28,10 +28,10 @@ import (
 // notes field. Fields are empty strings when not present — Go's zero value
 // for strings, same idea as Python's None but without needing Optional[str].
 type ShiftNotes struct {
-	Position  string // role/position worked (e.g., "Grill Cook")
-	Trainer   string // training supervisor (optional, temporary)
-	TimeChit  string // actual hours worked (e.g., "6h 15m")
-	Freeform  string // everything that isn't a key: value pair
+	Position string // role/position worked (e.g., "Grill Cook")
+	Trainer  string // training supervisor (optional, temporary)
+	TimeChit string // actual hours worked (e.g., "6h 15m")
+	Freeform string // everything that isn't a key: value pair
 }
 
 // Known shift keys — the parser recognizes these (case-insensitive).

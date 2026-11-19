@@ -51,10 +51,10 @@ func TestBuildChatMood_TwoEntriesInjectsContext(t *testing.T) {
 	store := newLayerTestStore(t)
 	for i := 0; i < 2; i++ {
 		_, err := store.SaveMoodEntry(&memory.MoodEntry{
-			Kind:    memory.MoodKindMomentary,
-			Valence: 3,
-			Labels:  []string{"Sad"},
-			Source:  memory.MoodSourceInferred,
+			Kind:       memory.MoodKindMomentary,
+			Valence:    3,
+			Labels:     []string{"Sad"},
+			Source:     memory.MoodSourceInferred,
 			Confidence: 0.8,
 		})
 		if err != nil {

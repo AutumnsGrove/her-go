@@ -213,23 +213,23 @@ func TestBuildShiftNotes(t *testing.T) {
 // outputs when extracting from time chit receipt photos.
 func TestParseTimeChit(t *testing.T) {
 	tests := []struct {
-		input   string
-		want    int  // total minutes
-		wantOK  bool
+		input  string
+		want   int // total minutes
+		wantOK bool
 	}{
 		{"6h 15m", 375, true},
 		{"8h 0m", 480, true},
 		{"4h 30m", 270, true},
 		{"0h 45m", 45, true},
 		{"12h 0m", 720, true},
-		{"6H 15M", 375, true},          // case insensitive
-		{"6h  15m", 375, true},         // extra space
-		{"6h15m", 0, false},            // no space between h and m — doesn't match
+		{"6H 15M", 375, true},            // case insensitive
+		{"6h  15m", 375, true},           // extra space
+		{"6h15m", 0, false},              // no space between h and m — doesn't match
 		{"6 hours 15 minutes", 0, false}, // wrong format
 		{"", 0, false},
 		{"abc", 0, false},
-		{"6h", 0, false},               // missing minutes part
-		{"15m", 0, false},              // missing hours part
+		{"6h", 0, false},  // missing minutes part
+		{"15m", 0, false}, // missing hours part
 	}
 
 	for _, tc := range tests {

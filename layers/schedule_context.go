@@ -81,9 +81,9 @@ func buildScheduleContext(ctx *LayerContext) LayerResult {
 
 		scheduleInfo = fmt.Sprintf(
 			"**Active schedule context:** The most recent message was triggered by "+
-			"schedule #%d (%q, type: %s). If the user refers to \"this reminder\", "+
-			"\"that schedule\", or asks to delete/remove/cancel it, they mean "+
-			"schedule #%d. Use `delete_schedule` with task_id=%d.",
+				"schedule #%d (%q, type: %s). If the user refers to \"this reminder\", "+
+				"\"that schedule\", or asks to delete/remove/cancel it, they mean "+
+				"schedule #%d. Use `delete_schedule` with task_id=%d.",
 			msg.ScheduleID, schedName, task.Kind, msg.ScheduleID, msg.ScheduleID,
 		)
 		break

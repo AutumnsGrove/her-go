@@ -21,9 +21,9 @@ import (
 // a callable script. Tests inject handlers that fail, panic, count
 // calls, or record the payload they saw.
 type scriptedHandler struct {
-	kind       string
-	callCount  int
-	mu         sync.Mutex
+	kind      string
+	callCount int
+	mu        sync.Mutex
 	// fn is invoked on every Execute call. Return the error you want
 	// the runner to see; return nil for success.
 	fn func(call int, payload json.RawMessage) error

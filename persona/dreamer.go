@@ -32,11 +32,11 @@ func init() {
 // single struct instead of many positional arguments makes call sites readable
 // and easier to extend — same pattern used by agent.RunParams.
 type DreamerParams struct {
-	LLM           *llm.Client    // persona model for NightlyReflect and GatedRewrite
-	DreamLLM      *llm.Client    // memory dreamer model — nil disables consolidation
-	ClassifierLLM *llm.Client    // classifier for persona quality gate — nil-safe, gate skipped if nil
-	Embed         *embed.Client  // embedding client for reflection dedup — nil-safe, dedup skipped if nil
-	Store         memory.Store   // SQLite store for reading/writing persona state
+	LLM           *llm.Client   // persona model for NightlyReflect and GatedRewrite
+	DreamLLM      *llm.Client   // memory dreamer model — nil disables consolidation
+	ClassifierLLM *llm.Client   // classifier for persona quality gate — nil-safe, gate skipped if nil
+	Embed         *embed.Client // embedding client for reflection dedup — nil-safe, dedup skipped if nil
+	Store         memory.Store  // SQLite store for reading/writing persona state
 	Cfg           *config.Config
 	EventBus      *tui.Bus // may be nil (e.g., sim mode) — all emits are nil-safe
 

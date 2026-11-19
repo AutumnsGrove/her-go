@@ -75,14 +75,14 @@ type LayerContext struct {
 	EmbedClient *embed.Client
 
 	// Runtime state — set by the agent before building the prompt.
-	ConversationSummary string                // from chat compaction
-	AgentActionSummary  string                // from agent compaction (tool call history)
-	RecentAgentActions  []memory.AgentAction  // recent tool calls kept in full fidelity
-	ConversationID      string                // current conversation
-	ScrubbedUserMessage string                // PII-scrubbed user input
-	RecentMessages      []memory.Message      // sliding window for agent context
-	HasImage            bool                  // user sent a photo
-	OCRText             string                // pre-flight OCR extraction
+	ConversationSummary string               // from chat compaction
+	AgentActionSummary  string               // from agent compaction (tool call history)
+	RecentAgentActions  []memory.AgentAction // recent tool calls kept in full fidelity
+	ConversationID      string               // current conversation
+	ScrubbedUserMessage string               // PII-scrubbed user input
+	RecentMessages      []memory.Message     // sliding window for agent context
+	HasImage            bool                 // user sent a photo
+	OCRText             string               // pre-flight OCR extraction
 	// Instruction and search context from the agent (for chat stream messages).
 	Instruction   string
 	SearchContext string
@@ -111,9 +111,9 @@ type LayerContext struct {
 // Order uses gaps (100, 200, 300...) so new layers can be inserted
 // between existing ones without renumbering everything.
 type PromptLayer struct {
-	Name    string                        // human-readable: "Mood Trend", "Weather"
-	Order   int                           // sort key — lower runs first
-	Stream  Stream                        // which model this layer targets
+	Name    string                          // human-readable: "Mood Trend", "Weather"
+	Order   int                             // sort key — lower runs first
+	Stream  Stream                          // which model this layer targets
 	Builder func(*LayerContext) LayerResult // produces the layer's content
 }
 

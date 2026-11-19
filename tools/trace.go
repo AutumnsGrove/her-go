@@ -26,16 +26,16 @@ import (
 // traceSpec defines how a tool's trace line is formatted. Parsed from
 // the trace: block in tool.yaml.
 type traceSpec struct {
-	Emoji    string            `yaml:"emoji"`
-	Format   string            `yaml:"format,omitempty"`   // Go template string
-	OnReject *traceRejectSpec  `yaml:"on_reject,omitempty"`
+	Emoji    string           `yaml:"emoji"`
+	Format   string           `yaml:"format,omitempty"` // Go template string
+	OnReject *traceRejectSpec `yaml:"on_reject,omitempty"`
 }
 
 // traceRejectSpec defines alternate formatting when the result indicates
 // rejection (e.g., classifier or style gate rejected a memory write).
 type traceRejectSpec struct {
-	Prefix string `yaml:"prefix"`          // result prefix to match (e.g., "rejected:")
-	Emoji  string `yaml:"emoji"`           // override emoji for rejections
+	Prefix string `yaml:"prefix"`           // result prefix to match (e.g., "rejected:")
+	Emoji  string `yaml:"emoji"`            // override emoji for rejections
 	Format string `yaml:"format,omitempty"` // Go template for rejection line
 }
 
@@ -62,9 +62,10 @@ var traceRegistry = map[string]*compiledTrace{}
 // - default: returns a fallback when the piped value is missing/empty
 //
 // In templates, pipe syntax makes these readable:
-//   {{.thought | escape}}
-//   {{.Result | truncate 80 | escape}}
-//   {{.repo | default "repos"}}
+//
+//	{{.thought | escape}}
+//	{{.Result | truncate 80 | escape}}
+//	{{.repo | default "repos"}}
 //
 // Go templates pipe the value as the LAST argument, so truncate takes
 // (maxLen int, s string) and default takes (fallback, value) — the piped

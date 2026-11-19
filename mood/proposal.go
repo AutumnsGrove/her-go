@@ -10,11 +10,11 @@ import (
 // ConfirmProposal resolves a pending mood proposal the user tapped
 // "Log it" on. It:
 //
-//   1. Looks up the pending row by Telegram message id.
-//   2. Decodes the stored proposal JSON into a MoodEntry.
-//   3. Saves the entry with source=confirmed.
-//   4. Flips the proposal's status to confirmed.
-//   5. Edits the original Telegram message to show it was logged.
+//  1. Looks up the pending row by Telegram message id.
+//  2. Decodes the stored proposal JSON into a MoodEntry.
+//  3. Saves the entry with source=confirmed.
+//  4. Flips the proposal's status to confirmed.
+//  5. Edits the original Telegram message to show it was logged.
 //
 // The Edit callback is optional — pass nil when you don't need the
 // message updated (e.g. tests that only care about the DB). Any

@@ -153,13 +153,13 @@ type BackgroundStartHook func(ctx BackgroundStartContext) (skip bool, reason str
 
 // BackgroundStartContext carries the batch state.
 type BackgroundStartContext struct {
-	ConversationID  string
-	TurnCount       int    // accumulated turns since last background run
-	ShouldAnalyze   bool   // substance gate verdict
-	UserMessage     string
-	ReplyText       string
-	ThinkTraces     []string         // driver's reasoning for memory agent
-	DriverMessages  []llm.ChatMessage // full driver conversation for context
+	ConversationID string
+	TurnCount      int  // accumulated turns since last background run
+	ShouldAnalyze  bool // substance gate verdict
+	UserMessage    string
+	ReplyText      string
+	ThinkTraces    []string          // driver's reasoning for memory agent
+	DriverMessages []llm.ChatMessage // full driver conversation for context
 }
 
 // BackgroundEndHook fires after ALL background agents have completed.

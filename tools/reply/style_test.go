@@ -168,9 +168,9 @@ func TestHasStyleIssue(t *testing.T) {
 			want: false, // two is now fine
 		},
 		{
-			name: "emdash/three_dashes",
-			text: "She was tired—exhausted, really—and the room felt smaller—darker—than before.",
-			want: true,
+			name:    "emdash/three_dashes",
+			text:    "She was tired—exhausted, really—and the room felt smaller—darker—than before.",
+			want:    true,
 			wantSub: "em dash",
 		},
 		{
@@ -198,21 +198,21 @@ func TestHasStyleIssue(t *testing.T) {
 		// "I love that" as hollow opener
 		// ─────────────────────────────────────────────────
 		{
-			name: "ilovethat/opener",
-			text: "I love that. It's such a perfect, timeless combination.",
-			want: true,
+			name:    "ilovethat/opener",
+			text:    "I love that. It's such a perfect, timeless combination.",
+			want:    true,
 			wantSub: "I love that",
 		},
 		{
-			name: "ilovethat/opener_with_energy",
-			text: "I love that energy. No compromises.",
-			want: true,
+			name:    "ilovethat/opener_with_energy",
+			text:    "I love that energy. No compromises.",
+			want:    true,
 			wantSub: "I love that",
 		},
 		{
-			name: "ilovethat/after_newline",
-			text: "YES!! Okay.\nI love that. It's basically your signature move at this point.",
-			want: true,
+			name:    "ilovethat/after_newline",
+			text:    "YES!! Okay.\nI love that. It's basically your signature move at this point.",
+			want:    true,
 			wantSub: "I love that",
 		},
 		{
@@ -230,27 +230,27 @@ func TestHasStyleIssue(t *testing.T) {
 		// "Here's the thing" family
 		// ─────────────────────────────────────────────────
 		{
-			name: "heresthething/basic",
-			text: "Here's the thing about sobriety: the cravings don't stop.",
-			want: true,
+			name:    "heresthething/basic",
+			text:    "Here's the thing about sobriety: the cravings don't stop.",
+			want:    true,
 			wantSub: "here's the thing",
 		},
 		{
-			name: "heresthething/where_it_gets",
-			text: "Here's where it gets interesting though.",
-			want: true,
+			name:    "heresthething/where_it_gets",
+			text:    "Here's where it gets interesting though.",
+			want:    true,
 			wantSub: "here's where it gets",
 		},
 		{
-			name: "heresthething/kicker",
-			text: "And here's the kicker: she already knew.",
-			want: true,
+			name:    "heresthething/kicker",
+			text:    "And here's the kicker: she already knew.",
+			want:    true,
 			wantSub: "here's the kicker",
 		},
 		{
-			name: "heresthething/most_people_miss",
-			text: "Here's what most people miss about grief.",
-			want: true,
+			name:    "heresthething/most_people_miss",
+			text:    "Here's what most people miss about grief.",
+			want:    true,
 			wantSub: "here's what most people",
 		},
 		{
@@ -263,15 +263,15 @@ func TestHasStyleIssue(t *testing.T) {
 		// Filler transitions
 		// ─────────────────────────────────────────────────
 		{
-			name: "filler/worth_noting",
-			text: "It's worth noting that this only works if you stay consistent.",
-			want: true,
+			name:    "filler/worth_noting",
+			text:    "It's worth noting that this only works if you stay consistent.",
+			want:    true,
 			wantSub: "filler",
 		},
 		{
-			name: "filler/bears_mentioning",
-			text: "It bears mentioning that the side effects taper off.",
-			want: true,
+			name:    "filler/bears_mentioning",
+			text:    "It bears mentioning that the side effects taper off.",
+			want:    true,
 			wantSub: "filler",
 		},
 		{
@@ -328,14 +328,14 @@ func TestHasStyleIssue(t *testing.T) {
 		// Priority: first match wins
 		// ─────────────────────────────────────────────────
 		{
-			name: "priority/not_just_before_emdash",
-			text: "That's not just baking—that's a statement—and you know it.",
+			name:    "priority/not_just_before_emdash",
+			text:    "That's not just baking—that's a statement—and you know it.",
 			want:    true,
 			wantSub: "not X, it's Y", // negpar fires first, not em dash
 		},
 		{
-			name: "priority/not_just_before_ilovethat",
-			text: "Not just trusting a hunch, but testing it. I love that.",
+			name:    "priority/not_just_before_ilovethat",
+			text:    "Not just trusting a hunch, but testing it. I love that.",
 			want:    true,
 			wantSub: "not X, it's Y", // negpar fires first
 		},

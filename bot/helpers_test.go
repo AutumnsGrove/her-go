@@ -28,7 +28,7 @@ import (
 // with just the behaviour we care about.
 type stubStore struct{}
 
-func (s stubStore) Close() error                                   { return nil }
+func (s stubStore) Close() error { return nil }
 func (s stubStore) SaveMessage(role, contentRaw, contentScrubbed, conversationID string, scheduleID int64) (int64, error) {
 	return 0, nil
 }
@@ -42,7 +42,7 @@ func (s stubStore) MessagesAfter(conversationID string, sinceID int64) ([]memory
 func (s stubStore) MessagesInRange(conversationID string, startID, endID int64) ([]memory.Message, error) {
 	return nil, nil
 }
-func (s stubStore) UpdateMessageScrubbed(messageID int64, scrubbed string) error        { return nil }
+func (s stubStore) UpdateMessageScrubbed(messageID int64, scrubbed string) error         { return nil }
 func (s stubStore) UpdateMessageMedia(messageID int64, fileID, description string) error { return nil }
 func (s stubStore) UpdateMessageVoicePath(messageID int64, path string) error            { return nil }
 func (s stubStore) UpdateMessageTokenCount(messageID int64, tokenCount int) error        { return nil }
@@ -63,13 +63,15 @@ func (s stubStore) SaveMemory(content, category, subject string, sourceMessageID
 func (s stubStore) UpdateMemoryEmbedding(memoryID int64, embedding []float32, embeddingText []float32) error {
 	return nil
 }
-func (s stubStore) RecentMemories(subject string, limit int) ([]memory.Memory, error) { return nil, nil }
-func (s stubStore) GetMemoryContent(memoryID int64) (string, error)                   { return "", nil }
+func (s stubStore) RecentMemories(subject string, limit int) ([]memory.Memory, error) {
+	return nil, nil
+}
+func (s stubStore) GetMemoryContent(memoryID int64) (string, error) { return "", nil }
 func (s stubStore) UpdateMemory(memoryID int64, content, category string, importance int, tags string) error {
 	return nil
 }
-func (s stubStore) UpdateMemoryTags(memoryID int64, tags string) error { return nil }
-func (s stubStore) DeactivateMemory(memoryID int64) error               { return nil }
+func (s stubStore) UpdateMemoryTags(memoryID int64, tags string) error    { return nil }
+func (s stubStore) DeactivateMemory(memoryID int64) error                 { return nil }
 func (s stubStore) LinkMemories(id1, id2 int64, similarity float64) error { return nil }
 func (s stubStore) LinkedMemories(memoryID int64, limit int) ([]memory.Memory, error) {
 	return nil, nil
@@ -79,9 +81,9 @@ func (s stubStore) SupersedeMemory(oldID, newID int64, reason string) error  { r
 func (s stubStore) GetMemory(memoryID int64) (*memory.Memory, error)         { return nil, nil }
 func (s stubStore) GetMemoryBySlug(slug string) (*memory.Memory, error)      { return nil, nil }
 func (s stubStore) ActiveSelfMemories() ([]memory.Memory, error)             { return nil, nil }
-func (s stubStore) UniqueSlug(base string) (string, error)                  { return base, nil }
-func (s stubStore) SetMemoryHook(memoryID int64, hook, slug string) error   { return nil }
-func (s stubStore) MemoriesWithoutHooks() ([]memory.Memory, error)          { return nil, nil }
+func (s stubStore) UniqueSlug(base string) (string, error)                   { return base, nil }
+func (s stubStore) SetMemoryHook(memoryID int64, hook, slug string) error    { return nil }
+func (s stubStore) MemoriesWithoutHooks() ([]memory.Memory, error)           { return nil, nil }
 func (s stubStore) MemoryHistory(memoryID int64) ([]memory.Memory, error)    { return nil, nil }
 func (s stubStore) CountMemoryLinks() (int, error)                           { return 0, nil }
 func (s stubStore) AllActiveMemories() ([]memory.Memory, error)              { return nil, nil }
@@ -110,8 +112,8 @@ func (s stubStore) SaveClassifierLog(conversationID, writeType, verdict, content
 	return nil
 }
 func (s stubStore) LogCommand(command string, chatID int64, conversationID, args string) {}
-func (s stubStore) PersonaHistory(limit int) ([]memory.PersonaVersion, error)           { return nil, nil }
-func (s stubStore) SavePersonaVersion(content, trigger string) (int64, error)           { return 0, nil }
+func (s stubStore) PersonaHistory(limit int) ([]memory.PersonaVersion, error)            { return nil, nil }
+func (s stubStore) SavePersonaVersion(content, trigger string) (int64, error)            { return 0, nil }
 func (s stubStore) SaveReflection(content string, factCount int, userMessage, miraResponse string) (int64, error) {
 	return 0, nil
 }
@@ -131,9 +133,9 @@ func (s stubStore) SetLastReflectedMessageID(id int64) error                    
 func (s stubStore) MessagesAfterID(afterID int64, limit int) ([]memory.Message, error) {
 	return nil, nil
 }
-func (s stubStore) LastMessageTime() (time.Time, error) { return time.Time{}, nil }
-func (s stubStore) RecentReflections(limit int) ([]memory.Reflection, error)   { return nil, nil }
-func (s stubStore) UnconsumedReflectionCount() (int, error)                     { return 0, nil }
+func (s stubStore) LastMessageTime() (time.Time, error)                      { return time.Time{}, nil }
+func (s stubStore) RecentReflections(limit int) ([]memory.Reflection, error) { return nil, nil }
+func (s stubStore) UnconsumedReflectionCount() (int, error)                  { return 0, nil }
 func (s stubStore) GetTraitHistory(traitName string, limit int) ([]memory.Trait, error) {
 	return nil, nil
 }
@@ -149,8 +151,8 @@ func (s stubStore) MoodEntriesInRange(kind memory.MoodKind, from, to time.Time) 
 func (s stubStore) SimilarMoodEntriesWithin(now time.Time, embedding []float32, window time.Duration, limit int) ([]memory.MoodEntry, error) {
 	return nil, nil
 }
-func (s stubStore) DeleteMoodEntry(id int64) error                              { return nil }
-func (s stubStore) SupersedeMoodEntry(oldID, newID int64, reason string) error  { return nil }
+func (s stubStore) DeleteMoodEntry(id int64) error                             { return nil }
+func (s stubStore) SupersedeMoodEntry(oldID, newID int64, reason string) error { return nil }
 func (s stubStore) SavePendingMoodProposal(p *memory.PendingMoodProposal) (int64, error) {
 	return 0, nil
 }
@@ -174,7 +176,7 @@ func (s stubStore) SaveSummary(conversationID, summary string, startID, endID in
 func (s stubStore) LatestSummary(conversationID, stream string) (string, int64, error) {
 	return "", 0, nil
 }
-func (s stubStore) UpsertSchedulerTask(t *memory.SchedulerTask) error { return nil }
+func (s stubStore) UpsertSchedulerTask(t *memory.SchedulerTask) error      { return nil }
 func (s stubStore) ListAllSchedulerTasks() ([]memory.SchedulerTask, error) { return nil, nil }
 func (s stubStore) DueSchedulerTasks(now time.Time) ([]memory.SchedulerTask, error) {
 	return nil, nil
@@ -187,7 +189,7 @@ func (s stubStore) MarkSchedulerSuccess(id int64, nextFire time.Time) error { re
 func (s stubStore) MarkSchedulerFailure(id int64, nextFire time.Time, errMsg string, attempts int) error {
 	return nil
 }
-func (s stubStore) DeleteSchedulerTask(id int64) error { return nil }
+func (s stubStore) DeleteSchedulerTask(id int64) error                             { return nil }
 func (s stubStore) CreateUserSchedulerTask(t *memory.SchedulerTask) (int64, error) { return 0, nil }
 func (s stubStore) GetSchedulerTaskByID(id int64) (*memory.SchedulerTask, error)   { return nil, nil }
 func (s stubStore) ListManagedSchedulerTasks(includeDisabled bool) ([]memory.SchedulerTask, error) {
@@ -227,13 +229,13 @@ func (s stubStore) SendInbox(sender, recipient, msgType, payload string) (int64,
 	return 0, nil
 }
 func (s stubStore) ConsumeInbox(recipient string) ([]memory.InboxMessage, error) { return nil, nil }
-func (s stubStore) PendingInboxCount(recipient string) (int, error)               { return 0, nil }
-func (s stubStore) GetEmbedDimension() int { return 0 }
+func (s stubStore) PendingInboxCount(recipient string) (int, error)              { return 0, nil }
+func (s stubStore) GetEmbedDimension() int                                       { return 0 }
 
 // Memory Cards
-func (s stubStore) GetCard(topicSlug string) (*memory.MemoryCard, error)   { return nil, nil }
-func (s stubStore) GetCardByID(id int64) (*memory.MemoryCard, error)       { return nil, nil }
-func (s stubStore) AllCards() ([]memory.MemoryCard, error)                 { return nil, nil }
+func (s stubStore) GetCard(topicSlug string) (*memory.MemoryCard, error)       { return nil, nil }
+func (s stubStore) GetCardByID(id int64) (*memory.MemoryCard, error)           { return nil, nil }
+func (s stubStore) AllCards() ([]memory.MemoryCard, error)                     { return nil, nil }
 func (s stubStore) CardsBySubject(subject string) ([]memory.MemoryCard, error) { return nil, nil }
 func (s stubStore) UpdateCardSummary(topicSlug, newSummary, delta string, sourceMessageID int64) (*memory.MemoryCard, error) {
 	return nil, nil
@@ -245,7 +247,7 @@ func (s stubStore) ExpireCard(topicSlug, reason string) error { return nil }
 func (s stubStore) MergeCards(targetSlug, sourceSlug, mergedSummary, reason string) (*memory.MemoryCard, error) {
 	return nil, nil
 }
-func (s stubStore) MemoriesByCard(cardID int64) ([]memory.Memory, error) { return nil, nil }
+func (s stubStore) MemoriesByCard(cardID int64) ([]memory.Memory, error)        { return nil, nil }
 func (s stubStore) RecentLogEntries(hours int) ([]memory.MemoryLogEntry, error) { return nil, nil }
 func (s stubStore) CardLogEntries(cardID int64, limit int) ([]memory.MemoryLogEntry, error) {
 	return nil, nil
@@ -266,7 +268,7 @@ func (s stubStore) SemanticSearchBySubject(queryVec []float32, subject string, t
 	return nil, nil
 }
 func (s stubStore) CostSince(role string, since time.Time) (float64, error) { return 0, nil }
-func (s stubStore) CostForMessage(messageID int64) (float64, error)          { return 0, nil }
+func (s stubStore) CostForMessage(messageID int64) (float64, error)         { return 0, nil }
 
 // Ensure stubStore satisfies the full Store interface at compile time.
 // This blank-identifier assignment is a Go idiom: if stubStore is
@@ -295,7 +297,8 @@ func newMinimalBot() *Bot {
 // on the re-check inside the lock.
 //
 // The real value of this test is running it with -race:
-//   go test -race -run TestGetConversationID_Concurrent ./bot/
+//
+//	go test -race -run TestGetConversationID_Concurrent ./bot/
 //
 // Without the mutex fix, the race detector flags a concurrent write to
 // the ID generation logic. With the fix, no races are reported.
@@ -339,4 +342,3 @@ func TestGetConversationID_Concurrent(t *testing.T) {
 		}
 	}
 }
-

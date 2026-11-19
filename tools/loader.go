@@ -46,14 +46,14 @@ func (a *agentList) UnmarshalYAML(node *yaml.Node) error {
 
 // toolManifest is the top-level structure of a tool.yaml file.
 type toolManifest struct {
-	Name        string         `yaml:"name"`
-	Agent       agentList      `yaml:"agent"`
-	Description string         `yaml:"description"`
-	Hint        string         `yaml:"hint,omitempty"`
-	Hot         bool           `yaml:"hot"`
-	Category    string         `yaml:"category,omitempty"`
-	Parameters  parametersDef  `yaml:"parameters"`
-	Trace       *traceSpec     `yaml:"trace,omitempty"`
+	Name        string        `yaml:"name"`
+	Agent       agentList     `yaml:"agent"`
+	Description string        `yaml:"description"`
+	Hint        string        `yaml:"hint,omitempty"`
+	Hot         bool          `yaml:"hot"`
+	Category    string        `yaml:"category,omitempty"`
+	Parameters  parametersDef `yaml:"parameters"`
+	Trace       *traceSpec    `yaml:"trace,omitempty"`
 }
 
 // parametersDef represents the JSON Schema "parameters" block.
@@ -64,22 +64,22 @@ type toolManifest struct {
 // syntax so the loader can convert it 1:1 to the map[string]interface{}
 // that the OpenAI tool format expects.
 type parametersDef struct {
-	Type       string                    `yaml:"type"`
-	Properties map[string]propertyDef    `yaml:"properties"`
-	Required   []string                  `yaml:"required,omitempty"`
+	Type       string                 `yaml:"type"`
+	Properties map[string]propertyDef `yaml:"properties"`
+	Required   []string               `yaml:"required,omitempty"`
 }
 
 // propertyDef represents a single parameter in the JSON Schema.
 type propertyDef struct {
-	Type        string        `yaml:"type"`
-	Description string        `yaml:"description,omitempty"`
-	Enum        []string      `yaml:"enum,omitempty"`
-	Minimum     *float64      `yaml:"minimum,omitempty"`
-	Maximum     *float64      `yaml:"maximum,omitempty"`
+	Type        string   `yaml:"type"`
+	Description string   `yaml:"description,omitempty"`
+	Enum        []string `yaml:"enum,omitempty"`
+	Minimum     *float64 `yaml:"minimum,omitempty"`
+	Maximum     *float64 `yaml:"maximum,omitempty"`
 	// For nested objects (e.g., array items)
-	Items       *propertyDef  `yaml:"items,omitempty"`
-	Properties  map[string]propertyDef `yaml:"properties,omitempty"`
-	Required    []string      `yaml:"required,omitempty"`
+	Items      *propertyDef           `yaml:"items,omitempty"`
+	Properties map[string]propertyDef `yaml:"properties,omitempty"`
+	Required   []string               `yaml:"required,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

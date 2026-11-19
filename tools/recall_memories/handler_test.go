@@ -128,14 +128,14 @@ func TestHandle_InvalidJSON(t *testing.T) {
 // would fail. They pass only because the handler normalises the value safely.
 func TestHandle_LimitDefaults(t *testing.T) {
 	cases := []struct {
-		name     string
-		limit    int
-		wantMsg  string
+		name    string
+		limit   int
+		wantMsg string
 	}{
-		{"limit zero",     0,   "not available"},
-		{"limit negative", -5,  "not available"},
-		{"limit eleven",   11,  "not available"},
-		{"limit valid",    3,   "not available"},
+		{"limit zero", 0, "not available"},
+		{"limit negative", -5, "not available"},
+		{"limit eleven", 11, "not available"},
+		{"limit valid", 3, "not available"},
 	}
 
 	for _, tc := range cases {
@@ -196,10 +196,10 @@ func TestHandle_NoMatchingMemories_Documented(t *testing.T) {
 // message from the early-exit paths.
 func TestHandle_ReturnStrings_GuardMessages(t *testing.T) {
 	cases := []struct {
-		name        string
-		argsJSON    string
-		embedClient bool // false = nil
-		embedDim    int
+		name         string
+		argsJSON     string
+		embedClient  bool // false = nil
+		embedDim     int
 		wantContains string
 	}{
 		{
@@ -355,4 +355,3 @@ func TestHandle_NoModeProvided(t *testing.T) {
 		t.Errorf("result = %q, want the missing-mode error", result)
 	}
 }
-

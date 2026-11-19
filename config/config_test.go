@@ -48,11 +48,11 @@ func readFile(t *testing.T, path string) string {
 // `go test -v` shows exactly which case broke.
 func TestSetLocation(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		lat      float64
-		lon      float64
-		locName  string
+		name    string
+		input   string
+		lat     float64
+		lon     float64
+		locName string
 		// wantContains: substrings that MUST appear in the output.
 		// Plain substring checks are easier to read than regex and
 		// good enough for this surgical-edit test.

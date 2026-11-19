@@ -34,11 +34,11 @@ var tier1Patterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b(?:\d[ -]*?){13,19}\b`),
 
 	// API keys and secrets (common patterns)
-	regexp.MustCompile(`\b(?:sk-[a-zA-Z0-9]{20,})\b`),                   // OpenAI/Anthropic style
-	regexp.MustCompile(`\b(?:Bearer\s+[a-zA-Z0-9._\-]{20,})\b`),         // Bearer tokens
-	regexp.MustCompile(`\b(?:ghp_[a-zA-Z0-9]{36,})\b`),                  // GitHub PAT
-	regexp.MustCompile(`\b(?:AKIA[A-Z0-9]{16})\b`),                      // AWS access key
-	regexp.MustCompile(`\b(?:password|passwd|pwd)\s*[:=]\s*\S+`),         // password assignments
+	regexp.MustCompile(`\b(?:sk-[a-zA-Z0-9]{20,})\b`),            // OpenAI/Anthropic style
+	regexp.MustCompile(`\b(?:Bearer\s+[a-zA-Z0-9._\-]{20,})\b`),  // Bearer tokens
+	regexp.MustCompile(`\b(?:ghp_[a-zA-Z0-9]{36,})\b`),           // GitHub PAT
+	regexp.MustCompile(`\b(?:AKIA[A-Z0-9]{16})\b`),               // AWS access key
+	regexp.MustCompile(`\b(?:password|passwd|pwd)\s*[:=]\s*\S+`), // password assignments
 
 	// Bank routing numbers (9 digits, but we need the routing context)
 	regexp.MustCompile(`(?i)\b(?:routing|aba)\s*(?:#|number|num|no)?[:\s]*\d{9}\b`),

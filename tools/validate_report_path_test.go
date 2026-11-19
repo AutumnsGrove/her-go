@@ -11,10 +11,10 @@ func TestValidateReportPath(t *testing.T) {
 	reportsDir := t.TempDir()
 
 	tests := []struct {
-		name      string
-		relPath   string
-		wantErr   bool
-		wantAbs   string
+		name    string
+		relPath string
+		wantErr bool
+		wantAbs string
 	}{
 		{
 			name:    "simple file",

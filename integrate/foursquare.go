@@ -73,8 +73,8 @@ type Place struct {
 	Name       string          `json:"name"`
 	Location   PlaceLocation   `json:"location"`
 	Categories []PlaceCategory `json:"categories"`
-	Distance   int             `json:"distance"`  // meters from search center (only with ll param)
-	Latitude   float64         `json:"latitude"`  // place coordinates (top-level on new API)
+	Distance   int             `json:"distance"` // meters from search center (only with ll param)
+	Latitude   float64         `json:"latitude"` // place coordinates (top-level on new API)
 	Longitude  float64         `json:"longitude"`
 }
 

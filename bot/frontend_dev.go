@@ -49,16 +49,16 @@ func (f *DevFrontend) SendConfirm(text string) (int64, error) {
 	return 0, nil
 }
 
-func (f *DevFrontend) StageReset() error      { return nil }
+func (f *DevFrontend) StageReset() error        { return nil }
 func (f *DevFrontend) DeletePlaceholder() error { return nil }
 
 func (f *DevFrontend) StartTyping() func() {
 	return func() {} // no-op — HTTP doesn't have typing indicators
 }
 
-func (f *DevFrontend) SupportsStreaming() bool   { return false }
+func (f *DevFrontend) SupportsStreaming() bool    { return false }
 func (f *DevFrontend) OnStreamToken(token string) {}
-func (f *DevFrontend) StopStream()               {}
+func (f *DevFrontend) StopStream()                {}
 
 func (f *DevFrontend) SendBusy() error {
 	return nil // HTTP will return 429 at the handler level

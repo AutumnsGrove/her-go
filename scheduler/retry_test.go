@@ -69,10 +69,10 @@ func TestRetryConfig_NextWait_Exponential(t *testing.T) {
 		attempt int
 		want    time.Duration
 	}{
-		{1, 60 * time.Second},        // 1x
-		{2, 120 * time.Second},       // 2x
-		{3, 240 * time.Second},       // 4x
-		{4, 480 * time.Second},       // 8x
+		{1, 60 * time.Second},  // 1x
+		{2, 120 * time.Second}, // 2x
+		{3, 240 * time.Second}, // 4x
+		{4, 480 * time.Second}, // 8x
 	}
 	for _, tc := range tests {
 		if got := r.NextWait(tc.attempt); got != tc.want {

@@ -34,7 +34,7 @@ type Current struct {
 	Description string  // human-readable: "partly cloudy"
 	Precip      float64 // precipitation in mm (Open-Meteo always reports mm)
 	WindSpeed   float64
-	WindUnit    string   // "mph" or "km/h"
+	WindUnit    string // "mph" or "km/h"
 	FetchedAt   time.Time
 }
 

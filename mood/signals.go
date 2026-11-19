@@ -12,11 +12,12 @@ import (
 // itself.
 //
 // Scoring is deliberately simple and transparent:
-//   +0.50 for any first-person affect phrase ("I'm exhausted", "I feel…")
-//   +0.25 for any bare affect word ("exhausted", "stressed")
-//   +0.15 for an intensity modifier ("absolutely", "so", "really")
-//   +0.10 for an affect-bearing emoji
-//   cap at 1.0
+//
+//	+0.50 for any first-person affect phrase ("I'm exhausted", "I feel…")
+//	+0.25 for any bare affect word ("exhausted", "stressed")
+//	+0.15 for an intensity modifier ("absolutely", "so", "really")
+//	+0.10 for an affect-bearing emoji
+//	cap at 1.0
 //
 // The point isn't precision — it's a second vote independent of the
 // LLM, so a single-channel failure can't put a clearly-expressed mood
@@ -113,15 +114,15 @@ var firstPersonAffect = []string{
 	"everything just ", // filler word between "everything" and "feels/is"
 	"things are ",
 	"things feel ",
-	"just feels ",  // "everything just feels gray", "it just feels wrong"
-	"just feel ",   // "i just feel like"
+	"just feels ", // "everything just feels gray", "it just feels wrong"
+	"just feel ",  // "i just feel like"
 
 	// Casual / colloquial framing
-	"feeling ",     // "feeling pretty good about"
-	"having a ",    // "having a great day", "having a rough time"
+	"feeling ",      // "feeling pretty good about"
+	"having a ",     // "having a great day", "having a rough time"
 	"been feeling ", // "been feeling off lately"
-	"kinda ",       // "kinda stressed", "kinda happy"
-	"lowkey ",      // "lowkey anxious", "lowkey excited"
+	"kinda ",        // "kinda stressed", "kinda happy"
+	"lowkey ",       // "lowkey anxious", "lowkey excited"
 }
 
 // affectWords — bare emotion words likely to appear in a real mood
@@ -225,12 +226,12 @@ func containsAffectEmoji(text string) bool {
 }
 
 var affectEmoji = []string{
-	"😭", "😢", "😔", "😞", "😩",   // unpleasant cluster
-	"😤", "😠", "😡", "🤬",          // anger
-	"😰", "😨", "😱", "😖",          // anxiety / fear
-	"😊", "😄", "😃", "😁", "😆",   // happy
-	"🥰", "❤️", "💕", "🙂", "😌",   // warmth / calm
-	"🥳", "🎉", "✨", "💪", "🔥",   // excitement / energy
-	"🤩", "😍", "💖", "🙌",          // enthusiasm / love
-	"😐", "😑",                      // neutral
+	"😭", "😢", "😔", "😞", "😩", // unpleasant cluster
+	"😤", "😠", "😡", "🤬", // anger
+	"😰", "😨", "😱", "😖", // anxiety / fear
+	"😊", "😄", "😃", "😁", "😆", // happy
+	"🥰", "❤️", "💕", "🙂", "😌", // warmth / calm
+	"🥳", "🎉", "✨", "💪", "🔥", // excitement / energy
+	"🤩", "😍", "💖", "🙌", // enthusiasm / love
+	"😐", "😑", // neutral
 }

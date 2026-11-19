@@ -168,7 +168,6 @@ func TestDo_ContextCancellation(t *testing.T) {
 	}
 }
 
-
 func TestDo_LinearBackoff(t *testing.T) {
 	start := time.Now()
 	calls := 0

@@ -9,11 +9,11 @@ import (
 
 	engine "her/agent_engine"
 	"her/calendar"
-	"her/gmail"
-	"her/layers"
 	"her/compact"
 	"her/config"
 	"her/embed"
+	"her/gmail"
+	"her/layers"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -162,28 +162,28 @@ type RunParams struct {
 	ScheduleID                int64 // scheduler_tasks.id that triggered this run (0 if not from a schedule)
 	StatusCallback            tools.StatusCallback
 	SendCallback              tools.SendCallback
-	TTSCallback               tools.TTSCallback           // DEPRECATED: use OnMessageSend
-	OnMessageSend             tools.MessageSendCallback   // fires after each reply delivery — replaces TTSCallback
-	TraceCallback             tools.TraceCallback             // nil if traces disabled
-	MemoryTraceCallback       tools.TraceCallback             // nil if memory agent tracing disabled; separate message from TraceCallback
-	StageResetCallback        tools.StageResetCallback        // nil-safe — sends new placeholder after reply
-	DeletePlaceholderCallback tools.DeletePlaceholderCallback // nil-safe — deletes orphan placeholder on exit
-	SendConfirmCallback       tools.SendConfirmCallback       // nil-safe — confirmation buttons for destructive actions
-	StreamCallback            tools.StreamCallback            // nil-safe — streams chat tokens to Telegram for live typing effect
-	SendPaginatedCallback     tools.SendPaginatedCallback     // nil-safe — splits long messages into pages with ◀/▶ buttons
-	ImageBase64               string   // base64-encoded image data (empty if no image)
-	ImageMIME                 string   // MIME type of the image (e.g., "image/jpeg")
-	OCRText                   string   // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
-	EventBus                  *tui.Bus                    // nil-safe — emits rich typed events for the TUI
-	ConfigPath                string                      // path to config.yaml — needed for persisting location changes via set_location
-	AgentEventCB              tools.AgentEventCallback    // nil-safe — fires when memory agent calls notify_agent
-	Tracker                   *turn.Tracker               // nil-safe — manages turn lifecycle, typing, sub-agent coordination
-	LiteToolHook              func(toolName string)       // nil-safe — called after each tool execution in lite trace mode
-	IsSimRun                  bool                        // true when running via the sim adapter
-	ReportsDir                string                      // absolute path to reports/ — file tools enforce this boundary
-	WorkerCallback            func(taskType, note string, triggerMsgID int64)   // nil-safe — fires worker agent in background goroutine
+	TTSCallback               tools.TTSCallback                                      // DEPRECATED: use OnMessageSend
+	OnMessageSend             tools.MessageSendCallback                              // fires after each reply delivery — replaces TTSCallback
+	TraceCallback             tools.TraceCallback                                    // nil if traces disabled
+	MemoryTraceCallback       tools.TraceCallback                                    // nil if memory agent tracing disabled; separate message from TraceCallback
+	StageResetCallback        tools.StageResetCallback                               // nil-safe — sends new placeholder after reply
+	DeletePlaceholderCallback tools.DeletePlaceholderCallback                        // nil-safe — deletes orphan placeholder on exit
+	SendConfirmCallback       tools.SendConfirmCallback                              // nil-safe — confirmation buttons for destructive actions
+	StreamCallback            tools.StreamCallback                                   // nil-safe — streams chat tokens to Telegram for live typing effect
+	SendPaginatedCallback     tools.SendPaginatedCallback                            // nil-safe — splits long messages into pages with ◀/▶ buttons
+	ImageBase64               string                                                 // base64-encoded image data (empty if no image)
+	ImageMIME                 string                                                 // MIME type of the image (e.g., "image/jpeg")
+	OCRText                   string                                                 // pre-flight OCR text extracted from the photo (empty if no image or OCR unavailable)
+	EventBus                  *tui.Bus                                               // nil-safe — emits rich typed events for the TUI
+	ConfigPath                string                                                 // path to config.yaml — needed for persisting location changes via set_location
+	AgentEventCB              tools.AgentEventCallback                               // nil-safe — fires when memory agent calls notify_agent
+	Tracker                   *turn.Tracker                                          // nil-safe — manages turn lifecycle, typing, sub-agent coordination
+	LiteToolHook              func(toolName string)                                  // nil-safe — called after each tool execution in lite trace mode
+	IsSimRun                  bool                                                   // true when running via the sim adapter
+	ReportsDir                string                                                 // absolute path to reports/ — file tools enforce this boundary
+	WorkerCallback            func(taskType, note string, triggerMsgID int64)        // nil-safe — fires worker agent in background goroutine
 	WorkerCallbackSync        func(taskType, note string, triggerMsgID int64) string // nil-safe — runs worker synchronously, returns summary
-	GmailBridge               gmail.Bridge                // nil-safe — email access (APIBridge in prod, FakeBridge in sims)
+	GmailBridge               gmail.Bridge                                           // nil-safe — email access (APIBridge in prod, FakeBridge in sims)
 }
 
 // RunResult holds the outcome of an agent run — the reply text plus
@@ -191,15 +191,15 @@ type RunParams struct {
 // (it's just a struct return), and avoids the bot having to query the
 // DB or re-derive data the agent already has in memory.
 type RunResult struct {
-	ReplyText        string
-	ThinkTraces      []string // driver agent's think() calls — used by introspection agent
-	ToolSequence     []string // ordered tool names called this turn (e.g. ["think", "recall_memories", "reply", "done"])
-	TotalCost        float64  // accumulated cost across all LLM calls (agent + chat)
-	ToolCalls        int      // number of tool calls the agent made
-	MemoriesSaved    int      // number of memories saved/updated during this turn
-	PendingNarration   string // cleaned report text queued by narrate_report tool — bot sends as voice memo
-	PublishedReportURL string // Telegraph URL from publish_report — bot auto-appends as clickable link
-	CardIndexTokens    int    // tokens spent on the "Card Index" agent layer this turn (0 if layer produced no content) — surfaced for the card-index-recall experiment
+	ReplyText          string
+	ThinkTraces        []string // driver agent's think() calls — used by introspection agent
+	ToolSequence       []string // ordered tool names called this turn (e.g. ["think", "recall_memories", "reply", "done"])
+	TotalCost          float64  // accumulated cost across all LLM calls (agent + chat)
+	ToolCalls          int      // number of tool calls the agent made
+	MemoriesSaved      int      // number of memories saved/updated during this turn
+	PendingNarration   string   // cleaned report text queued by narrate_report tool — bot sends as voice memo
+	PublishedReportURL string   // Telegraph URL from publish_report — bot auto-appends as clickable link
+	CardIndexTokens    int      // tokens spent on the "Card Index" agent layer this turn (0 if layer produced no content) — surfaced for the card-index-recall experiment
 }
 
 // Run executes the agent loop for one conversation turn.
@@ -442,8 +442,8 @@ func Run(params RunParams) (*RunResult, error) {
 		ConfigPath:                params.ConfigPath,
 		ReportsDir:                params.ReportsDir,
 		WorkerCallback:            params.WorkerCallback,
-		WorkerCallbackSync:       params.WorkerCallbackSync,
-		GmailBridge:              params.GmailBridge,
+		WorkerCallbackSync:        params.WorkerCallbackSync,
+		GmailBridge:               params.GmailBridge,
 		IsSimRun:                  params.IsSimRun,
 		PreApprovedRewrites:       make(map[string]bool),
 	}

@@ -36,8 +36,8 @@ func NewSearXNGClient(baseURL string) *SearXNGClient {
 // searxngResponse is the raw JSON response from SearXNG.
 // We only parse the fields we need and convert to our standard SearchResponse.
 type searxngResponse struct {
-	Query   string            `json:"query"`
-	Results []searxngResult   `json:"results"`
+	Query   string          `json:"query"`
+	Results []searxngResult `json:"results"`
 }
 
 // searxngResult is a single search result from SearXNG.

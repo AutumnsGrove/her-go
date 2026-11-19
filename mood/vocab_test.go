@@ -178,9 +178,9 @@ func TestTierForValence(t *testing.T) {
 		{4, TierNeutral, true},
 		{5, TierPleasant, true},
 		{7, TierPleasant, true},
-		{0, TierNeutral, false},   // out of range
-		{8, TierNeutral, false},   // out of range
-		{-1, TierNeutral, false},  // negative
+		{0, TierNeutral, false},  // out of range
+		{8, TierNeutral, false},  // out of range
+		{-1, TierNeutral, false}, // negative
 	}
 	for _, tc := range tests {
 		tier, ok := v.TierForValence(tc.valence)

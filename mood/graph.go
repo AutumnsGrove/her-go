@@ -92,7 +92,7 @@ func RenderValencePNG(store memory.Store, vocab *Vocab, r GraphRange, now time.T
 			b := vocab.Buckets[bucket]
 			col := parseHex(b.Color)
 			seriesByBucket[bucket] = &chart.TimeSeries{
-				Name:  fmt.Sprintf("%d %s", bucket, b.Label),
+				Name:    fmt.Sprintf("%d %s", bucket, b.Label),
 				XValues: []time.Time{},
 				YValues: []float64{},
 				Style: chart.Style{
@@ -267,4 +267,3 @@ func parseHexByte(s string) (uint8, error) {
 	}
 	return out, nil
 }
-

@@ -126,9 +126,9 @@ func (h *HealthMonitor) checkHealth() {
 	// - 60 min: Strong warning (something is probably wrong)
 	// - 120 min: Critical warning (definitely hung)
 	const (
-		warnThreshold     = 30 * time.Minute
-		strongWarnThresh  = 60 * time.Minute
-		criticalThresh    = 120 * time.Minute
+		warnThreshold    = 30 * time.Minute
+		strongWarnThresh = 60 * time.Minute
+		criticalThresh   = 120 * time.Minute
 	)
 
 	var shouldLog bool

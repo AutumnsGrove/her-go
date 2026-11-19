@@ -31,10 +31,10 @@ func TestRenderValencePNG_ProducesValidPNGBytes(t *testing.T) {
 	// Seed one entry per day for 5 days.
 	for i := 0; i < 5; i++ {
 		_, err := store.SaveMoodEntry(&memory.MoodEntry{
-			Kind:    memory.MoodKindMomentary,
-			Valence: 3 + i%3,
-			Labels:  []string{"Calm"},
-			Source:  memory.MoodSourceInferred,
+			Kind:      memory.MoodKindMomentary,
+			Valence:   3 + i%3,
+			Labels:    []string{"Calm"},
+			Source:    memory.MoodSourceInferred,
 			Timestamp: now.Add(-time.Duration(i) * 24 * time.Hour),
 		})
 		if err != nil {

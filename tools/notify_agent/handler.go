@@ -3,9 +3,9 @@
 //
 // When the memory agent finishes inbox tasks (cleanup, splits), it calls
 // notify_agent instead of done. This does three things:
-//   1. Writes the result to the inbox (so the driver agent can read details)
-//   2. Fires an AgentEvent to wake up the driver agent
-//   3. Ends the memory agent's turn (sets DoneCalled = true)
+//  1. Writes the result to the inbox (so the driver agent can read details)
+//  2. Fires an AgentEvent to wake up the driver agent
+//  3. Ends the memory agent's turn (sets DoneCalled = true)
 //
 // The driver agent then reads the inbox and sends a brief follow-up to the user.
 // If direct_message is set, the follow-up skips the agent loop entirely and

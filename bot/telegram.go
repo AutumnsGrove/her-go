@@ -15,8 +15,8 @@ import (
 	"her/agent"
 	"her/calendar"
 	"her/config"
-	"her/gmail"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -39,26 +39,26 @@ var log = logger.WithPrefix("bot")
 // in Python/Java, but done manually (Go favors explicitness over magic).
 type Bot struct {
 	tb               *tele.Bot
-	llm              *llm.Client          // conversational model (chat)
-	driverLLM        *llm.Client          // tool-calling orchestrator
-	memoryAgentLLM   *llm.Client          // post-turn memory agent — nil if not configured
-	moodAgentLLM     *llm.Client          // post-turn mood agent — nil if not configured
-	visionLLM        *llm.Client          // vision language model (Gemini Flash) — nil if not configured
-	classifierLLM    *llm.Client          // classifier for memory writes — nil if not configured
-	dreamAgentLLM    *llm.Client          // memory dreamer — nil falls back to memoryAgentLLM
-	introspectionLLM *llm.Client          // self-reflection agent — nil falls back to memoryAgentLLM
-	embedClient      *embed.Client          // local embedding model for similarity
-	searxngClient    *search.SearXNGClient  // self-hosted meta-search (optional, free, no rate limits)
-	tavilyClient     *search.TavilyClient   // web search and URL extraction (fallback if SearXNG not configured)
-	calendarBridge   calendar.Bridge        // nil in prod (tools create CLIBridge), FakeBridge in sims
-	voiceClient      *voice.Client        // STT client (local parakeet or remote whisper) — nil if voice disabled
-	ttsClient        *voice.TTSClient     // local TTS via kokoro/mlx-audio — nil if TTS disabled
+	llm              *llm.Client           // conversational model (chat)
+	driverLLM        *llm.Client           // tool-calling orchestrator
+	memoryAgentLLM   *llm.Client           // post-turn memory agent — nil if not configured
+	moodAgentLLM     *llm.Client           // post-turn mood agent — nil if not configured
+	visionLLM        *llm.Client           // vision language model (Gemini Flash) — nil if not configured
+	classifierLLM    *llm.Client           // classifier for memory writes — nil if not configured
+	dreamAgentLLM    *llm.Client           // memory dreamer — nil falls back to memoryAgentLLM
+	introspectionLLM *llm.Client           // self-reflection agent — nil falls back to memoryAgentLLM
+	embedClient      *embed.Client         // local embedding model for similarity
+	searxngClient    *search.SearXNGClient // self-hosted meta-search (optional, free, no rate limits)
+	tavilyClient     *search.TavilyClient  // web search and URL extraction (fallback if SearXNG not configured)
+	calendarBridge   calendar.Bridge       // nil in prod (tools create CLIBridge), FakeBridge in sims
+	voiceClient      *voice.Client         // STT client (local parakeet or remote whisper) — nil if voice disabled
+	ttsClient        *voice.TTSClient      // local TTS via kokoro/mlx-audio — nil if TTS disabled
 	store            memory.Store
 	cfg              *config.Config
 	configPath       string // path to config.yaml — needed for /traces toggle
 	systemPrompt     string
 	startTime        time.Time
-	isSimRun         bool   // true when running via the sim adapter
+	isSimRun         bool // true when running via the sim adapter
 
 	// moodRunner + moodSweeper are the post-turn mood pipeline. Nil
 	// when cfg.MoodAgent.Model is empty. runAgent launches a

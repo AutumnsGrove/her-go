@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"her/layers"
 	"her/config"
 	"her/embed"
+	"her/layers"
 	"her/logger"
 	"her/memory"
 

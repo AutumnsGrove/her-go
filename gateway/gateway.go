@@ -8,8 +8,8 @@ import (
 	"her/bot"
 	"her/calendar"
 	"her/config"
-	"her/gmail"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/logger"
 	"her/memory"
@@ -24,21 +24,21 @@ var log = logger.WithPrefix("gateway")
 // LLM clients, embedding, and search are stateless — they don't need
 // to be duplicated per adapter. Only the Store varies (keyed by DB path).
 type Deps struct {
-	ChatLLM          *llm.Client
-	DriverLLM        *llm.Client
-	MemoryAgentLLM   *llm.Client
-	MoodAgentLLM     *llm.Client
-	VisionLLM        *llm.Client
-	ClassifierLLM    *llm.Client
-	DreamAgentLLM    *llm.Client
-	IntrospectionLLM *llm.Client
-	EmbedClient      *embed.Client
-	SearXNGClient    *search.SearXNGClient // self-hosted search — nil if not configured
-	TavilyClient     *search.TavilyClient  // web search fallback
-	VoiceClient      *voice.Client         // STT — nil if voice disabled
-	TTSClient        *voice.TTSClient // TTS — nil if TTS disabled
-	CalendarBridge   calendar.Bridge              // nil in prod, FakeBridge in sims
-	ConfigPath       string
+	ChatLLM            *llm.Client
+	DriverLLM          *llm.Client
+	MemoryAgentLLM     *llm.Client
+	MoodAgentLLM       *llm.Client
+	VisionLLM          *llm.Client
+	ClassifierLLM      *llm.Client
+	DreamAgentLLM      *llm.Client
+	IntrospectionLLM   *llm.Client
+	EmbedClient        *embed.Client
+	SearXNGClient      *search.SearXNGClient // self-hosted search — nil if not configured
+	TavilyClient       *search.TavilyClient  // web search fallback
+	VoiceClient        *voice.Client         // STT — nil if voice disabled
+	TTSClient          *voice.TTSClient      // TTS — nil if TTS disabled
+	CalendarBridge     calendar.Bridge       // nil in prod, FakeBridge in sims
+	ConfigPath         string
 	WorkerCallback     func(taskType, note string, triggerMsgID int64)        // nil-safe — fires worker agent in background
 	WorkerCallbackSync func(taskType, note string, triggerMsgID int64) string // nil-safe — sync worker dispatch for wait=true
 	GmailBridge        gmail.Bridge                                           // nil-safe — email access

@@ -10,7 +10,8 @@ import (
 // makeMessages creates N fake messages alternating user/assistant,
 // each with roughly charsPerMsg characters of content. This lets us
 // control the token estimate precisely:
-//   tokens per message = len(content)/4 + 10 (overhead)
+//
+//	tokens per message = len(content)/4 + 10 (overhead)
 func makeMessages(n int, charsPerMsg int) []memory.Message {
 	msgs := make([]memory.Message, n)
 	content := make([]byte, charsPerMsg)
@@ -202,11 +203,11 @@ func TestMaybeCompact_RealisticSimMessages(t *testing.T) {
 
 	// Real message sizes from the compaction stress test (chars):
 	charSizes := []int{
-		80, 67,   // turn 1
-		82, 104,  // turn 2
-		106, 61,  // turn 3
-		85, 52,   // turn 4
-		93, 78,   // turn 5
+		80, 67, // turn 1
+		82, 104, // turn 2
+		106, 61, // turn 3
+		85, 52, // turn 4
+		93, 78, // turn 5
 		281, 217, // turn 6 (chatty phase starts)
 		259, 221, // turn 7
 		228, 199, // turn 8
@@ -298,7 +299,7 @@ func TestMaybeCompact_OnlyCountsUnsummarized(t *testing.T) {
 	// Only 6 un-summarized messages (IDs 35-40) should be counted: ~210 tokens.
 	// That's well under the 1050 threshold, so Triggered must be false.
 	if cr.Triggered {
-		t.Errorf("expected Triggered=false (only 6 un-summarized msgs, ~210 tokens, threshold=1050), "+
+		t.Errorf("expected Triggered=false (only 6 un-summarized msgs, ~210 tokens, threshold=1050), " +
 			"but trigger fired — end_id filter not working (runaway compaction regression)")
 	}
 	if len(cr.KeptMessages) != 40 {

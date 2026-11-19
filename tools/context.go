@@ -21,8 +21,8 @@ import (
 
 	"her/calendar"
 	"her/config"
-	"her/gmail"
 	"her/embed"
+	"her/gmail"
 	"her/llm"
 	"her/memory"
 	"her/scrub"

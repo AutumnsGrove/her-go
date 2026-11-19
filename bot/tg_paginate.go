@@ -5,11 +5,11 @@
 // and attach ◀/▶ inline buttons so the user can navigate.
 //
 // The flow:
-//   1. sendPaginated splits the text into page-sized chunks by lines
-//   2. Page 1 is sent with navigation buttons (if more than one page)
-//   3. The page session (all pages) is stored in Bot.pageSessions
-//   4. When the user clicks ◀/▶, handlePageCallback edits the message
-//      to show the requested page
+//  1. sendPaginated splits the text into page-sized chunks by lines
+//  2. Page 1 is sent with navigation buttons (if more than one page)
+//  3. The page session (all pages) is stored in Bot.pageSessions
+//  4. When the user clicks ◀/▶, handlePageCallback edits the message
+//     to show the requested page
 //
 // Pages are stored per-chat (keyed by chat ID). Only one paginated
 // view is active per chat — starting a new one replaces the old one.
@@ -241,7 +241,7 @@ func pageMarkup(pageIdx, totalPages int) *tele.ReplyMarkup {
 	if pageIdx > 0 {
 		btns = append(btns, markup.Data(
 			"◀ Prev",
-			"page", // Action — routes to handlePageCallback
+			"page",                  // Action — routes to handlePageCallback
 			strconv.Itoa(pageIdx-1), // Value — target page number
 		))
 	}

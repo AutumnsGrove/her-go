@@ -17,11 +17,11 @@ func init() {
 }
 
 type args struct {
-	TaskID  int64           `json:"task_id"`
-	Name    *string         `json:"name"`
-	CronExpr *string       `json:"cron_expr"`
-	Enabled *bool           `json:"enabled"`
-	Payload json.RawMessage `json:"payload"`
+	TaskID   int64           `json:"task_id"`
+	Name     *string         `json:"name"`
+	CronExpr *string         `json:"cron_expr"`
+	Enabled  *bool           `json:"enabled"`
+	Payload  json.RawMessage `json:"payload"`
 }
 
 // Handle updates an existing user-created schedule. At least one
@@ -128,4 +128,3 @@ var managedKinds = map[string]bool{
 }
 
 func isManagedKind(kind string) bool { return managedKinds[kind] }
-

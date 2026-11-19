@@ -211,10 +211,10 @@ func TestHandle_EmptySummary(t *testing.T) {
 // normal input variants without needing inbox inspection for each one.
 func TestHandle_TableDriven(t *testing.T) {
 	cases := []struct {
-		name           string
-		argsJSON       string
-		wantDone       bool
-		wantContains   string
+		name            string
+		argsJSON        string
+		wantDone        bool
+		wantContains    string
 		wantErrContains string
 	}{
 		{
@@ -236,10 +236,10 @@ func TestHandle_TableDriven(t *testing.T) {
 			wantErrContains: "error",
 		},
 		{
-			name:            "empty object — no fields",
-			argsJSON:        `{}`,
-			wantDone:        true,  // empty args are valid; summary just happens to be ""
-			wantContains:   "notified driver agent",
+			name:         "empty object — no fields",
+			argsJSON:     `{}`,
+			wantDone:     true, // empty args are valid; summary just happens to be ""
+			wantContains: "notified driver agent",
 		},
 	}
 

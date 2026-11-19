@@ -282,12 +282,12 @@ var agentSummaryPromptTmpl string
 
 // AgentCompactResult holds the output of MaybeCompactAgent.
 type AgentCompactResult struct {
-	Summary      string            // running agent action summary
+	Summary       string               // running agent action summary
 	RecentActions []memory.AgentAction // actions kept in full fidelity
-	DidCompact   bool              // true if summarization ran this call
-	Summarized   int               // number of actions summarized
-	TokensBefore int               // estimated tokens before
-	TokensAfter  int               // estimated tokens after
+	DidCompact    bool                 // true if summarization ran this call
+	Summarized    int                  // number of actions summarized
+	TokensBefore  int                  // estimated tokens before
+	TokensAfter   int                  // estimated tokens after
 }
 
 // EstimateActionTokens estimates the token count for a set of agent actions

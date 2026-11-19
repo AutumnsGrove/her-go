@@ -58,15 +58,15 @@ type MemoryAgentInput struct {
 // MemoryAgentParams bundles the dependencies the memory agent needs.
 // Smaller than RunParams — no callbacks, no Telegram.
 type MemoryAgentParams struct {
-	LLM           *llm.Client    // nil = memory agent disabled
-	ClassifierLLM *llm.Client    // nil = classifier disabled (writes pass through)
+	LLM           *llm.Client // nil = memory agent disabled
+	ClassifierLLM *llm.Client // nil = classifier disabled (writes pass through)
 	Store         memory.Store
 	EmbedClient   *embed.Client
 	Cfg           *config.Config
-	TraceCallback tools.TraceCallback    // nil = tracing disabled for memory agent
-	EventBus      *tui.Bus               // nil-safe — emits tool call events for the TUI
+	TraceCallback tools.TraceCallback      // nil = tracing disabled for memory agent
+	EventBus      *tui.Bus                 // nil-safe — emits tool call events for the TUI
 	AgentEventCB  tools.AgentEventCallback // nil-safe — fires when notify_agent is called
-	Phase         *turn.PhaseHandle       // nil-safe — routes events to the parent turn's memory group
+	Phase         *turn.PhaseHandle        // nil-safe — routes events to the parent turn's memory group
 }
 
 // defaultMemoryAgentPrompt is used when memory_agent_prompt.md can't be loaded.

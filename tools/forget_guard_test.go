@@ -65,10 +65,10 @@ func TestCanForget(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		memID    int64
-		wantOK   bool
-		wantSub  string
+		name    string
+		memID   int64
+		wantOK  bool
+		wantSub string
 	}{
 		{
 			name:    "protected card — refused",
