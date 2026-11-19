@@ -139,6 +139,7 @@ type unitData struct {
 //   - Restart=always: restart on ALL exit codes (including panics)
 //   - StartLimitBurst=5 in 10min: prevents infinite crash loops
 //   - WatchdogSec=120: systemd restarts if bot doesn't ping every 2min
+//   - TimeoutStartSec=240: the first start after a boot can exceed systemd's 90s default
 //   - RestartSec=10: wait 10s between restart attempts
 //   - StandardOutput/Error=append: logs go to rotating files in logs/
 const unitTemplate = `[Unit]
@@ -153,6 +154,13 @@ Group={{.User}}
 WorkingDirectory={{.WorkDir}}
 Environment=PATH={{.Path}}
 ExecStart={{.BinaryPath}} run
+
+# systemd's default start timeout is 90s for Type=notify. The first start after a boot is the slow
+# one - cold page cache, the database opening, state reloading - and on lepotato it has crossed 90s
+# (2026-11-19: "start operation timed out", then Restart=always brought it up 10s later, so a boot
+# we could have called healthy was reported as a failure by the post-boot check). 240s leaves room
+# for a slow boot without hiding a wedged one: WatchdogSec still catches a hang once READY=1 lands.
+TimeoutStartSec=240
 
 # Restart policy: always restart on failure, including panics (exit code 2).
 # This prevents single crashes from causing extended downtime.
